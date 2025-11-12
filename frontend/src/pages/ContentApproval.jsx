@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle, XCircle, Edit, Eye, Calendar } from 'lucide-react'
 import axios from 'axios'
-
-const API_URL = window.location.origin.replace(':5000', ':8000')
+import { API_URL } from '../lib/api'
 
 function ContentApproval() {
   const [pendingContent, setPendingContent] = useState([])

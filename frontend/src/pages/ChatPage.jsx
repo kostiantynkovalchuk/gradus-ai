@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { Send, Languages } from 'lucide-react'
 import axios from 'axios'
-
-const API_URL = window.location.origin.replace(':5000', ':8000')
+import { API_URL } from '../lib/api'
 
 function ChatPage() {
   const [message, setMessage] = useState('')
