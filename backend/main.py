@@ -6,7 +6,7 @@ from typing import List, Optional
 from datetime import datetime
 import logging
 
-from models import get_db, Base, engine
+from models import get_db, init_db
 from models.content import ContentQueue, ApprovalLog
 from services.claude_service import claude_service
 from services.image_generator import image_generator
@@ -16,9 +16,16 @@ from services.notification_service import notification_service
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(title="Gradus Media AI Agent")
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup."""
+    try:
+        init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.warning(f"Database initialization deferred: {str(e)}")
 
 app.add_middleware(
     CORSMiddleware,

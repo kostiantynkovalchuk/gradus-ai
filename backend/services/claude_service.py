@@ -4,16 +4,22 @@ from typing import Optional
 
 class ClaudeService:
     def __init__(self):
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
-        self.client = Anthropic(api_key=api_key)
+        self.client = None
         self.model = "claude-sonnet-4-5"
+        self.api_key = os.getenv("ANTHROPIC_API_KEY")
+    
+    def _ensure_client(self):
+        """Lazy initialization of Claude client."""
+        if self.client is None:
+            if not self.api_key:
+                raise ValueError("ANTHROPIC_API_KEY environment variable is not set. Please configure it to use Claude AI features.")
+            self.client = Anthropic(api_key=self.api_key)
     
     async def chat(self, message: str, system_prompt: Optional[str] = None) -> str:
         """
         Send a chat message to Claude and get a response.
         """
+        self._ensure_client()
         try:
             response = self.client.messages.create(
                 model=self.model,
