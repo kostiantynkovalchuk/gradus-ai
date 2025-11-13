@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle, XCircle, Edit, Eye, Calendar } from 'lucide-react'
-import axios from 'axios'
-import { API_URL } from '../lib/api'
+import api from '../lib/api'
 
 function ContentApproval() {
   const [pendingContent, setPendingContent] = useState([])
@@ -15,8 +14,8 @@ function ContentApproval() {
   const fetchData = async () => {
     try {
       const [contentRes, statsRes] = await Promise.all([
-        axios.get(`${API_URL}/api/content/pending`),
-        axios.get(`${API_URL}/api/content/stats`)
+        api.get('/content/pending'),
+        api.get('/content/stats')
       ])
       setPendingContent(contentRes.data)
       setStats(statsRes.data)
@@ -28,7 +27,7 @@ function ContentApproval() {
 
   const handleApprove = async (contentId) => {
     try {
-      await axios.post(`${API_URL}/api/content/${contentId}/approve`, {
+      await api.post(`/content/${contentId}/approve`, {
         moderator: 'Admin',
         platforms: ['facebook', 'linkedin']
       })
@@ -43,7 +42,7 @@ function ContentApproval() {
     if (!reason) return
 
     try {
-      await axios.post(`${API_URL}/api/content/${contentId}/reject`, {
+      await api.post(`/content/${contentId}/reject`, {
         moderator: 'Admin',
         reason: reason
       })
