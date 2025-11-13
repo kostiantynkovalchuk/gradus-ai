@@ -1,6 +1,7 @@
 import os
 from anthropic import Anthropic
 from typing import Dict, Optional
+from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,6 +10,9 @@ class TranslationService:
     def __init__(self):
         self.claude_api_key = os.getenv('ANTHROPIC_API_KEY')
         self.client = Anthropic(api_key=self.claude_api_key) if self.claude_api_key else None
+        
+        from services.notification_service import notification_service
+        self.notification_service = notification_service
     
     def translate_article(self, article_data: Dict) -> Optional[str]:
         """
@@ -61,6 +65,41 @@ class TranslationService:
         except Exception as e:
             logger.error(f"Translation failed: {e}")
             return None
+    
+    def translate_article_with_notification(self, article_data: Dict, article_id: int) -> tuple[Optional[str], bool]:
+        """
+        Translate article and send Telegram notification
+        
+        Args:
+            article_data: Dict with article info
+            article_id: Database ID of the article
+            
+        Returns:
+            Tuple of (Ukrainian translation or None, notification_sent boolean)
+        """
+        translation = self.translate_article(article_data)
+        notification_sent = False
+        
+        if translation:
+            notification_data = {
+                'id': article_id,
+                'source': 'The Spirits Business',
+                'title': article_data.get('title', 'No title'),
+                'translated_text': translation,
+                'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')
+            }
+            
+            try:
+                result = self.notification_service.send_approval_notification(notification_data)
+                if result:
+                    notification_sent = True
+                    logger.info(f"Notification sent for article {article_id}")
+                else:
+                    logger.warning(f"Notification failed for article {article_id}")
+            except Exception as e:
+                logger.error(f"Failed to send notification: {e}")
+        
+        return translation, notification_sent
     
     def translate_batch(self, articles: list) -> Dict[int, str]:
         """

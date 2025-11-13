@@ -1,0 +1,144 @@
+Perfect! Translation is working great. Now let's connect Telegram notifications to the translation pipeline.
+
+Please implement ONLY notification integration:
+
+1. UPDATE backend/services/translation_service.py:
+
+Add notification sending after successful translation:
+```python
+from services.notification_service import NotificationService
+
+class TranslationService:
+    def __init__(self):
+        self.claude_api_key = os.getenv('CLAUDE_API_KEY')
+        self.client = Anthropic(api_key=self.claude_api_key) if self.claude_api_key else None
+        self.notification_service = NotificationService()  # ADD THIS
+    
+    # ... existing code ...
+    
+    def translate_article_with_notification(self, article_data: Dict, article_id: int) -> Optional[str]:
+        """
+        Translate article and send notification
+        
+        Args:
+            article_data: Dict with article info
+            article_id: Database ID of the article
+            
+        Returns:
+            Ukrainian translation or None
+        """
+        # Translate
+        translation = self.translate_article(article_data)
+        
+        if translation:
+            # Send Telegram notification
+            notification_data = {
+                'id': article_id,
+                'source': 'The Spirits Business',
+                'title': article_data.get('title', 'No title'),
+                'translated_text': translation,
+                'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')
+            }
+            
+            # Send notification (non-blocking - don't fail translation if notification fails)
+            try:
+                self.notification_service.send_approval_notification(notification_data)
+                logger.info(f"Notification sent for article {article_id}")
+            except Exception as e:
+                logger.error(f"Failed to send notification: {e}")
+            
+        return translation
+```
+
+2. UPDATE backend/main.py endpoints:
+
+Modify translation endpoints to use the new notification method:
+```python
+@app.post("/api/translate/article/{article_id}")
+async def translate_article(article_id: int, db: Session = Depends(get_db)):
+    """Translate single article and send notification"""
+    
+    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    article_data = {
+        'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+        'content': article.original_text,
+        'summary': article.original_text[:1000]
+    }
+    
+    translation_service = TranslationService()
+    
+    # Use notification method
+    translated_text = translation_service.translate_article_with_notification(
+        article_data, 
+        article_id
+    )
+    
+    if translated_text:
+        article.translated_text = translated_text
+        article.status = 'pending_approval'
+        db.commit()
+        
+        return {
+            "status": "success",
+            "article_id": article_id,
+            "notification_sent": True,
+            "preview": translated_text[:200] + "..."
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Translation failed")
+
+
+@app.post("/api/translate/pending")
+async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_db)):
+    """Translate all draft articles and send notifications"""
+    
+    draft_articles = db.query(ContentQueue).filter(
+        ContentQueue.status == 'draft',
+        ContentQueue.translated_text == None
+    ).limit(limit).all()
+    
+    if not draft_articles:
+        return {"status": "success", "message": "No articles to translate"}
+    
+    translation_service = TranslationService()
+    translated_count = 0
+    notifications_sent = 0
+    
+    for article in draft_articles:
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text,
+            'summary': article.original_text[:1000]
+        }
+        
+        # Use notification method
+        translated_text = translation_service.translate_article_with_notification(
+            article_data,
+            article.id
+        )
+        
+        if translated_text:
+            article.translated_text = translated_text
+            article.status = 'pending_approval'
+            translated_count += 1
+            notifications_sent += 1
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "translated_count": translated_count,
+        "notifications_sent": notifications_sent
+    }
+```
+
+That's it! Just:
+- Add translate_article_with_notification() method
+- Update endpoints to send notifications automatically
+- Non-blocking (translation succeeds even if notification fails)
+
+Please implement and we'll test the full pipeline!

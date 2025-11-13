@@ -385,7 +385,7 @@ async def run_scraper(limit: int = 5, db: Session = Depends(get_db)):
 @app.post("/api/translate/article/{article_id}")
 async def translate_article_endpoint(article_id: int, db: Session = Depends(get_db)):
     """
-    Translate a single article by ID
+    Translate a single article by ID and send Telegram notification
     Updates the article's translated_text and status
     """
     try:
@@ -405,7 +405,10 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
         
         logger.info(f"Translating article {article_id}: {article_data['title'][:50]}...")
         
-        translated_text = translation_service.translate_article(article_data)
+        translated_text, notification_sent = translation_service.translate_article_with_notification(
+            article_data,
+            article_id
+        )
         
         if translated_text:
             article.translated_text = translated_text
@@ -417,6 +420,7 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
             return {
                 "status": "success",
                 "article_id": article_id,
+                "notification_sent": notification_sent,
                 "translated_length": len(translated_text),
                 "preview": translated_text[:200] + "..."
             }
@@ -433,7 +437,7 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
 @app.post("/api/translate/pending")
 async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_db)):
     """
-    Translate all articles with status='draft'
+    Translate all articles with status='draft' and send Telegram notifications
     """
     try:
         draft_articles = db.query(ContentQueue).filter(
@@ -446,12 +450,14 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
                 "status": "success",
                 "message": "No articles to translate",
                 "translated_count": 0,
-                "total_draft": 0
+                "total_draft": 0,
+                "notifications_sent": 0
             }
         
         logger.info(f"Translating {len(draft_articles)} draft articles...")
         
         translated_count = 0
+        notifications_sent = 0
         
         for article in draft_articles:
             original_text = article.original_text or ''
@@ -463,12 +469,17 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
                 'summary': original_text[:1000] if original_text else ''
             }
             
-            translated_text = translation_service.translate_article(article_data)
+            translated_text, notification_sent = translation_service.translate_article_with_notification(
+                article_data,
+                article.id
+            )
             
             if translated_text:
                 article.translated_text = translated_text
                 article.status = 'pending_approval'
                 translated_count += 1
+                if notification_sent:
+                    notifications_sent += 1
                 logger.info(f"Translated article {article.id}: {article_data['title'][:50]}...")
         
         db.commit()
@@ -478,7 +489,8 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
         return {
             "status": "success",
             "translated_count": translated_count,
-            "total_draft": len(draft_articles)
+            "total_draft": len(draft_articles),
+            "notifications_sent": notifications_sent
         }
         
     except Exception as e:
