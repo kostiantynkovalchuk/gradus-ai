@@ -1,0 +1,71 @@
+Small fix needed: The article titles include " - The Spirits Business" suffix, which duplicates the source information shown separately.
+
+Please update the scraper to clean article titles:
+
+UPDATE backend/services/news_scraper.py:
+
+Add a title cleaning method:
+```python
+def clean_article_title(self, title: str, source_name: str = "The Spirits Business") -> str:
+    """
+    Clean article title by removing source suffix
+    
+    Args:
+        title: Raw article title
+        source_name: Source publication name to remove
+        
+    Returns:
+        Clean title without source suffix
+    """
+    if not title:
+        return ""
+    
+    # Remove source name from end of title
+    # Patterns: " - The Spirits Business", " | The Spirits Business", etc.
+    patterns = [
+        f' - {source_name}',
+        f' | {source_name}',
+        f' – {source_name}',  # em dash
+        f' — {source_name}',  # longer dash
+    ]
+    
+    cleaned_title = title
+    for pattern in patterns:
+        if cleaned_title.endswith(pattern):
+            cleaned_title = cleaned_title[:-len(pattern)].strip()
+            break
+    
+    return cleaned_title
+```
+
+UPDATE scrape_spirits_business() to use title cleaning:
+```python
+def scrape_spirits_business(self, limit: int = 5) -> List[Dict]:
+    """Scrape with clean titles"""
+    articles = []
+    
+    try:
+        # ... existing code ...
+        
+        for article in article_elements:
+            # ... extract title, url, etc. ...
+            
+            # Clean title (remove source suffix)
+            clean_title = self.clean_article_title(title, "The Spirits Business")
+            
+            if clean_title and url:
+                # ... rest of the code ...
+                
+                articles.append({
+                    'title': clean_title,  # Use cleaned title!
+                    'url': url,
+                    'content': clean_content,
+                    # ... rest ...
+                })
+        
+        return articles
+```
+
+This will ensure titles are clean and source is only shown once in the "Source:" field.
+
+Please implement this quick fix!

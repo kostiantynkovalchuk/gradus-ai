@@ -57,6 +57,35 @@ class NewsScraper:
             return match.group(1).strip()
         return ""
     
+    def clean_article_title(self, title: str, source_name: str = "The Spirits Business") -> str:
+        """
+        Clean article title by removing source suffix
+        
+        Args:
+            title: Raw article title
+            source_name: Source publication name to remove
+            
+        Returns:
+            Clean title without source suffix
+        """
+        if not title:
+            return ""
+        
+        patterns = [
+            f' - {source_name}',
+            f' | {source_name}',
+            f' – {source_name}',
+            f' — {source_name}',
+        ]
+        
+        cleaned_title = title
+        for pattern in patterns:
+            if cleaned_title.endswith(pattern):
+                cleaned_title = cleaned_title[:-len(pattern)].strip()
+                break
+        
+        return cleaned_title
+    
     def scrape_spirits_business(self, limit: int = 5) -> List[Dict]:
         """
         Scrape latest articles from The Spirits Business homepage.
@@ -121,7 +150,9 @@ class NewsScraper:
                 
                 clean_data = self.extract_article_content(article_url)
                 raw_content = clean_data.get('content', '')
-                article_title = clean_data.get('title') or title
+                raw_title = clean_data.get('title') or title
+                
+                article_title = self.clean_article_title(raw_title, "The Spirits Business")
                 
                 extracted_author = self.extract_author(raw_content)
                 if extracted_author:
