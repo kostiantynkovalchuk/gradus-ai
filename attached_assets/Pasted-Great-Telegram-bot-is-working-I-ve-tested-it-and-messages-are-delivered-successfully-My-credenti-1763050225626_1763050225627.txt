@@ -1,3 +1,15 @@
+Great! Telegram bot is working. I've tested it and messages are delivered successfully.
+
+My credentials:
+- TELEGRAM_BOT_TOKEN: 8554868004:AAFL8i-8kQel6eweFVj-IX3jT-TQ1It_Zto
+- TELEGRAM_CHAT_ID: 441389791
+
+Now please implement ONLY the notification service:
+
+1. CREATE backend/services/notification_service.py:
+
+Add a simple notification service that sends Telegram messages when content needs approval.
+```python
 import os
 import requests
 from typing import Dict, Any
@@ -63,5 +75,24 @@ class NotificationService:
             return response.json()
         except Exception as e:
             return {"ok": False, "error": str(e)}
+```
 
-notification_service = NotificationService()
+2. ADD TEST ENDPOINT in backend/main.py:
+```python
+from services.notification_service import NotificationService
+
+@app.post("/api/test/telegram")
+async def test_telegram():
+    """Test Telegram notification"""
+    notification_service = NotificationService()
+    result = notification_service.send_test_notification()
+    return result
+```
+
+That's it for now. Just implement these two things:
+- notification_service.py with send_approval_notification() and send_test_notification()
+- /api/test/telegram endpoint
+
+We'll integrate it into the content pipeline in the next step.
+
+Please implement and let me know when ready!

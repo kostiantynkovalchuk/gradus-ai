@@ -99,6 +99,12 @@ async def translate(request: TranslateRequest):
         logger.error(f"Translation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/test/telegram")
+async def test_telegram():
+    """Test Telegram notification"""
+    result = notification_service.send_test_notification()
+    return result
+
 @app.get("/api/content/pending")
 async def get_pending_content(db: Session = Depends(get_db)):
     try:
