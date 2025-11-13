@@ -90,7 +90,9 @@ function ContentApproval() {
             <div key={content.id} className="bg-white rounded-lg shadow p-6">
               <div className="flex justify-between items-start mb-4">
                 <div>
-                  <h3 className="text-lg font-semibold">{content.source_title || 'Untitled'}</h3>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                    {content.translated_title || content.extra_metadata?.title || 'Untitled'}
+                  </h3>
                   <p className="text-sm text-gray-500">Source: {content.source}</p>
                 </div>
                 <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm">
