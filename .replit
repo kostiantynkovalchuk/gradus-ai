@@ -1,4 +1,4 @@
-modules = ["python-3.11", "nodejs-20"]
+modules = ["python-3.11", "nodejs-20", "postgresql-16"]
 [agent]
 expertMode = true
 integrations = ["python_openai:1.0.0", "python_database:1.0.0", "python_anthropic:1.0.0", "web_scraper:1.0.0"]

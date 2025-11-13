@@ -12,6 +12,7 @@ from services.claude_service import claude_service
 from services.image_generator import image_generator
 from services.social_poster import social_poster
 from services.notification_service import notification_service
+from services.news_scraper import news_scraper
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -298,6 +299,86 @@ async def get_stats(db: Session = Depends(get_db)):
         }
     except Exception as e:
         logger.error(f"Error fetching stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/scraper/test")
+async def test_scraper():
+    """Test the news scraper with 1 article"""
+    try:
+        logger.info("Testing news scraper with 1 article...")
+        articles = news_scraper.scrape_spirits_business(limit=1)
+        
+        return {
+            "success": True,
+            "message": f"Successfully scraped {len(articles)} article(s)",
+            "articles": articles
+        }
+    except Exception as e:
+        logger.error(f"Scraper test error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/scraper/run")
+async def run_scraper(limit: int = 5, db: Session = Depends(get_db)):
+    """
+    Manually trigger the news scraper.
+    Scrapes articles and adds them to the content queue for approval.
+    """
+    try:
+        logger.info(f"Running news scraper (limit: {limit})...")
+        
+        articles = news_scraper.scrape_spirits_business(limit=limit)
+        
+        created_count = 0
+        for article in articles:
+            try:
+                existing = db.query(ContentQueue).filter(
+                    ContentQueue.source_url == article['url']
+                ).first()
+                
+                if existing:
+                    logger.info(f"Article already exists: {article['title'][:50]}...")
+                    continue
+                
+                content_entry = ContentQueue(
+                    status="draft",
+                    source="The Spirits Business",
+                    source_url=article['url'],
+                    original_text=article['excerpt'],
+                    translated_text=None,
+                    image_url=None,
+                    platforms=["facebook", "linkedin"],
+                    extra_metadata={
+                        "title": article['title'],
+                        "date": article['date'],
+                        "author": article['author'],
+                        "scraped_at": article['scraped_at']
+                    }
+                )
+                
+                db.add(content_entry)
+                created_count += 1
+                
+            except Exception as e:
+                logger.error(f"Error saving article: {str(e)}")
+                continue
+        
+        db.commit()
+        
+        logger.info(f"Scraper completed: {len(articles)} scraped, {created_count} new articles added")
+        
+        return {
+            "success": True,
+            "message": f"Scraper completed successfully",
+            "scraped": len(articles),
+            "new_articles": created_count,
+            "articles": articles
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Scraper error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

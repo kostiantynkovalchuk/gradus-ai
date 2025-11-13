@@ -8,6 +8,7 @@ class ContentQueue(Base):
     id = Column(Integer, primary_key=True, index=True)
     status = Column(String(20), nullable=False)
     source = Column(String(255))
+    source_url = Column(String(500))
     source_title = Column(Text)
     original_text = Column(Text)
     translated_text = Column(Text)
@@ -20,6 +21,7 @@ class ContentQueue(Base):
     reviewed_by = Column(String(100))
     rejection_reason = Column(Text)
     edit_history = Column(JSON)
+    extra_metadata = Column(JSON)
     analytics = Column(JSON)
     
     __table_args__ = (
