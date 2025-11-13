@@ -344,15 +344,15 @@ async def run_scraper(limit: int = 5, db: Session = Depends(get_db)):
                     status="draft",
                     source="The Spirits Business",
                     source_url=article['url'],
-                    original_text=article['excerpt'],
+                    original_text=article.get('content', ''),
                     translated_text=None,
-                    image_url=None,
+                    image_url=article.get('image_url'),
                     platforms=["facebook", "linkedin"],
                     extra_metadata={
-                        "title": article['title'],
-                        "date": article['date'],
-                        "author": article['author'],
-                        "scraped_at": article['scraped_at']
+                        "title": article.get('title'),
+                        "published_date": article.get('published_date'),
+                        "author": article.get('author'),
+                        "scraped_at": article.get('scraped_at')
                     }
                 )
                 

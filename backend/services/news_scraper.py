@@ -76,18 +76,22 @@ class NewsScraper:
                             excerpt = text[:300]
                             break
                 
+                clean_data = self.extract_article_content(article_url)
+                
                 article_data = {
                     'source': 'The Spirits Business',
                     'url': article_url,
-                    'title': title,
-                    'excerpt': excerpt if excerpt else title,
-                    'date': date_str,
+                    'title': clean_data.get('title') or title,
+                    'summary': clean_data.get('content', '')[:1000],
+                    'content': clean_data.get('content', ''),
+                    'image_url': '',
+                    'published_date': date_str,
                     'author': author,
                     'scraped_at': datetime.utcnow().isoformat()
                 }
                 
                 articles.append(article_data)
-                logger.info(f"Scraped article: {title[:50]}...")
+                logger.info(f"Scraped article: {title[:50]}... ({len(clean_data.get('content', ''))} chars)")
             
             logger.info(f"Successfully scraped {len(articles)} articles from The Spirits Business")
             return articles
@@ -96,9 +100,55 @@ class NewsScraper:
             logger.error(f"Error scraping The Spirits Business: {str(e)}")
             raise
     
+    def extract_article_content(self, url: str) -> Dict[str, str]:
+        """
+        Extract clean article content from URL using Trafilatura.
+        Removes metadata like date, author, category.
+        
+        Returns dict with 'title' and 'content'
+        """
+        try:
+            logger.info(f"Extracting clean content from: {url}")
+            
+            downloaded = trafilatura.fetch_url(url)
+            
+            if not downloaded:
+                logger.warning(f"Failed to download {url}")
+                return {"title": "", "content": ""}
+            
+            result = trafilatura.extract(
+                downloaded,
+                include_comments=False,
+                include_tables=False,
+                output_format='json',
+                with_metadata=True
+            )
+            
+            if result:
+                import json
+                data = json.loads(result)
+                
+                title = data.get('title', '')
+                content = data.get('text', '')
+                
+                logger.info(f"Extracted {len(content)} chars from: {title[:50]}...")
+                
+                return {
+                    "title": title,
+                    "content": content
+                }
+            
+            logger.warning(f"No content extracted from {url}")
+            return {"title": "", "content": ""}
+            
+        except Exception as e:
+            logger.error(f"Failed to extract content from {url}: {e}")
+            return {"title": "", "content": ""}
+    
     def get_article_content(self, url: str) -> Dict:
         """
         Fetch and extract full content from a specific article URL using trafilatura.
+        (Deprecated - use extract_article_content instead)
         """
         try:
             logger.info(f"Fetching article content from: {url}")
