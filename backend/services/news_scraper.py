@@ -14,6 +14,49 @@ class NewsScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
     
+    def clean_article_content(self, content: str, title: str) -> str:
+        """
+        Clean article content by removing:
+        - Duplicate title at the beginning
+        - Author byline (By Author Name)
+        - Related news section at the end
+        - Extra metadata
+        
+        Args:
+            content: Raw article text
+            title: Article title
+            
+        Returns:
+            Clean article content
+        """
+        if not content:
+            return ""
+        
+        title_escaped = re.escape(title)
+        content = re.sub(f'^{title_escaped}\\s*', '', content, flags=re.IGNORECASE)
+        
+        byline_pattern = r'(?:^|\n)By\s+[A-Z][a-zA-Z\'\-\.]*(?:\s+[A-Z][a-zA-Z\'\-\.]*)*(?=\n|$|[A-Z][a-z]|[A-Z]{2,})'
+        content = re.sub(byline_pattern, '\n', content, flags=re.MULTILINE)
+        
+        content = re.split(r'Related news|Related articles|Related content', content, flags=re.IGNORECASE)[0]
+        
+        content = re.sub(r'\n\s*\n+', '\n\n', content)
+        content = content.strip()
+        
+        return content
+    
+    def extract_author(self, content: str) -> str:
+        """
+        Extract author name from content.
+        Handles multi-word names, hyphens, apostrophes, and initials.
+        Returns author name or empty string
+        """
+        byline_pattern = r'(?:^|\n)By\s+([A-Z][a-zA-Z\'\-\.]*(?:\s+[A-Z][a-zA-Z\'\-\.]*)*?)(?=\n|$|[A-Z][a-z]|[A-Z]{2,})'
+        match = re.search(byline_pattern, content, flags=re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+        return ""
+    
     def scrape_spirits_business(self, limit: int = 5) -> List[Dict]:
         """
         Scrape latest articles from The Spirits Business homepage.
@@ -77,13 +120,23 @@ class NewsScraper:
                             break
                 
                 clean_data = self.extract_article_content(article_url)
+                raw_content = clean_data.get('content', '')
+                article_title = clean_data.get('title') or title
+                
+                extracted_author = self.extract_author(raw_content)
+                if extracted_author:
+                    author = extracted_author
+                elif author:
+                    author = re.sub(r'^By\s+', '', author).strip()
+                
+                cleaned_content = self.clean_article_content(raw_content, article_title)
                 
                 article_data = {
                     'source': 'The Spirits Business',
                     'url': article_url,
-                    'title': clean_data.get('title') or title,
-                    'summary': clean_data.get('content', '')[:1000],
-                    'content': clean_data.get('content', ''),
+                    'title': article_title,
+                    'summary': cleaned_content[:1000],
+                    'content': cleaned_content,
                     'image_url': '',
                     'published_date': date_str,
                     'author': author,
@@ -91,7 +144,7 @@ class NewsScraper:
                 }
                 
                 articles.append(article_data)
-                logger.info(f"Scraped article: {title[:50]}... ({len(clean_data.get('content', ''))} chars)")
+                logger.info(f"Scraped article: {title[:50]}... ({len(cleaned_content)} chars cleaned)")
             
             logger.info(f"Successfully scraped {len(articles)} articles from The Spirits Business")
             return articles

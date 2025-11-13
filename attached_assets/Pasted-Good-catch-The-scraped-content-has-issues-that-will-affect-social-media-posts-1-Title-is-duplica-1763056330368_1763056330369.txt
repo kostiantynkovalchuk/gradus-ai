@@ -1,0 +1,125 @@
+Good catch! The scraped content has issues that will affect social media posts:
+
+1. Title is duplicated in content: "IWSR cuts 2025 alcohol forecast By Nicola Carruthers..."
+2. Author name appears in content: "By Nicola Carruthers"
+3. Related news appears at end: "Related news El Jimador New Mix RTDs land in US"
+
+We need to clean the content BEFORE translation and posting.
+
+Please update the scraper:
+
+UPDATE backend/services/news_scraper.py:
+
+Add a content cleaning method:
+```python
+import re
+
+def clean_article_content(self, content: str, title: str) -> str:
+    """
+    Clean article content by removing:
+    - Duplicate title at the beginning
+    - Author byline (By Author Name)
+    - Related news section at the end
+    - Extra metadata
+    
+    Args:
+        content: Raw article text
+        title: Article title
+        
+    Returns:
+        Clean article content
+    """
+    if not content:
+        return ""
+    
+    # Remove title if it appears at the start
+    # Make title regex-safe
+    title_escaped = re.escape(title)
+    content = re.sub(f'^{title_escaped}\\s*', '', content, flags=re.IGNORECASE)
+    
+    # Remove author byline patterns
+    # Matches: "By Author Name", "By Author Name|Category", etc.
+    content = re.sub(r'^By\s+[A-Z][a-z]+\s+[A-Z][a-z]+(\s*\|.*?)?[\s]*', '', content, flags=re.MULTILINE)
+    content = re.sub(r'By\s+[A-Z][a-z]+\s+[A-Z][a-z]+', '', content)
+    
+    # Remove "Related news" section and everything after it
+    content = re.split(r'Related news|Related articles|Related content', content, flags=re.IGNORECASE)[0]
+    
+    # Remove extra whitespace and newlines
+    content = re.sub(r'\n\s*\n+', '\n\n', content)  # Multiple newlines → double newline
+    content = content.strip()
+    
+    return content
+
+
+def extract_author(self, content: str) -> str:
+    """
+    Extract author name from content
+    Returns author name or empty string
+    """
+    match = re.search(r'By\s+([A-Z][a-z]+\s+[A-Z][a-z]+)', content)
+    if match:
+        return match.group(1)
+    return ""
+```
+
+UPDATE the scrape_spirits_business() method to use cleaning:
+```python
+def scrape_spirits_business(self, limit: int = 5) -> List[Dict]:
+    """Scrape with content cleaning"""
+    articles = []
+    
+    try:
+        # ... existing scraping code ...
+        
+        for article in article_elements:
+            # ... extract title, url, etc. ...
+            
+            if title and url:
+                # Extract content
+                clean_data = self.extract_article_content(url)
+                raw_content = clean_data.get('content', '')
+                
+                # Extract author BEFORE cleaning
+                author = self.extract_author(raw_content)
+                
+                # Clean content
+                clean_content = self.clean_article_content(raw_content, title)
+                
+                articles.append({
+                    'title': clean_data.get('title') or title,
+                    'url': url,
+                    'content': clean_content,  # Clean content!
+                    'summary': clean_content[:500],  # First 500 chars of clean content
+                    'author': author,  # Store separately
+                    'image_url': image_url,
+                    'source': 'The Spirits Business',
+                    'published_date': datetime.now().isoformat(),
+                    'scraped_at': datetime.now().isoformat()
+                })
+        
+        return articles
+        
+    except Exception as e:
+        logger.error(f"Scraping error: {e}")
+        return []
+```
+
+UPDATE database saving to include author in metadata:
+```python
+new_article = ContentQueue(
+    original_text=article.get('content', ''),  # Clean content
+    source_url=article.get('url'),
+    status='draft',
+    extra_metadata={
+        'title': article.get('title'),
+        'author': article.get('author', ''),  # Store author separately
+        'source': article.get('source'),
+        'image_url': article.get('image_url'),
+        'published_date': article.get('published_date'),
+        'scraped_at': article.get('scraped_at')
+    }
+)
+```
+
+Please implement these cleaning functions to ensure posts look professional!
