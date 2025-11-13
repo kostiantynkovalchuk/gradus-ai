@@ -13,6 +13,7 @@ from services.image_generator import image_generator
 from services.social_poster import social_poster
 from services.notification_service import notification_service
 from services.news_scraper import news_scraper
+from services.translation_service import translation_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -379,6 +380,110 @@ async def run_scraper(limit: int = 5, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         logger.error(f"Scraper error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/translate/article/{article_id}")
+async def translate_article_endpoint(article_id: int, db: Session = Depends(get_db)):
+    """
+    Translate a single article by ID
+    Updates the article's translated_text and status
+    """
+    try:
+        article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+        
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        original_text = article.original_text or ''
+        
+        article_data = {
+            'id': article_id,
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': original_text,
+            'summary': original_text[:1000] if original_text else ''
+        }
+        
+        logger.info(f"Translating article {article_id}: {article_data['title'][:50]}...")
+        
+        translated_text = translation_service.translate_article(article_data)
+        
+        if translated_text:
+            article.translated_text = translated_text
+            article.status = 'pending_approval'
+            db.commit()
+            
+            logger.info(f"Article {article_id} translated successfully")
+            
+            return {
+                "status": "success",
+                "article_id": article_id,
+                "translated_length": len(translated_text),
+                "preview": translated_text[:200] + "..."
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Translation failed")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Translation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/translate/pending")
+async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_db)):
+    """
+    Translate all articles with status='draft'
+    """
+    try:
+        draft_articles = db.query(ContentQueue).filter(
+            ContentQueue.status == 'draft',
+            ContentQueue.translated_text == None
+        ).limit(limit).all()
+        
+        if not draft_articles:
+            return {
+                "status": "success",
+                "message": "No articles to translate",
+                "translated_count": 0,
+                "total_draft": 0
+            }
+        
+        logger.info(f"Translating {len(draft_articles)} draft articles...")
+        
+        translated_count = 0
+        
+        for article in draft_articles:
+            original_text = article.original_text or ''
+            
+            article_data = {
+                'id': article.id,
+                'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                'content': original_text,
+                'summary': original_text[:1000] if original_text else ''
+            }
+            
+            translated_text = translation_service.translate_article(article_data)
+            
+            if translated_text:
+                article.translated_text = translated_text
+                article.status = 'pending_approval'
+                translated_count += 1
+                logger.info(f"Translated article {article.id}: {article_data['title'][:50]}...")
+        
+        db.commit()
+        
+        logger.info(f"Translation completed: {translated_count}/{len(draft_articles)} articles translated")
+        
+        return {
+            "status": "success",
+            "translated_count": translated_count,
+            "total_draft": len(draft_articles)
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Batch translation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

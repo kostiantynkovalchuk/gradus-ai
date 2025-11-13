@@ -1,0 +1,188 @@
+Excellent work on the scraper! Now let's add translation for scraped articles.
+
+Please implement ONLY the translation service:
+
+1. CREATE backend/services/translation_service.py:
+```python
+import os
+from anthropic import Anthropic
+from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TranslationService:
+    def __init__(self):
+        self.claude_api_key = os.getenv('CLAUDE_API_KEY')
+        self.client = Anthropic(api_key=self.claude_api_key) if self.claude_api_key else None
+    
+    def translate_article(self, article_data: Dict) -> Optional[str]:
+        """
+        Translate article from English to Ukrainian using Claude
+        
+        Args:
+            article_data: Dict with 'title' and 'content' or 'summary'
+            
+        Returns:
+            Ukrainian translation or None if failed
+        """
+        if not self.client:
+            logger.error("Claude API client not initialized")
+            return None
+        
+        title = article_data.get('title', '')
+        content = article_data.get('content') or article_data.get('summary', '')
+        
+        # Combine title and content
+        full_text = f"{title}\n\n{content}"
+        
+        # Translation prompt
+        prompt = f"""Переведи следующую статью о спиртных напитках на украинский язык.
+
+Требования к переводу:
+- Профессиональный стиль для алкогольной индустрии
+- Сохрани все термины и названия брендов как есть (например: vodka → vodka, не горілка)
+- Естественный украинский язык, не дословный перевод
+- Сохрани структуру и форматирование
+- Tone of voice: информативный, но не сухой
+
+СТАТЬЯ:
+
+{full_text}
+
+Переведи только текст статьи, без комментариев."""
+
+        try:
+            message = self.client.messages.create(
+                model="claude-sonnet-4.5-20250929",
+                max_tokens=4000,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
+            )
+            
+            translation = message.content[0].text.strip()
+            logger.info(f"Translated article: {title[:50]}...")
+            return translation
+            
+        except Exception as e:
+            logger.error(f"Translation failed: {e}")
+            return None
+    
+    def translate_batch(self, articles: list) -> Dict[int, str]:
+        """
+        Translate multiple articles
+        
+        Returns:
+            Dict mapping article IDs to translations
+        """
+        translations = {}
+        
+        for article in articles:
+            article_id = article.get('id')
+            translation = self.translate_article(article)
+            
+            if translation:
+                translations[article_id] = translation
+        
+        return translations
+```
+
+2. ADD TRANSLATION ENDPOINTS in backend/main.py:
+```python
+from services.translation_service import TranslationService
+from sqlalchemy.orm import Session
+from database import get_db
+from models import ContentQueue
+
+@app.post("/api/translate/article/{article_id}")
+async def translate_article(article_id: int, db: Session = Depends(get_db)):
+    """
+    Translate a single article by ID
+    Updates the article's translated_text and status
+    """
+    # Get article from database
+    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    # Prepare article data for translation
+    article_data = {
+        'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+        'content': article.original_text,
+        'summary': article.original_text[:1000]  # First 1000 chars if no full content
+    }
+    
+    # Translate
+    translation_service = TranslationService()
+    translated_text = translation_service.translate_article(article_data)
+    
+    if translated_text:
+        # Update database
+        article.translated_text = translated_text
+        article.status = 'pending_approval'  # Move to approval stage
+        db.commit()
+        
+        return {
+            "status": "success",
+            "article_id": article_id,
+            "translated_length": len(translated_text),
+            "preview": translated_text[:200] + "..."
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Translation failed")
+
+
+@app.post("/api/translate/pending")
+async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_db)):
+    """
+    Translate all articles with status='draft'
+    """
+    # Get draft articles
+    draft_articles = db.query(ContentQueue).filter(
+        ContentQueue.status == 'draft',
+        ContentQueue.translated_text == None
+    ).limit(limit).all()
+    
+    if not draft_articles:
+        return {
+            "status": "success",
+            "message": "No articles to translate"
+        }
+    
+    translation_service = TranslationService()
+    translated_count = 0
+    
+    for article in draft_articles:
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text,
+            'summary': article.original_text[:1000]
+        }
+        
+        translated_text = translation_service.translate_article(article_data)
+        
+        if translated_text:
+            article.translated_text = translated_text
+            article.status = 'pending_approval'
+            translated_count += 1
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "translated_count": translated_count,
+        "total_draft": len(draft_articles)
+    }
+```
+
+That's it! Just implement:
+- translation_service.py with translate_article()
+- POST /api/translate/article/{id} - translate single article
+- POST /api/translate/pending - translate all draft articles
+
+We'll test it manually, then add Telegram notifications in the next step.
+
+Please implement and let me know when ready!
