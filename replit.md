@@ -42,6 +42,8 @@ This project implements an intelligent content management system with human-in-t
 - PostgreSQL database with ContentQueue and ApprovalLog models
 - Human-in-the-loop approval workflow
 - Service architecture for extensibility
+- **News scraper for The Spirits Business** (manual trigger)
+- Telegram notifications for content approval
 
 ✅ **Frontend (React + Vite)**
 - Dashboard with statistics
@@ -51,63 +53,106 @@ This project implements an intelligent content management system with human-in-t
 - Responsive UI with Tailwind CSS
 
 ✅ **API Endpoints**
-- `POST /chat` - Chat with Claude AI
-- `POST /translate` - Translate English to Ukrainian
+
+**Content Management:**
 - `GET /api/content/pending` - Get pending content
 - `POST /api/content/{id}/approve` - Approve content
 - `POST /api/content/{id}/reject` - Reject content
 - `PUT /api/content/{id}/edit` - Edit content
+- `GET /api/content/history` - Get content history
 - `GET /api/content/stats` - Get statistics
+
+**AI Services:**
+- `POST /chat` - Chat with Claude AI
+- `POST /translate` - Translate English to Ukrainian
+
+**News Scraper:**
+- `POST /api/scraper/test` - Test scraper with 1 article
+- `POST /api/scraper/run?limit=5` - Manually scrape articles (default: 5)
+
+**Notifications:**
+- `POST /api/test/telegram` - Test Telegram notification
 
 ## Environment Variables
 
-Required:
+**Required:**
 - `ANTHROPIC_API_KEY` - Claude AI API key
 - `DATABASE_URL` - PostgreSQL connection (auto-configured by Replit)
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token for notifications
+- `TELEGRAM_CHAT_ID` - Telegram chat ID for notifications
 
-Optional (for future features):
+**Optional (for future features):**
 - `OPENAI_API_KEY` - For DALL-E image generation
 - `PINECONE_API_KEY` - For RAG functionality
-- `TELEGRAM_BOT_TOKEN_TRAINING` - Training bot
-- `TELEGRAM_BOT_TOKEN_HR` - HR bot
 - `FACEBOOK_PAGE_ACCESS_TOKEN` - Facebook posting
 - `LINKEDIN_ACCESS_TOKEN` - LinkedIn posting
 
 ## Running the Application
 
+**Backend**: Runs automatically on port 8000 (configured workflow)
+```bash
+cd backend && python start.py
+```
+
 **Frontend**: Runs automatically on port 5000 (configured workflow)
 - Access the dashboard at the Replit webview
 
-**Backend**: Start manually when needed
-```bash
-cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 8000
-```
+**API Documentation**: http://localhost:8000/docs (when backend is running)
 
 ## Database Schema
 
 ### ContentQueue Table
-- Stores content for review and approval
-- Fields: id, status, source, original_text, translated_text, image_url, platforms, timestamps
-- Status flow: draft → pending_approval → approved → posted
+Stores content for review and approval
+- **Core fields:** id, status, source, source_url, source_title
+- **Content fields:** original_text, translated_text, image_url, image_prompt
+- **Metadata:** extra_metadata (JSON), edit_history (JSON), analytics (JSON)
+- **Scheduling:** scheduled_post_time, platforms (array)
+- **Review tracking:** created_at, reviewed_at, reviewed_by, rejection_reason
+- **Status flow:** draft → pending_approval → approved → posted
 
 ### ApprovalLog Table
-- Audit trail for all approval actions
-- Fields: id, content_id, action, moderator, timestamp, details
+Audit trail for all approval actions
+- **Fields:** id, content_id, action, moderator, timestamp, details (JSON)
+
+## News Scraper
+
+The news scraper fetches latest articles from The Spirits Business website:
+
+**Features:**
+- Scrapes article metadata (title, URL, excerpt, date, author)
+- Year-agnostic URL matching (works across calendar years)
+- Duplicate detection (prevents re-adding existing articles)
+- Saves articles as "draft" status in ContentQueue
+- Uses BeautifulSoup for HTML parsing
+- Trafilatura integration available for full article content extraction (via get_article_content method)
+
+**Usage:**
+```bash
+# Test with 1 article
+curl -X POST http://localhost:8000/api/scraper/test
+
+# Scrape 5 articles (default)
+curl -X POST http://localhost:8000/api/scraper/run
+
+# Scrape 10 articles
+curl -X POST http://localhost:8000/api/scraper/run?limit=10
+```
 
 ## Next Steps (Phase 2)
 
-🔲 Stage 1: News Automation
-- Implement automated news scraping
-- DALL-E image generation
-- Scheduled social media posting
-- Notification system
+✅ **Stage 1: News Scraping (Manual)** - COMPLETED
+- ✅ News scraper for The Spirits Business
+- ✅ Telegram notifications
+- 🔲 DALL-E image generation
+- 🔲 Scheduled/automated scraping
+- 🔲 Social media posting
 
-🔲 Stage 2: Outreach Agent
+🔲 **Stage 2: Outreach Agent**
 - Social media monitoring
 - Lead qualification
 - Personalized outreach
 
-🔲 Stages 3 & 4: Telegram Bots
+🔲 **Stages 3 & 4: Telegram Bots**
 - Training bot with RAG
 - HR recruitment bot
 
