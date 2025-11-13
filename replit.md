@@ -104,7 +104,7 @@ cd backend && python start.py
 ### ContentQueue Table
 Stores content for review and approval
 - **Core fields:** id, status, source, source_url, source_title
-- **Content fields:** original_text, translated_text, image_url, image_prompt
+- **Content fields:** original_text, translated_title, translated_text, image_url, image_prompt
 - **Metadata:** extra_metadata (JSON), edit_history (JSON), analytics (JSON)
 - **Scheduling:** scheduled_post_time, platforms (array)
 - **Review tracking:** created_at, reviewed_at, reviewed_by, rejection_reason
@@ -119,12 +119,20 @@ Audit trail for all approval actions
 The news scraper fetches latest articles from The Spirits Business website:
 
 **Features:**
+- **Clean content extraction** using Trafilatura (removes metadata prefixes like dates/authors)
 - Scrapes article metadata (title, URL, excerpt, date, author)
 - Year-agnostic URL matching (works across calendar years)
 - Duplicate detection (prevents re-adding existing articles)
 - Saves articles as "draft" status in ContentQueue
-- Uses BeautifulSoup for HTML parsing
-- Trafilatura integration available for full article content extraction (via get_article_content method)
+- Full article text extraction (2000-3000+ characters of clean content)
+
+**Translation Service:**
+- **Separate title and content translations** for better quality
+- Title translation: 200 token limit for concise headlines
+- Content translation: 4000 token limit for full article text
+- Uses Claude Sonnet 4 model
+- Automatic Telegram notifications when content is ready for approval
+- Saves both `translated_title` and `translated_text` to database
 
 **Usage:**
 ```bash
