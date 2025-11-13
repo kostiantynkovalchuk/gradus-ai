@@ -1,7 +1,34 @@
+import { useState, useEffect } from 'react'
 import { BarChart, MessageSquare, FileText, Users, TrendingUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import api from '../lib/api'
 
 function HomePage() {
+  const [stats, setStats] = useState({
+    pending: 0,
+    approved: 0,
+    posted: 0,
+    rejected: 0
+  })
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetchStats()
+    const interval = setInterval(fetchStats, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const fetchStats = async () => {
+    try {
+      const response = await api.get('/content/stats')
+      setStats(response.data)
+      setLoading(false)
+    } catch (error) {
+      console.error('Failed to fetch stats:', error)
+      setLoading(false)
+    }
+  }
+
   return (
     <div>
       <div className="mb-8">
@@ -15,7 +42,9 @@ function HomePage() {
             <h3 className="text-lg font-semibold">Pending Approval</h3>
             <FileText className="text-purple-600" size={24} />
           </div>
-          <p className="text-3xl font-bold text-purple-600">0</p>
+          <p className="text-3xl font-bold text-purple-600">
+            {loading ? '...' : stats.pending}
+          </p>
           <p className="text-sm text-gray-500 mt-2">Content awaiting review</p>
         </div>
 
@@ -24,7 +53,9 @@ function HomePage() {
             <h3 className="text-lg font-semibold">Approved</h3>
             <TrendingUp className="text-green-600" size={24} />
           </div>
-          <p className="text-3xl font-bold text-green-600">0</p>
+          <p className="text-3xl font-bold text-green-600">
+            {loading ? '...' : stats.approved}
+          </p>
           <p className="text-sm text-gray-500 mt-2">Ready to post</p>
         </div>
 
@@ -33,7 +64,9 @@ function HomePage() {
             <h3 className="text-lg font-semibold">Posted</h3>
             <Users className="text-blue-600" size={24} />
           </div>
-          <p className="text-3xl font-bold text-blue-600">0</p>
+          <p className="text-3xl font-bold text-blue-600">
+            {loading ? '...' : stats.posted}
+          </p>
           <p className="text-sm text-gray-500 mt-2">Published content</p>
         </div>
       </div>
