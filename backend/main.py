@@ -405,13 +405,14 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
         
         logger.info(f"Translating article {article_id}: {article_data['title'][:50]}...")
         
-        translated_text, notification_sent = translation_service.translate_article_with_notification(
+        translation, notification_sent = translation_service.translate_article_with_notification(
             article_data,
             article_id
         )
         
-        if translated_text:
-            article.translated_text = translated_text
+        if translation and translation.get('title') and translation.get('content'):
+            article.translated_title = translation['title']
+            article.translated_text = translation['content']
             article.status = 'pending_approval'
             db.commit()
             
@@ -421,8 +422,9 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
                 "status": "success",
                 "article_id": article_id,
                 "notification_sent": notification_sent,
-                "translated_length": len(translated_text),
-                "preview": translated_text[:200] + "..."
+                "translated_title": translation['title'],
+                "translated_content_length": len(translation['content']),
+                "preview": translation['content'][:200] + "..."
             }
         else:
             raise HTTPException(status_code=500, detail="Translation failed")
@@ -469,13 +471,14 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
                 'summary': original_text[:1000] if original_text else ''
             }
             
-            translated_text, notification_sent = translation_service.translate_article_with_notification(
+            translation, notification_sent = translation_service.translate_article_with_notification(
                 article_data,
                 article.id
             )
             
-            if translated_text:
-                article.translated_text = translated_text
+            if translation and translation.get('title') and translation.get('content'):
+                article.translated_title = translation['title']
+                article.translated_text = translation['content']
                 article.status = 'pending_approval'
                 translated_count += 1
                 if notification_sent:

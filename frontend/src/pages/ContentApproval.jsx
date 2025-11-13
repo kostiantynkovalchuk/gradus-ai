@@ -98,17 +98,34 @@ function ContentApproval() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Original (English):</p>
-                  <div className="p-3 bg-gray-50 rounded text-sm">
-                    {content.original_text || 'No content'}
+              <div className="space-y-4 mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Original Title (English):</p>
+                    <div className="p-3 bg-gray-50 rounded text-sm font-semibold">
+                      {content.extra_metadata?.title || 'No title'}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Translated Title (Ukrainian):</p>
+                    <div className="p-3 bg-blue-50 rounded text-sm font-semibold">
+                      {content.translated_title || 'No translation'}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Translation (Ukrainian):</p>
-                  <div className="p-3 bg-gray-50 rounded text-sm">
-                    {content.translated_text || 'No translation'}
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Original Content (English):</p>
+                    <div className="p-3 bg-gray-50 rounded text-sm max-h-64 overflow-y-auto">
+                      {content.original_text || 'No content'}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Translated Content (Ukrainian):</p>
+                    <div className="p-3 bg-blue-50 rounded text-sm max-h-64 overflow-y-auto">
+                      {content.translated_text || 'No translation'}
+                    </div>
                   </div>
                 </div>
               </div>

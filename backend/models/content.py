@@ -11,6 +11,7 @@ class ContentQueue(Base):
     source_url = Column(String(500))
     source_title = Column(Text)
     original_text = Column(Text)
+    translated_title = Column(Text)
     translated_text = Column(Text)
     image_url = Column(String(255))
     image_prompt = Column(Text)

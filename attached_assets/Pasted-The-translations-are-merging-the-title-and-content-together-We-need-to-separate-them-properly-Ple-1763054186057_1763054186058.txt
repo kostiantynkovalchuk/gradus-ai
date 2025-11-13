@@ -1,0 +1,85 @@
+The translations are merging the title and content together. We need to separate them properly.
+
+Please update the translation service:
+
+1. UPDATE backend/services/translation_service.py:
+
+Change the translate_article() method to translate title and content SEPARATELY:
+```python
+def translate_article(self, article_data: Dict) -> Dict[str, str]:
+    """
+    Translate article title and content separately
+    
+    Returns:
+        Dict with 'title' and 'content' keys
+    """
+    if not self.client:
+        logger.error("Claude API client not initialized")
+        return {"title": "", "content": ""}
+    
+    title = article_data.get('title', '')
+    content = article_data.get('content') or article_data.get('summary', '')
+    
+    # Translate title separately
+    title_prompt = f"""Переведи только заголовок статьи на украинский язык профессионально:
+
+{title}
+
+Верни только переведенный заголовок, без дополнительных слов."""
+
+    # Translate content separately
+    content_prompt = f"""Переведи текст статьи на украинский язык профессионально:
+
+{content}
+
+Требования:
+- Сохрани термины и бренды как есть
+- Естественный украинский язык
+- Информативный стиль
+
+Верни только переведенный текст."""
+
+    try:
+        # Translate title
+        title_message = self.client.messages.create(
+            model="claude-sonnet-4.5-20250929",
+            max_tokens=200,
+            messages=[{"role": "user", "content": title_prompt}]
+        )
+        translated_title = title_message.content[0].text.strip()
+        
+        # Translate content
+        content_message = self.client.messages.create(
+            model="claude-sonnet-4.5-20250929",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": content_prompt}]
+        )
+        translated_content = content_message.content[0].text.strip()
+        
+        logger.info(f"Translated article: {title[:50]}...")
+        
+        return {
+            "title": translated_title,
+            "content": translated_content
+        }
+        
+    except Exception as e:
+        logger.error(f"Translation failed: {e}")
+        return {"title": "", "content": ""}
+```
+
+2. UPDATE the database schema to store title separately:
+
+Add a new column `translated_title` to ContentQueue model if it doesn't exist.
+
+3. UPDATE the endpoints to save both title and content:
+```python
+translation = translation_service.translate_article(article_data)
+
+if translation and translation.get('title') and translation.get('content'):
+    article.translated_title = translation['title']  # NEW
+    article.translated_text = translation['content']  # UPDATED
+    article.status = 'pending_approval'
+```
+
+Please implement these changes to properly separate title and content!

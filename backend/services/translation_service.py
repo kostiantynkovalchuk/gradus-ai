@@ -14,59 +14,67 @@ class TranslationService:
         from services.notification_service import notification_service
         self.notification_service = notification_service
     
-    def translate_article(self, article_data: Dict) -> Optional[str]:
+    def translate_article(self, article_data: Dict) -> Dict[str, str]:
         """
-        Translate article from English to Ukrainian using Claude
+        Translate article title and content separately
         
         Args:
             article_data: Dict with 'title' and 'content' or 'summary'
             
         Returns:
-            Ukrainian translation or None if failed
+            Dict with 'title' and 'content' keys
         """
         if not self.client:
             logger.error("Claude API client not initialized")
-            return None
+            return {"title": "", "content": ""}
         
         title = article_data.get('title', '')
         content = article_data.get('content') or article_data.get('summary', '')
         
-        full_text = f"{title}\n\n{content}"
-        
-        prompt = f"""Переведи следующую статью о спиртных напитках на украинский язык.
+        title_prompt = f"""Переведи только заголовок статьи на украинский язык профессионально:
 
-Требования к переводу:
-- Профессиональный стиль для алкогольной индустрии
-- Сохрани все термины и названия брендов как есть (например: vodka → vodka, не горілка)
-- Естественный украинский язык, не дословный перевод
-- Сохрани структуру и форматирование
-- Tone of voice: информативный, но не сухой
+{title}
 
-СТАТЬЯ:
+Верни только переведенный заголовок, без дополнительных слов."""
 
-{full_text}
+        content_prompt = f"""Переведи текст статьи на украинский язык профессионально:
 
-Переведи только текст статьи, без комментариев."""
+{content}
+
+Требования:
+- Сохрани термины и бренды как есть
+- Естественный украинский язык
+- Информативный стиль
+
+Верни только переведенный текст."""
 
         try:
-            message = self.client.messages.create(
+            title_message = self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=200,
+                messages=[{"role": "user", "content": title_prompt}]
+            )
+            translated_title = title_message.content[0].text.strip()
+            
+            content_message = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=4000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
+                messages=[{"role": "user", "content": content_prompt}]
             )
+            translated_content = content_message.content[0].text.strip()
             
-            translation = message.content[0].text.strip()
             logger.info(f"Translated article: {title[:50]}...")
-            return translation
+            
+            return {
+                "title": translated_title,
+                "content": translated_content
+            }
             
         except Exception as e:
             logger.error(f"Translation failed: {e}")
-            return None
+            return {"title": "", "content": ""}
     
-    def translate_article_with_notification(self, article_data: Dict, article_id: int) -> tuple[Optional[str], bool]:
+    def translate_article_with_notification(self, article_data: Dict, article_id: int) -> tuple[Dict[str, str], bool]:
         """
         Translate article and send Telegram notification
         
@@ -75,17 +83,17 @@ class TranslationService:
             article_id: Database ID of the article
             
         Returns:
-            Tuple of (Ukrainian translation or None, notification_sent boolean)
+            Tuple of (Dict with 'title' and 'content', notification_sent boolean)
         """
         translation = self.translate_article(article_data)
         notification_sent = False
         
-        if translation:
+        if translation and translation.get('title') and translation.get('content'):
             notification_data = {
                 'id': article_id,
                 'source': 'The Spirits Business',
-                'title': article_data.get('title', 'No title'),
-                'translated_text': translation,
+                'title': translation['title'],
+                'translated_text': translation['content'],
                 'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')
             }
             
