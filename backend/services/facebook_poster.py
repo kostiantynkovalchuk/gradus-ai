@@ -69,12 +69,25 @@ class FacebookPoster:
         }
         
         try:
+            logger.info(f"Posting to Facebook with image: {image_url[:100]}...")
             response = requests.post(url, data=payload, timeout=30)
             result = response.json()
             
+            logger.info(f"Facebook API response: {result}")
+            
             if 'id' in result:
                 post_id = result['id']
-                post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_id.split('_')[1]}"
+                
+                try:
+                    if '_' in post_id:
+                        post_number = post_id.split('_')[1]
+                    else:
+                        post_number = post_id
+                    
+                    post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_number}"
+                except Exception as parse_error:
+                    logger.error(f"Error parsing post_id '{post_id}': {parse_error}")
+                    post_url = f"https://www.facebook.com/{self.page_id}"
                 
                 logger.info(f"Posted to Facebook successfully: {post_id}")
                 
@@ -85,10 +98,19 @@ class FacebookPoster:
                 }
             else:
                 logger.error(f"Facebook API error: {result}")
+                
+                if 'error' in result:
+                    error = result['error']
+                    logger.error(f"Facebook error code {error.get('code')}: {error.get('message')}")
+                    
+                    if error.get('code') == 190:
+                        logger.error("Facebook access token is invalid or expired!")
+                
                 return None
                 
         except Exception as e:
             logger.error(f"Failed to post to Facebook: {e}")
+            logger.exception("Full traceback:")
             return None
     
     def post_text_only(self, message: str) -> Optional[Dict]:
@@ -103,12 +125,25 @@ class FacebookPoster:
         }
         
         try:
+            logger.info(f"Posting text-only to Facebook...")
             response = requests.post(url, data=payload, timeout=30)
             result = response.json()
             
+            logger.info(f"Facebook API response: {result}")
+            
             if 'id' in result:
                 post_id = result['id']
-                post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_id.split('_')[1]}"
+                
+                try:
+                    if '_' in post_id:
+                        post_number = post_id.split('_')[1]
+                    else:
+                        post_number = post_id
+                    
+                    post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_number}"
+                except Exception as parse_error:
+                    logger.error(f"Error parsing post_id '{post_id}': {parse_error}")
+                    post_url = f"https://www.facebook.com/{self.page_id}"
                 
                 logger.info(f"Posted text to Facebook successfully: {post_id}")
                 
@@ -123,6 +158,7 @@ class FacebookPoster:
                 
         except Exception as e:
             logger.error(f"Failed to post to Facebook: {e}")
+            logger.exception("Full traceback:")
             return None
     
     def verify_token(self) -> bool:
