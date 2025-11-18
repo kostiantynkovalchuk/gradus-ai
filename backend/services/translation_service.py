@@ -74,13 +74,14 @@ class TranslationService:
             logger.error(f"Translation failed: {e}")
             return {"title": "", "content": ""}
     
-    def translate_article_with_notification(self, article_data: Dict, article_id: int) -> tuple[Dict[str, str], bool]:
+    def translate_article_with_notification(self, article_data: Dict, article_id: int, image_url: str = None) -> tuple[Dict[str, str], bool]:
         """
-        Translate article and send Telegram notification
+        Translate article and send Telegram notification with image
         
         Args:
             article_data: Dict with article info
             article_id: Database ID of the article
+            image_url: Optional image URL to include in notification
             
         Returns:
             Tuple of (Dict with 'title' and 'content', notification_sent boolean)
@@ -94,6 +95,7 @@ class TranslationService:
                 'source': 'The Spirits Business',
                 'title': translation['title'],
                 'translated_text': translation['content'],
+                'image_url': image_url,
                 'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')
             }
             

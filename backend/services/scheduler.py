@@ -96,7 +96,8 @@ class ContentScheduler:
                         
                         translation, notification_sent = translation_service.translate_article_with_notification(
                             article_data,
-                            article.id
+                            article.id,
+                            article.image_url
                         )
                         
                         if translation and translation.get('title') and translation.get('content'):

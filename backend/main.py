@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -7,6 +7,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 import logging
 import threading
+import os
 
 from models import get_db, init_db
 from models.content import ContentQueue, ApprovalLog
@@ -18,6 +19,7 @@ from services.news_scraper import news_scraper
 from services.translation_service import translation_service
 from services.facebook_poster import facebook_poster
 from services.scheduler import content_scheduler
+from services.telegram_webhook import telegram_webhook_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -465,7 +467,8 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
         
         translation, notification_sent = translation_service.translate_article_with_notification(
             article_data,
-            article_id
+            article_id,
+            article.image_url
         )
         
         if translation and translation.get('title') and translation.get('content'):
@@ -531,7 +534,8 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
             
             translation, notification_sent = translation_service.translate_article_with_notification(
                 article_data,
-                article.id
+                article.id,
+                article.image_url
             )
             
             if translation and translation.get('title') and translation.get('content'):
@@ -755,6 +759,41 @@ async def get_scheduler_status():
         "jobs": jobs,
         "total_jobs": len(jobs)
     }
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Telegram webhook endpoint to handle inline button callbacks
+    
+    Receives updates from Telegram Bot API when users click inline buttons
+    
+    Security: Set TELEGRAM_WEBHOOK_SECRET environment variable and configure webhook:
+    https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>&secret_token=<SECRET>
+    """
+    try:
+        telegram_secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
+        if telegram_secret:
+            provided_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+            if provided_secret != telegram_secret:
+                logger.warning("Telegram webhook: Invalid or missing secret token")
+                raise HTTPException(status_code=403, detail="Forbidden")
+        
+        payload = await request.json()
+        
+        if 'callback_query' in payload:
+            result = telegram_webhook_handler.handle_callback_query(
+                payload['callback_query'],
+                db
+            )
+            return result
+        
+        return {"status": "ok", "message": "No callback_query found"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Telegram webhook error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
