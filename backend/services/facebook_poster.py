@@ -15,7 +15,7 @@ class FacebookPoster:
     
     def format_post_text(self, article_data: Dict) -> str:
         """
-        Format post text for Facebook
+        Format post text for Facebook with FULL Ukrainian content
         
         Args:
             article_data: Dict with title, content, source, author
@@ -24,16 +24,14 @@ class FacebookPoster:
             Formatted post text
         """
         title = article_data.get('translated_title', '')
-        content = article_data.get('translated_content', '')[:500]
+        content = article_data.get('translated_content', '')
         source = article_data.get('source', 'The Spirits Business')
         author = article_data.get('author', '')
-        original_url = article_data.get('url', '')
         
         post_text = f"""📰 {title}
 
-{content}...
+{content}
 
-🔗 Читати повністю: {original_url}
 📰 {source}"""
         
         if author:

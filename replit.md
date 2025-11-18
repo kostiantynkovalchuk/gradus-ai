@@ -221,12 +221,13 @@ Automated Facebook Page posting integrated into the content approval workflow:
 ```
 📰 [Ukrainian Title]
 
-[First 500 chars of Ukrainian content]...
+[FULL Ukrainian content - no truncation]
 
-🔗 Читати повністю: [Original article URL]
 📰 The Spirits Business
 ✍️ [Author name if available]
 ```
+
+**Note:** Facebook automatically shows "See more" for long posts (2,200+ characters), providing better UX than external links.
 
 **Testing:**
 ```bash
