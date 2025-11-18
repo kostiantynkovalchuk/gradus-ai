@@ -78,6 +78,11 @@ This project implements an intelligent content management system with human-in-t
 - `POST /api/images/regenerate/{article_id}` - Regenerate image with new prompt
 - `POST /api/images/generate-pending` - Batch generate for articles without images
 
+**Facebook Integration:**
+- `POST /api/facebook/test` - Test Facebook token validity
+- `POST /api/facebook/post-test` - Test Facebook posting with sample content
+- Auto-posting integrated into approval workflow
+
 ## Environment Variables
 
 **Required:**
@@ -89,9 +94,12 @@ This project implements an intelligent content management system with human-in-t
 **Required (for image generation):**
 - `OPENAI_API_KEY` - For DALL-E 3 image generation
 
+**Required (for Facebook posting):**
+- `FACEBOOK_PAGE_ACCESS_TOKEN` - Facebook Page access token
+- `FACEBOOK_PAGE_ID` - Facebook Page ID
+
 **Optional (for future features):**
 - `PINECONE_API_KEY` - For RAG functionality
-- `FACEBOOK_PAGE_ACCESS_TOKEN` - Facebook posting
 - `LINKEDIN_ACCESS_TOKEN` - LinkedIn posting
 
 ## Running the Application
@@ -189,14 +197,59 @@ curl -X POST http://localhost:8000/api/images/regenerate/4
 curl -X POST http://localhost:8000/api/images/generate-pending
 ```
 
+## Facebook Auto-Posting
+
+Automated Facebook Page posting integrated into the content approval workflow:
+
+**Features:**
+- **Auto-posting on approval** - Posts to Facebook automatically when content is approved
+- **Image support** - Posts with generated DALL-E images (or text-only fallback)
+- **Ukrainian content** - Properly formatted posts in Ukrainian language
+- **Post tracking** - Saves Facebook post ID and URL to database
+- **Telegram notifications** - Sends "posted" notification with Facebook link
+- **Graceful error handling** - Content approval succeeds even if posting fails
+
+**Posting Flow:**
+1. User approves content in dashboard
+2. System saves approval + sends "approved" notification
+3. **Auto-posts to Facebook** with image and formatted text
+4. Saves Facebook post URL to database
+5. Changes status to "posted"
+6. Sends "posted" Telegram notification with link
+
+**Post Format:**
+```
+📰 [Ukrainian Title]
+
+[First 500 chars of Ukrainian content]...
+
+🔗 Читати повністю: [Original article URL]
+📰 The Spirits Business
+✍️ [Author name if available]
+```
+
+**Testing:**
+```bash
+# Test Facebook token
+curl -X POST http://localhost:8000/api/facebook/test
+
+# Test posting
+curl -X POST http://localhost:8000/api/facebook/post-test
+```
+
+**Configuration:**
+- Set `FACEBOOK_PAGE_ACCESS_TOKEN` in Replit Secrets
+- Set `FACEBOOK_PAGE_ID` in Replit Secrets
+- Tokens managed securely via environment variables (never committed to git)
+
 ## Next Steps (Phase 2)
 
 ✅ **Stage 1: News Scraping (Manual)** - COMPLETED
 - ✅ News scraper for The Spirits Business
 - ✅ Telegram notifications
 - ✅ DALL-E image generation (text-free images)
+- ✅ Facebook auto-posting
 - 🔲 Scheduled/automated scraping
-- 🔲 Social media posting
 
 🔲 **Stage 2: Outreach Agent**
 - Social media monitoring

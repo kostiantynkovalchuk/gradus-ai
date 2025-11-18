@@ -14,6 +14,7 @@ from services.social_poster import social_poster
 from services.notification_service import notification_service
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
+from services.facebook_poster import facebook_poster
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -170,13 +171,54 @@ async def approve_content(
         
         notification_service.notify_content_approved({
             'id': content_id,
-            'title': content.translated_title or content.extra_metadata.get('title', 'No title'),
+            'title': content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else ''),
             'scheduled_time': str(request.scheduled_time) if request.scheduled_time else 'Відразу'
         })
         
         logger.info(f"Content {content_id} approved by {request.moderator}")
         
-        return {"message": "Content approved successfully", "content": content}
+        fb_result = None
+        if "facebook" in [p.lower() for p in request.platforms]:
+            post_data = {
+                'translated_title': content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else ''),
+                'translated_content': content.translated_text or '',
+                'url': content.source_url or '',
+                'source': content.source or 'The Spirits Business',
+                'author': (content.extra_metadata.get('author', '') if content.extra_metadata else ''),
+                'image_url': content.image_url
+            }
+            
+            fb_result = facebook_poster.post_with_image(post_data)
+            
+            if fb_result:
+                content.status = "posted"
+                
+                if not content.extra_metadata:
+                    content.extra_metadata = {}
+                content.extra_metadata['fb_post_id'] = fb_result['post_id']
+                content.extra_metadata['fb_post_url'] = fb_result['post_url']
+                
+                db.commit()
+                
+                notification_service.notify_content_posted({
+                    'id': content_id,
+                    'title': post_data['translated_title'],
+                    'platforms': ['Facebook'],
+                    'fb_post_url': fb_result['post_url'],
+                    'posted_at': fb_result['posted_at']
+                })
+                
+                logger.info(f"Content {content_id} posted to Facebook: {fb_result['post_url']}")
+        
+        if fb_result:
+            return {
+                "status": "success",
+                "message": "Content approved and posted to Facebook",
+                "content": content,
+                "fb_post_url": fb_result['post_url']
+            }
+        else:
+            return {"message": "Content approved successfully", "content": content}
         
     except HTTPException:
         raise
@@ -644,6 +686,50 @@ async def generate_images_for_pending(limit: int = 5, db: Session = Depends(get_
     except Exception as e:
         db.rollback()
         logger.error(f"Batch image generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/facebook/test")
+async def test_facebook_connection():
+    """Test Facebook API connection"""
+    try:
+        if facebook_poster.verify_token():
+            return {
+                "status": "success",
+                "message": "Facebook token is valid",
+                "page_id": facebook_poster.page_id
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Facebook token invalid")
+    except Exception as e:
+        logger.error(f"Facebook test error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/facebook/post-test")
+async def test_facebook_post():
+    """Post a test message to Facebook"""
+    try:
+        test_data = {
+            'translated_title': '🧪 Тестовий пост від Gradus AI',
+            'translated_content': 'Це тестовий пост для перевірки інтеграції з Facebook. Система автоматичного постингу працює коректно!',
+            'url': 'https://www.thespiritsbusiness.com/',
+            'source': 'Gradus AI Bot',
+            'author': 'Test System',
+            'image_url': None
+        }
+        
+        result = facebook_poster.post_with_image(test_data)
+        
+        if result:
+            return {
+                "status": "success",
+                "message": "Test post created!",
+                "post_url": result['post_url'],
+                "post_id": result['post_id']
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create test post")
+    except Exception as e:
+        logger.error(f"Facebook post test error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

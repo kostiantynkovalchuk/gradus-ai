@@ -26,14 +26,24 @@ function ContentApproval() {
   }
 
   const handleApprove = async (contentId) => {
+    if (!window.confirm('✅ Approve and post to Facebook?')) return
+    
     try {
-      await api.post(`/content/${contentId}/approve`, {
+      const response = await api.post(`/content/${contentId}/approve`, {
         moderator: 'Admin',
         platforms: ['facebook', 'linkedin']
       })
+      
+      if (response.data.status === 'success' && response.data.fb_post_url) {
+        alert(`🎉 Posted to Facebook!\n\n${response.data.fb_post_url}`)
+      } else {
+        alert('✅ Content approved successfully!')
+      }
+      
       fetchData()
     } catch (error) {
       console.error('Error approving content:', error)
+      alert('❌ Failed to approve content')
     }
   }
 
