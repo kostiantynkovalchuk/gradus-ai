@@ -197,6 +197,35 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
     
+    def check_facebook_token_task(self):
+        """
+        Task: Check Facebook token expiration
+        Runs at: 09:00 daily
+        """
+        logger.info("🤖 [SCHEDULER] Checking Facebook token expiration...")
+        
+        try:
+            from services.facebook_token_manager import facebook_token_manager
+            
+            status = facebook_token_manager.check_token_expiration()
+            
+            if status.get('error'):
+                logger.error(f"Token check failed: {status['error']}")
+                return
+            
+            days_remaining = status.get('days_remaining')
+            
+            if days_remaining is None:
+                logger.info("✅ Facebook token never expires")
+            elif days_remaining < 7:
+                logger.warning(f"⚠️ Facebook token expires in {days_remaining} days!")
+                facebook_token_manager.send_expiration_alert(days_remaining)
+            else:
+                logger.info(f"✅ Facebook token healthy ({days_remaining} days remaining)")
+                
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Token check failed: {e}")
+    
     def start(self):
         """Start the scheduler with all tasks (idempotent)"""
         if self.scheduler.running:
@@ -246,12 +275,21 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        self.scheduler.add_job(
+            self.check_facebook_token_task,
+            CronTrigger(hour=9, minute=0),
+            id='check_facebook_token',
+            name='Check Facebook token expiration',
+            replace_existing=True
+        )
+        
         self.scheduler.start()
-        logger.info("✅ Scheduler started with 4 automated tasks")
+        logger.info("✅ Scheduler started with 5 automated tasks")
         logger.info("📅 Next scrape: 00:00, 06:00, 12:00, 18:00")
         logger.info("🔄 Translation: Every hour at :15")
         logger.info("🎨 Images: Every hour at :30")
         logger.info("🗑️  Cleanup: Daily at 03:00")
+        logger.info("🔐 Token check: Daily at 09:00")
     
     def stop(self):
         """Stop the scheduler (idempotent)"""

@@ -771,6 +771,28 @@ async def test_facebook_post():
         logger.error(f"Facebook post test error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/facebook/token-status")
+async def check_facebook_token():
+    """Check Facebook token expiration status"""
+    from services.facebook_token_manager import facebook_token_manager
+    
+    status = facebook_token_manager.check_token_expiration()
+    
+    return status
+
+@app.post("/api/facebook/token-alert")
+async def send_token_alert():
+    """Manually trigger token expiration alert"""
+    from services.facebook_token_manager import facebook_token_manager
+    
+    status = facebook_token_manager.check_token_expiration()
+    
+    if status.get('days_remaining'):
+        facebook_token_manager.send_expiration_alert(status['days_remaining'])
+        return {"status": "success", "message": "Alert sent", "days_remaining": status['days_remaining']}
+    
+    return {"status": "info", "message": "Token never expires or invalid", "token_status": status}
+
 @app.get("/api/scheduler/status")
 async def get_scheduler_status():
     """Get scheduler status and upcoming jobs"""
