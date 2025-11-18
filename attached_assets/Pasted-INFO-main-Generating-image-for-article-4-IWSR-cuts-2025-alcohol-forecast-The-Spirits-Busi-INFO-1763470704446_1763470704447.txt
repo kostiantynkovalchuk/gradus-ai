@@ -1,0 +1,11 @@
+INFO:main:Generating image for article 4: IWSR cuts 2025 alcohol forecast - The Spirits Busi...
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:services.image_generator:Generated DALL-E prompt: A professional, minimalist infographic-style image featuring a sleek downward trending arrow or grap...
+INFO:httpx:HTTP Request: POST https://api.openai.com/v1/images/generations "HTTP/1.1 200 OK"
+INFO:services.image_generator:Image generated successfully: https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjjuVp775vPeMPdkNV9/img-fS4enyaqY02h4asbBbQes6tv.png?st=2025-11-18T11%3A56%3A12Z&se=2025-11-18T13%3A56%3A12Z&sp=r&sv=2024-08-04&sr=b&rscd=inline&rsct=image/png&skoid=32836cae-d25f-4fe9-827b-1c8c59c442cc&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2025-11-18T12%3A25%3A29Z&ske=2025-11-19T12%3A25%3A29Z&sks=b&skv=2024-08-04&sig=9tabaD9BktejzDDyUulsd98YOWSp/O4r4AlyPSFqagg%3D
+ERROR:main:Error generating image: (psycopg2.errors.StringDataRightTruncation) value too long for type character varying(255)
+
+[SQL: UPDATE content_queue SET image_url=%(image_url)s, image_prompt=%(image_prompt)s WHERE content_queue.id = %(content_queue_id)s]
+[parameters: {'image_url': 'https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjjuVp775vPeMPdkNV9/img-fS4enyaqY02h4asbBbQes6tv.png ... (174 characters truncated) ... e-a814-9c849652bcb3&skt=2025-11-18T12%3A25%3A29Z&ske=2025-11-19T12%3A25%3A29Z&sks=b&skv=2024-08-04&sig=9tabaD9BktejzDDyUulsd98YOWSp/O4r4AlyPSFqagg%3D', 'image_prompt': 'A professional, minimalist infographic-style image featuring a sleek downward trending arrow or graph line overlaying elegant silhouettes of various  ... (140 characters truncated) ...  to represent growth, set against a clean white or subtle gradient background with modern typography elements and subtle data visualization graphics.', 'content_queue_id': 4}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)
+INFO:     10.82.3.26:0 - "POST /api/images/generate/4 HTTP/1.1" 500 Internal Server Error
