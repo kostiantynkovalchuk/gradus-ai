@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import logging
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
-from models import SessionLocal
 from models.content import ContentQueue
 
 logger = logging.getLogger(__name__)
@@ -12,6 +11,19 @@ logger = logging.getLogger(__name__)
 class ContentScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
+    
+    def _get_db_session(self):
+        """
+        Get a properly initialized database session for scheduler tasks.
+        This ensures SessionLocal is initialized even in background threads.
+        """
+        import models
+        
+        # Ensure database is initialized (handles background thread case)
+        if models.SessionLocal is None:
+            models.init_db()
+        
+        return models.SessionLocal()
     
     def scrape_news_task(self):
         """
@@ -27,7 +39,8 @@ class ContentScheduler:
                 logger.warning("[SCHEDULER] No new articles found")
                 return
             
-            with SessionLocal() as db:
+            db = self._get_db_session()
+            try:
                 new_count = 0
                 
                 for article in articles:
@@ -59,6 +72,8 @@ class ContentScheduler:
                 
                 db.commit()
                 logger.info(f"✅ [SCHEDULER] Scraped {new_count} new articles")
+            finally:
+                db.close()
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Scraping failed: {e}")
@@ -71,7 +86,8 @@ class ContentScheduler:
         logger.info("🤖 [SCHEDULER] Starting translation task...")
         
         try:
-            with SessionLocal() as db:
+            db = self._get_db_session()
+            try:
                 draft_articles = db.query(ContentQueue).filter(
                     ContentQueue.status == 'draft',
                     ContentQueue.translated_text == None
@@ -105,6 +121,8 @@ class ContentScheduler:
                 
                 db.commit()
                 logger.info(f"✅ [SCHEDULER] Translated {translated_count} articles (notifications will be sent with images)")
+            finally:
+                db.close()
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Translation failed: {e}")
@@ -121,7 +139,8 @@ class ContentScheduler:
             from services.image_generator import image_generator
             from services.notification_service import notification_service
             
-            with SessionLocal() as db:
+            db = self._get_db_session()
+            try:
                 articles_without_images = db.query(ContentQueue).filter(
                     ContentQueue.status == 'pending_approval',
                     ContentQueue.image_url == None
@@ -173,6 +192,8 @@ class ContentScheduler:
                 
                 db.commit()
                 logger.info(f"✅ [SCHEDULER] Generated {generated_count} images, sent {notifications_sent} notifications")
+            finally:
+                db.close()
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Image generation failed: {e}")
@@ -185,7 +206,8 @@ class ContentScheduler:
         logger.info("🤖 [SCHEDULER] Starting cleanup task...")
         
         try:
-            with SessionLocal() as db:
+            db = self._get_db_session()
+            try:
                 cutoff_date = datetime.utcnow() - timedelta(days=30)
                 
                 deleted = db.query(ContentQueue).filter(
@@ -195,6 +217,8 @@ class ContentScheduler:
                 
                 db.commit()
                 logger.info(f"✅ [SCHEDULER] Cleaned up {deleted} old articles")
+            finally:
+                db.close()
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
