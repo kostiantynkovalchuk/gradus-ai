@@ -117,13 +117,9 @@ class ContentScheduler:
         logger.info("🤖 [SCHEDULER] Starting image generation task...")
         
         try:
-            # Import services inside function to avoid circular imports and ensure proper initialization
+            # Import services inside function to avoid circular imports
             from services.image_generator import image_generator
             from services.notification_service import notification_service
-            
-            # Debug: Check if services are initialized
-            logger.debug(f"image_generator type: {type(image_generator)}, value: {image_generator}")
-            logger.debug(f"notification_service type: {type(notification_service)}, value: {notification_service}")
             
             with SessionLocal() as db:
                 articles_without_images = db.query(ContentQueue).filter(
@@ -145,7 +141,6 @@ class ContentScheduler:
                             'content': article.original_text or article.translated_text or ''
                         }
                         
-                        logger.debug(f"Calling image_generator.generate_article_image for article {article.id}...")
                         result = image_generator.generate_article_image(article_data)
                         
                         if result.get('image_url'):
@@ -173,8 +168,6 @@ class ContentScheduler:
                             
                     except Exception as e:
                         logger.error(f"[SCHEDULER] Error generating image for article {article.id}: {e}")
-                        import traceback
-                        logger.error(f"[SCHEDULER] Traceback: {traceback.format_exc()}")
                         db.rollback()
                         continue
                 
@@ -183,8 +176,6 @@ class ContentScheduler:
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Image generation failed: {e}")
-            import traceback
-            logger.error(f"[SCHEDULER] Traceback: {traceback.format_exc()}")
     
     def cleanup_old_content_task(self):
         """
