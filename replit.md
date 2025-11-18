@@ -243,14 +243,75 @@ curl -X POST http://localhost:8000/api/facebook/post-test
 - Set `FACEBOOK_PAGE_ID` in Replit Secrets
 - Tokens managed securely via environment variables (never committed to git)
 
+## Automation Scheduler (APScheduler)
+
+**24/7 automated content pipeline** using APScheduler for background task execution:
+
+**Features:**
+- **Background scheduler** - Runs 24/7 automatically on backend startup
+- **4 automated tasks** - Scraping, translation, image generation, cleanup
+- **Manual triggers** - API endpoints to run jobs on-demand
+- **Status monitoring** - Real-time job status and next run times
+- **Graceful shutdown** - Proper cleanup on application shutdown
+
+**Automated Tasks:**
+
+1. **News Scraping** - Runs every 6 hours (00:00, 06:00, 12:00, 18:00)
+   - Scrapes 5 articles from The Spirits Business
+   - Saves to database as "draft" status
+   - Duplicate detection prevents re-adding existing articles
+
+2. **Translation** - Runs every hour at :15 (00:15, 01:15, 02:15, etc.)
+   - Translates up to 5 draft articles
+   - Changes status to "pending_approval"
+   - Sends Telegram notifications for review
+
+3. **Image Generation** - Runs every hour at :30 (00:30, 01:30, 02:30, etc.)
+   - Generates DALL-E images for up to 5 articles without images
+   - Only processes articles in "pending_approval" status
+
+4. **Cleanup** - Runs daily at 03:00 AM
+   - Deletes rejected content older than 30 days
+   - Keeps database clean and optimized
+
+**Scheduler API Endpoints:**
+
+```bash
+# Get scheduler status and upcoming jobs
+curl http://localhost:8000/api/scheduler/status
+```
+
+**Note:** Manual trigger endpoints have been removed for security. The scheduler runs automatically 24/7, and manual intervention is not needed. Use the status endpoint to monitor job schedules.
+
+**Implementation:**
+- File: `backend/services/scheduler.py` - ContentScheduler class with all automated tasks
+- Initialization: `backend/main.py` - Lifespan context manager starts/stops scheduler
+- Scheduler runs in background thread, doesn't block API requests
+
+**Complete Automation Pipeline:**
+
+```
+Every 6 hours → Scrape articles → Save as draft
+↓
+Every hour at :15 → Translate drafts → Change to pending_approval → Notify Telegram
+↓
+Every hour at :30 → Generate images for pending articles
+↓
+Manual (Dashboard) → Human approval → Auto-post to Facebook → Notify Telegram
+↓
+Daily at 03:00 → Clean up old rejected content
+```
+
+This creates a **fully autonomous content pipeline** from scraping to Facebook posting! 🚀
+
 ## Next Steps (Phase 2)
 
-✅ **Stage 1: News Scraping (Manual)** - COMPLETED
+✅ **Stage 1: Automated Content Pipeline** - COMPLETED
 - ✅ News scraper for The Spirits Business
-- ✅ Telegram notifications
+- ✅ Telegram notifications (approval & posting)
 - ✅ DALL-E image generation (text-free images)
-- ✅ Facebook auto-posting
-- 🔲 Scheduled/automated scraping
+- ✅ Facebook auto-posting with images
+- ✅ **24/7 automation with APScheduler** - Fully autonomous pipeline!
 
 🔲 **Stage 2: Outreach Agent**
 - Social media monitoring

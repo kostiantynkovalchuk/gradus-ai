@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 import logging
+import threading
 
 from models import get_db, init_db
 from models.content import ContentQueue, ApprovalLog
@@ -15,20 +17,30 @@ from services.notification_service import notification_service
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
 from services.facebook_poster import facebook_poster
+from services.scheduler import content_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Gradus Media AI Agent")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan - start/stop scheduler"""
+    logger.info("🚀 Starting Gradus Media AI Agent...")
+    init_db()
+    content_scheduler.start()
+    logger.info("✅ Scheduler started - automation enabled!")
+    
+    yield
+    
+    logger.info("Shutting down scheduler...")
+    content_scheduler.stop()
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup."""
-    try:
-        init_db()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.warning(f"Database initialization deferred: {str(e)}")
+app = FastAPI(
+    title="Gradus Media AI Agent",
+    description="Automated content creation and distribution",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -731,6 +743,18 @@ async def test_facebook_post():
     except Exception as e:
         logger.error(f"Facebook post test error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/scheduler/status")
+async def get_scheduler_status():
+    """Get scheduler status and upcoming jobs"""
+    jobs = content_scheduler.get_jobs()
+    
+    return {
+        "status": "running",
+        "scheduler_active": content_scheduler.scheduler.running,
+        "jobs": jobs,
+        "total_jobs": len(jobs)
+    }
 
 if __name__ == "__main__":
     import uvicorn

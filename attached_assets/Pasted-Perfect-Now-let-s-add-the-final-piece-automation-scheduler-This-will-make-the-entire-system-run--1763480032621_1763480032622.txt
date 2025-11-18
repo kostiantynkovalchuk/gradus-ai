@@ -1,0 +1,439 @@
+Perfect! Now let's add the final piece - automation scheduler! This will make the entire system run 24/7 automatically.
+
+🎯 OBJECTIVE:
+Add APScheduler to automate the entire content pipeline so it runs continuously without manual intervention.
+
+📋 IMPLEMENTATION:
+
+1. CREATE backend/services/scheduler.py:
+```python
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from datetime import datetime
+import logging
+from services.news_scraper import NewsScraper
+from services.translation_service import TranslationService
+from services.image_generator import ImageGenerator
+from services.notification_service import NotificationService
+from database import SessionLocal
+from models import ContentQueue
+
+logger = logging.getLogger(__name__)
+
+class ContentScheduler:
+    def __init__(self):
+        self.scheduler = BackgroundScheduler()
+        self.news_scraper = NewsScraper()
+        self.translation_service = TranslationService()
+        self.image_generator = ImageGenerator()
+        self.notification_service = NotificationService()
+    
+    def scrape_news_task(self):
+        """
+        Task: Scrape news every 6 hours
+        Runs at: 00:00, 06:00, 12:00, 18:00
+        """
+        logger.info("🤖 [SCHEDULER] Starting news scraping task...")
+        
+        try:
+            # Scrape articles
+            articles = self.news_scraper.scrape_all_sources(limit_per_source=5)
+            
+            if not articles:
+                logger.warning("No new articles found")
+                return
+            
+            # Save to database
+            db = SessionLocal()
+            new_count = 0
+            
+            for article in articles:
+                # Check if already exists
+                existing = db.query(ContentQueue).filter(
+                    ContentQueue.source_url == article.get('url')
+                ).first()
+                
+                if not existing:
+                    new_article = ContentQueue(
+                        original_text=article.get('content', ''),
+                        source_url=article.get('url'),
+                        status='draft',
+                        extra_metadata={
+                            'title': article.get('title'),
+                            'source': article.get('source'),
+                            'author': article.get('author', ''),
+                            'image_url': article.get('image_url'),
+                            'scraped_at': article.get('scraped_at')
+                        }
+                    )
+                    db.add(new_article)
+                    new_count += 1
+            
+            db.commit()
+            db.close()
+            
+            logger.info(f"✅ [SCHEDULER] Scraped {new_count} new articles")
+            
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Scraping failed: {e}")
+    
+    def translate_pending_task(self):
+        """
+        Task: Translate draft articles every hour
+        Runs at: Every hour at :15 (00:15, 01:15, etc.)
+        """
+        logger.info("🤖 [SCHEDULER] Starting translation task...")
+        
+        try:
+            db = SessionLocal()
+            
+            # Get draft articles without translation
+            draft_articles = db.query(ContentQueue).filter(
+                ContentQueue.status == 'draft',
+                ContentQueue.translated_text == None
+            ).limit(5).all()
+            
+            if not draft_articles:
+                logger.info("No articles to translate")
+                db.close()
+                return
+            
+            translated_count = 0
+            
+            for article in draft_articles:
+                article_data = {
+                    'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                    'content': article.original_text,
+                    'summary': article.original_text[:1000]
+                }
+                
+                # Translate with notification
+                translation = self.translation_service.translate_article_with_notification(
+                    article_data,
+                    article.id
+                )
+                
+                if translation:
+                    article.translated_text = translation
+                    article.status = 'pending_approval'
+                    translated_count += 1
+            
+            db.commit()
+            db.close()
+            
+            logger.info(f"✅ [SCHEDULER] Translated {translated_count} articles")
+            
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Translation failed: {e}")
+    
+    def generate_images_task(self):
+        """
+        Task: Generate images for articles without images
+        Runs at: Every hour at :30 (00:30, 01:30, etc.)
+        """
+        logger.info("🤖 [SCHEDULER] Starting image generation task...")
+        
+        try:
+            db = SessionLocal()
+            
+            # Get articles without images
+            articles_without_images = db.query(ContentQueue).filter(
+                ContentQueue.status == 'pending_approval',
+                ContentQueue.image_url == None
+            ).limit(5).all()
+            
+            if not articles_without_images:
+                logger.info("No articles need images")
+                db.close()
+                return
+            
+            generated_count = 0
+            
+            for article in articles_without_images:
+                article_data = {
+                    'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                    'content': article.original_text or article.translated_text
+                }
+                
+                result = self.image_generator.generate_article_image(article_data)
+                
+                if result.get('image_url'):
+                    article.image_url = result['image_url']
+                    article.image_prompt = result['prompt']
+                    generated_count += 1
+            
+            db.commit()
+            db.close()
+            
+            logger.info(f"✅ [SCHEDULER] Generated {generated_count} images")
+            
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Image generation failed: {e}")
+    
+    def cleanup_old_content_task(self):
+        """
+        Task: Clean up old rejected content
+        Runs at: 03:00 AM daily
+        """
+        logger.info("🤖 [SCHEDULER] Starting cleanup task...")
+        
+        try:
+            db = SessionLocal()
+            
+            # Delete rejected content older than 30 days
+            from datetime import timedelta
+            cutoff_date = datetime.now() - timedelta(days=30)
+            
+            deleted = db.query(ContentQueue).filter(
+                ContentQueue.status == 'rejected',
+                ContentQueue.created_at < cutoff_date
+            ).delete()
+            
+            db.commit()
+            db.close()
+            
+            logger.info(f"✅ [SCHEDULER] Cleaned up {deleted} old articles")
+            
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
+    
+    def start(self):
+        """Start the scheduler with all tasks"""
+        
+        # Task 1: Scrape news every 6 hours
+        self.scheduler.add_job(
+            self.scrape_news_task,
+            CronTrigger(hour='0,6,12,18', minute=0),
+            id='scrape_news',
+            name='Scrape news articles',
+            replace_existing=True
+        )
+        
+        # Task 2: Translate every hour at :15
+        self.scheduler.add_job(
+            self.translate_pending_task,
+            CronTrigger(minute=15),
+            id='translate_articles',
+            name='Translate pending articles',
+            replace_existing=True
+        )
+        
+        # Task 3: Generate images every hour at :30
+        self.scheduler.add_job(
+            self.generate_images_task,
+            CronTrigger(minute=30),
+            id='generate_images',
+            name='Generate article images',
+            replace_existing=True
+        )
+        
+        # Task 4: Cleanup at 3 AM daily
+        self.scheduler.add_job(
+            self.cleanup_old_content_task,
+            CronTrigger(hour=3, minute=0),
+            id='cleanup_old_content',
+            name='Cleanup old rejected content',
+            replace_existing=True
+        )
+        
+        self.scheduler.start()
+        logger.info("✅ Scheduler started with 4 automated tasks")
+    
+    def stop(self):
+        """Stop the scheduler"""
+        self.scheduler.shutdown()
+        logger.info("Scheduler stopped")
+    
+    def get_jobs(self):
+        """Get list of scheduled jobs"""
+        jobs = []
+        for job in self.scheduler.get_jobs():
+            jobs.append({
+                'id': job.id,
+                'name': job.name,
+                'next_run': job.next_run_time.isoformat() if job.next_run_time else None,
+                'trigger': str(job.trigger)
+            })
+        return jobs
+```
+
+2. UPDATE backend/main.py - Initialize scheduler on startup:
+```python
+from services.scheduler import ContentScheduler
+from contextlib import asynccontextmanager
+
+# Create scheduler instance
+content_scheduler = ContentScheduler()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan - start/stop scheduler"""
+    # Startup
+    logger.info("🚀 Starting Gradus Media AI Agent...")
+    content_scheduler.start()
+    logger.info("✅ Scheduler started - automation enabled!")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down scheduler...")
+    content_scheduler.stop()
+
+# Update FastAPI app initialization
+app = FastAPI(
+    title="Gradus Media AI Agent",
+    description="Automated content creation and distribution",
+    version="1.0.0",
+    lifespan=lifespan  # Add lifespan
+)
+
+# ... existing code ...
+
+@app.get("/api/scheduler/status")
+async def get_scheduler_status():
+    """Get scheduler status and upcoming jobs"""
+    jobs = content_scheduler.get_jobs()
+    
+    return {
+        "status": "running",
+        "scheduler_active": content_scheduler.scheduler.running,
+        "jobs": jobs,
+        "total_jobs": len(jobs)
+    }
+
+@app.post("/api/scheduler/trigger/{job_id}")
+async def trigger_job_manually(job_id: str):
+    """Manually trigger a scheduled job"""
+    
+    valid_jobs = {
+        'scrape_news': content_scheduler.scrape_news_task,
+        'translate_articles': content_scheduler.translate_pending_task,
+        'generate_images': content_scheduler.generate_images_task,
+        'cleanup_old_content': content_scheduler.cleanup_old_content_task
+    }
+    
+    if job_id not in valid_jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    
+    try:
+        # Run job in background
+        import threading
+        thread = threading.Thread(target=valid_jobs[job_id])
+        thread.start()
+        
+        return {
+            "status": "success",
+            "message": f"Job {job_id} triggered manually",
+            "job_id": job_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+3. UPDATE backend/requirements.txt:
+
+Add APScheduler:
+APScheduler==3.10.4
+
+4. ADD FRONTEND - Scheduler Status Widget:
+
+Create frontend/src/components/SchedulerStatus.jsx:
+```jsx
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+export default function SchedulerStatus() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchStatus = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/scheduler/status`);
+      setStatus(response.data);
+    } catch (error) {
+      console.error('Failed to fetch scheduler status:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const triggerJob = async (jobId) => {
+    try {
+      await axios.post(`${API_URL}/api/scheduler/trigger/${jobId}`);
+      alert(`✅ Job ${jobId} triggered!`);
+      fetchStatus();
+    } catch (error) {
+      alert(`❌ Failed to trigger job: ${error.message}`);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 30000); // Refresh every 30s
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading) return <div>Loading scheduler status...</div>;
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h3 className="text-xl font-bold mb-4">
+        🤖 Automation Status
+      </h3>
+      
+      <div className="mb-4">
+        <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
+          status?.scheduler_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+        }`}>
+          {status?.scheduler_active ? '✅ Running' : '❌ Stopped'}
+        </span>
+      </div>
+
+      <div className="space-y-3">
+        {status?.jobs.map((job) => (
+          <div key={job.id} className="border rounded p-3">
+            <div className="flex justify-between items-start mb-2">
+              <div>
+                <p className="font-semibold">{job.name}</p>
+                <p className="text-sm text-gray-600">{job.trigger}</p>
+              </div>
+              <button
+                onClick={() => triggerJob(job.id)}
+                className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+              >
+                ▶️ Run Now
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Next run: {job.next_run ? new Date(job.next_run).toLocaleString() : 'N/A'}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+5. UPDATE Home Page to show scheduler widget:
+
+Add to frontend/src/pages/HomePage.jsx
+
+🧪 TESTING:
+
+After implementation:
+1. Restart backend - scheduler starts automatically
+2. Check status: `curl http://localhost:8000/api/scheduler/status`
+3. Trigger manual run: `curl -X POST http://localhost:8000/api/scheduler/trigger/scrape_news`
+4. Check logs for scheduled task execution
+5. Wait for next scheduled run (or trigger manually)
+
+⏰ SCHEDULE:
+- 00:00, 06:00, 12:00, 18:00 - Scrape news (4x daily)
+- Every hour :15 - Translate pending articles
+- Every hour :30 - Generate images
+- 03:00 daily - Cleanup old content
+
+Please implement the automation scheduler!
