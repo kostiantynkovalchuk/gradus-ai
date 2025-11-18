@@ -793,6 +793,53 @@ async def send_token_alert():
     
     return {"status": "info", "message": "Token never expires or invalid", "token_status": status}
 
+@app.get("/api/analytics/post/{content_id}")
+async def get_post_analytics(content_id: int, db: Session = Depends(get_db)):
+    """Get analytics for specific post by content ID"""
+    from services.analytics_tracker import analytics_tracker
+    
+    article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
+    
+    if not article or not article.extra_metadata or 'fb_post_id' not in article.extra_metadata:
+        raise HTTPException(status_code=404, detail="Post not found or not posted to Facebook")
+    
+    post_id = article.extra_metadata['fb_post_id']
+    metrics = analytics_tracker.get_post_insights(post_id)
+    
+    if 'error' not in metrics:
+        if not article.extra_metadata:
+            article.extra_metadata = {}
+        article.extra_metadata['analytics'] = metrics
+        db.commit()
+    
+    return {
+        "content_id": content_id,
+        "title": article.translated_title or 'Untitled',
+        "post_url": article.extra_metadata.get('fb_post_url', ''),
+        "metrics": metrics
+    }
+
+@app.get("/api/analytics/recent")
+async def get_recent_posts_analytics(limit: int = 10):
+    """Get performance metrics for recent posts"""
+    from services.analytics_tracker import analytics_tracker
+    
+    results = analytics_tracker.get_recent_posts_performance(limit=limit)
+    
+    return {
+        "posts": results,
+        "count": len(results)
+    }
+
+@app.get("/api/analytics/insights")
+async def get_posting_insights(days: int = 30):
+    """Get best posting times and engagement insights"""
+    from services.analytics_tracker import analytics_tracker
+    
+    insights = analytics_tracker.get_best_posting_times(days=days)
+    
+    return insights
+
 @app.get("/api/scheduler/status")
 async def get_scheduler_status():
     """Get scheduler status and upcoming jobs"""

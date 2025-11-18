@@ -1,0 +1,417 @@
+Add basic analytics tracking to monitor Facebook post performance and identify optimal posting times!
+
+🎯 OBJECTIVE:
+Track Facebook post metrics automatically to understand what content performs best and when.
+
+📋 IMPLEMENTATION:
+
+1. CREATE backend/services/analytics_tracker.py:
+```python
+import os
+import requests
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from database import SessionLocal
+from models import ContentQueue
+from sqlalchemy import func
+
+logger = logging.getLogger(__name__)
+
+class AnalyticsTracker:
+    def __init__(self):
+        self.page_access_token = os.getenv('FACEBOOK_PAGE_ACCESS_TOKEN')
+        self.page_id = os.getenv('FACEBOOK_PAGE_ID')
+        self.graph_api_version = 'v18.0'
+    
+    def get_post_insights(self, post_id: str) -> Dict:
+        """
+        Get engagement metrics for a Facebook post
+        
+        Args:
+            post_id: Facebook post ID (page_id_post_id format)
+            
+        Returns:
+            Dict with likes, comments, shares, reach, impressions, engagement_rate
+        """
+        if not self.page_access_token:
+            logger.error("Facebook token not configured")
+            return {"error": "Token not configured"}
+        
+        url = f"https://graph.facebook.com/{self.graph_api_version}/{post_id}"
+        params = {
+            'fields': 'likes.summary(true),comments.summary(true),shares,insights.metric(post_impressions,post_engaged_users,post_clicks)',
+            'access_token': self.page_access_token
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            result = response.json()
+            
+            if 'error' in result:
+                logger.error(f"Analytics error for {post_id}: {result['error']}")
+                return {"error": result['error'].get('message', 'Unknown error')}
+            
+            # Parse basic metrics
+            metrics = {
+                'post_id': post_id,
+                'likes': result.get('likes', {}).get('summary', {}).get('total_count', 0),
+                'comments': result.get('comments', {}).get('summary', {}).get('total_count', 0),
+                'shares': result.get('shares', {}).get('count', 0),
+                'engagement_rate': 0,
+                'impressions': 0,
+                'reach': 0,
+                'clicks': 0,
+                'collected_at': datetime.now().isoformat()
+            }
+            
+            # Parse insights (may not be available immediately)
+            insights = result.get('insights', {}).get('data', [])
+            for insight in insights:
+                metric_name = insight.get('name')
+                values = insight.get('values', [])
+                value = values[0].get('value', 0) if values else 0
+                
+                if metric_name == 'post_impressions':
+                    metrics['impressions'] = value
+                elif metric_name == 'post_engaged_users':
+                    metrics['reach'] = value
+                elif metric_name == 'post_clicks':
+                    metrics['clicks'] = value
+            
+            # Calculate engagement rate
+            if metrics['impressions'] > 0:
+                total_engagement = metrics['likes'] + metrics['comments'] + metrics['shares']
+                metrics['engagement_rate'] = round((total_engagement / metrics['impressions']) * 100, 2)
+            
+            logger.info(f"Collected metrics for {post_id}: {metrics['likes']} likes, {metrics['comments']} comments")
+            
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"Failed to get insights for {post_id}: {e}")
+            return {"error": str(e)}
+    
+    def get_best_posting_times(self, days: int = 30) -> Dict:
+        """
+        Analyze historical posts to find best posting times
+        
+        Args:
+            days: Number of days to analyze (default 30)
+            
+        Returns:
+            Dict with best hours, best days, and statistics
+        """
+        db = SessionLocal()
+        
+        try:
+            # Get posted content from last N days
+            cutoff_date = datetime.now() - timedelta(days=days)
+            
+            posts = db.query(ContentQueue).filter(
+                ContentQueue.status == 'posted',
+                ContentQueue.posted_at >= cutoff_date,
+                ContentQueue.extra_metadata.isnot(None)
+            ).all()
+            
+            # Filter posts with Facebook post ID
+            posts = [p for p in posts if p.extra_metadata and 'fb_post_id' in p.extra_metadata]
+            
+            if not posts:
+                return {
+                    "message": "Not enough data yet. Need at least 1 posted article.",
+                    "posts_analyzed": 0
+                }
+            
+            # Analyze by hour and day
+            performance_by_hour = {}
+            performance_by_day = {}
+            total_engagement = 0
+            posts_with_metrics = 0
+            
+            for post in posts:
+                post_id = post.extra_metadata.get('fb_post_id')
+                
+                # Get metrics from stored analytics or fetch fresh
+                if 'analytics' in post.extra_metadata:
+                    metrics = post.extra_metadata['analytics']
+                else:
+                    metrics = self.get_post_insights(post_id)
+                    
+                    if 'error' not in metrics:
+                        # Store for future
+                        post.extra_metadata['analytics'] = metrics
+                
+                if 'error' in metrics:
+                    continue
+                
+                posts_with_metrics += 1
+                engagement = metrics.get('likes', 0) + metrics.get('comments', 0) + metrics.get('shares', 0)
+                total_engagement += engagement
+                
+                # Track by hour
+                hour = post.posted_at.hour
+                if hour not in performance_by_hour:
+                    performance_by_hour[hour] = {'count': 0, 'total_engagement': 0, 'posts': []}
+                
+                performance_by_hour[hour]['count'] += 1
+                performance_by_hour[hour]['total_engagement'] += engagement
+                performance_by_hour[hour]['posts'].append({
+                    'title': post.translated_title or 'Untitled',
+                    'engagement': engagement
+                })
+                
+                # Track by day of week
+                day = post.posted_at.strftime('%A')
+                if day not in performance_by_day:
+                    performance_by_day[day] = {'count': 0, 'total_engagement': 0, 'posts': []}
+                
+                performance_by_day[day]['count'] += 1
+                performance_by_day[day]['total_engagement'] += engagement
+                performance_by_day[day]['posts'].append({
+                    'title': post.translated_title or 'Untitled',
+                    'engagement': engagement
+                })
+            
+            db.commit()  # Save any new analytics
+            
+            # Calculate averages and rank
+            best_hours = []
+            for hour, data in performance_by_hour.items():
+                avg = data['total_engagement'] / data['count'] if data['count'] > 0 else 0
+                best_hours.append({
+                    'hour': f"{hour:02d}:00",
+                    'avg_engagement': round(avg, 2),
+                    'posts_count': data['count'],
+                    'total_engagement': data['total_engagement']
+                })
+            
+            best_hours = sorted(best_hours, key=lambda x: x['avg_engagement'], reverse=True)
+            
+            best_days = []
+            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            for day in day_order:
+                if day in performance_by_day:
+                    data = performance_by_day[day]
+                    avg = data['total_engagement'] / data['count'] if data['count'] > 0 else 0
+                    best_days.append({
+                        'day': day,
+                        'avg_engagement': round(avg, 2),
+                        'posts_count': data['count'],
+                        'total_engagement': data['total_engagement']
+                    })
+            
+            best_days = sorted(best_days, key=lambda x: x['avg_engagement'], reverse=True)
+            
+            avg_engagement_per_post = round(total_engagement / posts_with_metrics, 2) if posts_with_metrics > 0 else 0
+            
+            return {
+                'summary': {
+                    'posts_analyzed': posts_with_metrics,
+                    'date_range_days': days,
+                    'total_engagement': total_engagement,
+                    'avg_engagement_per_post': avg_engagement_per_post
+                },
+                'best_hours': best_hours[:5],  # Top 5 hours
+                'best_days': best_days,  # All days ranked
+                'recommendations': self._generate_recommendations(best_hours, best_days, posts_with_metrics)
+            }
+            
+        finally:
+            db.close()
+    
+    def _generate_recommendations(self, best_hours: List, best_days: List, posts_count: int) -> List[str]:
+        """Generate actionable recommendations based on data"""
+        recommendations = []
+        
+        if posts_count < 5:
+            recommendations.append(f"⚠️ Limited data: Only {posts_count} posts analyzed. Need at least 10 posts for reliable insights.")
+        
+        if best_hours:
+            top_hour = best_hours[0]
+            recommendations.append(f"🕐 Best posting time: {top_hour['hour']} (avg {top_hour['avg_engagement']} engagement)")
+        
+        if best_days:
+            top_day = best_days[0]
+            recommendations.append(f"📅 Best posting day: {top_day['day']} (avg {top_day['avg_engagement']} engagement)")
+        
+        if len(best_hours) >= 3:
+            top_3_hours = [h['hour'] for h in best_hours[:3]]
+            recommendations.append(f"⭐ Optimal posting windows: {', '.join(top_3_hours)}")
+        
+        return recommendations
+    
+    def get_recent_posts_performance(self, limit: int = 10) -> List[Dict]:
+        """Get performance summary for recent posts"""
+        db = SessionLocal()
+        
+        try:
+            posts = db.query(ContentQueue).filter(
+                ContentQueue.status == 'posted',
+                ContentQueue.extra_metadata.isnot(None)
+            ).order_by(ContentQueue.posted_at.desc()).limit(limit).all()
+            
+            results = []
+            
+            for post in posts:
+                if not post.extra_metadata or 'fb_post_id' not in post.extra_metadata:
+                    continue
+                
+                post_id = post.extra_metadata['fb_post_id']
+                
+                # Get or fetch metrics
+                if 'analytics' in post.extra_metadata:
+                    metrics = post.extra_metadata['analytics']
+                else:
+                    metrics = self.get_post_insights(post_id)
+                    if 'error' not in metrics:
+                        post.extra_metadata['analytics'] = metrics
+                
+                if 'error' in metrics:
+                    continue
+                
+                results.append({
+                    'id': post.id,
+                    'title': post.translated_title or 'Untitled',
+                    'posted_at': post.posted_at.isoformat() if post.posted_at else None,
+                    'post_url': post.extra_metadata.get('fb_post_url', ''),
+                    'metrics': {
+                        'likes': metrics.get('likes', 0),
+                        'comments': metrics.get('comments', 0),
+                        'shares': metrics.get('shares', 0),
+                        'engagement_rate': metrics.get('engagement_rate', 0),
+                        'impressions': metrics.get('impressions', 0)
+                    }
+                })
+            
+            db.commit()
+            return results
+            
+        finally:
+            db.close()
+```
+
+2. ADD ENDPOINTS in backend/main.py:
+```python
+from services.analytics_tracker import AnalyticsTracker
+
+@app.get("/api/analytics/post/{content_id}")
+async def get_post_analytics(content_id: int, db: Session = Depends(get_db)):
+    """Get analytics for specific post by content ID"""
+    article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
+    
+    if not article or not article.extra_metadata or 'fb_post_id' not in article.extra_metadata:
+        raise HTTPException(status_code=404, detail="Post not found or not posted to Facebook")
+    
+    tracker = AnalyticsTracker()
+    post_id = article.extra_metadata['fb_post_id']
+    metrics = tracker.get_post_insights(post_id)
+    
+    # Update stored analytics
+    if 'error' not in metrics:
+        article.extra_metadata['analytics'] = metrics
+        db.commit()
+    
+    return {
+        "content_id": content_id,
+        "title": article.translated_title,
+        "posted_at": article.posted_at.isoformat() if article.posted_at else None,
+        "post_url": article.extra_metadata.get('fb_post_url', ''),
+        "metrics": metrics
+    }
+
+
+@app.get("/api/analytics/best-times")
+async def get_best_posting_times(days: int = 30):
+    """
+    Analyze best times to post based on historical data
+    
+    Args:
+        days: Number of days to analyze (default 30)
+    """
+    tracker = AnalyticsTracker()
+    analysis = tracker.get_best_posting_times(days=days)
+    
+    return analysis
+
+
+@app.get("/api/analytics/recent-performance")
+async def get_recent_performance(limit: int = 10):
+    """Get performance metrics for recent posts"""
+    tracker = AnalyticsTracker()
+    performance = tracker.get_recent_posts_performance(limit=limit)
+    
+    return {
+        "posts": performance,
+        "total": len(performance)
+    }
+```
+
+3. ADD SCHEDULER TASK in backend/services/scheduler.py:
+```python
+def collect_analytics_task(self):
+    """
+    Task: Collect analytics for recent posts
+    Runs at: Daily at 22:00 (10pm)
+    """
+    logger.info("🤖 [SCHEDULER] Collecting post analytics...")
+    
+    try:
+        from services.analytics_tracker import AnalyticsTracker
+        
+        db = SessionLocal()
+        tracker = AnalyticsTracker()
+        
+        # Get posts from last 7 days
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        recent_posts = db.query(ContentQueue).filter(
+            ContentQueue.status == 'posted',
+            ContentQueue.posted_at >= seven_days_ago,
+            ContentQueue.extra_metadata.isnot(None)
+        ).all()
+        
+        collected = 0
+        errors = 0
+        
+        for post in recent_posts:
+            if not post.extra_metadata or 'fb_post_id' not in post.extra_metadata:
+                continue
+            
+            post_id = post.extra_metadata['fb_post_id']
+            metrics = tracker.get_post_insights(post_id)
+            
+            if 'error' not in metrics:
+                # Store in database
+                post.extra_metadata['analytics'] = metrics
+                collected += 1
+            else:
+                errors += 1
+        
+        db.commit()
+        db.close()
+        
+        logger.info(f"✅ [SCHEDULER] Analytics: {collected} collected, {errors} errors")
+        
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] Analytics collection failed: {e}")
+
+def start(self):
+    """Start the scheduler with all tasks"""
+    
+    # ... existing tasks ...
+    
+    # Task 6: Collect analytics daily at 22:00
+    self.scheduler.add_job(
+        self.collect_analytics_task,
+        CronTrigger(hour=22, minute=0),
+        id='collect_analytics',
+        name='Collect post analytics',
+        replace_existing=True
+    )
+    
+    self.scheduler.start()
+    logger.info("✅ Scheduler started with 6 automated tasks")
+    logger.info("📊 Analytics collection: Daily at 22:00")
+```
+
+Please add basic analytics tracking system!
