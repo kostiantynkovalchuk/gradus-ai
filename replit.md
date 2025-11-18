@@ -73,6 +73,11 @@ This project implements an intelligent content management system with human-in-t
 **Notifications:**
 - `POST /api/test/telegram` - Test Telegram notification
 
+**Image Generation:**
+- `POST /api/images/generate/{article_id}` - Generate image for specific article
+- `POST /api/images/regenerate/{article_id}` - Regenerate image with new prompt
+- `POST /api/images/generate-pending` - Batch generate for articles without images
+
 ## Environment Variables
 
 **Required:**
@@ -81,8 +86,10 @@ This project implements an intelligent content management system with human-in-t
 - `TELEGRAM_BOT_TOKEN` - Telegram bot token for notifications
 - `TELEGRAM_CHAT_ID` - Telegram chat ID for notifications
 
+**Required (for image generation):**
+- `OPENAI_API_KEY` - For DALL-E 3 image generation
+
 **Optional (for future features):**
-- `OPENAI_API_KEY` - For DALL-E image generation
 - `PINECONE_API_KEY` - For RAG functionality
 - `FACEBOOK_PAGE_ACCESS_TOKEN` - Facebook posting
 - `LINKEDIN_ACCESS_TOKEN` - LinkedIn posting
@@ -146,12 +153,48 @@ curl -X POST http://localhost:8000/api/scraper/run
 curl -X POST http://localhost:8000/api/scraper/run?limit=10
 ```
 
+## Image Generation (DALL-E 3)
+
+AI-powered image generation for social media posts using Claude + DALL-E 3 pipeline:
+
+**Features:**
+- **Claude-powered prompt generation** - Uses Claude Sonnet 4 to create contextual DALL-E prompts
+- **Text-free images** - Explicit instructions to avoid text/labels in generated images
+- **Professional aesthetic** - Premium alcohol industry styling with minimalist design
+- **1024x1024 images** - Square format optimized for social media (Facebook/LinkedIn)
+- **Regeneration support** - Create new images with different prompts if needed
+- **Batch generation** - Generate images for multiple articles at once
+
+**Image Generation Flow:**
+1. Article content (title + text) → Claude API
+2. Claude creates professional DALL-E prompt (2-3 sentences) with "no text" instructions
+3. DALL-E 3 generates image (standard quality, $0.04 per image)
+4. Image URL + prompt saved to database
+5. Frontend displays image with regeneration option
+
+**Database Schema Note:**
+- `image_url` column changed from `VARCHAR(255)` to `TEXT` to handle long DALL-E URLs (400-500 characters)
+- Applied via: `ALTER TABLE content_queue ALTER COLUMN image_url TYPE TEXT;`
+- **Production deployment:** Run same ALTER TABLE on production database before deploying
+
+**Usage:**
+```bash
+# Generate image for specific article
+curl -X POST http://localhost:8000/api/images/generate/4
+
+# Regenerate with new prompt
+curl -X POST http://localhost:8000/api/images/regenerate/4
+
+# Batch generate for all pending articles without images
+curl -X POST http://localhost:8000/api/images/generate-pending
+```
+
 ## Next Steps (Phase 2)
 
 ✅ **Stage 1: News Scraping (Manual)** - COMPLETED
 - ✅ News scraper for The Spirits Business
 - ✅ Telegram notifications
-- 🔲 DALL-E image generation
+- ✅ DALL-E image generation (text-free images)
 - 🔲 Scheduled/automated scraping
 - 🔲 Social media posting
 

@@ -1,0 +1,65 @@
+The image generation works but DALL-E includes text in images which doesn't render well. We need to update the prompts to avoid any text.
+
+Please fix:
+
+UPDATE backend/services/image_generator.py:
+
+Modify the generate_image_prompt() method to explicitly avoid text:
+```python
+def generate_image_prompt(self, article_data: Dict) -> str:
+    """
+    Use Claude to generate a professional DALL-E prompt based on article content
+    """
+    if not self.claude_client:
+        logger.error("Claude client not initialized")
+        return ""
+    
+    title = article_data.get('title', '')
+    content = article_data.get('content', '')[:1000]
+    
+    prompt = f"""Based on this alcohol industry article, create a professional DALL-E image prompt for a social media post.
+
+Article Title: {title}
+Article Content: {content}
+
+Requirements for the image prompt:
+- Professional, premium alcohol industry aesthetic
+- Suitable for Facebook/LinkedIn business posts
+- Modern, clean, minimalist design
+- Relevant to the article topic
+- Brand-safe (no specific brand logos unless mentioned in article)
+- Color scheme: premium (blues, golds, silvers, or warm earth tones)
+- Style: photorealistic or professional infographic
+
+CRITICAL: NO TEXT OR WORDS should appear in the image
+- Do not include any letters, numbers, labels, or captions
+- Use purely visual elements (charts, bottles, ingredients, settings)
+- Let the imagery speak for itself without text overlays
+
+Create a detailed DALL-E prompt (2-3 sentences) that will generate an appropriate text-free image.
+Return ONLY the prompt text, nothing else."""
+
+    try:
+        message = self.claude_client.messages.create(
+            model="claude-sonnet-4.5-20250929",
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": prompt
+            }]
+        )
+        
+        dalle_prompt = message.content[0].text.strip()
+        
+        # Add explicit "no text" instruction to DALL-E prompt
+        dalle_prompt += " No text, labels, or words in the image."
+        
+        logger.info(f"Generated DALL-E prompt: {dalle_prompt[:100]}...")
+        return dalle_prompt
+        
+    except Exception as e:
+        logger.error(f"Failed to generate image prompt: {e}")
+        return ""
+```
+
+This ensures both Claude and DALL-E understand to avoid text in images.

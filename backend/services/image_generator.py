@@ -26,12 +26,6 @@ class ImageGenerator:
     def generate_image_prompt(self, article_data: Dict) -> str:
         """
         Use Claude to generate a professional DALL-E prompt based on article content
-        
-        Args:
-            article_data: Dict with 'title' and 'content'
-            
-        Returns:
-            DALL-E prompt string
         """
         if not self.claude_client:
             logger.error("Claude client not initialized")
@@ -54,7 +48,12 @@ Requirements for the image prompt:
 - Color scheme: premium (blues, golds, silvers, or warm earth tones)
 - Style: photorealistic or professional infographic
 
-Create a detailed DALL-E prompt (2-3 sentences) that will generate an appropriate image.
+CRITICAL: NO TEXT OR WORDS should appear in the image
+- Do not include any letters, numbers, labels, or captions
+- Use purely visual elements (charts, bottles, ingredients, settings)
+- Let the imagery speak for itself without text overlays
+
+Create a detailed DALL-E prompt (2-3 sentences) that will generate an appropriate text-free image.
 Return ONLY the prompt text, nothing else."""
 
         try:
@@ -68,6 +67,10 @@ Return ONLY the prompt text, nothing else."""
             )
             
             dalle_prompt = message.content[0].text.strip()
+            
+            # Add explicit "no text" instruction to DALL-E prompt
+            dalle_prompt += " No text, labels, or words in the image."
+            
             logger.info(f"Generated DALL-E prompt: {dalle_prompt[:100]}...")
             return dalle_prompt
             
