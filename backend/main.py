@@ -795,6 +795,99 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
         logger.error(f"Telegram webhook error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/telegram/set-webhook")
+async def set_telegram_webhook():
+    """
+    Set Telegram webhook URL
+    Call this once to configure the webhook
+    
+    Optional: Set TELEGRAM_WEBHOOK_SECRET in Secrets for webhook authentication
+    """
+    import requests
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    
+    if not bot_token:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not configured")
+    
+    replit_domains = os.getenv('REPLIT_DOMAINS')
+    if not replit_domains:
+        replit_domains = os.getenv('REPLIT_DEV_DOMAIN')
+    
+    if not replit_domains:
+        raise HTTPException(
+            status_code=500, 
+            detail="Could not determine app URL. Make sure app is running on Replit."
+        )
+    
+    app_url = f"https://{replit_domains.split(',')[0]}"
+    webhook_url = f"{app_url}/api/telegram/webhook"
+    
+    telegram_secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
+    
+    url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
+    payload = {"url": webhook_url}
+    
+    if telegram_secret:
+        payload["secret_token"] = telegram_secret
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        result = response.json()
+        
+        if result.get('ok'):
+            return {
+                "status": "success",
+                "message": "Webhook set successfully",
+                "webhook_url": webhook_url,
+                "secured": bool(telegram_secret),
+                "telegram_response": result
+            }
+        else:
+            return {
+                "status": "error",
+                "message": result.get('description', 'Unknown error'),
+                "details": result
+            }
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/telegram/webhook-info")
+async def get_webhook_info():
+    """Get current webhook information from Telegram"""
+    import requests
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    
+    if not bot_token:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not configured")
+    
+    url = f"https://api.telegram.org/bot{bot_token}/getWebhookInfo"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        result = response.json()
+        
+        if result.get('ok'):
+            webhook_info = result.get('result', {})
+            return {
+                "status": "success",
+                "webhook_info": webhook_info,
+                "is_configured": bool(webhook_info.get('url')),
+                "pending_updates": webhook_info.get('pending_update_count', 0)
+            }
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail=result.get('description', 'Failed to get webhook info')
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get webhook info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

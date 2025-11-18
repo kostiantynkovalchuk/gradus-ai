@@ -84,8 +84,25 @@ The Telegram Quick Approval feature allows one-click approval/rejection of conte
 3. Save your `TELEGRAM_BOT_TOKEN`
 4. Find your chat ID using [@userinfobot](https://t.me/userinfobot) and save as `TELEGRAM_CHAT_ID`
 
-#### Step 2: Configure Webhook (Optional but Recommended)
-For production security, configure webhook authentication:
+#### Step 2: Configure Webhook (Automatic or Manual)
+
+**Option A: Automatic Setup (Recommended)**
+
+Simply visit this endpoint in your browser while the app is running:
+
+```
+GET https://your-app-url.repl.co/api/telegram/set-webhook
+```
+
+This will:
+- Automatically detect your Replit app URL
+- Set up the webhook with Telegram
+- Apply the secret token if `TELEGRAM_WEBHOOK_SECRET` is configured
+- Return confirmation with webhook details
+
+**Option B: Manual Setup**
+
+For production security with manual configuration:
 
 ```bash
 # 1. Generate a random secret token
@@ -99,6 +116,14 @@ curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_REPLIT_U
 # Example:
 # curl "https://api.telegram.org/bot123456:ABC-DEF.../setWebhook?url=https://yourapp.repl.co/api/telegram/webhook&secret_token=abc123..."
 ```
+
+**Check Webhook Status:**
+
+```
+GET https://your-app-url.repl.co/api/telegram/webhook-info
+```
+
+Returns current webhook configuration and pending updates count.
 
 **Without Webhook Secret:**
 - System works but webhook is unauthenticated
