@@ -49,6 +49,91 @@ class NotificationService:
             logger.error(f"Failed to send notification: {e}")
             return False
     
+    def notify_content_approved(self, content_data: Dict[str, Any]) -> bool:
+        """
+        Send notification when content is approved and ready to post
+        
+        Args:
+            content_data: Dict with approved content info
+            
+        Returns:
+            True if notification sent successfully
+        """
+        message = f"""
+✅ <b>Контент затверджено!</b>
+
+📰 <b>Заголовок:</b> {content_data.get('title', 'No title')}
+📅 <b>Запланований постинг:</b> {content_data.get('scheduled_time', 'Відразу')}
+🔗 <b>ID:</b> {content_data.get('id')}
+
+Контент буде опубліковано відповідно до розкладу.
+        """
+        
+        url = f"{self.base_url}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info(f"Approval notification sent for content {content_data.get('id')}")
+                return True
+            else:
+                logger.error(f"Telegram API error: {result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to send approval notification: {e}")
+            return False
+    
+    def notify_content_posted(self, content_data: Dict[str, Any]) -> bool:
+        """
+        Send notification when content is successfully posted to social media
+        
+        Args:
+            content_data: Dict with posted content info
+            
+        Returns:
+            True if notification sent successfully
+        """
+        message = f"""
+🎉 <b>Контент опубліковано!</b>
+
+📰 <b>Заголовок:</b> {content_data.get('title', 'No title')}
+📱 <b>Платформи:</b> {', '.join(content_data.get('platforms', []))}
+🔗 <b>Facebook:</b> {content_data.get('fb_post_url', 'N/A')}
+⏰ <b>Час:</b> {content_data.get('posted_at', '')}
+
+Контент успішно опубліковано на соціальних мережах!
+        """
+        
+        url = f"{self.base_url}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info(f"Posted notification sent for content {content_data.get('id')}")
+                return True
+            else:
+                logger.error(f"Telegram API error: {result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to send posted notification: {e}")
+            return False
+    
     def send_test_notification(self) -> Dict[str, Any]:
         """Send test notification"""
         url = f"{self.base_url}/sendMessage"

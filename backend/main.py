@@ -168,7 +168,11 @@ async def approve_content(
         db.commit()
         db.refresh(content)
         
-        await notification_service.notify_content_approved(content_id, request.moderator)
+        notification_service.notify_content_approved({
+            'id': content_id,
+            'title': content.translated_title or content.extra_metadata.get('title', 'No title'),
+            'scheduled_time': str(request.scheduled_time) if request.scheduled_time else 'Відразу'
+        })
         
         logger.info(f"Content {content_id} approved by {request.moderator}")
         
