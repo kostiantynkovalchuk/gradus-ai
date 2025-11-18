@@ -498,9 +498,9 @@ async def translate_article_endpoint(article_id: int, db: Session = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/translate/pending")
-async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_db)):
+async def translate_pending_articles(limit: int = 10, db: Session = Depends(get_db)):
     """
-    Translate all articles with status='draft' and send Telegram notifications
+    Translate all articles with status='draft' (notifications sent later with images)
     """
     try:
         draft_articles = db.query(ContentQueue).filter(
@@ -513,14 +513,12 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
                 "status": "success",
                 "message": "No articles to translate",
                 "translated_count": 0,
-                "total_draft": 0,
-                "notifications_sent": 0
+                "total_draft": 0
             }
         
         logger.info(f"Translating {len(draft_articles)} draft articles...")
         
         translated_count = 0
-        notifications_sent = 0
         
         for article in draft_articles:
             original_text = article.original_text or ''
@@ -532,20 +530,18 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
                 'summary': original_text[:1000] if original_text else ''
             }
             
-            translation, notification_sent = translation_service.translate_article_with_notification(
-                article_data,
-                article.id,
-                article.image_url
-            )
-            
-            if translation and translation.get('title') and translation.get('content'):
-                article.translated_title = translation['title']
-                article.translated_text = translation['content']
-                article.status = 'pending_approval'
-                translated_count += 1
-                if notification_sent:
-                    notifications_sent += 1
-                logger.info(f"Translated article {article.id}: {article_data['title'][:50]}...")
+            try:
+                translation = await claude_service.translate_to_ukrainian(original_text)
+                
+                if translation:
+                    article.translated_title = article_data['title']
+                    article.translated_text = translation
+                    article.status = 'pending_approval'
+                    translated_count += 1
+                    logger.info(f"Translated article {article.id}: {article_data['title'][:50]}...")
+            except Exception as e:
+                logger.error(f"Failed to translate article {article.id}: {e}")
+                continue
         
         db.commit()
         
@@ -555,7 +551,7 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
             "status": "success",
             "translated_count": translated_count,
             "total_draft": len(draft_articles),
-            "notifications_sent": notifications_sent
+            "message": f"Translated {translated_count} articles. Run image generation next to send notifications."
         }
         
     except Exception as e:
@@ -654,9 +650,9 @@ async def regenerate_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/images/generate-pending")
-async def generate_images_for_pending(limit: int = 5, db: Session = Depends(get_db)):
+async def generate_images_for_pending(limit: int = 10, db: Session = Depends(get_db)):
     """
-    Generate images for all articles that don't have one yet
+    Generate images AND send Telegram notifications with image previews
     """
     try:
         articles_without_images = db.query(ContentQueue).filter(
@@ -668,12 +664,15 @@ async def generate_images_for_pending(limit: int = 5, db: Session = Depends(get_
             return {
                 "status": "success",
                 "message": "No articles need images",
-                "generated_count": 0
+                "generated_count": 0,
+                "total_without_images": 0,
+                "notifications_sent": 0
             }
         
         logger.info(f"Generating images for {len(articles_without_images)} articles...")
         
         generated_count = 0
+        notifications_sent = 0
         
         for article in articles_without_images:
             article_data = {
@@ -681,22 +680,46 @@ async def generate_images_for_pending(limit: int = 5, db: Session = Depends(get_
                 'content': article.original_text or article.translated_text or ''
             }
             
-            result = image_generator.generate_article_image(article_data)
-            
-            if result.get('image_url'):
-                article.image_url = result['image_url']
-                article.image_prompt = result['prompt']
-                generated_count += 1
-                logger.info(f"Generated image for article {article.id}")
+            try:
+                result = image_generator.generate_article_image(article_data)
+                
+                if result.get('image_url'):
+                    article.image_url = result['image_url']
+                    article.image_prompt = result['prompt']
+                    generated_count += 1
+                    
+                    logger.info(f"Generated image for article {article.id}")
+                    
+                    notification_data = {
+                        'id': article.id,
+                        'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                        'translated_text': article.translated_text or article.original_text or '',
+                        'image_url': article.image_url,
+                        'source': article.source or 'The Spirits Business',
+                        'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
+                    }
+                    
+                    try:
+                        notification_service.send_approval_notification(notification_data)
+                        notifications_sent += 1
+                        logger.info(f"✅ Notification with image sent for article {article.id}")
+                    except Exception as notif_error:
+                        logger.error(f"Failed to send notification for article {article.id}: {notif_error}")
+                        
+            except Exception as e:
+                logger.error(f"Failed to generate image for article {article.id}: {e}")
+                continue
         
         db.commit()
         
-        logger.info(f"Image generation completed: {generated_count}/{len(articles_without_images)}")
+        logger.info(f"Image generation completed: {generated_count}/{len(articles_without_images)}, notifications sent: {notifications_sent}")
         
         return {
             "status": "success",
             "generated_count": generated_count,
-            "total_without_images": len(articles_without_images)
+            "total_without_images": len(articles_without_images),
+            "notifications_sent": notifications_sent,
+            "message": f"Generated {generated_count} images and sent {notifications_sent} Telegram notifications"
         }
         
     except Exception as e:

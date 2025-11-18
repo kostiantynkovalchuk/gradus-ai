@@ -67,7 +67,7 @@ class ContentScheduler:
     
     def translate_pending_task(self):
         """
-        Task: Translate draft articles every hour
+        Task: Translate draft articles every hour (notifications sent later with images)
         Runs at: Every hour at :15 (00:15, 01:15, etc.)
         """
         logger.info("🤖 [SCHEDULER] Starting translation task...")
@@ -77,7 +77,7 @@ class ContentScheduler:
                 draft_articles = db.query(ContentQueue).filter(
                     ContentQueue.status == 'draft',
                     ContentQueue.translated_text == None
-                ).limit(5).all()
+                ).limit(10).all()
                 
                 if not draft_articles:
                     logger.info("[SCHEDULER] No articles to translate")
@@ -88,37 +88,32 @@ class ContentScheduler:
                 for article in draft_articles:
                     try:
                         article_data = {
-                            'id': article.id,
                             'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
-                            'content': article.original_text,
-                            'summary': article.original_text[:1000] if article.original_text else ''
+                            'content': article.original_text
                         }
                         
-                        translation, notification_sent = translation_service.translate_article_with_notification(
-                            article_data,
-                            article.id,
-                            article.image_url
-                        )
+                        translation = translation_service.translate_article(article_data)
                         
                         if translation and translation.get('title') and translation.get('content'):
                             article.translated_title = translation['title']
                             article.translated_text = translation['content']
                             article.status = 'pending_approval'
                             translated_count += 1
+                            logger.info(f"[SCHEDULER] Translated article {article.id}: {article_data['title'][:50]}...")
                     except Exception as e:
                         logger.error(f"[SCHEDULER] Error translating article {article.id}: {e}")
                         db.rollback()
                         continue
                 
                 db.commit()
-                logger.info(f"✅ [SCHEDULER] Translated {translated_count} articles")
+                logger.info(f"✅ [SCHEDULER] Translated {translated_count} articles (notifications will be sent with images)")
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Translation failed: {e}")
     
     def generate_images_task(self):
         """
-        Task: Generate images for articles without images
+        Task: Generate images AND send Telegram notifications with image previews
         Runs at: Every hour at :30 (00:30, 01:30, etc.)
         """
         logger.info("🤖 [SCHEDULER] Starting image generation task...")
@@ -128,13 +123,14 @@ class ContentScheduler:
                 articles_without_images = db.query(ContentQueue).filter(
                     ContentQueue.status == 'pending_approval',
                     ContentQueue.image_url == None
-                ).limit(5).all()
+                ).limit(10).all()
                 
                 if not articles_without_images:
                     logger.info("[SCHEDULER] No articles need images")
                     return
                 
                 generated_count = 0
+                notifications_sent = 0
                 
                 for article in articles_without_images:
                     try:
@@ -149,13 +145,32 @@ class ContentScheduler:
                             article.image_url = result['image_url']
                             article.image_prompt = result['prompt']
                             generated_count += 1
+                            
+                            logger.info(f"[SCHEDULER] Generated image for article {article.id}")
+                            
+                            notification_data = {
+                                'id': article.id,
+                                'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                                'translated_text': article.translated_text or article.original_text or '',
+                                'image_url': article.image_url,
+                                'source': article.source or 'The Spirits Business',
+                                'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
+                            }
+                            
+                            try:
+                                notification_service.send_approval_notification(notification_data)
+                                notifications_sent += 1
+                                logger.info(f"✅ [SCHEDULER] Notification with image sent for article {article.id}")
+                            except Exception as notif_error:
+                                logger.error(f"[SCHEDULER] Failed to send notification for article {article.id}: {notif_error}")
+                            
                     except Exception as e:
                         logger.error(f"[SCHEDULER] Error generating image for article {article.id}: {e}")
                         db.rollback()
                         continue
                 
                 db.commit()
-                logger.info(f"✅ [SCHEDULER] Generated {generated_count} images")
+                logger.info(f"✅ [SCHEDULER] Generated {generated_count} images, sent {notifications_sent} notifications")
             
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Image generation failed: {e}")

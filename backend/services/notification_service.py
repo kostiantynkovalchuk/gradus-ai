@@ -34,7 +34,7 @@ class NotificationService:
 
 📰 <b>{title}</b>
 
-🇺🇦 {preview_text}
+{preview_text}
 
 📰 {source}
 🔗 ID: {content_id}
