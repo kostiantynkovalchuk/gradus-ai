@@ -501,6 +501,147 @@ async def translate_pending_articles(limit: int = 5, db: Session = Depends(get_d
         logger.error(f"Batch translation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/images/generate/{article_id}")
+async def generate_image_for_article(article_id: int, db: Session = Depends(get_db)):
+    """
+    Generate image for a specific article
+    Updates article with image_url and image_prompt
+    """
+    try:
+        article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+        
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text or article.translated_text or ''
+        }
+        
+        logger.info(f"Generating image for article {article_id}: {article_data['title'][:50]}...")
+        
+        result = image_generator.generate_article_image(article_data)
+        
+        if result.get('image_url'):
+            article.image_url = result['image_url']
+            article.image_prompt = result['prompt']
+            db.commit()
+            
+            logger.info(f"Image generated successfully for article {article_id}")
+            
+            return {
+                "status": "success",
+                "article_id": article_id,
+                "image_url": result['image_url'],
+                "prompt": result['prompt']
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Image generation failed")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error generating image: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/images/regenerate/{article_id}")
+async def regenerate_image(
+    article_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Regenerate image for article (generates new prompt and new image)
+    """
+    try:
+        article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+        
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text or article.translated_text or ''
+        }
+        
+        logger.info(f"Regenerating image for article {article_id}")
+        
+        result = image_generator.generate_article_image(article_data)
+        
+        if result.get('image_url'):
+            article.image_url = result['image_url']
+            article.image_prompt = result['prompt']
+            db.commit()
+            
+            logger.info(f"Image regenerated for article {article_id}")
+            
+            return {
+                "status": "success",
+                "article_id": article_id,
+                "image_url": result['image_url'],
+                "prompt": result['prompt']
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Image regeneration failed")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error regenerating image: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/images/generate-pending")
+async def generate_images_for_pending(limit: int = 5, db: Session = Depends(get_db)):
+    """
+    Generate images for all articles that don't have one yet
+    """
+    try:
+        articles_without_images = db.query(ContentQueue).filter(
+            ContentQueue.status == 'pending_approval',
+            ContentQueue.image_url == None
+        ).limit(limit).all()
+        
+        if not articles_without_images:
+            return {
+                "status": "success",
+                "message": "No articles need images",
+                "generated_count": 0
+            }
+        
+        logger.info(f"Generating images for {len(articles_without_images)} articles...")
+        
+        generated_count = 0
+        
+        for article in articles_without_images:
+            article_data = {
+                'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                'content': article.original_text or article.translated_text or ''
+            }
+            
+            result = image_generator.generate_article_image(article_data)
+            
+            if result.get('image_url'):
+                article.image_url = result['image_url']
+                article.image_prompt = result['prompt']
+                generated_count += 1
+                logger.info(f"Generated image for article {article.id}")
+        
+        db.commit()
+        
+        logger.info(f"Image generation completed: {generated_count}/{len(articles_without_images)}")
+        
+        return {
+            "status": "success",
+            "generated_count": generated_count,
+            "total_without_images": len(articles_without_images)
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Batch image generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
