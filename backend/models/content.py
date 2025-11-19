@@ -15,6 +15,7 @@ class ContentQueue(Base):
     translated_text = Column(Text)
     image_url = Column(Text)
     image_prompt = Column(Text)
+    local_image_path = Column(Text)
     scheduled_post_time = Column(TIMESTAMP)
     platforms = Column(ARRAY(String))
     created_at = Column(TIMESTAMP, server_default=func.now())

@@ -1,4 +1,7 @@
 import os
+import requests
+import hashlib
+from pathlib import Path
 from openai import OpenAI
 from anthropic import Anthropic
 from typing import Dict, Optional
@@ -22,6 +25,10 @@ class ImageGenerator:
             self.claude_client = None
         else:
             self.claude_client = Anthropic(api_key=anthropic_key)
+        
+        # Set up permanent image storage directory
+        self.image_storage_dir = Path("attached_assets/generated_images")
+        self.image_storage_dir.mkdir(parents=True, exist_ok=True)
     
     def generate_image_prompt(self, article_data: Dict) -> str:
         """
@@ -78,10 +85,36 @@ Return ONLY the prompt text, nothing else."""
             logger.error(f"Failed to generate image prompt: {e}")
             return ""
     
-    def generate_image(self, prompt: str) -> Optional[str]:
+    def download_and_save_image(self, image_url: str) -> Optional[str]:
+        """
+        Download image from DALL-E temporary URL and save permanently to filesystem.
+        Returns the local file path.
+        """
+        try:
+            # Download the image
+            response = requests.get(image_url, timeout=30)
+            response.raise_for_status()
+            
+            # Generate unique filename using hash of URL
+            url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
+            filename = f"dalle_{url_hash}.png"
+            filepath = self.image_storage_dir / filename
+            
+            # Save to filesystem
+            with open(filepath, 'wb') as f:
+                f.write(response.content)
+            
+            logger.info(f"Image saved permanently to: {filepath}")
+            return str(filepath)
+            
+        except Exception as e:
+            logger.error(f"Failed to download and save image: {e}")
+            return None
+    
+    def generate_image(self, prompt: str) -> Optional[Dict[str, str]]:
         """
         Generate an image using DALL-E based on the provided prompt.
-        Returns the URL of the generated image.
+        Returns dict with both temporary URL and permanent local path.
         """
         if not self.openai_client:
             logger.error("OpenAI client not initialized - missing API key")
@@ -103,7 +136,14 @@ Return ONLY the prompt text, nothing else."""
             if response.data and len(response.data) > 0 and response.data[0].url:
                 image_url = response.data[0].url
                 logger.info(f"Image generated successfully: {image_url}")
-                return image_url
+                
+                # Download and save immediately to prevent expiration issues
+                local_path = self.download_and_save_image(image_url)
+                
+                return {
+                    'url': image_url,  # Temporary DALL-E URL (expires in 1-2 hours)
+                    'local_path': local_path  # Permanent local file path
+                }
             else:
                 logger.error("No image URL in response")
                 return None
@@ -117,18 +157,22 @@ Return ONLY the prompt text, nothing else."""
         Complete pipeline: generate prompt + generate image
         
         Returns:
-            Dict with 'prompt' and 'image_url'
+            Dict with 'prompt', 'image_url', and 'local_path'
         """
         dalle_prompt = self.generate_image_prompt(article_data)
         
         if not dalle_prompt:
-            return {"prompt": "", "image_url": ""}
+            return {"prompt": "", "image_url": "", "local_path": ""}
         
-        image_url = self.generate_image(dalle_prompt)
+        image_result = self.generate_image(dalle_prompt)
+        
+        if not image_result:
+            return {"prompt": dalle_prompt, "image_url": "", "local_path": ""}
         
         return {
             "prompt": dalle_prompt,
-            "image_url": image_url or ""
+            "image_url": image_result.get('url', ''),
+            "local_path": image_result.get('local_path', '')
         }
 
 image_generator = ImageGenerator()

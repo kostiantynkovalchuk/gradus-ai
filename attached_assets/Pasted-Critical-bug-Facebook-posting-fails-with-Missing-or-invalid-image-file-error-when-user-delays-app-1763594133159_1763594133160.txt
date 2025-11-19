@@ -1,0 +1,90 @@
+Critical bug: Facebook posting fails with "Missing or invalid image file" error when user delays approval because DALL-E image URLs expire!
+
+🐛 ISSUE:
+ERROR: Facebook error code 324: Missing or invalid image file
+error_subcode: 2069019
+
+Timeline:
+1. System generates image → DALL-E returns temporary URL
+2. User receives Telegram notification (image shows fine)
+3. User delays approval by several hours
+4. User approves → Facebook posting fails
+5. DALL-E URL expired (they expire after 1-2 hours)
+
+🔍 ROOT CAUSE:
+We store DALL-E URLs directly in database:
+- image_url = "https://oaidalleapiprodscus.blob.core.windows.net/..."
+- These URLs expire after ~1-2 hours
+- Facebook can't download expired URLs
+
+📋 SOLUTION OPTIONS:
+
+OPTION A (Quick Fix): Download & Re-host Images
+
+UPDATE backend/services/image_generator.py:
+```python
+import requests
+import base64
+from datetime import datetime
+
+def generate_article_image(self, article_data: Dict[str, str]) -> Dict[str, Any]:
+    # ... existing DALL-E generation code ...
+    
+    # After getting image_url from DALL-E:
+    if image_url:
+        try:
+            # Download image immediately
+            response = requests.get(image_url, timeout=30)
+            if response.status_code == 200:
+                # Convert to base64 for permanent storage
+                image_base64 = base64.b64encode(response.content).decode('utf-8')
+                
+                return {
+                    'image_url': image_url,  # Keep original for now
+                    'image_base64': image_base64,  # Permanent storage
+                    'prompt': prompt,
+                    'status': 'success'
+                }
+        except Exception as e:
+            logger.error(f"Failed to download image: {e}")
+```
+
+UPDATE backend/services/facebook_poster.py:
+```python
+def post_to_facebook(self, content_data: Dict[str, Any]) -> Dict[str, Any]:
+    
+    # Check if we have base64 image (permanent)
+    if 'image_base64' in content_data:
+        # Upload from base64
+        image_data = base64.b64decode(content_data['image_base64'])
+        # Upload to Facebook as bytes
+    else:
+        # Try URL (might be expired)
+        image_url = content_data.get('image_url')
+        # Try to download and upload
+```
+
+OPTION B (Better): Check URL validity before posting
+```python
+def is_image_url_valid(self, url: str) -> bool:
+    """Check if image URL is still accessible"""
+    try:
+        response = requests.head(url, timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+def post_to_facebook(self, content_data: Dict[str, Any]) -> Dict[str, Any]:
+    image_url = content_data.get('image_url')
+    
+    # Check if URL still valid
+    if image_url and not self.is_image_url_valid(image_url):
+        logger.warning(f"Image URL expired, regenerating...")
+        # Regenerate image
+        # OR use base64 backup
+        # OR return error asking user to regenerate
+```
+
+Recommended: Implement OPTION A to download and store images permanently as base64 in the database. This ensures images never expire and Facebook posting always works regardless of approval timing.
+
+Please fix the image expiration issue!

@@ -165,6 +165,7 @@ class ContentScheduler:
                         if result.get('image_url'):
                             article.image_url = result['image_url']
                             article.image_prompt = result['prompt']
+                            article.local_image_path = result.get('local_path', '')
                             generated_count += 1
                             
                             logger.info(f"[SCHEDULER] Generated image for article {article.id}")

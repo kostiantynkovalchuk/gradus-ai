@@ -82,7 +82,8 @@ class TelegramWebhookHandler:
                 'url': article.source_url or '',
                 'source': article.source or 'The Spirits Business',
                 'author': (article.extra_metadata.get('author', '') if article.extra_metadata else ''),
-                'image_url': article.image_url
+                'image_url': article.image_url,
+                'local_image_path': article.local_image_path
             }
             
             fb_result = facebook_poster.post_with_image(post_data)

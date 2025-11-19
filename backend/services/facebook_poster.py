@@ -44,7 +44,7 @@ class FacebookPoster:
         Post to Facebook Page with image
         
         Args:
-            article_data: Dict with all article info including image_url
+            article_data: Dict with all article info including image_url or local_image_path
             
         Returns:
             Dict with post_id and post_url, or None if failed
@@ -54,12 +54,45 @@ class FacebookPoster:
             return None
         
         message = self.format_post_text(article_data)
+        local_image_path = article_data.get('local_image_path')
         image_url = article_data.get('image_url')
         
-        if not image_url:
-            logger.warning("No image URL provided, posting text only")
+        # Prefer local image file over URL (URL may be expired)
+        if local_image_path and os.path.exists(local_image_path):
+            logger.info(f"Using local image file: {local_image_path}")
+            return self._post_with_local_image(message, local_image_path)
+        elif image_url:
+            logger.warning("No local image found, trying URL (may be expired)")
+            return self._post_with_image_url(message, image_url)
+        else:
+            logger.warning("No image provided, posting text only")
             return self.post_text_only(message)
+    
+    def _post_with_local_image(self, message: str, local_image_path: str) -> Optional[Dict]:
+        """Post to Facebook using local image file (prevents expiration issues)"""
+        url = f"{self.base_url}/{self.page_id}/photos"
         
+        try:
+            with open(local_image_path, 'rb') as image_file:
+                files = {'source': image_file}
+                data = {
+                    'message': message,
+                    'access_token': self.page_access_token
+                }
+                
+                logger.info(f"Posting to Facebook with local image file...")
+                response = requests.post(url, files=files, data=data, timeout=30)
+                result = response.json()
+                
+                return self._parse_facebook_response(result)
+                
+        except Exception as e:
+            logger.error(f"Failed to post with local image: {e}")
+            logger.exception("Full traceback:")
+            return None
+    
+    def _post_with_image_url(self, message: str, image_url: str) -> Optional[Dict]:
+        """Post to Facebook using image URL (may fail if URL expired)"""
         url = f"{self.base_url}/{self.page_id}/photos"
         
         payload = {
@@ -69,48 +102,54 @@ class FacebookPoster:
         }
         
         try:
-            logger.info(f"Posting to Facebook with image: {image_url[:100]}...")
+            logger.info(f"Posting to Facebook with image URL: {image_url[:100]}...")
             response = requests.post(url, data=payload, timeout=30)
             result = response.json()
             
-            logger.info(f"Facebook API response: {result}")
-            
-            if 'id' in result:
-                post_id = result['id']
-                
-                try:
-                    if '_' in post_id:
-                        post_number = post_id.split('_')[1]
-                    else:
-                        post_number = post_id
-                    
-                    post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_number}"
-                except Exception as parse_error:
-                    logger.error(f"Error parsing post_id '{post_id}': {parse_error}")
-                    post_url = f"https://www.facebook.com/{self.page_id}"
-                
-                logger.info(f"Posted to Facebook successfully: {post_id}")
-                
-                return {
-                    'post_id': post_id,
-                    'post_url': post_url,
-                    'posted_at': datetime.now().isoformat()
-                }
-            else:
-                logger.error(f"Facebook API error: {result}")
-                
-                if 'error' in result:
-                    error = result['error']
-                    logger.error(f"Facebook error code {error.get('code')}: {error.get('message')}")
-                    
-                    if error.get('code') == 190:
-                        logger.error("Facebook access token is invalid or expired!")
-                
-                return None
+            return self._parse_facebook_response(result)
                 
         except Exception as e:
-            logger.error(f"Failed to post to Facebook: {e}")
+            logger.error(f"Failed to post with image URL: {e}")
             logger.exception("Full traceback:")
+            return None
+    
+    def _parse_facebook_response(self, result: Dict) -> Optional[Dict]:
+        """Parse Facebook API response and return post data"""
+        logger.info(f"Facebook API response: {result}")
+        
+        if 'id' in result:
+            post_id = result['id']
+            
+            try:
+                if '_' in post_id:
+                    post_number = post_id.split('_')[1]
+                else:
+                    post_number = post_id
+                
+                post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_number}"
+            except Exception as parse_error:
+                logger.error(f"Error parsing post_id '{post_id}': {parse_error}")
+                post_url = f"https://www.facebook.com/{self.page_id}"
+            
+            logger.info(f"Posted to Facebook successfully: {post_id}")
+            
+            return {
+                'post_id': post_id,
+                'post_url': post_url,
+                'posted_at': datetime.now().isoformat()
+            }
+        else:
+            logger.error(f"Facebook API error: {result}")
+            
+            if 'error' in result:
+                error = result['error']
+                logger.error(f"Facebook error code {error.get('code')}: {error.get('message')}")
+                
+                if error.get('code') == 190:
+                    logger.error("Facebook access token is invalid or expired!")
+                elif error.get('code') == 324:
+                    logger.error("Image file missing or invalid - URL may have expired!")
+            
             return None
     
     def post_text_only(self, message: str) -> Optional[Dict]:
