@@ -171,7 +171,7 @@ class ContentScheduler:
                             
                             notification_data = {
                                 'id': article.id,
-                                'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                                'translated_title': article.translated_title,
                                 'translated_text': article.translated_text or article.original_text or '',
                                 'image_url': article.image_url,
                                 'source': article.source or 'The Spirits Business',

@@ -23,7 +23,7 @@ class NotificationService:
             return False
         
         content_id = content_data.get('id')
-        title = content_data.get('title', 'No title')
+        title = content_data.get('translated_title', content_data.get('title', 'Без заголовка'))
         translated_text = content_data.get('translated_text', '')
         image_url = content_data.get('image_url')
         source = content_data.get('source', 'The Spirits Business')
@@ -92,10 +92,12 @@ class NotificationService:
         Returns:
             True if notification sent successfully
         """
+        title = content_data.get('translated_title', content_data.get('title', 'Без заголовка'))
+        
         message = f"""
 ✅ <b>Контент затверджено!</b>
 
-📰 <b>Заголовок:</b> {content_data.get('title', 'No title')}
+📰 <b>Заголовок:</b> {title}
 📅 <b>Запланований постинг:</b> {content_data.get('scheduled_time', 'Відразу')}
 🔗 <b>ID:</b> {content_data.get('id')}
 
@@ -134,10 +136,12 @@ class NotificationService:
         Returns:
             True if notification sent successfully
         """
+        title = content_data.get('translated_title', content_data.get('title', 'Без заголовка'))
+        
         message = f"""
 🎉 <b>Контент опубліковано!</b>
 
-📰 <b>Заголовок:</b> {content_data.get('title', 'No title')}
+📰 <b>Заголовок:</b> {title}
 📱 <b>Платформи:</b> {', '.join(content_data.get('platforms', []))}
 🔗 <b>Facebook:</b> {content_data.get('fb_post_url', 'N/A')}
 ⏰ <b>Час:</b> {content_data.get('posted_at', '')}
