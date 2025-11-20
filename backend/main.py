@@ -583,6 +583,7 @@ async def generate_image_for_article(article_id: int, db: Session = Depends(get_
         if result.get('image_url'):
             article.image_url = result['image_url']
             article.image_prompt = result['prompt']
+            article.local_image_path = result.get('local_path', '')
             db.commit()
             
             logger.info(f"Image generated successfully for article {article_id}")
@@ -629,6 +630,7 @@ async def regenerate_image(
         if result.get('image_url'):
             article.image_url = result['image_url']
             article.image_prompt = result['prompt']
+            article.local_image_path = result.get('local_path', '')
             db.commit()
             
             logger.info(f"Image regenerated for article {article_id}")
@@ -686,6 +688,7 @@ async def generate_images_for_pending(limit: int = 10, db: Session = Depends(get
                 if result.get('image_url'):
                     article.image_url = result['image_url']
                     article.image_prompt = result['prompt']
+                    article.local_image_path = result.get('local_path', '')
                     generated_count += 1
                     
                     logger.info(f"Generated image for article {article.id}")
@@ -725,6 +728,65 @@ async def generate_images_for_pending(limit: int = 10, db: Session = Depends(get
     except Exception as e:
         db.rollback()
         logger.error(f"Batch image generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/images/migrate-local-storage")
+async def migrate_images_to_local_storage(db: Session = Depends(get_db)):
+    """
+    Retroactively download existing DALL-E images and save them locally.
+    This fixes articles that have image_url but no local_image_path.
+    """
+    try:
+        articles_need_migration = db.query(ContentQueue).filter(
+            ContentQueue.image_url != None,
+            ContentQueue.local_image_path == None
+        ).all()
+        
+        if not articles_need_migration:
+            return {
+                "status": "success",
+                "message": "No articles need migration",
+                "migrated_count": 0
+            }
+        
+        logger.info(f"Migrating {len(articles_need_migration)} images to local storage...")
+        
+        migrated_count = 0
+        failed_count = 0
+        
+        for article in articles_need_migration:
+            try:
+                logger.info(f"Downloading image for article {article.id}...")
+                local_path = image_generator.download_and_save_image(article.image_url)
+                
+                if local_path:
+                    article.local_image_path = local_path
+                    migrated_count += 1
+                    logger.info(f"✅ Article {article.id}: Saved to {local_path}")
+                else:
+                    failed_count += 1
+                    logger.warning(f"⚠️ Article {article.id}: Download failed (URL may be expired)")
+                    
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"❌ Article {article.id}: Migration error: {e}")
+                continue
+        
+        db.commit()
+        
+        logger.info(f"Migration completed: {migrated_count} succeeded, {failed_count} failed")
+        
+        return {
+            "status": "success",
+            "total_articles": len(articles_need_migration),
+            "migrated_count": migrated_count,
+            "failed_count": failed_count,
+            "message": f"Migrated {migrated_count}/{len(articles_need_migration)} images to local storage"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Migration error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/facebook/test")

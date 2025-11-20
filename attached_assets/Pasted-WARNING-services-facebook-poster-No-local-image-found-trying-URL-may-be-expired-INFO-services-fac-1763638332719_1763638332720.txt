@@ -1,0 +1,14 @@
+WARNING:services.facebook_poster:No local image found, trying URL (may be expired)
+INFO:services.facebook_poster:Posting to Facebook with image URL: https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjj...
+INFO:services.facebook_poster:Facebook API response: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'AjyGPU8mWErjBdV3qem_XdW'}}
+ERROR:services.facebook_poster:Facebook API error: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'AjyGPU8mWErjBdV3qem_XdW'}}
+ERROR:services.facebook_poster:Facebook error code 324: Missing or invalid image file
+ERROR:services.facebook_poster:Image file missing or invalid - URL may have expired!
+INFO:     10.82.9.130:0 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:     10.82.0.252:0 - "GET /api/content/stats HTTP/1.1" 200 OK
+WARNING:services.facebook_poster:No local image found, trying URL (may be expired)
+INFO:services.facebook_poster:Posting to Facebook with image URL: https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjj...
+INFO:services.facebook_poster:Facebook API response: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'AeP2J9ZsAqoWZdkkHZhmCEg'}}
+ERROR:services.facebook_poster:Facebook API error: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'AeP2J9ZsAqoWZdkkHZhmCEg'}}
+ERROR:services.facebook_poster:Facebook error code 324: Missing or invalid image file
+ERROR:services.facebook_poster:Image file missing or invalid - URL may have expired!
