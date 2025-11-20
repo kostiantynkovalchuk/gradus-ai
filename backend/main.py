@@ -199,7 +199,8 @@ async def approve_content(
                 'url': content.source_url or '',
                 'source': content.source or 'The Spirits Business',
                 'author': (content.extra_metadata.get('author', '') if content.extra_metadata else ''),
-                'image_url': content.image_url
+                'image_url': content.image_url,
+                'local_image_path': content.local_image_path
             }
             
             fb_result = facebook_poster.post_with_image(post_data)
