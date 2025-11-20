@@ -32,7 +32,8 @@ The system is built with a FastAPI backend and a React frontend. Key architectur
     - Daily cleanup of old rejected content.
 - **Telegram Quick Approval:** Enables one-click approval/rejection and auto-posting directly from Telegram notifications, including image previews.
 - **Image Generation Pipeline:** Uses Claude AI to generate contextual DALL-E 3 prompts, ensuring text-free, professional, 1024x1024 images optimized for social media.
-- **Facebook Auto-Posting:** Integrates directly into the approval workflow, automatically posting approved content with images to a specified Facebook Page.
+- **Permanent Image Storage:** DALL-E images are downloaded immediately and saved to `attached_assets/generated_images/` to prevent expiration issues. Both `image_url` (temporary) and `local_image_path` (permanent) are stored in the database.
+- **Facebook Auto-Posting:** Integrates directly into the approval workflow, automatically posting approved content with images to a specified Facebook Page. Uses local image files to prevent DALL-E URL expiration failures.
 
 **Feature Specifications:**
 - **Content Management:** API endpoints for managing pending, approved, and rejected content, including editing and historical tracking.
