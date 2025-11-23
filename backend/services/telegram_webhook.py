@@ -63,7 +63,10 @@ class TelegramWebhookHandler:
             return {"status": "error", "message": "Invalid callback format"}
     
     def _approve_content(self, content_id: int, callback_id: str, message: Dict, db: Session) -> Dict:
-        """Approve content and post to Facebook with proper transaction handling"""
+        """
+        Approve content for scheduled posting (NO IMMEDIATE POST)
+        Marks as 'approved' - scheduler will post at optimal times
+        """
         
         try:
             article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
@@ -76,73 +79,55 @@ class TelegramWebhookHandler:
                 self._answer_callback_query(callback_id, f"⚠️ Already {article.status}")
                 return {"status": "error", "message": f"Article already {article.status}"}
             
-            post_data = {
-                'translated_title': article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else ''),
-                'translated_content': article.translated_text or '',
-                'url': article.source_url or '',
-                'source': article.source or 'The Spirits Business',
-                'author': (article.extra_metadata.get('author', '') if article.extra_metadata else ''),
-                'image_url': article.image_url,
-                'local_image_path': article.local_image_path
-            }
+            article.status = 'approved'
+            article.reviewed_at = datetime.utcnow()
+            article.reviewed_by = 'telegram_bot'
             
-            fb_result = facebook_poster.post_with_image(post_data)
+            if not article.extra_metadata:
+                article.extra_metadata = {}
+            article.extra_metadata['approved_at'] = datetime.utcnow().isoformat()
+            article.extra_metadata['approved_by'] = 'telegram'
             
-            if not fb_result:
-                self._answer_callback_query(callback_id, "❌ Facebook posting failed")
-                return {"status": "error", "message": "Facebook posting failed, approval cancelled", "content_id": content_id}
-            
-            try:
-                article.status = 'posted'
-                article.reviewed_at = datetime.utcnow()
-                article.reviewed_by = 'telegram_bot'
-                
-                if not article.extra_metadata:
-                    article.extra_metadata = {}
-                article.extra_metadata['fb_post_id'] = fb_result['post_id']
-                article.extra_metadata['fb_post_url'] = fb_result['post_url']
-                
-                log_entry = ApprovalLog(
-                    content_id=content_id,
-                    action="approved_and_posted",
-                    moderator="telegram_bot",
-                    details={
-                        "method": "telegram_inline_button",
-                        "fb_post_url": fb_result['post_url']
-                    }
-                )
-                db.add(log_entry)
-                db.commit()
-                db.refresh(article)
-                
-                logger.info(f"Content {content_id} approved via Telegram and posted to Facebook: {fb_result['post_url']}")
-                
-            except Exception as db_error:
-                logger.error(f"Database error after Facebook posting for content {content_id}: {db_error}")
-                db.rollback()
-                self._answer_callback_query(callback_id, "⚠️ Posted to Facebook but DB update failed")
-                return {
-                    "status": "partial_success", 
-                    "message": f"Posted to Facebook but database update failed: {str(db_error)}", 
-                    "fb_post_url": fb_result['post_url'],
-                    "content_id": content_id
+            log_entry = ApprovalLog(
+                content_id=content_id,
+                action="approved",
+                moderator="telegram_bot",
+                details={
+                    "method": "telegram_inline_button",
+                    "note": "Approved for scheduled posting"
                 }
+            )
+            db.add(log_entry)
+            db.commit()
+            db.refresh(article)
             
-            new_caption = f"""✅ <b>Затверджено і опубліковано!</b>
+            logger.info(f"Content {content_id} approved via Telegram - scheduled for posting")
+            
+            title = article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else 'No title')
+            
+            posting_schedule = """📅 <b>Розклад публікації:</b>
+• Facebook: Щодня о 18:00
+• LinkedIn: Пн/Ср/Пт о 9:00
 
-📰 <b>{post_data['translated_title']}</b>
+💡 Система автоматично опублікує контент в оптимальний час для максимальної взаємодії."""
+            
+            new_caption = f"""✅ <b>Контент схвалено!</b>
 
-📱 Facebook: {fb_result['post_url']}
-⏰ {datetime.utcnow().strftime('%H:%M, %d %b %Y')}"""
+📰 <b>{title}</b>
+
+✅ Статус: Готово до публікації
+🆔 ID: {content_id}
+
+{posting_schedule}"""
             
             caption_updated = self._update_message_caption(message, new_caption)
             if caption_updated:
-                self._answer_callback_query(callback_id, "✅ Posted to Facebook!")
+                self._answer_callback_query(callback_id, "✅ Схвалено! Буде опубліковано за розкладом")
             else:
-                self._answer_callback_query(callback_id, "✅ Posted! (Notification update failed)")
-                logger.warning(f"Content {content_id}: Posted successfully but Telegram caption update failed")
+                self._answer_callback_query(callback_id, "✅ Схвалено для публікації")
+                logger.warning(f"Content {content_id}: Approved but Telegram caption update failed")
             
-            return {"status": "success", "fb_post_url": fb_result['post_url'], "content_id": content_id}
+            return {"status": "success", "message": "Content approved for scheduled posting", "content_id": content_id}
                 
         except Exception as e:
             logger.error(f"Error approving content {content_id}: {e}")

@@ -171,6 +171,43 @@ class NotificationService:
             logger.error(f"Failed to send posted notification: {e}")
             return False
     
+    def send_custom_notification(self, message: str) -> bool:
+        """
+        Send custom notification message to Telegram
+        
+        Args:
+            message: Custom message text (supports HTML formatting)
+            
+        Returns:
+            True if notification sent successfully
+        """
+        if not self.bot_token or not self.chat_id:
+            logger.error("Telegram credentials not configured")
+            return False
+        
+        url = f"{self.base_url}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info("Custom notification sent successfully")
+                return True
+            else:
+                logger.error(f"Telegram API error: {result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to send custom notification: {e}")
+            return False
+    
     def send_test_notification(self) -> Dict[str, Any]:
         """Send test notification"""
         url = f"{self.base_url}/sendMessage"

@@ -261,6 +261,154 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] API monitoring failed: {e}")
     
+    def post_to_facebook_task(self):
+        """
+        Post approved content to Facebook at scheduled time
+        Runs: Every day at 6:00 PM
+        Posts oldest approved content (FIFO queue)
+        """
+        logger.info("🤖 [SCHEDULER] Facebook scheduled posting...")
+        
+        try:
+            from services.facebook_poster import facebook_poster
+            from services.notification_service import notification_service
+            
+            db = self._get_db_session()
+            try:
+                article = db.query(ContentQueue).filter(
+                    ContentQueue.status == 'approved'
+                ).order_by(ContentQueue.created_at.asc()).first()
+                
+                if not article:
+                    logger.info("[SCHEDULER] No approved content to post to Facebook")
+                    return
+                
+                post_data = {
+                    'translated_title': article.translated_title or '',
+                    'translated_content': article.translated_text or '',
+                    'url': article.source_url or '',
+                    'source': article.source or 'The Spirits Business',
+                    'author': article.extra_metadata.get('author', '') if article.extra_metadata else '',
+                    'image_url': article.image_url,
+                    'local_image_path': article.local_image_path
+                }
+                
+                result = facebook_poster.post_with_image(post_data)
+                
+                if result:
+                    article.status = 'posted'
+                    article.posted_at = datetime.utcnow()
+                    
+                    if not article.extra_metadata:
+                        article.extra_metadata = {}
+                    article.extra_metadata['fb_post_id'] = result['post_id']
+                    article.extra_metadata['fb_post_url'] = result['post_url']
+                    article.extra_metadata['posted_platform'] = 'facebook'
+                    
+                    db.commit()
+                    
+                    logger.info(f"✅ [SCHEDULER] Posted to Facebook: Article {article.id}")
+                    
+                    title = article.translated_title or 'No title'
+                    message = f"""📢 <b>Опубліковано!</b>
+
+📱 <b>Платформа:</b> Facebook
+
+📰 <b>{title}</b>
+
+🔗 <a href="{result['post_url']}">Переглянути пост</a>
+
+✅ Автоматична публікація за розкладом
+🆔 ID: {article.id}
+🕐 {datetime.utcnow().strftime('%H:%M, %d %b %Y')}"""
+                    
+                    notification_service.send_custom_notification(message)
+                    
+                else:
+                    logger.error(f"❌ [SCHEDULER] Facebook posting failed for article {article.id}")
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Facebook posting task failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def post_to_linkedin_task(self):
+        """
+        Post approved content to LinkedIn at scheduled time
+        Runs: Mon/Wed/Fri at 9:00 AM
+        Posts oldest approved content (FIFO queue)
+        """
+        logger.info("🤖 [SCHEDULER] LinkedIn scheduled posting...")
+        
+        try:
+            from services.linkedin_poster import linkedin_poster
+            from services.notification_service import notification_service
+            
+            db = self._get_db_session()
+            try:
+                article = db.query(ContentQueue).filter(
+                    ContentQueue.status == 'approved'
+                ).order_by(ContentQueue.created_at.asc()).first()
+                
+                if not article:
+                    logger.info("[SCHEDULER] No approved content to post to LinkedIn")
+                    return
+                
+                post_data = {
+                    'title': article.translated_title or '',
+                    'text': article.translated_text or '',
+                    'source': article.source or 'The Spirits Business',
+                    'source_url': article.source_url or '',
+                    'image_url': article.image_url
+                }
+                
+                result = linkedin_poster.post_to_linkedin(post_data)
+                
+                if result.get('status') == 'success':
+                    article.status = 'posted'
+                    article.posted_at = datetime.utcnow()
+                    
+                    if not article.extra_metadata:
+                        article.extra_metadata = {}
+                    article.extra_metadata['linkedin_post_id'] = result.get('post_id', '')
+                    article.extra_metadata['linkedin_post_url'] = result.get('post_url', '')
+                    article.extra_metadata['posted_platform'] = 'linkedin'
+                    
+                    db.commit()
+                    
+                    logger.info(f"✅ [SCHEDULER] Posted to LinkedIn: Article {article.id}")
+                    
+                    title = article.translated_title or 'No title'
+                    post_url = result.get('post_url', '')
+                    
+                    message = f"""📢 <b>Опубліковано!</b>
+
+💼 <b>Платформа:</b> LinkedIn
+
+📰 <b>{title}</b>
+
+🔗 <a href="{post_url}">Переглянути пост</a>
+
+✅ Автоматична публікація за розкладом
+🆔 ID: {article.id}
+🕐 {datetime.utcnow().strftime('%H:%M, %d %b %Y')}"""
+                    
+                    notification_service.send_custom_notification(message)
+                    
+                else:
+                    logger.error(f"❌ [SCHEDULER] LinkedIn posting failed: {result.get('message', 'Unknown error')}")
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] LinkedIn posting task failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
     def start(self):
         """Start the scheduler with all tasks (idempotent)"""
         if self.scheduler.running:
@@ -318,13 +466,31 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        self.scheduler.add_job(
+            self.post_to_facebook_task,
+            CronTrigger(hour=18, minute=0),
+            id='post_facebook',
+            name='Post to Facebook (scheduled)',
+            replace_existing=True
+        )
+        
+        self.scheduler.add_job(
+            self.post_to_linkedin_task,
+            CronTrigger(day_of_week='mon,wed,fri', hour=9, minute=0),
+            id='post_linkedin',
+            name='Post to LinkedIn (scheduled)',
+            replace_existing=True
+        )
+        
         self.scheduler.start()
-        logger.info("✅ Scheduler started with 5 automated tasks")
+        logger.info("✅ Scheduler started with 7 automated tasks")
         logger.info("📅 Next scrape: 00:00, 06:00, 12:00, 18:00")
         logger.info("🔄 Translation: Every hour at :15")
         logger.info("🎨 Images: Every hour at :30")
         logger.info("🗑️  Cleanup: Daily at 03:00")
         logger.info("🔐 API Monitor: Daily at 09:00")
+        logger.info("📱 Facebook posting: Daily at 18:00 (6 PM)")
+        logger.info("💼 LinkedIn posting: Mon/Wed/Fri at 09:00")
     
     def stop(self):
         """Stop the scheduler (idempotent)"""
