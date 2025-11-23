@@ -20,6 +20,7 @@ from services.translation_service import translation_service
 from services.facebook_poster import facebook_poster
 from services.scheduler import content_scheduler
 from services.telegram_webhook import telegram_webhook_handler
+from services.api_token_monitor import api_token_monitor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -842,6 +843,60 @@ async def check_facebook_token():
     status = facebook_token_manager.check_token_expiration()
     
     return status
+
+@app.get("/api/monitor/all")
+async def monitor_all_api_services():
+    """
+    Comprehensive monitoring of all API services
+    Returns health status, quotas, and expiration info
+    """
+    try:
+        results = api_token_monitor.check_all_services()
+        return results
+    except Exception as e:
+        logger.error(f"API monitoring error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/monitor/anthropic")
+async def monitor_anthropic():
+    """Check Claude/Anthropic API status"""
+    try:
+        result = api_token_monitor.check_anthropic_api()
+        return result
+    except Exception as e:
+        logger.error(f"Anthropic monitoring error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/monitor/openai")
+async def monitor_openai():
+    """Check OpenAI/DALL-E API status"""
+    try:
+        result = api_token_monitor.check_openai_api()
+        return result
+    except Exception as e:
+        logger.error(f"OpenAI monitoring error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/monitor/test-alerts")
+async def test_monitoring_alerts():
+    """
+    Manually trigger API monitoring check and send alerts if needed
+    Useful for testing notification system
+    """
+    try:
+        results = api_token_monitor.check_all_services()
+        
+        if not results.get('warnings') and not results.get('errors'):
+            api_token_monitor.send_success_notification(results)
+        
+        return {
+            "status": "success",
+            "message": "Monitoring check completed",
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Monitoring test error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/facebook/token-alert")
 async def send_token_alert():

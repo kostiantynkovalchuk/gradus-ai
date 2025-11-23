@@ -224,34 +224,42 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
     
-    def check_facebook_token_task(self):
+    def check_api_services_task(self):
         """
-        Task: Check Facebook token expiration
+        Task: Comprehensive API monitoring - Check all services
         Runs at: 09:00 daily
         """
-        logger.info("🤖 [SCHEDULER] Checking Facebook token expiration...")
+        logger.info("🤖 [SCHEDULER] Checking all API services...")
         
         try:
-            from services.facebook_token_manager import facebook_token_manager
+            from services.api_token_monitor import api_token_monitor
             
-            status = facebook_token_manager.check_token_expiration()
+            results = api_token_monitor.check_all_services()
             
-            if status.get('error'):
-                logger.error(f"Token check failed: {status['error']}")
-                return
+            services = results.get('services', {})
+            warnings = results.get('warnings', [])
+            errors = results.get('errors', [])
             
-            days_remaining = status.get('days_remaining')
+            healthy_count = sum(1 for s in services.values() if s.get('status') == 'healthy')
+            total_count = len(services)
             
-            if days_remaining is None:
-                logger.info("✅ Facebook token never expires")
-            elif days_remaining < 7:
-                logger.warning(f"⚠️ Facebook token expires in {days_remaining} days!")
-                facebook_token_manager.send_expiration_alert(days_remaining)
-            else:
-                logger.info(f"✅ Facebook token healthy ({days_remaining} days remaining)")
+            logger.info(f"✅ [SCHEDULER] API Monitor: {healthy_count}/{total_count} services healthy")
+            
+            if errors:
+                logger.error(f"❌ {len(errors)} service(s) with errors:")
+                for error in errors:
+                    logger.error(f"  • {error['service']}: {error['message']}")
+            
+            if warnings:
+                logger.warning(f"⚠️ {len(warnings)} service(s) with warnings:")
+                for warning in warnings:
+                    logger.warning(f"  • {warning['service']}: {warning['message']}")
+            
+            if not warnings and not errors:
+                logger.info("✅ All API services operational")
                 
         except Exception as e:
-            logger.error(f"❌ [SCHEDULER] Token check failed: {e}")
+            logger.error(f"❌ [SCHEDULER] API monitoring failed: {e}")
     
     def start(self):
         """Start the scheduler with all tasks (idempotent)"""
@@ -303,10 +311,10 @@ class ContentScheduler:
         )
         
         self.scheduler.add_job(
-            self.check_facebook_token_task,
+            self.check_api_services_task,
             CronTrigger(hour=9, minute=0),
-            id='check_facebook_token',
-            name='Check Facebook token expiration',
+            id='check_api_services',
+            name='Check all API services',
             replace_existing=True
         )
         
@@ -316,7 +324,7 @@ class ContentScheduler:
         logger.info("🔄 Translation: Every hour at :15")
         logger.info("🎨 Images: Every hour at :30")
         logger.info("🗑️  Cleanup: Daily at 03:00")
-        logger.info("🔐 Token check: Daily at 09:00")
+        logger.info("🔐 API Monitor: Daily at 09:00")
     
     def stop(self):
         """Stop the scheduler (idempotent)"""
