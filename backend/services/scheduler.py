@@ -362,7 +362,8 @@ class ContentScheduler:
                     'text': article.translated_text or '',
                     'source': article.source or 'The Spirits Business',
                     'source_url': article.source_url or '',
-                    'image_url': article.image_url
+                    'image_url': article.image_url,
+                    'local_image_path': article.local_image_path
                 }
                 
                 result = linkedin_poster.post_to_linkedin(post_data)

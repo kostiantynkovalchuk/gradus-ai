@@ -49,7 +49,7 @@ class LinkedInPoster:
         Post content to LinkedIn organization page
         
         Args:
-            article_data: Dict with title, text, source_url, image_url (optional)
+            article_data: Dict with title, text, source_url, image_url, local_image_path (optional)
             
         Returns:
             Dict with status, post_id, post_url
@@ -72,9 +72,10 @@ class LinkedInPoster:
         
         post_text = self.format_post_text(article_data)
         image_url = article_data.get('image_url')
+        local_image_path = article_data.get('local_image_path')
         
-        if image_url:
-            return self._post_with_image(post_text, image_url)
+        if image_url or local_image_path:
+            return self._post_with_image(post_text, image_url, local_image_path)
         else:
             return self._post_text_only(post_text)
     
@@ -118,9 +119,172 @@ class LinkedInPoster:
                 'message': str(e)
             }
     
-    def _post_with_image(self, text: str, image_url: str) -> Dict:
-        """Post content with image to LinkedIn"""
+    def _register_upload(self) -> Optional[Dict]:
+        """
+        Step 1: Register image upload with LinkedIn
+        Returns upload URL and asset URN
+        """
+        url = f"{self.base_url}/{self.api_version}/assets?action=registerUpload"
         
+        payload = {
+            "registerUploadRequest": {
+                "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
+                "owner": self.organization_urn,
+                "serviceRelationships": [{
+                    "relationshipType": "OWNER",
+                    "identifier": "urn:li:userGeneratedContent"
+                }]
+            }
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+            "X-Restli-Protocol-Version": "2.0.0"
+        }
+        
+        try:
+            logger.info("Registering image upload with LinkedIn...")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                asset_urn = result.get('value', {}).get('asset')
+                upload_url = result.get('value', {}).get('uploadMechanism', {}).get(
+                    'com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest', {}
+                ).get('uploadUrl')
+                
+                if asset_urn and upload_url:
+                    logger.info(f"Upload registered: {asset_urn}")
+                    return {
+                        'asset_urn': asset_urn,
+                        'upload_url': upload_url
+                    }
+                else:
+                    logger.error(f"Invalid registration response: {result}")
+                    return None
+            else:
+                logger.error(f"Registration failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to register upload: {e}")
+            return None
+    
+    def _upload_image(self, upload_url: str, image_url: Optional[str] = None, local_image_path: Optional[str] = None) -> bool:
+        """
+        Step 2: Upload image to LinkedIn
+        Downloads image from URL or reads from local file, then uploads to LinkedIn's storage
+        
+        Args:
+            upload_url: Pre-signed LinkedIn upload URL
+            image_url: Remote image URL (tried first)
+            local_image_path: Local file path (fallback)
+        
+        Note: Pre-signed upload URL handles auth, don't add Authorization header
+        """
+        image_data = None
+        content_type = 'image/jpeg'
+        
+        # Try remote URL first
+        if image_url:
+            try:
+                logger.info(f"Downloading image from remote URL: {image_url}")
+                img_response = requests.get(image_url, timeout=30)
+                
+                if img_response.status_code == 200:
+                    # Validate it's actually an image
+                    response_content_type = img_response.headers.get('Content-Type', '')
+                    if 'image' in response_content_type:
+                        image_data = img_response.content
+                        content_type = response_content_type
+                        logger.info(f"Downloaded from remote URL (Content-Type: {content_type})")
+                    else:
+                        logger.warning(f"Remote URL returned non-image Content-Type: {response_content_type}")
+                else:
+                    logger.warning(f"Failed to download from remote URL: {img_response.status_code}")
+            except Exception as e:
+                logger.warning(f"Exception downloading from remote URL: {e}")
+        
+        # Fallback to local file if remote failed
+        if not image_data and local_image_path:
+            try:
+                logger.info(f"Falling back to local image: {local_image_path}")
+                with open(local_image_path, 'rb') as f:
+                    image_data = f.read()
+                
+                # Determine content type from file extension
+                if local_image_path.lower().endswith('.png'):
+                    content_type = 'image/png'
+                elif local_image_path.lower().endswith('.jpg') or local_image_path.lower().endswith('.jpeg'):
+                    content_type = 'image/jpeg'
+                
+                logger.info(f"Loaded local image (Content-Type: {content_type})")
+            except Exception as e:
+                logger.error(f"Failed to read local image: {e}")
+                return False
+        
+        # If we still don't have image data, fail
+        if not image_data:
+            logger.error("No valid image data available from remote URL or local file")
+            return False
+        
+        # Upload to LinkedIn
+        try:
+            logger.info(f"Uploading image to LinkedIn (size: {len(image_data)} bytes)...")
+            
+            # Pre-signed URL handles auth - no Authorization header needed
+            headers = {
+                "Content-Type": content_type
+            }
+            
+            upload_response = requests.put(
+                upload_url,
+                data=image_data,
+                headers=headers,
+                timeout=60
+            )
+            
+            if upload_response.status_code in [200, 201]:
+                logger.info("Image uploaded successfully to LinkedIn")
+                return True
+            else:
+                logger.error(f"LinkedIn upload failed: {upload_response.status_code} - {upload_response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception during LinkedIn upload: {e}")
+            return False
+    
+    def _post_with_image(self, text: str, image_url: Optional[str] = None, local_image_path: Optional[str] = None) -> Dict:
+        """
+        Post content with image to LinkedIn using proper asset upload workflow
+        
+        Steps:
+        1. Register upload to get asset URN
+        2. Upload image binary (tries remote URL first, falls back to local file)
+        3. Create post with asset URN
+        4. If image upload fails, degrades to text-only post
+        
+        Args:
+            text: Post text content
+            image_url: Remote image URL (optional)
+            local_image_path: Local image file path (optional fallback)
+        """
+        
+        # Step 1: Register upload
+        upload_info = self._register_upload()
+        if not upload_info:
+            logger.warning("Image upload registration failed, posting text-only")
+            return self._post_text_only(text)
+        
+        # Step 2: Upload image (with fallback)
+        upload_success = self._upload_image(upload_info['upload_url'], image_url, local_image_path)
+        if not upload_success:
+            logger.warning("Image upload failed, degrading to text-only post")
+            return self._post_text_only(text)
+        
+        # Step 3: Create post with asset URN
         url = f"{self.base_url}/{self.api_version}/ugcPosts"
         
         payload = {
@@ -137,7 +301,7 @@ class LinkedInPoster:
                         "description": {
                             "text": "Article image"
                         },
-                        "media": image_url,
+                        "media": upload_info['asset_urn'],
                         "title": {
                             "text": "Image"
                         }
@@ -156,7 +320,7 @@ class LinkedInPoster:
         }
         
         try:
-            logger.info("Posting with image to LinkedIn...")
+            logger.info("Creating LinkedIn post with uploaded image...")
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             
             return self._parse_response(response)
