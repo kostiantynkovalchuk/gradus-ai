@@ -8,6 +8,8 @@ from .spirits_business import SpiritsBusinessScraper
 from .delo_ua import DeloUaScraper
 from .minfin_ua import MinFinUaScraper
 from .just_drinks import JustDrinksScraper
+from .restorator_ua import RestoratorUaScraper
+from .drinks_report import DrinksReportScraper
 from .manager import ScraperManager
 
 __all__ = [
@@ -17,5 +19,7 @@ __all__ = [
     'DeloUaScraper',
     'MinFinUaScraper',
     'JustDrinksScraper',
+    'RestoratorUaScraper',
+    'DrinksReportScraper',
     'ScraperManager'
 ]
