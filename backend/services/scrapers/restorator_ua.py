@@ -12,10 +12,10 @@ from .base import ScraperBase, ArticlePayload
 logger = logging.getLogger(__name__)
 
 class RestoratorUaScraper(ScraperBase):
-    """Scraper for Restorator.ua HoReCa industry section (Ukrainian source)"""
+    """Scraper for HoReCa-Україна (horeca-ukraine.com) - Ukrainian HoReCa news"""
     
     def get_source_name(self) -> str:
-        return "Restorator.ua"
+        return "HoReCa-Україна"
     
     def get_language(self) -> str:
         return "uk"
@@ -24,12 +24,12 @@ class RestoratorUaScraper(ScraperBase):
         return False
     
     def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
-        """Scrape articles from Restorator.ua posts section"""
+        """Scrape articles from HoReCa-Україна news section"""
         articles = []
         
         try:
             logger.info(f"🔍 Scraping {self.source_name} (Ukrainian)...")
-            posts_url = "https://restorator.ua/post/"
+            posts_url = "https://horeca-ukraine.com/category/news/"
             
             headers = {'User-Agent': self.user_agent}
             response = requests.get(posts_url, headers=headers, timeout=15)

@@ -110,18 +110,19 @@ class ContentScheduler:
     
     def scrape_facebook_sources_task(self):
         """
-        Scrape Facebook sources: Just Drinks, Restorator.ua, The Drinks Report
+        Scrape Facebook sources: Just Drinks
         Runs: Every day at 2:00 AM
         
         Lighter, more engaging sources for general audience
+        NOTE: Restorator.ua and The Drinks Report removed due to site issues
         """
         logger.info("🤖 [SCHEDULER] Scraping Facebook sources...")
         
         try:
             from services.scrapers.manager import scraper_manager
             
-            # Facebook sources - engaging content
-            facebook_sources = ['just_drinks', 'restorator_ua', 'drinks_report']
+            # Facebook sources - engaging English content
+            facebook_sources = ['just_drinks']
             
             db = self._get_db_session()
             try:

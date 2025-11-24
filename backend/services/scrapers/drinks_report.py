@@ -12,10 +12,10 @@ from .base import ScraperBase, ArticlePayload
 logger = logging.getLogger(__name__)
 
 class DrinksReportScraper(ScraperBase):
-    """Scraper for The Drinks Report news (English source)"""
+    """Scraper for The Drinks Business - Leading drinks industry news (English source)"""
     
     def get_source_name(self) -> str:
-        return "The Drinks Report"
+        return "The Drinks Business"
     
     def get_language(self) -> str:
         return "en"
@@ -24,12 +24,12 @@ class DrinksReportScraper(ScraperBase):
         return True
     
     def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
-        """Scrape articles from The Drinks Report news section"""
+        """Scrape articles from The Drinks Business news section"""
         articles = []
         
         try:
             logger.info(f"🔍 Scraping {self.source_name} (English)...")
-            news_url = "https://www.thedrinksreport.com/news/"
+            news_url = "https://www.thedrinksbusiness.com/category/news/"
             
             headers = {'User-Agent': self.user_agent}
             response = requests.get(news_url, headers=headers, timeout=15)
