@@ -8,6 +8,7 @@ from typing import List, Dict, Set
 from .base import ArticlePayload
 from .spirits_business import SpiritsBusinessScraper
 from .delo_ua import DeloUaScraper
+from .minfin_ua import MinFinUaScraper
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,8 @@ class ScraperManager:
     def __init__(self):
         self.scrapers = {
             'spirits_business': SpiritsBusinessScraper(),
-            'delo_ua': DeloUaScraper()
+            'delo_ua': DeloUaScraper(),
+            'minfin_ua': MinFinUaScraper()
         }
     
     def scrape_all_sources(self, limit_per_source: int = 5) -> Dict[str, List[ArticlePayload]]:

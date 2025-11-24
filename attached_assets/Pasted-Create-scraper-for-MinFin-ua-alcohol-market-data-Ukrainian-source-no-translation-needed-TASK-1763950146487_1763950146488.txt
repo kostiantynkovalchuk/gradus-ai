@@ -1,0 +1,236 @@
+Create scraper for MinFin.ua alcohol market data (Ukrainian source, no translation needed):
+
+📋 TASK: Build MinFin.ua scraper for Ukrainian market news
+
+CREATE backend/services/scrapers/minfin_ua_scraper.py:
+```python
+import requests
+from bs4 import BeautifulSoup
+import logging
+from typing import List
+from datetime import datetime
+from .base_scraper import BaseScraper, ArticlePayload
+
+logger = logging.getLogger(__name__)
+
+class MinFinUaScraper(BaseScraper):
+    """
+    Scraper for MinFin.ua alcohol market section
+    Ukrainian language - no translation needed
+    """
+    
+    def __init__(self):
+        self.base_url = "https://minfin.com.ua"
+        # MinFin has alcohol/tobacco section
+        self.section_url = "https://minfin.com.ua/ua/company/alkogol/"
+        self.user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    
+    def get_source_name(self) -> str:
+        return "MinFin.ua"
+    
+    def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
+        """
+        Scrape articles from MinFin.ua alcohol section
+        
+        Args:
+            limit: Number of articles to scrape
+            
+        Returns:
+            List of ArticlePayload objects
+        """
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(self.section_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = []
+            
+            # Find news items (adjust selectors based on actual site)
+            article_elements = soup.select('.news-item, .article-item, .list-item, .mfn-table-item')[:limit]
+            
+            logger.info(f"Found {len(article_elements)} article elements on MinFin.ua")
+            
+            for element in article_elements:
+                try:
+                    article = self._parse_article_card(element)
+                    
+                    if article:
+                        # Get full content
+                        full_content = self._fetch_article_content(article.url)
+                        
+                        if full_content:
+                            article.content = full_content
+                            articles.append(article)
+                            
+                            logger.info(f"✅ Scraped: {article.title[:50]}...")
+                        else:
+                            logger.warning(f"No content extracted for: {article.url}")
+                            
+                except Exception as e:
+                    logger.error(f"Error parsing MinFin article: {e}")
+                    continue
+            
+            logger.info(f"✅ Scraped {len(articles)} articles from MinFin.ua")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"❌ MinFin.ua scraping failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+    
+    def _parse_article_card(self, element) -> ArticlePayload:
+        """Parse article card from listing page"""
+        
+        # Find title - MinFin uses various structures
+        title_elem = element.select_one('h2, h3, .title, .mfn-table-header, a')
+        if not title_elem:
+            return None
+        
+        title = title_elem.get_text(strip=True)
+        
+        # Find link
+        link_elem = element.select_one('a')
+        if not link_elem:
+            return None
+        
+        url = link_elem.get('href')
+        if not url.startswith('http'):
+            url = f"{self.base_url}{url}"
+        
+        # Find date (optional)
+        date_elem = element.select_one('.date, time, .mfn-table-date')
+        published_date = date_elem.get_text(strip=True) if date_elem else None
+        
+        return ArticlePayload(
+            title=title,
+            content="",  # Will be filled by _fetch_article_content
+            url=url,
+            source=self.get_source_name(),
+            language='uk',  # Ukrainian
+            needs_translation=False,
+            author=None,
+            published_date=published_date,
+            image_url=None
+        )
+    
+    def _fetch_article_content(self, url: str) -> str:
+        """Fetch full article content from article page"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find article content - MinFin uses various containers
+            content_elem = soup.select_one('.article-content, .content, article, .mfn-article-content')
+            
+            if not content_elem:
+                # Try finding main content area
+                content_elem = soup.select_one('main, .main-content')
+            
+            if not content_elem:
+                logger.warning(f"No content container found for: {url}")
+                return None
+            
+            # Remove unwanted elements
+            for unwanted in content_elem.select('script, style, .ads, .advertisement, nav, footer, .related'):
+                unwanted.decompose()
+            
+            # Extract text
+            content = content_elem.get_text(separator='\n', strip=True)
+            
+            # Clean up
+            content = self._clean_text(content)
+            
+            if len(content) < 100:
+                logger.warning(f"Content too short ({len(content)} chars) for: {url}")
+                return None
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error fetching MinFin content from {url}: {e}")
+            return None
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean scraped text"""
+        
+        # Remove extra whitespace
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        text = '\n\n'.join(lines)
+        
+        # Remove common unwanted patterns
+        text = text.replace('\xa0', ' ')  # Non-breaking spaces
+        text = text.replace('\u200b', '')  # Zero-width spaces
+        
+        # Remove very short lines (likely navigation/UI elements)
+        lines = text.split('\n\n')
+        lines = [line for line in lines if len(line) > 20]
+        
+        return '\n\n'.join(lines)
+```
+
+UPDATE backend/services/scrapers/scraper_manager.py:
+
+Add MinFin.ua to the scraper registry:
+```python
+from .minfin_ua_scraper import MinFinUaScraper
+
+class ScraperManager:
+    
+    def __init__(self):
+        self.scrapers = {
+            'the_spirits_business': SpiritsBusinessScraper(),
+            'delo_ua': DeloUaScraper(),
+            'minfin_ua': MinFinUaScraper(),  # ← ADD THIS
+        }
+```
+
+UPDATE backend/services/multi_source_scraper.py:
+
+Add MinFin.ua to LinkedIn sources:
+```python
+class MultiSourceScraper:
+    
+    def __init__(self):
+        self.sources = {
+            'linkedin': [
+                'the_spirits_business',
+                'delo_ua',
+                'minfin_ua'  # ← ADD THIS
+            ],
+            'facebook': [
+                'just_drinks',
+                'restorator_ua',
+                'the_drinks_report'
+            ]
+        }
+```
+
+Test the scraper:
+```bash
+cd backend
+python -c "
+from services.scrapers.minfin_ua_scraper import MinFinUaScraper
+scraper = MinFinUaScraper()
+articles = scraper.scrape_articles(limit=2)
+print(f'✅ Scraped {len(articles)} MinFin.ua articles')
+for a in articles:
+    print(f'- {a.title[:60]}...')
+    print(f'  Language: {a.language}, Translation: {a.needs_translation}')
+"
+```
+
+IMPORTANT NOTE:
+MinFin.ua may have different page structures than expected. If selectors don't work:
+1. Visit https://minfin.com.ua/ua/company/alkogol/ in browser
+2. Inspect actual HTML structure
+3. Update CSS selectors in _parse_article_card() and _fetch_article_content()
+4. Common MinFin classes: .mfn-table-item, .mfn-article-content, .mfn-table-header
+
+Please implement MinFin.ua scraper!
