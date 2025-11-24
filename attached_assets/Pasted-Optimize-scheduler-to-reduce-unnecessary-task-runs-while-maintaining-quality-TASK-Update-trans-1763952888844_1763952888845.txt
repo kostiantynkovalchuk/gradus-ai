@@ -1,0 +1,117 @@
+Optimize scheduler to reduce unnecessary task runs while maintaining quality:
+
+📋 TASK: Update translation and image generation to run 3x/day instead of every 4 hours
+
+RATIONALE:
+- Current: Checks every 4 hours = 6x/day = 42x/week
+- Optimized: Checks 3x/day = 21x/week
+- Reduction: 56% fewer task runs
+- Quality: Same (still plenty of processing time)
+- Cost: Same ($0 - checks are free anyway)
+- Benefit: Cleaner logs, more efficient system
+
+UPDATE backend/services/scheduler.py:
+
+FIND these two lines in the start() method:
+```python
+# Translation: Every 4 hours at :15
+self.scheduler.add_job(
+    self.translate_pending_task,
+    CronTrigger(hour='*/4', minute=15),  # ← CURRENT
+    id='translate_articles',
+    name='Translate pending articles',
+    replace_existing=True
+)
+
+# Images: Every 4 hours at :30
+self.scheduler.add_job(
+    self.generate_images_task,
+    CronTrigger(hour='*/4', minute=30),  # ← CURRENT
+    id='generate_images',
+    name='Generate images & send Telegram notifications',
+    replace_existing=True
+)
+```
+
+REPLACE with:
+```python
+# Translation: 3x per day (morning, afternoon, evening)
+self.scheduler.add_job(
+    self.translate_pending_task,
+    CronTrigger(hour='6,14,20', minute=0),  # ← OPTIMIZED: 6am, 2pm, 8pm
+    id='translate_articles',
+    name='Translate pending articles (3x/day)',
+    replace_existing=True
+)
+
+# Images: 3x per day (15 minutes after translation)
+self.scheduler.add_job(
+    self.generate_images_task,
+    CronTrigger(hour='6,14,20', minute=15),  # ← OPTIMIZED: 6:15am, 2:15pm, 8:15pm
+    id='generate_images',
+    name='Generate images & send Telegram notifications (3x/day)',
+    replace_existing=True
+)
+```
+
+NEW SCHEDULE LOGIC:
+
+LinkedIn Days (Mon/Wed/Fri):
+01:00 🔍 Scrape LinkedIn sources
+02:00 🔍 Scrape Facebook sources
+03:00 🧹 Cleanup old content
+06:00 🔤 Translate pending articles
+06:15 🎨 Generate images → Telegram notifications
+08:00 🔧 Check API tokens
+09:00 💼 POST TO LINKEDIN
+14:00 🔤 Translate pending (if any stragglers)
+14:15 🎨 Generate images (if any stragglers)
+18:00 📱 POST TO FACEBOOK
+20:00 🔤 Final translation check
+20:15 🎨 Final image generation
+
+Facebook Only Days (Tue/Thu/Sat/Sun):
+02:00 🔍 Scrape Facebook sources
+03:00 🧹 Cleanup old content
+06:00 🔤 Translate pending articles
+06:15 🎨 Generate images → Telegram notifications
+08:00 🔧 Check API tokens
+14:00 🔤 Translate pending (if any stragglers)
+14:15 🎨 Generate images (if any stragglers)
+18:00 📱 POST TO FACEBOOK
+20:00 🔤 Final translation check
+20:15 🎨 Final image generation
+
+BENEFITS:
+✅ Scrape at 1-2am → Process at 6am (4 hour buffer)
+✅ Second check at 2pm (catches any slow translations)
+✅ Third check at 8pm (after Facebook post, prepares for next day)
+✅ Still 12+ hours before posting (plenty of time for approval)
+✅ Reduces checks from 42/week to 21/week (50% reduction)
+✅ More focused processing windows
+✅ Cleaner logs
+
+UPDATE the startup log message to reflect new schedule:
+```python
+logger.info("🔄 PROCESSING:")
+logger.info("   • Translation: 3x/day at 6am, 2pm, 8pm")
+logger.info("   • Images: 3x/day at 6:15am, 2:15pm, 8:15pm")
+```
+
+VERIFY after restart:
+1. Scheduler should show 8 tasks (same count)
+2. Translation task: next run at 6:00 AM (not every 4 hours)
+3. Images task: next run at 6:15 AM (not every 4 hours)
+4. Logs should show optimized schedule in startup message
+
+TEST the new schedule:
+```bash
+# Check scheduler status
+curl http://localhost:8000/api/scheduler/status
+
+# Should see:
+# - translate_articles: cron[hour='6,14,20', minute='0']
+# - generate_images: cron[hour='6,14,20', minute='15']
+```
+
+Please implement the optimized 3x/day processing schedule!

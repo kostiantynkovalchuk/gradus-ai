@@ -35,8 +35,8 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, Delo.ua, MinFin.ua
       - Facebook sources (Daily 2:00 AM): Just Drinks, Restorator.ua, The Drinks Report
     - **Processing:**
-      - AI-driven translation (every 4 hours at :15, only for English sources)
-      - Image generation (every 4 hours at :30, for both languages)
+      - AI-driven translation (3x/day at 6am, 2pm, 8pm - only for English sources)
+      - Image generation (3x/day at 6:15am, 2:15pm, 8:15pm - for both languages)
     - **Maintenance:**
       - Daily cleanup of rejected content (3:00 AM)
       - API monitoring (8:00 AM)

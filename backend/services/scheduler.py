@@ -586,21 +586,21 @@ class ContentScheduler:
             replace_existing=True
         )
         
-        # Translation: Every 4 hours at :15
+        # Translation: 3x per day (morning, afternoon, evening)
         self.scheduler.add_job(
             self.translate_pending_task,
-            CronTrigger(hour='*/4', minute=15),
+            CronTrigger(hour='6,14,20', minute=0),
             id='translate_articles',
-            name='Translate pending articles',
+            name='Translate pending articles (3x/day)',
             replace_existing=True
         )
         
-        # Images: Every 4 hours at :30
+        # Images: 3x per day (15 minutes after translation)
         self.scheduler.add_job(
             self.generate_images_task,
-            CronTrigger(hour='*/4', minute=30),
+            CronTrigger(hour='6,14,20', minute=15),
             id='generate_images',
-            name='Generate images & send Telegram notifications',
+            name='Generate images & send Telegram notifications (3x/day)',
             replace_existing=True
         )
         
@@ -662,8 +662,8 @@ class ContentScheduler:
         logger.info("   • Facebook: Daily 2:00 AM")
         logger.info("")
         logger.info("🔄 PROCESSING:")
-        logger.info("   • Translation: Every 4 hours at :15")
-        logger.info("   • Images: Every 4 hours at :30")
+        logger.info("   • Translation: 3x/day at 6am, 2pm, 8pm")
+        logger.info("   • Images: 3x/day at 6:15am, 2:15pm, 8:15pm")
         logger.info("")
         logger.info("📢 POSTING SCHEDULE:")
         logger.info("   • LinkedIn: Mon/Wed/Fri 9:00 AM")
