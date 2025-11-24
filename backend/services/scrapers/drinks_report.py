@@ -24,12 +24,12 @@ class DrinksReportScraper(ScraperBase):
         return True
     
     def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
-        """Scrape articles from The Drinks Business news section"""
+        """Scrape articles from The Drinks Business homepage"""
         articles = []
         
         try:
             logger.info(f"🔍 Scraping {self.source_name} (English)...")
-            news_url = "https://www.thedrinksbusiness.com/category/news/"
+            news_url = "https://www.thedrinksbusiness.com/"
             
             headers = {'User-Agent': self.user_agent}
             response = requests.get(news_url, headers=headers, timeout=15)
@@ -39,6 +39,7 @@ class DrinksReportScraper(ScraperBase):
             
             # Try multiple selectors for article cards
             article_elements = (
+                soup.select('div[class*="post"]') or
                 soup.select('article') or
                 soup.select('.post') or
                 soup.select('.news-item') or

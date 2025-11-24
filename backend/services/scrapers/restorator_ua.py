@@ -24,12 +24,12 @@ class RestoratorUaScraper(ScraperBase):
         return False
     
     def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
-        """Scrape articles from HoReCa-Україна news section"""
+        """Scrape articles from HoReCa-Україна HoReCa news section"""
         articles = []
         
         try:
             logger.info(f"🔍 Scraping {self.source_name} (Ukrainian)...")
-            posts_url = "https://horeca-ukraine.com/category/news/"
+            posts_url = "https://horeca-ukraine.com/category/horeca-news/"
             
             headers = {'User-Agent': self.user_agent}
             response = requests.get(posts_url, headers=headers, timeout=15)

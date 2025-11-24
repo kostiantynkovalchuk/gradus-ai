@@ -24,12 +24,12 @@ class DeloUaScraper(ScraperBase):
         return False
     
     def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
-        """Scrape articles from Delo.ua alcohol section"""
+        """Scrape articles from Delo.ua business section"""
         articles = []
         
         try:
             logger.info(f"🔍 Scraping {self.source_name} (Ukrainian)...")
-            section_url = "https://delo.ua/business/alkogol/"
+            section_url = "https://delo.ua/business/"
             
             headers = {'User-Agent': self.user_agent}
             response = requests.get(section_url, headers=headers, timeout=15)
