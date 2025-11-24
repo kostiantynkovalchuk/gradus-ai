@@ -76,6 +76,7 @@ class ContentScheduler:
                                 continue
                             
                             # Create new content entry
+                            content_hash = article.get_content_hash()
                             new_article = ContentQueue(
                                 status='draft',
                                 source=article.source_name,
@@ -88,12 +89,16 @@ class ContentScheduler:
                                     'title': article.title,
                                     'published_date': article.published_at,
                                     'author': article.author,
-                                    'content_hash': article.get_content_hash(),
+                                    'content_hash': content_hash,
                                     'scraped_at': datetime.utcnow().isoformat()
                                 }
                             )
                             db.add(new_article)
                             total_new += 1
+                            
+                            # Add to working sets to prevent duplicates within this scrape pass
+                            existing_urls.add(article.url)
+                            existing_hashes.add(content_hash)
                             
                             lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
                             translation_status = "NO translation" if not article.needs_translation else "needs translation"
