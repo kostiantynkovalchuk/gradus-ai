@@ -9,6 +9,7 @@ from .base import ArticlePayload
 from .spirits_business import SpiritsBusinessScraper
 from .delo_ua import DeloUaScraper
 from .minfin_ua import MinFinUaScraper
+from .just_drinks import JustDrinksScraper
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ class ScraperManager:
         self.scrapers = {
             'spirits_business': SpiritsBusinessScraper(),
             'delo_ua': DeloUaScraper(),
-            'minfin_ua': MinFinUaScraper()
+            'minfin_ua': MinFinUaScraper(),
+            'just_drinks': JustDrinksScraper()
         }
     
     def scrape_all_sources(self, limit_per_source: int = 5) -> Dict[str, List[ArticlePayload]]:
