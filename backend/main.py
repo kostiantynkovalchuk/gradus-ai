@@ -74,6 +74,15 @@ class EditRequest(BaseModel):
     image_prompt: Optional[str] = None
     platforms: Optional[List[str]] = None
 
+class CreateContentRequest(BaseModel):
+    title: str
+    content: str
+    source: str = "Manual"
+    source_url: Optional[str] = None
+    language: str = "uk"
+    needs_translation: bool = False
+    platforms: List[str] = ["facebook", "linkedin"]
+
 @app.get("/")
 async def root():
     return {
@@ -344,6 +353,51 @@ async def edit_content(
     except Exception as e:
         db.rollback()
         logger.error(f"Error editing content: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/content/create")
+async def create_content(
+    request: CreateContentRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Create Ukrainian content manually (bypasses translation)
+    Useful for adding Ukrainian news sources that don't need translation
+    """
+    try:
+        new_content = ContentQueue(
+            status='draft',
+            source=request.source,
+            source_url=request.source_url,
+            original_text=request.content,
+            language=request.language,
+            needs_translation=request.needs_translation,
+            platforms=request.platforms,
+            extra_metadata={
+                'title': request.title,
+                'created_via': 'api',
+                'created_at': datetime.utcnow().isoformat()
+            }
+        )
+        
+        db.add(new_content)
+        db.commit()
+        db.refresh(new_content)
+        
+        logger.info(f"Ukrainian content created: ID {new_content.id}, language={request.language}, needs_translation={request.needs_translation}")
+        
+        return {
+            "status": "success",
+            "message": "Ukrainian content created successfully",
+            "content_id": new_content.id,
+            "language": request.language,
+            "needs_translation": request.needs_translation,
+            "next_steps": "Content will be processed for images and sent for approval"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating Ukrainian content: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/content/stats")
