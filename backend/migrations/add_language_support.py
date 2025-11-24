@@ -10,12 +10,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
-from models import SessionLocal
+import models
 
 def migrate():
     """Add language and needs_translation columns to content_queue table"""
     
-    db = SessionLocal()
+    # Initialize database connection
+    models.init_db()
+    db = models.SessionLocal()
     
     try:
         print("🔄 Starting migration: Add language support...")

@@ -82,19 +82,24 @@ class ContentScheduler:
         """
         Task: Translate draft articles every hour (notifications sent later with images)
         Runs at: Every hour at :15 (00:15, 01:15, etc.)
+        
+        ONLY translates articles that need translation (needs_translation=True)
+        Ukrainian sources (needs_translation=False) skip translation entirely
         """
         logger.info("🤖 [SCHEDULER] Starting translation task...")
         
         try:
             db = self._get_db_session()
             try:
+                # Get articles that NEED translation
                 draft_articles = db.query(ContentQueue).filter(
                     ContentQueue.status == 'draft',
+                    ContentQueue.needs_translation == True,
                     ContentQueue.translated_text == None
                 ).limit(10).all()
                 
                 if not draft_articles:
-                    logger.info("[SCHEDULER] No articles to translate")
+                    logger.info("[SCHEDULER] No articles need translation")
                     return
                 
                 translated_count = 0
@@ -131,6 +136,10 @@ class ContentScheduler:
         """
         Task: Generate images AND send Telegram notifications with image previews
         Runs at: Every hour at :30 (00:30, 01:30, etc.)
+        
+        Handles BOTH:
+        - Translated articles (status='pending_approval', has translated_text)
+        - Ukrainian articles (needs_translation=False, status='draft')
         """
         logger.info("🤖 [SCHEDULER] Starting image generation task...")
         
@@ -138,11 +147,20 @@ class ContentScheduler:
             # Import services inside function to avoid circular imports
             from services.image_generator import image_generator
             from services.notification_service import notification_service
+            from sqlalchemy import or_
             
             db = self._get_db_session()
             try:
+                # Get articles ready for images:
+                # 1. Already translated (status='pending_approval')
+                # 2. Ukrainian articles that don't need translation (needs_translation=False)
                 articles_without_images = db.query(ContentQueue).filter(
-                    ContentQueue.status == 'pending_approval',
+                    or_(
+                        # Translated articles ready for images
+                        (ContentQueue.status == 'pending_approval'),
+                        # Ukrainian articles ready for images (skip translation)
+                        (ContentQueue.status == 'draft') & (ContentQueue.needs_translation == False)
+                    ),
                     ContentQueue.image_url == None
                 ).limit(10).all()
                 
@@ -166,6 +184,16 @@ class ContentScheduler:
                             article.image_url = result['image_url']
                             article.image_prompt = result['prompt']
                             article.local_image_path = result.get('local_path', '')
+                            
+                            # Mark Ukrainian articles as pending_approval after image generation
+                            if not article.needs_translation and article.status == 'draft':
+                                article.status = 'pending_approval'
+                                # Use original text as "translated" text for Ukrainian sources
+                                if not article.translated_title:
+                                    article.translated_title = article.extra_metadata.get('title', '') if article.extra_metadata else ''
+                                if not article.translated_text:
+                                    article.translated_text = article.original_text
+                            
                             generated_count += 1
                             
                             logger.info(f"[SCHEDULER] Generated image for article {article.id}")
