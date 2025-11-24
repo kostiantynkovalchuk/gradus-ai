@@ -25,13 +25,13 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
     - **English sources (need translation):**
       - The Spirits Business - Professional industry news
       - Just Drinks - Lighter, more accessible drinks industry content
+      - Drinks International - Vodka and spirits industry news
     - **Ukrainian sources (no translation):**
       - Delo.ua - Ukrainian retail and business news (uses Playwright for JavaScript rendering)
-      - MinFin.ua - Ukrainian market data
       - HoReCa-Україна - Ukrainian HoReCa industry news
 - **Automated Content Pipeline:** 24/7 automation via APScheduler with platform-optimized scheduling:
     - **Platform-Specific Scraping:**
-      - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, MinFin.ua
+      - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, Drinks International
       - Facebook sources (Daily 2:00 AM): Delo.ua, HoReCa-Україна, Just Drinks
     - **Processing:**
       - AI-driven translation (3x/day at 6am, 2pm, 8pm - only for English sources)
