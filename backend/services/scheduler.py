@@ -583,7 +583,7 @@ class ContentScheduler:
             self.scrape_facebook_sources_task,
             CronTrigger(hour=2, minute=0),
             id='scrape_facebook',
-            name='Scrape Facebook sources (Just Drinks, Restorator, Drinks Report)',
+            name='Scrape Facebook sources (Just Drinks)',
             replace_existing=True
         )
         
@@ -655,8 +655,6 @@ class ContentScheduler:
         logger.info("")
         logger.info("   Facebook (Daily):")
         logger.info("      • Just Drinks 🇬🇧")
-        logger.info("      • Restorator.ua 🇺🇦")
-        logger.info("      • The Drinks Report 🇬🇧")
         logger.info("")
         logger.info("📅 SCRAPING SCHEDULE:")
         logger.info("   • LinkedIn: Mon/Wed/Fri 1:00 AM")

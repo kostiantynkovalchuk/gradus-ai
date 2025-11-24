@@ -21,19 +21,18 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **Database:** PostgreSQL with SQLAlchemy ORM for robust data persistence.
 - **Human-in-the-loop Workflow:** Critical for content quality control, enabling review and approval before publishing.
 - **Service-Oriented Architecture:** Modular design supporting extensibility and maintainability.
-- **Multi-Source Scraping Architecture:** Modular scraper system with ScraperManager coordinating 6 diverse sources:
+- **Multi-Source Scraping Architecture:** Modular scraper system with ScraperManager coordinating 4 active sources:
     - **English sources (need translation):**
       - The Spirits Business - Professional industry news
       - Just Drinks - Lighter, more accessible content
-      - The Drinks Report - Quick news bites and updates
     - **Ukrainian sources (no translation):**
       - Delo.ua - Ukrainian business news
       - MinFin.ua - Ukrainian market data
-      - Restorator.ua - HoReCa (Hotel/Restaurant/Catering) industry
+    - **Note:** Restorator.ua and The Drinks Report temporarily disabled due to website issues (404 errors, JavaScript rendering requirements)
 - **Automated Content Pipeline:** 24/7 automation via APScheduler with platform-optimized scheduling:
     - **Platform-Specific Scraping:**
       - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, Delo.ua, MinFin.ua
-      - Facebook sources (Daily 2:00 AM): Just Drinks, Restorator.ua, The Drinks Report
+      - Facebook sources (Daily 2:00 AM): Just Drinks
     - **Processing:**
       - AI-driven translation (3x/day at 6am, 2pm, 8pm - only for English sources)
       - Image generation (3x/day at 6:15am, 2:15pm, 8:15pm - for both languages)
