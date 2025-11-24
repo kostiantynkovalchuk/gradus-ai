@@ -63,7 +63,7 @@ class TranslateRequest(BaseModel):
 class ApproveRequest(BaseModel):
     moderator: str
     scheduled_time: Optional[datetime] = None
-    platforms: List[str] = ["facebook", "linkedin"]
+    platforms: Optional[List[str]] = None  # None = keep original platform from scraping
 
 class RejectRequest(BaseModel):
     moderator: str
@@ -220,13 +220,18 @@ async def approve_content(
         content.reviewed_at = datetime.utcnow()
         content.reviewed_by = request.moderator
         content.scheduled_post_time = request.scheduled_time or datetime.utcnow()
-        content.platforms = request.platforms
+        # Only update platforms if explicitly provided, otherwise keep original
+        if request.platforms is not None:
+            content.platforms = request.platforms
+        # Ensure platforms is set (fallback if somehow missing)
+        if not content.platforms:
+            content.platforms = ['facebook']  # Safe default
         
         log_entry = ApprovalLog(
             content_id=content_id,
             action="approved",
             moderator=request.moderator,
-            details={"platforms": request.platforms, "scheduled_time": str(request.scheduled_time)}
+            details={"platforms": content.platforms, "scheduled_time": str(request.scheduled_time)}
         )
         
         db.add(log_entry)
@@ -503,7 +508,7 @@ async def run_scraper(limit: int = 5, db: Session = Depends(get_db)):
                     original_text=article.get('content', ''),
                     translated_text=None,
                     image_url=article.get('image_url'),
-                    platforms=["facebook", "linkedin"],
+                    platforms=["linkedin"],  # The Spirits Business is for LinkedIn
                     extra_metadata={
                         "title": article.get('title'),
                         "published_date": article.get('published_date'),
