@@ -27,56 +27,96 @@ class ContentScheduler:
     
     def scrape_news_task(self):
         """
-        Task: Scrape news every 6 hours
+        Task: Scrape news from multiple sources (English + Ukrainian)
         Runs at: 00:00, 06:00, 12:00, 18:00
+        
+        Uses ScraperManager to coordinate multiple sources:
+        - The Spirits Business (English, needs translation)
+        - Delo.ua (Ukrainian, no translation needed)
         """
-        logger.info("🤖 [SCHEDULER] Starting news scraping task...")
+        logger.info("🤖 [SCHEDULER] Starting multi-source news scraping task...")
         
         try:
-            articles = news_scraper.scrape_spirits_business(limit=5)
+            from services.scrapers.manager import scraper_manager
             
-            if not articles:
-                logger.warning("[SCHEDULER] No new articles found")
+            # Scrape all sources
+            results = scraper_manager.scrape_all_sources(limit_per_source=5)
+            
+            if not results:
+                logger.warning("[SCHEDULER] No articles from any source")
                 return
             
             db = self._get_db_session()
             try:
-                new_count = 0
+                # Get existing URLs for deduplication
+                existing_urls = set(
+                    url[0] for url in db.query(ContentQueue.source_url).filter(
+                        ContentQueue.source_url.isnot(None)
+                    ).all()
+                )
                 
-                for article in articles:
-                    try:
-                        existing = db.query(ContentQueue).filter(
-                            ContentQueue.source_url == article.get('url')
-                        ).first()
-                        
-                        if not existing:
+                # Get existing content hashes
+                existing_hashes = set(
+                    meta.get('content_hash', '') 
+                    for meta in db.query(ContentQueue.extra_metadata).filter(
+                        ContentQueue.extra_metadata.isnot(None)
+                    ).all()
+                    if meta and meta.get('content_hash')
+                )
+                
+                total_new = 0
+                
+                # Process articles from all sources
+                for source_name, articles in results.items():
+                    for article in articles:
+                        try:
+                            # Check for duplicates
+                            if scraper_manager.check_duplicate(article, existing_urls, existing_hashes):
+                                logger.info(f"[SCHEDULER] Duplicate article skipped: {article.title[:50]}...")
+                                continue
+                            
+                            # Create new content entry
                             new_article = ContentQueue(
                                 status='draft',
-                                source='The Spirits Business',
-                                source_url=article.get('url'),
-                                original_text=article.get('content', ''),
+                                source=article.source_name,
+                                source_url=article.url,
+                                original_text=article.content,
+                                language=article.language,  # ← SET LANGUAGE
+                                needs_translation=article.needs_translation,  # ← SET TRANSLATION FLAG
                                 platforms=['facebook', 'linkedin'],
                                 extra_metadata={
-                                    'title': article.get('title'),
-                                    'published_date': article.get('published_date'),
-                                    'author': article.get('author'),
-                                    'scraped_at': article.get('scraped_at')
+                                    'title': article.title,
+                                    'published_date': article.published_at,
+                                    'author': article.author,
+                                    'content_hash': article.get_content_hash(),
+                                    'scraped_at': datetime.utcnow().isoformat()
                                 }
                             )
                             db.add(new_article)
-                            new_count += 1
-                    except Exception as e:
-                        logger.error(f"[SCHEDULER] Error processing article: {e}")
-                        db.rollback()
-                        continue
+                            total_new += 1
+                            
+                            lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
+                            translation_status = "NO translation" if not article.needs_translation else "needs translation"
+                            logger.info(f"[SCHEDULER] {lang_emoji} Added {article.source_name}: {article.title[:50]}... ({translation_status})")
+                            
+                        except Exception as e:
+                            logger.error(f"[SCHEDULER] Error processing article: {e}")
+                            db.rollback()
+                            continue
                 
                 db.commit()
-                logger.info(f"✅ [SCHEDULER] Scraped {new_count} new articles")
+                logger.info(f"✅ [SCHEDULER] Scraped {total_new} new articles from {len(results)} sources")
+                
+                # Log language breakdown
+                uk_count = sum(1 for articles in results.values() for a in articles if a.language == 'uk')
+                en_count = sum(1 for articles in results.values() for a in articles if a.language == 'en')
+                logger.info(f"  📊 Language breakdown: 🇬🇧 English: {en_count}, 🇺🇦 Ukrainian: {uk_count}")
+                
             finally:
                 db.close()
             
         except Exception as e:
-            logger.error(f"❌ [SCHEDULER] Scraping failed: {e}")
+            logger.error(f"❌ [SCHEDULER] Multi-source scraping failed: {e}")
     
     def translate_pending_task(self):
         """
