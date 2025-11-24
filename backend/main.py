@@ -132,6 +132,46 @@ async def test_telegram():
     result = notification_service.send_test_notification()
     return result
 
+@app.get("/api/content")
+async def get_content(
+    status: Optional[str] = None,
+    platform: Optional[str] = None,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """Get content with optional filters for status and platform"""
+    try:
+        query = db.query(ContentQueue)
+        
+        if status:
+            query = query.filter(ContentQueue.status == status)
+        
+        if platform:
+            from sqlalchemy import cast, String
+            query = query.filter(cast(ContentQueue.platforms, String).like(f'%{platform}%'))
+        
+        articles = query.order_by(ContentQueue.created_at.desc()).limit(limit).all()
+        
+        return [
+            {
+                "id": article.id,
+                "title": article.extra_metadata.get("title") if article.extra_metadata else None,
+                "translated_title": article.translated_title,
+                "status": article.status,
+                "platforms": article.platforms,
+                "language": article.language,
+                "needs_translation": article.needs_translation,
+                "created_at": article.created_at.isoformat() if article.created_at else None,
+                "source": article.source,
+                "image_url": article.image_url,
+                "local_image_path": article.local_image_path,
+            }
+            for article in articles
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching content: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/content/pending")
 async def get_pending_content(db: Session = Depends(get_db)):
     try:
