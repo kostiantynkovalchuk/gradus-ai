@@ -24,15 +24,15 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **Multi-Source Scraping Architecture:** Modular scraper system with ScraperManager coordinating 5 active sources:
     - **English sources (need translation):**
       - The Spirits Business - Professional industry news
-      - The Drinks Business - Leading drinks industry news
+      - Just Drinks - Lighter, more accessible drinks industry content
     - **Ukrainian sources (no translation):**
-      - Delo.ua - Ukrainian business news
+      - Delo.ua - Ukrainian retail and business news
       - MinFin.ua - Ukrainian market data
       - HoReCa-Україна - Ukrainian HoReCa industry news
 - **Automated Content Pipeline:** 24/7 automation via APScheduler with platform-optimized scheduling:
     - **Platform-Specific Scraping:**
       - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, MinFin.ua
-      - Facebook sources (Daily 2:00 AM): Delo.ua, HoReCa-Україна, The Drinks Business
+      - Facebook sources (Daily 2:00 AM): Delo.ua, HoReCa-Україна, Just Drinks
     - **Processing:**
       - AI-driven translation (3x/day at 6am, 2pm, 8pm - only for English sources)
       - Image generation (3x/day at 6:15am, 2:15pm, 8:15pm - for both languages)

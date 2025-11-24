@@ -110,7 +110,7 @@ class ContentScheduler:
     
     def scrape_facebook_sources_task(self):
         """
-        Scrape Facebook sources: Delo.ua, HoReCa-Ukraine, The Drinks Business
+        Scrape Facebook sources: Delo.ua, HoReCa-Ukraine, Just Drinks
         Runs: Every day at 2:00 AM
         
         Mix of Ukrainian and English sources for general audience
@@ -121,7 +121,7 @@ class ContentScheduler:
             from services.scrapers.manager import scraper_manager
             
             # Facebook sources - 2 Ukrainian + 1 English
-            facebook_sources = ['delo_ua', 'restorator_ua', 'drinks_report']
+            facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks']
             
             db = self._get_db_session()
             try:
@@ -582,7 +582,7 @@ class ContentScheduler:
             self.scrape_facebook_sources_task,
             CronTrigger(hour=2, minute=0),
             id='scrape_facebook',
-            name='Scrape Facebook sources (Delo, HoReCa, Drinks Business)',
+            name='Scrape Facebook sources (Delo, HoReCa, Just Drinks)',
             replace_existing=True
         )
         
@@ -654,7 +654,7 @@ class ContentScheduler:
         logger.info("   Facebook (Daily):")
         logger.info("      • Delo.ua 🇺🇦")
         logger.info("      • HoReCa-Україна 🇺🇦")
-        logger.info("      • The Drinks Business 🇬🇧")
+        logger.info("      • Just Drinks 🇬🇧")
         logger.info("")
         logger.info("📅 SCRAPING SCHEDULE:")
         logger.info("   • LinkedIn: Mon/Wed/Fri 1:00 AM")
