@@ -26,7 +26,7 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - The Spirits Business - Professional industry news
       - Just Drinks - Lighter, more accessible drinks industry content
     - **Ukrainian sources (no translation):**
-      - Delo.ua - Ukrainian retail and business news
+      - Delo.ua - Ukrainian retail and business news (uses Playwright for JavaScript rendering)
       - MinFin.ua - Ukrainian market data
       - HoReCa-Україна - Ukrainian HoReCa industry news
 - **Automated Content Pipeline:** 24/7 automation via APScheduler with platform-optimized scheduling:
@@ -51,7 +51,7 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 **Feature Specifications:**
 - **Content Management:** API for managing pending, approved, and rejected content with editing and history.
 - **AI Services:** Endpoints for Claude AI chat and English-to-Ukrainian translation.
-- **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection.
+- **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Database Schema:** `ContentQueue` for reviewable content and `ApprovalLog` for audit trails, storing comprehensive metadata.
 
