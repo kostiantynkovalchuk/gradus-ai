@@ -8,10 +8,9 @@ from typing import List, Dict, Set
 from .base import ArticlePayload
 from .spirits_business import SpiritsBusinessScraper
 from .delo_ua import DeloUaScraper
-from .minfin_ua import MinFinUaScraper
+from .drinks_international import DrinksInternationalScraper
 from .just_drinks import JustDrinksScraper
 from .restorator_ua import RestoratorUaScraper
-from .drinks_report import DrinksReportScraper
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +21,9 @@ class ScraperManager:
         self.scrapers = {
             'spirits_business': SpiritsBusinessScraper(),
             'delo_ua': DeloUaScraper(),
-            'minfin_ua': MinFinUaScraper(),
+            'drinks_international': DrinksInternationalScraper(),
             'just_drinks': JustDrinksScraper(),
-            'restorator_ua': RestoratorUaScraper(),
-            'drinks_report': DrinksReportScraper()
+            'restorator_ua': RestoratorUaScraper()
         }
         
         logger.info(f"✅ ScraperManager initialized with {len(self.scrapers)} sources")
