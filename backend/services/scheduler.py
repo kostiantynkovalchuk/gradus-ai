@@ -27,7 +27,7 @@ class ContentScheduler:
     
     def scrape_linkedin_sources_task(self):
         """
-        Scrape LinkedIn sources: The Spirits Business, MinFin.ua
+        Scrape LinkedIn sources: The Spirits Business, Drinks International
         Runs: Mon/Wed/Fri at 1:00 AM
         
         Professional, business-oriented sources for B2B audience
@@ -38,7 +38,7 @@ class ContentScheduler:
             from services.scrapers.manager import scraper_manager
             
             # LinkedIn sources - professional content
-            linkedin_sources = ['spirits_business', 'minfin_ua']
+            linkedin_sources = ['spirits_business', 'drinks_international']
             
             db = self._get_db_session()
             try:
@@ -563,7 +563,7 @@ class ContentScheduler:
                 self.scrape_linkedin_sources_task,
                 CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
                 id='scrape_linkedin',
-                name='Scrape LinkedIn sources (TSB, MinFin)',
+                name='Scrape LinkedIn sources (TSB, Drinks Int)',
                 replace_existing=True
             )
         except:
@@ -573,7 +573,7 @@ class ContentScheduler:
                 self.scrape_linkedin_sources_task,
                 CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
                 id='scrape_linkedin',
-                name='Scrape LinkedIn sources (TSB, MinFin)',
+                name='Scrape LinkedIn sources (TSB, Drinks Int)',
                 replace_existing=True
             )
         
@@ -649,7 +649,7 @@ class ContentScheduler:
         logger.info("📰 CONTENT SOURCES:")
         logger.info("   LinkedIn (Mon/Wed/Fri):")
         logger.info("      • The Spirits Business 🇬🇧")
-        logger.info("      • MinFin.ua 🇺🇦")
+        logger.info("      • Drinks International 🇬🇧")
         logger.info("")
         logger.info("   Facebook (Daily):")
         logger.info("      • Delo.ua 🇺🇦")
