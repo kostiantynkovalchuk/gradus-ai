@@ -88,7 +88,7 @@ Return ONLY the prompt text, nothing else."""
     def download_and_save_image(self, image_url: str) -> Optional[str]:
         """
         Download image from DALL-E temporary URL and save permanently to filesystem.
-        Returns the local file path.
+        Returns the ABSOLUTE local file path.
         """
         try:
             # Download the image
@@ -104,8 +104,10 @@ Return ONLY the prompt text, nothing else."""
             with open(filepath, 'wb') as f:
                 f.write(response.content)
             
-            logger.info(f"Image saved permanently to: {filepath}")
-            return str(filepath)
+            # Return ABSOLUTE path for reliable access
+            absolute_path = str(filepath.absolute())
+            logger.info(f"Image saved permanently to: {absolute_path}")
+            return absolute_path
             
         except Exception as e:
             logger.error(f"Failed to download and save image: {e}")

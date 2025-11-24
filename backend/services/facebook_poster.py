@@ -58,11 +58,24 @@ class FacebookPoster:
         image_url = article_data.get('image_url')
         
         # Prefer local image file over URL (URL may be expired)
-        if local_image_path and os.path.exists(local_image_path):
-            logger.info(f"Using local image file: {local_image_path}")
-            return self._post_with_local_image(message, local_image_path)
+        # Try both absolute and relative paths to handle different path formats
+        found_path = None
+        if local_image_path:
+            # Try absolute path first
+            if os.path.exists(local_image_path):
+                found_path = local_image_path
+                logger.info(f"✅ Using local image (absolute): {local_image_path}")
+            # Try relative to current working directory
+            elif os.path.exists(os.path.join(os.getcwd(), local_image_path)):
+                found_path = os.path.join(os.getcwd(), local_image_path)
+                logger.info(f"✅ Using local image (relative): {found_path}")
+            else:
+                logger.warning(f"⚠️  Local image path not found: {local_image_path}")
+        
+        if found_path:
+            return self._post_with_local_image(message, found_path)
         elif image_url:
-            logger.warning("No local image found, trying URL (may be expired)")
+            logger.warning("⚠️  No local image, trying URL (may expire)")
             return self._post_with_image_url(message, image_url)
         else:
             logger.warning("No image provided, posting text only")
