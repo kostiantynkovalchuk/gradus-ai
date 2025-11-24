@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, CheckConstraint, ARRAY, JSON
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, CheckConstraint, ARRAY, JSON, Boolean
 from sqlalchemy.sql import func
 from .import Base
 
@@ -25,6 +25,11 @@ class ContentQueue(Base):
     edit_history = Column(JSON)
     extra_metadata = Column(JSON)
     analytics = Column(JSON)
+    posted_at = Column(TIMESTAMP)
+    
+    # Language support fields
+    language = Column(String(10), default='en')
+    needs_translation = Column(Boolean, default=True)
     
     __table_args__ = (
         CheckConstraint(
