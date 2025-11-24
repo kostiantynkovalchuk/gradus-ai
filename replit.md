@@ -30,11 +30,16 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - Delo.ua - Ukrainian business news
       - MinFin.ua - Ukrainian market data
       - Restorator.ua - HoReCa (Hotel/Restaurant/Catering) industry
-- **Automated Content Pipeline:** 24/7 automation via APScheduler for:
-    - Multi-source news scraping (every 6 hours at 00:00, 06:00, 12:00, 18:00).
-    - AI-driven translation (hourly, only for English sources).
-    - Image generation (hourly, for both languages).
-    - Daily cleanup of rejected content.
+- **Automated Content Pipeline:** 24/7 automation via APScheduler with platform-optimized scheduling:
+    - **Platform-Specific Scraping:**
+      - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, Delo.ua, MinFin.ua
+      - Facebook sources (Daily 2:00 AM): Just Drinks, Restorator.ua, The Drinks Report
+    - **Processing:**
+      - AI-driven translation (every 4 hours at :15, only for English sources)
+      - Image generation (every 4 hours at :30, for both languages)
+    - **Maintenance:**
+      - Daily cleanup of rejected content (3:00 AM)
+      - API monitoring (8:00 AM)
 - **Telegram Quick Approval:** Allows one-click content approval/rejection directly from Telegram notifications, including image previews.
 - **Image Generation:** Utilizes Claude AI to craft DALL-E 3 prompts for 1024x1024, text-free, professional social media images.
 - **Permanent Image Storage:** DALL-E generated images are downloaded and stored locally in `attached_assets/generated_images/` to prevent link expiration.

@@ -25,26 +25,20 @@ class ContentScheduler:
         
         return models.SessionLocal()
     
-    def scrape_news_task(self):
+    def scrape_linkedin_sources_task(self):
         """
-        Task: Scrape news from multiple sources (English + Ukrainian)
-        Runs at: 00:00, 06:00, 12:00, 18:00
+        Scrape LinkedIn sources: The Spirits Business, Delo.ua, MinFin.ua
+        Runs: Mon/Wed/Fri at 1:00 AM
         
-        Uses ScraperManager to coordinate multiple sources:
-        - The Spirits Business (English, needs translation)
-        - Delo.ua (Ukrainian, no translation needed)
+        Professional, business-oriented sources for B2B audience
         """
-        logger.info("🤖 [SCHEDULER] Starting multi-source news scraping task...")
+        logger.info("🤖 [SCHEDULER] Scraping LinkedIn sources...")
         
         try:
             from services.scrapers.manager import scraper_manager
             
-            # Scrape all sources
-            results = scraper_manager.scrape_all_sources(limit_per_source=5)
-            
-            if not results:
-                logger.warning("[SCHEDULER] No articles from any source")
-                return
+            # LinkedIn sources - professional content
+            linkedin_sources = ['spirits_business', 'delo_ua', 'minfin_ua']
             
             db = self._get_db_session()
             try:
@@ -55,7 +49,6 @@ class ContentScheduler:
                     ).all()
                 )
                 
-                # Get existing content hashes
                 existing_hashes = set(
                     meta.get('content_hash', '') 
                     for meta in db.query(ContentQueue.extra_metadata).filter(
@@ -66,25 +59,25 @@ class ContentScheduler:
                 
                 total_new = 0
                 
-                # Process articles from all sources
-                for source_name, articles in results.items():
-                    for article in articles:
-                        try:
-                            # Check for duplicates
+                for source_name in linkedin_sources:
+                    try:
+                        articles = scraper_manager.scrape_source(source_name, limit=3)
+                        logger.info(f"  📊 {source_name}: {len(articles)} articles scraped")
+                        
+                        for article in articles:
                             if scraper_manager.check_duplicate(article, existing_urls, existing_hashes):
-                                logger.info(f"[SCHEDULER] Duplicate article skipped: {article.title[:50]}...")
+                                logger.info(f"    ⏭️  Duplicate skipped: {article.title[:50]}...")
                                 continue
                             
-                            # Create new content entry
                             content_hash = article.get_content_hash()
                             new_article = ContentQueue(
                                 status='draft',
                                 source=article.source_name,
                                 source_url=article.url,
                                 original_text=article.content,
-                                language=article.language,  # ← SET LANGUAGE
-                                needs_translation=article.needs_translation,  # ← SET TRANSLATION FLAG
-                                platforms=['facebook', 'linkedin'],
+                                language=article.language,
+                                needs_translation=article.needs_translation,
+                                platforms=['linkedin'],
                                 extra_metadata={
                                     'title': article.title,
                                     'published_date': article.published_at,
@@ -96,32 +89,107 @@ class ContentScheduler:
                             db.add(new_article)
                             total_new += 1
                             
-                            # Add to working sets to prevent duplicates within this scrape pass
                             existing_urls.add(article.url)
                             existing_hashes.add(content_hash)
                             
                             lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
-                            translation_status = "NO translation" if not article.needs_translation else "needs translation"
-                            logger.info(f"[SCHEDULER] {lang_emoji} Added {article.source_name}: {article.title[:50]}... ({translation_status})")
-                            
-                        except Exception as e:
-                            logger.error(f"[SCHEDULER] Error processing article: {e}")
-                            db.rollback()
-                            continue
+                            logger.info(f"    ✅ {lang_emoji} {article.title[:50]}...")
+                    
+                    except Exception as e:
+                        logger.error(f"  ❌ {source_name} failed: {e}")
+                        continue
                 
                 db.commit()
-                logger.info(f"✅ [SCHEDULER] Scraped {total_new} new articles from {len(results)} sources")
-                
-                # Log language breakdown
-                uk_count = sum(1 for articles in results.values() for a in articles if a.language == 'uk')
-                en_count = sum(1 for articles in results.values() for a in articles if a.language == 'en')
-                logger.info(f"  📊 Language breakdown: 🇬🇧 English: {en_count}, 🇺🇦 Ukrainian: {uk_count}")
+                logger.info(f"✅ [SCHEDULER] LinkedIn: Scraped {total_new} new articles")
                 
             finally:
                 db.close()
-            
+        
         except Exception as e:
-            logger.error(f"❌ [SCHEDULER] Multi-source scraping failed: {e}")
+            logger.error(f"❌ [SCHEDULER] LinkedIn scraping failed: {e}")
+    
+    def scrape_facebook_sources_task(self):
+        """
+        Scrape Facebook sources: Just Drinks, Restorator.ua, The Drinks Report
+        Runs: Every day at 2:00 AM
+        
+        Lighter, more engaging sources for general audience
+        """
+        logger.info("🤖 [SCHEDULER] Scraping Facebook sources...")
+        
+        try:
+            from services.scrapers.manager import scraper_manager
+            
+            # Facebook sources - engaging content
+            facebook_sources = ['just_drinks', 'restorator_ua', 'drinks_report']
+            
+            db = self._get_db_session()
+            try:
+                # Get existing URLs for deduplication
+                existing_urls = set(
+                    url[0] for url in db.query(ContentQueue.source_url).filter(
+                        ContentQueue.source_url.isnot(None)
+                    ).all()
+                )
+                
+                existing_hashes = set(
+                    meta.get('content_hash', '') 
+                    for meta in db.query(ContentQueue.extra_metadata).filter(
+                        ContentQueue.extra_metadata.isnot(None)
+                    ).all()
+                    if meta and meta.get('content_hash')
+                )
+                
+                total_new = 0
+                
+                for source_name in facebook_sources:
+                    try:
+                        articles = scraper_manager.scrape_source(source_name, limit=3)
+                        logger.info(f"  📊 {source_name}: {len(articles)} articles scraped")
+                        
+                        for article in articles:
+                            if scraper_manager.check_duplicate(article, existing_urls, existing_hashes):
+                                logger.info(f"    ⏭️  Duplicate skipped: {article.title[:50]}...")
+                                continue
+                            
+                            content_hash = article.get_content_hash()
+                            new_article = ContentQueue(
+                                status='draft',
+                                source=article.source_name,
+                                source_url=article.url,
+                                original_text=article.content,
+                                language=article.language,
+                                needs_translation=article.needs_translation,
+                                platforms=['facebook'],
+                                extra_metadata={
+                                    'title': article.title,
+                                    'published_date': article.published_at,
+                                    'author': article.author,
+                                    'content_hash': content_hash,
+                                    'scraped_at': datetime.utcnow().isoformat()
+                                }
+                            )
+                            db.add(new_article)
+                            total_new += 1
+                            
+                            existing_urls.add(article.url)
+                            existing_hashes.add(content_hash)
+                            
+                            lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
+                            logger.info(f"    ✅ {lang_emoji} {article.title[:50]}...")
+                    
+                    except Exception as e:
+                        logger.error(f"  ❌ {source_name} failed: {e}")
+                        continue
+                
+                db.commit()
+                logger.info(f"✅ [SCHEDULER] Facebook: Scraped {total_new} new articles")
+                
+            finally:
+                db.close()
+        
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Facebook scraping failed: {e}")
     
     def translate_pending_task(self):
         """
@@ -484,46 +552,77 @@ class ContentScheduler:
             logger.error(traceback.format_exc())
     
     def start(self):
-        """Start the scheduler with all tasks (idempotent)"""
+        """Start scheduler with platform-specific scraping and posting"""
         if self.scheduler.running:
             logger.info("Scheduler already running, skipping start")
             return
         
         try:
+            # LinkedIn sources: Mon/Wed/Fri at 1:00 AM
             self.scheduler.add_job(
-                self.scrape_news_task,
-                CronTrigger(hour='0,6,12,18', minute=0),
-                id='scrape_news',
-                name='Scrape news articles',
+                self.scrape_linkedin_sources_task,
+                CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
+                id='scrape_linkedin',
+                name='Scrape LinkedIn sources (TSB, Delo, MinFin)',
                 replace_existing=True
             )
         except:
             logger.info("Scheduler was shutdown, recreating...")
             self.scheduler = BackgroundScheduler()
             self.scheduler.add_job(
-                self.scrape_news_task,
-                CronTrigger(hour='0,6,12,18', minute=0),
-                id='scrape_news',
-                name='Scrape news articles',
+                self.scrape_linkedin_sources_task,
+                CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
+                id='scrape_linkedin',
+                name='Scrape LinkedIn sources (TSB, Delo, MinFin)',
                 replace_existing=True
             )
         
+        # Facebook sources: Daily at 2:00 AM
+        self.scheduler.add_job(
+            self.scrape_facebook_sources_task,
+            CronTrigger(hour=2, minute=0),
+            id='scrape_facebook',
+            name='Scrape Facebook sources (Just Drinks, Restorator, Drinks Report)',
+            replace_existing=True
+        )
+        
+        # Translation: Every 4 hours at :15
         self.scheduler.add_job(
             self.translate_pending_task,
-            CronTrigger(minute=15),
+            CronTrigger(hour='*/4', minute=15),
             id='translate_articles',
             name='Translate pending articles',
             replace_existing=True
         )
         
+        # Images: Every 4 hours at :30
         self.scheduler.add_job(
             self.generate_images_task,
-            CronTrigger(minute=30),
+            CronTrigger(hour='*/4', minute=30),
             id='generate_images',
-            name='Generate article images',
+            name='Generate images & send Telegram notifications',
             replace_existing=True
         )
         
+        # LinkedIn posting: Mon/Wed/Fri at 9:00 AM
+        self.scheduler.add_job(
+            self.post_to_linkedin_task,
+            CronTrigger(day_of_week='mon,wed,fri', hour=9, minute=0),
+            id='post_linkedin',
+            name='Post to LinkedIn',
+            replace_existing=True
+        )
+        
+        # Facebook posting: Daily at 6:00 PM
+        self.scheduler.add_job(
+            self.post_to_facebook_task,
+            CronTrigger(hour=18, minute=0),
+            id='post_facebook',
+            name='Post to Facebook',
+            replace_existing=True
+        )
+        
+        # Cleanup: Daily at 3:00 AM
         self.scheduler.add_job(
             self.cleanup_old_content_task,
             CronTrigger(hour=3, minute=0),
@@ -532,39 +631,51 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        # API monitoring: Daily at 8:00 AM
         self.scheduler.add_job(
             self.check_api_services_task,
-            CronTrigger(hour=9, minute=0),
+            CronTrigger(hour=8, minute=0),
             id='check_api_services',
             name='Check all API services',
             replace_existing=True
         )
         
-        self.scheduler.add_job(
-            self.post_to_facebook_task,
-            CronTrigger(hour=18, minute=0),
-            id='post_facebook',
-            name='Post to Facebook (scheduled)',
-            replace_existing=True
-        )
-        
-        self.scheduler.add_job(
-            self.post_to_linkedin_task,
-            CronTrigger(day_of_week='mon,wed,fri', hour=9, minute=0),
-            id='post_linkedin',
-            name='Post to LinkedIn (scheduled)',
-            replace_existing=True
-        )
-        
         self.scheduler.start()
-        logger.info("✅ Scheduler started with 7 automated tasks")
-        logger.info("📅 Next scrape: 00:00, 06:00, 12:00, 18:00")
-        logger.info("🔄 Translation: Every hour at :15")
-        logger.info("🎨 Images: Every hour at :30")
-        logger.info("🗑️  Cleanup: Daily at 03:00")
-        logger.info("🔐 API Monitor: Daily at 09:00")
-        logger.info("📱 Facebook posting: Daily at 18:00 (6 PM)")
-        logger.info("💼 LinkedIn posting: Mon/Wed/Fri at 09:00")
+        
+        logger.info("=" * 60)
+        logger.info("✅ GRADUS MEDIA AI AGENT - FULLY OPERATIONAL")
+        logger.info("=" * 60)
+        logger.info("")
+        logger.info("📰 CONTENT SOURCES:")
+        logger.info("   LinkedIn (Mon/Wed/Fri):")
+        logger.info("      • The Spirits Business 🇬🇧")
+        logger.info("      • Delo.ua 🇺🇦")
+        logger.info("      • MinFin.ua 🇺🇦")
+        logger.info("")
+        logger.info("   Facebook (Daily):")
+        logger.info("      • Just Drinks 🇬🇧")
+        logger.info("      • Restorator.ua 🇺🇦")
+        logger.info("      • The Drinks Report 🇬🇧")
+        logger.info("")
+        logger.info("📅 SCRAPING SCHEDULE:")
+        logger.info("   • LinkedIn: Mon/Wed/Fri 1:00 AM")
+        logger.info("   • Facebook: Daily 2:00 AM")
+        logger.info("")
+        logger.info("🔄 PROCESSING:")
+        logger.info("   • Translation: Every 4 hours at :15")
+        logger.info("   • Images: Every 4 hours at :30")
+        logger.info("")
+        logger.info("📢 POSTING SCHEDULE:")
+        logger.info("   • LinkedIn: Mon/Wed/Fri 9:00 AM")
+        logger.info("   • Facebook: Daily 6:00 PM")
+        logger.info("")
+        logger.info("🔧 MAINTENANCE:")
+        logger.info("   • API monitoring: Daily 8:00 AM")
+        logger.info("   • Cleanup: Daily 3:00 AM")
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("🚀 System ready! Waiting for next scheduled task...")
+        logger.info("=" * 60)
     
     def stop(self):
         """Stop the scheduler (idempotent)"""
