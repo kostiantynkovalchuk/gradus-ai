@@ -261,9 +261,9 @@ class DeloUaScraper(ScraperBase):
             'Більше новин', 'Популярне', 'Актуально'
         }
         
-        # Step 3: Get all lines, remove metadata, handle duplicate titles
+        # Step 3: Get all lines, remove metadata, COMPLETELY REMOVE duplicate titles
+        # Title is added separately during posting, so we remove ALL occurrences from content
         lines = content.split('\n')
-        seen_title = False
         filtered_lines = []
         
         for line in lines:
@@ -294,17 +294,19 @@ class DeloUaScraper(ScraperBase):
             if len(line_stripped) < 8 and not line_stripped.endswith(('.', '!', '?', '"', '»')):
                 continue
             
-            # Handle title duplicates (only keep first occurrence)
+            # REMOVE ALL occurrences of the exact title (title is added separately during posting)
             if title and line_stripped == title:
-                if not seen_title:
-                    filtered_lines.append(line_stripped)
-                    seen_title = True
                 continue
             
             filtered_lines.append(line_stripped)
         
         # Step 4: AGGRESSIVE LINE JOINING - join ALL lines into single text block
         full_text = ' '.join(filtered_lines)
+        
+        # Step 4.5: Remove title if it appears at the very start of content
+        # This handles cases like "Title Цьогорічна..." where title is merged with first sentence
+        if title and full_text.startswith(title):
+            full_text = full_text[len(title):].lstrip()
         
         # Step 5: Fix spacing issues
         full_text = full_text.replace('\xa0', ' ')
