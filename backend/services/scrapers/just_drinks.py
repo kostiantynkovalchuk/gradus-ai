@@ -218,6 +218,16 @@ class JustDrinksScraper(ScraperBase):
         if not content:
             return ""
         
+        # Remove duplicate title if present at start (within first 500 chars)
+        if title and len(title) > 15:
+            if content.startswith(title):
+                content = content[len(title):].strip()
+            else:
+                title_pos = content[:500].find(title)
+                if title_pos >= 0:
+                    content = content[:title_pos] + content[title_pos + len(title):]
+                    content = content.strip()
+        
         # Split into lines
         lines = content.split('\n')
         cleaned_lines = []
@@ -232,11 +242,16 @@ class JustDrinksScraper(ScraperBase):
             if not line:
                 continue
             
-            # Skip author names (2-3 capitalized words, typically short line)
+            # Skip "By <Author>" bylines (e.g., "By Fiona Holland", "By John Smith in News")
+            if re.match(r'^By\s+[A-Z][a-z]+(\s+[A-Z][a-z\-]+)*(\s+(in|for|at|from)\s+.*)?$', line, re.IGNORECASE):
+                continue
+            
+            # Skip author names (2-4 capitalized words, short line, no punctuation)
             words = line.split()
             if 1 <= len(words) <= 4 and len(line) < 40:
-                # Check if it looks like an author name (capitalized words)
-                if all(w[0].isupper() for w in words if w and w[0].isalpha()):
+                # Check if it looks like an author name (capitalized words, allowing small connectors)
+                name_words = [w for w in words if len(w) > 2]  # Ignore small words like "in", "at"
+                if name_words and all(w[0].isupper() for w in name_words if w and w[0].isalpha()):
                     # But don't skip if it ends with punctuation (likely a sentence)
                     if not line.endswith(('.', '!', '?', ':')):
                         continue
