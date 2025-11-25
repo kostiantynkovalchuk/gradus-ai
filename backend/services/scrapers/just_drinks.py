@@ -58,8 +58,8 @@ class JustDrinksScraper(ScraperBase):
                     if not article_data:
                         continue
                     
-                    # Fetch full article content
-                    content = self._fetch_article_content(article_data['url'])
+                    # Fetch full article content (pass title for cleaning)
+                    content = self._fetch_article_content(article_data['url'], article_data['title'])
                     
                     if content and len(content) > 100:
                         article = ArticlePayload(
@@ -160,7 +160,7 @@ class JustDrinksScraper(ScraperBase):
             logger.error(f"Error parsing article card: {e}")
             return None
     
-    def _fetch_article_content(self, url: str) -> Optional[str]:
+    def _fetch_article_content(self, url: str, title: str = "") -> Optional[str]:
         """Fetch full article content from article page"""
         try:
             headers = {'User-Agent': self.user_agent}
@@ -183,15 +183,27 @@ class JustDrinksScraper(ScraperBase):
                 logger.warning(f"  Could not find content container for: {url}")
                 return None
             
-            # Remove unwanted elements
+            # Remove unwanted elements (ads, scripts, social, etc.)
             for unwanted in content_elem.select('script, style, aside, .ads, .advertisement, .social-share, .related-articles, nav, footer, .comments, .share'):
                 unwanted.decompose()
+            
+            # Remove metadata elements BEFORE extracting text
+            metadata_selectors = [
+                '.author', '.post-author', '.byline', '.article-author',
+                '.date', '.post-date', '.published-date', '.timestamp', 'time',
+                '.article-meta', '.meta', '.post-meta', '.entry-meta',
+                '.social-share', '.share-buttons', '.share-links',
+                '.tags', '.post-tags', '.article-tags'
+            ]
+            for selector in metadata_selectors:
+                for element in content_elem.select(selector):
+                    element.decompose()
             
             # Extract text
             content = content_elem.get_text(separator='\n', strip=True)
             
-            # Clean text
-            content = self._clean_text(content)
+            # Clean content (remove metadata patterns, fix formatting)
+            content = self._clean_content(content, title)
             
             return content
             
@@ -199,26 +211,75 @@ class JustDrinksScraper(ScraperBase):
             logger.error(f"Error fetching content from {url}: {e}")
             return None
     
-    def _clean_text(self, text: str) -> str:
-        """Clean scraped text"""
-        if not text:
+    def _clean_content(self, content: str, title: str) -> str:
+        """Clean Just Drinks article content - remove author, dates, fix formatting"""
+        import re
+        
+        if not content:
             return ""
         
-        # Remove extra whitespace
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        text = '\n\n'.join(lines)
+        # Split into lines
+        lines = content.split('\n')
+        cleaned_lines = []
         
-        # Remove non-breaking spaces
-        text = text.replace('\xa0', ' ')
-        text = text.replace('\u200b', '')
+        # English month names for date detection
+        months = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)'
         
-        # Remove very short lines (likely UI elements)
-        lines = text.split('\n\n')
-        lines = [line for line in lines if len(line) > 15]
-        text = '\n\n'.join(lines)
+        for line in lines:
+            line = line.strip()
+            
+            # Skip empty lines
+            if not line:
+                continue
+            
+            # Skip author names (2-3 capitalized words, typically short line)
+            words = line.split()
+            if 1 <= len(words) <= 4 and len(line) < 40:
+                # Check if it looks like an author name (capitalized words)
+                if all(w[0].isupper() for w in words if w and w[0].isalpha()):
+                    # But don't skip if it ends with punctuation (likely a sentence)
+                    if not line.endswith(('.', '!', '?', ':')):
+                        continue
+            
+            # Skip date patterns: "November 24, 2025", "24 November 2025", etc.
+            if re.match(rf'^{months}\s+\d{{1,2}},?\s+\d{{4}}$', line, re.IGNORECASE):
+                continue
+            if re.match(rf'^\d{{1,2}}\s+{months},?\s+\d{{4}}$', line, re.IGNORECASE):
+                continue
+            if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', line):
+                continue
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', line):
+                continue
+            
+            # Skip very short lines that are likely navigation/UI (but keep source tag)
+            if len(line) < 10 and not line.endswith('.') and 'Just Drinks' not in line:
+                continue
+            
+            # Skip social sharing text
+            if any(social in line.lower() for social in ['share this', 'tweet', 'linkedin', 'facebook', 'email this']):
+                if len(line) < 30:
+                    continue
+            
+            cleaned_lines.append(line)
+        
+        # Join with double newline for paragraph separation
+        content = '\n\n'.join(cleaned_lines)
+        
+        # Fix paragraph spacing at sentence boundaries (for run-on text)
+        content = re.sub(r'\.(\s*)([A-Z])', r'.\n\n\2', content)
+        
+        # Remove excessive newlines
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        # Remove non-breaking spaces and zero-width spaces
+        content = content.replace('\xa0', ' ')
+        content = content.replace('\u200b', '')
         
         # Remove multiple spaces
-        import re
-        text = re.sub(r' +', ' ', text)
+        content = re.sub(r' +', ' ', content)
         
-        return text.strip()
+        return content.strip()
+    
+    def _clean_text(self, text: str) -> str:
+        """Legacy method - redirects to _clean_content"""
+        return self._clean_content(text, "")
