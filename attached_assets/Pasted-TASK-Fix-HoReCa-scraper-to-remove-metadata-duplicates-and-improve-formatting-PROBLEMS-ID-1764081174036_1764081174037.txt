@@ -1,0 +1,125 @@
+TASK: Fix HoReCa-Україна scraper to remove metadata, duplicates, and improve formatting
+
+PROBLEMS IDENTIFIED:
+1. Duplicate title appearing twice in content
+2. Metadata: "Pro-HoReCa / Статті", "Новини Ресторанів"
+3. Related links section: "Цікаве за цей тиждень:"
+4. Footer text: "Усі представлені фото та відео матеріали..."
+5. Category tags at bottom: "Аналітичні огляди / Тенденції ринку"
+6. Chaotic line breaks throughout content
+
+FILE: backend/services/scrapers/horeca_ua_scraper.py
+
+REQUIRED CHANGES:
+
+=== 1. REMOVE METADATA ELEMENTS ===
+Before extracting text, remove these CSS selectors:
+- .article-meta, .meta, .post-meta
+- .category, .post-category
+- .breadcrumb, .breadcrumbs
+- .tags, .post-tags
+- .related, .related-posts
+- .footer-text, .disclaimer
+- nav, footer elements
+
+=== 2. EXCLUDE TEXT PATTERNS ===
+After extraction, filter out lines containing:
+- "Pro-HoReCa"
+- "Статті"
+- "Цікаве за цей тиждень"
+- "Усі представлені фото"
+- "Новини Ресторанів"
+- "Аналітичні огляди"
+- "Тенденції ринку"
+- "Постачальники HoReCa"
+
+=== 3. REMOVE DUPLICATE TITLE ===
+Check if title appears in first 200 chars of content
+If found, remove it
+
+=== 4. FIX LINE BREAKS ===
+- Remove multiple consecutive newlines (\n{3,} → \n\n)
+- Remove trailing/leading whitespace per line
+- Remove empty lines
+- Ensure double newline between paragraphs
+- Remove lines with only whitespace
+- Remove very short lines (<10 chars) that are navigation/UI elements
+
+=== 5. ADD CLEANING METHOD ===
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean HoReCa article content"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove duplicate title at start
+    if content.startswith(title):
+        content = content[len(title):].strip()
+    
+    # Remove metadata and footer patterns
+    patterns_to_remove = [
+        r'Pro-HoReCa.*?\n',
+        r'Статті.*?\n',
+        r'Цікаве за цей тиждень:.*',
+        r'Усі представлені фото.*',
+        r'Новини Ресторанів.*',
+        r'Аналітичні огляди.*',
+        r'Тенденції ринку.*',
+        r'Постачальники HoReCa.*',
+    ]
+    
+    for pattern in patterns_to_remove:
+        content = re.sub(pattern, '', content, flags=re.DOTALL)
+    
+    # Split into lines and clean
+    lines = content.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        # Skip empty, very short, or metadata lines
+        if (line and 
+            len(line) > 10 and 
+            'Pro-HoReCa' not in line and
+            'Цікаве за цей' not in line):
+            cleaned_lines.append(line)
+    
+    # Join with double newline for paragraphs
+    content = '\n\n'.join(cleaned_lines)
+    
+    # Fix excessive newlines
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
+```
+
+=== 6. UPDATE EXTRACTION ===
+In scrape_articles method, after extracting content:
+```python
+title = self._extract_title(article)
+raw_content = self._extract_content(article)
+content = self._clean_content(raw_content, title)
+```
+
+=== 7. TEST AND VERIFY ===
+1. Scrape 1 test article from HoReCa
+2. Show content before cleaning
+3. Show content after cleaning
+4. Verify:
+   - No duplicate title
+   - No "Pro-HoReCa" metadata
+   - No "Цікаве за цей тиждень" section
+   - No footer text
+   - Clean paragraph spacing
+   - Minimum 100 chars actual content
+
+=== 8. UPDATE EXISTING ARTICLES ===
+Find HoReCa articles in database
+Apply cleaning function to their content
+Update database
+Show count of articles updated
+
+OUTPUT:
+Show updated scraper code, test result, and confirmation that existing articles are cleaned.

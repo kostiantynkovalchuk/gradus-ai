@@ -59,8 +59,8 @@ class RestoratorUaScraper(ScraperBase):
                     if not article_data:
                         continue
                     
-                    # Fetch full article content
-                    content = self._fetch_article_content(article_data['url'])
+                    # Fetch full article content (pass title for duplicate removal)
+                    content = self._fetch_article_content(article_data['url'], article_data['title'])
                     
                     if content and len(content) > 100:
                         article = ArticlePayload(
@@ -148,7 +148,7 @@ class RestoratorUaScraper(ScraperBase):
             logger.error(f"Error parsing article card: {e}")
             return None
     
-    def _fetch_article_content(self, url: str) -> Optional[str]:
+    def _fetch_article_content(self, url: str, title: str = "") -> Optional[str]:
         """Fetch full article content from article page"""
         try:
             headers = {'User-Agent': self.user_agent}
@@ -171,15 +171,29 @@ class RestoratorUaScraper(ScraperBase):
                 logger.warning(f"  Could not find content container for: {url}")
                 return None
             
-            # Remove unwanted elements
+            # Remove unwanted elements (ads, scripts, social, etc.)
             for unwanted in content_elem.select('script, style, aside, .ads, .advertisement, nav, footer, .related, .comments, .share'):
                 unwanted.decompose()
+            
+            # Remove metadata elements BEFORE extracting text
+            metadata_selectors = [
+                '.article-meta', '.meta', '.metadata', '.post-meta', '.entry-meta',
+                '.category', '.post-category', '.article-category',
+                '.breadcrumb', '.breadcrumbs',
+                '.tags', '.post-tags', '.article-tags',
+                '.related', '.related-posts', '.related-articles',
+                '.footer-text', '.disclaimer', '.copyright',
+                '.author', '.post-author', '.date', '.post-date'
+            ]
+            for selector in metadata_selectors:
+                for element in content_elem.select(selector):
+                    element.decompose()
             
             # Extract text
             content = content_elem.get_text(separator='\n', strip=True)
             
-            # Clean text
-            content = self._clean_text(content)
+            # Clean content (remove metadata patterns, duplicate title, fix formatting)
+            content = self._clean_content(content, title)
             
             return content
             
@@ -187,26 +201,99 @@ class RestoratorUaScraper(ScraperBase):
             logger.error(f"Error fetching content from {url}: {e}")
             return None
     
-    def _clean_text(self, text: str) -> str:
-        """Clean scraped Ukrainian text"""
-        if not text:
+    def _clean_content(self, content: str, title: str) -> str:
+        """Clean HoReCa article content - remove metadata, duplicates, fix formatting"""
+        import re
+        
+        if not content:
             return ""
         
-        # Remove extra whitespace
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        text = '\n\n'.join(lines)
+        # Remove duplicate title if present anywhere near the start (within first 500 chars)
+        if title and len(title) > 15:
+            # Check for exact match at start
+            if content.startswith(title):
+                content = content[len(title):].strip()
+            else:
+                # Check if title appears in the first 500 chars
+                title_pos = content[:500].find(title)
+                if title_pos >= 0:
+                    content = content[:title_pos] + content[title_pos + len(title):]
+                    content = content.strip()
         
-        # Remove non-breaking spaces
-        text = text.replace('\xa0', ' ')
-        text = text.replace('\u200b', '')
+        # Remove HoReCa-specific metadata and footer patterns
+        patterns_to_remove = [
+            r'Pro-HoReCa\s*/?\s*Статті.*?\n',
+            r'Pro-HoReCa.*?\n',
+            r'^Статті\s*\n',
+            r'Цікаве за цей тиждень:.*',
+            r'Усі представлені фото.*',
+            r'Усі права захищені.*',
+            r'Новини Ресторанів.*?\n',
+            r'Аналітичні огляди.*?\n',
+            r'Тенденції ринку.*?\n',
+            r'Постачальники HoReCa.*?\n',
+            r'Подивитися всі.*?\n',
+            r'Поділитися.*?\n',
+            r'Share.*?\n',
+        ]
         
-        # Remove very short lines (likely navigation/UI elements)
-        lines = text.split('\n\n')
-        lines = [line for line in lines if len(line) > 15]
-        text = '\n\n'.join(lines)
+        for pattern in patterns_to_remove:
+            content = re.sub(pattern, '', content, flags=re.MULTILINE | re.IGNORECASE)
+        
+        # Split into lines and clean
+        lines = content.split('\n')
+        cleaned_lines = []
+        
+        # Words/phrases to skip as standalone lines (metadata/UI)
+        skip_words = {
+            'Pro-HoReCa', 'Статті', 'Новини', 'Категорія',
+            'Цікаве за цей тиждень', 'Усі представлені фото',
+            'Аналітичні огляди', 'Тенденції ринку', 'Постачальники HoReCa',
+            'Подивитися всі', 'Поділитися', 'Share', 'Facebook', 'Twitter',
+            'Telegram', 'Viber', 'Коментарі', 'Реклама', 'Новини Ресторанів'
+        }
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Skip empty lines
+            if not line:
+                continue
+            
+            # Skip metadata/UI words
+            if line in skip_words:
+                continue
+            
+            # Skip lines containing metadata phrases
+            skip_line = False
+            for skip_word in skip_words:
+                if skip_word in line and len(line) < 50:
+                    skip_line = True
+                    break
+            if skip_line:
+                continue
+            
+            # Skip very short lines that are likely navigation/UI
+            if len(line) < 10 and not line.endswith('.'):
+                continue
+            
+            cleaned_lines.append(line)
+        
+        # Join with double newline for paragraph separation
+        content = '\n\n'.join(cleaned_lines)
+        
+        # Remove multiple consecutive newlines (more than 2)
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        # Remove non-breaking spaces and zero-width spaces
+        content = content.replace('\xa0', ' ')
+        content = content.replace('\u200b', '')
         
         # Remove multiple spaces
-        import re
-        text = re.sub(r' +', ' ', text)
+        content = re.sub(r' +', ' ', content)
         
-        return text.strip()
+        return content.strip()
+    
+    def _clean_text(self, text: str) -> str:
+        """Legacy method - redirects to _clean_content"""
+        return self._clean_content(text, "")
