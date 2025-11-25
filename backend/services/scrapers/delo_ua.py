@@ -75,8 +75,8 @@ class DeloUaScraper(ScraperBase):
                     if article_data['url'].endswith(('/business/', '/retail/', '/news-feed/', '/articles/')):
                         continue
                     
-                    # Fetch full article content
-                    content = self._fetch_article_content(article_data['url'])
+                    # Fetch full article content (pass title for duplicate removal)
+                    content = self._fetch_article_content(article_data['url'], article_data['title'])
                     
                     if content and len(content) > 100:  # Minimum content length
                         article = ArticlePayload(
@@ -162,7 +162,7 @@ class DeloUaScraper(ScraperBase):
             logger.error(f"Error parsing article heading: {e}")
             return None
     
-    def _fetch_article_content(self, url: str) -> Optional[str]:
+    def _fetch_article_content(self, url: str, title: str = "") -> Optional[str]:
         """Fetch full article content from article page"""
         try:
             headers = {'User-Agent': self.user_agent}
@@ -185,15 +185,28 @@ class DeloUaScraper(ScraperBase):
                 logger.warning(f"  Could not find content container for: {url}")
                 return None
             
-            # Remove unwanted elements
+            # Remove unwanted elements (ads, scripts, social, etc.)
             for unwanted in content_elem.select('script, style, aside, .ads, .advertisement, .related, .comments, .share, .social'):
                 unwanted.decompose()
+            
+            # Remove metadata elements BEFORE extracting text
+            metadata_selectors = [
+                '.article-meta', '.meta', '.metadata', '.post-meta', '.entry-meta',
+                '.category', '.post-category', '.article-category',
+                '.date', '.post-date', '.published-date', '.article-date',
+                '.author', '.post-author', '.article-author',
+                '.tags', '.post-tags', '.article-tags',
+                'time', '.time', '.timestamp'
+            ]
+            for selector in metadata_selectors:
+                for element in content_elem.select(selector):
+                    element.decompose()
             
             # Extract text
             content = content_elem.get_text(separator='\n', strip=True)
             
-            # Clean text
-            content = self._clean_text(content)
+            # Clean content (remove metadata patterns, duplicate title, fix formatting)
+            content = self._clean_content(content, title)
             
             return content
             
@@ -201,21 +214,100 @@ class DeloUaScraper(ScraperBase):
             logger.error(f"Error fetching content from {url}: {e}")
             return None
     
-    def _clean_text(self, text: str) -> str:
-        """Clean scraped Ukrainian text"""
-        if not text:
+    def _clean_content(self, content: str, title: str) -> str:
+        """Clean and format article content - remove metadata, duplicate title, fix formatting"""
+        import re
+        
+        if not content:
             return ""
         
-        # Remove extra whitespace
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        text = '\n\n'.join(lines)
+        # Remove duplicate title if present anywhere near the start (within first 500 chars)
+        if title and len(title) > 15:
+            # Check for exact match at start
+            if content.startswith(title):
+                content = content[len(title):].strip()
+            else:
+                # Check if title appears in the first 500 chars (after metadata removal)
+                title_pos = content[:500].find(title)
+                if title_pos >= 0:
+                    # Remove the title from content
+                    content = content[:title_pos] + content[title_pos + len(title):]
+                    content = content.strip()
+                # Also check for similar match (first 40 chars of title)
+                elif len(title) > 40:
+                    title_start = title[:40]
+                    title_pos = content[:300].find(title_start)
+                    if title_pos >= 0:
+                        # Find where the title line ends
+                        newline_pos = content.find('\n', title_pos)
+                        if newline_pos > 0:
+                            content = content[:title_pos] + content[newline_pos:]
+                            content = content.strip()
         
-        # Remove non-breaking spaces
-        text = text.replace('\xa0', ' ')
-        text = text.replace('\u200b', '')  # Zero-width space
+        # Remove Ukrainian metadata patterns with regex
+        metadata_patterns = [
+            r'^Категорія\s*\n',
+            r'^Новини\s*\n',
+            r'^Дата публікації\s*\n',
+            r'^\d{1,2}\s+(січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)\s+\d{2}:\d{2}\s*\n',
+            r'^\d{1,2}\.\d{1,2}\.\d{4}\s*\n',
+            r'^Автор:?\s*[^\n]*\n',
+            r'^Джерело:?\s*[^\n]*\n',
+            r'^Фото:?\s*[^\n]*\n',
+        ]
+        
+        for pattern in metadata_patterns:
+            content = re.sub(pattern, '', content, flags=re.MULTILINE | re.IGNORECASE)
+        
+        # Split into lines and clean
+        lines = content.split('\n')
+        cleaned_lines = []
+        
+        # Words/phrases to skip as standalone lines (metadata/UI)
+        skip_words = {
+            'Категорія', 'Новини', 'Дата публікації', 'Автор', 'Джерело', 
+            'Фото', 'Теги', 'Читайте також', 'Поділитися', 'Share',
+            'Facebook', 'Twitter', 'Telegram', 'Viber',
+            'Змінити мову', 'Читать на русском', 'Читати українською',
+            'Коментарі', 'Підписатися', 'Реклама', 'Більше новин'
+        }
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Skip empty lines
+            if not line:
+                continue
+            
+            # Skip metadata words
+            if line in skip_words:
+                continue
+            
+            # Skip very short lines that are likely navigation/UI
+            if len(line) < 10 and not line.endswith('.'):
+                continue
+            
+            # Skip date-only lines (e.g., "25 листопада 14:30")
+            if re.match(r'^\d{1,2}\s+\w+\s+\d{2}:\d{2}$', line):
+                continue
+            
+            cleaned_lines.append(line)
+        
+        # Join with double newline for paragraph separation
+        content = '\n\n'.join(cleaned_lines)
+        
+        # Remove multiple consecutive newlines (more than 2)
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        # Remove non-breaking spaces and zero-width spaces
+        content = content.replace('\xa0', ' ')
+        content = content.replace('\u200b', '')
         
         # Remove multiple spaces
-        import re
-        text = re.sub(r' +', ' ', text)
+        content = re.sub(r' +', ' ', content)
         
-        return text.strip()
+        return content.strip()
+    
+    def _clean_text(self, text: str) -> str:
+        """Legacy method - redirects to _clean_content"""
+        return self._clean_content(text, "")

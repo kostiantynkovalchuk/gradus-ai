@@ -1,0 +1,140 @@
+TASK: Fix Delo.ua scraper to remove redundant metadata and improve content formatting
+
+PROBLEM ANALYSIS:
+Current scraper is extracting unwanted metadata and duplicating the title. Example issues:
+1. "Категорія" and "Новини" appearing in content (metadata, should be excluded)
+2. "Дата публікації" and date appearing at top (metadata, should be excluded)
+3. Title appearing TWICE in the scraped content
+4. Chaotic line breaks and poor formatting
+
+REQUIRED FIXES:
+
+=== FIX 1: UPDATE DELO.UA SCRAPER ===
+File: backend/services/scrapers/delo_ua_scraper.py
+
+Current issues:
+- Scraping metadata elements that should be excluded
+- Not removing duplicate title from content
+- Poor text cleaning and formatting
+
+Changes needed:
+
+1. IMPROVE CONTENT SELECTORS:
+   - Target only the main article body content
+   - Exclude these CSS selectors:
+     * .article-meta, .meta, .metadata
+     * .category, .post-category
+     * .date, .post-date, .published-date
+     * .author, .post-author
+     * Any elements with "Категорія", "Дата публікації"
+   
+2. REMOVE DUPLICATE TITLE:
+   - After extracting content, check if title appears in first 200 chars
+   - If found, remove it from content
+   - Handle both exact match and similar text
+
+3. IMPROVE TEXT CLEANING:
+   - Remove multiple consecutive line breaks (replace \n\n\n+ with \n\n)
+   - Remove leading/trailing whitespace per paragraph
+   - Remove empty paragraphs
+   - Ensure consistent spacing between paragraphs
+
+4. UPDATED CLEANING FUNCTION:
+   Add this method to DeloUaScraper class:
+```python
+   def _clean_content(self, content: str, title: str) -> str:
+       """Clean and format article content"""
+       if not content:
+           return ""
+       
+       # Remove duplicate title if present at start
+       if content.startswith(title):
+           content = content[len(title):].strip()
+       
+       # Remove metadata patterns
+       metadata_patterns = [
+           r'Категорія\s*\n\s*[^\n]+\n',
+           r'Дата публікації\s*\n\s*[^\n]+\n',
+           r'Новини\s*\n',
+           r'^\d{1,2}\s+\w+\s+\d{2}:\d{2}\s*\n'
+       ]
+       
+       import re
+       for pattern in metadata_patterns:
+           content = re.sub(pattern, '', content, flags=re.MULTILINE)
+       
+       # Clean up whitespace
+       lines = content.split('\n')
+       cleaned_lines = []
+       
+       for line in lines:
+           line = line.strip()
+           if line and line not in ['Категорія', 'Новини', 'Дата публікації']:
+               cleaned_lines.append(line)
+       
+       # Join with double newline for paragraph separation
+       content = '\n\n'.join(cleaned_lines)
+       
+       # Remove multiple consecutive newlines
+       content = re.sub(r'\n{3,}', '\n\n', content)
+       
+       return content.strip()
+```
+
+5. UPDATE scrape_articles METHOD:
+   After extracting content, call the cleaning function:
+```python
+   # Extract title
+   title = self._extract_title(article)
+   
+   # Extract content
+   raw_content = self._extract_content(article)
+   
+   # Clean content (remove metadata, duplicate title, fix formatting)
+   content = self._clean_content(raw_content, title)
+```
+
+6. IMPROVE CONTENT EXTRACTION:
+   Update content extraction to exclude metadata:
+```python
+   # Remove metadata elements before extracting text
+   for selector in ['.article-meta', '.meta', '.category', '.date', 
+                    '.author', '.post-meta', '.entry-meta']:
+       for element in soup.select(selector):
+           element.decompose()
+```
+
+=== FIX 2: TEST THE SCRAPER ===
+After implementing fixes:
+
+1. Test scraping 1 article from Delo.ua
+2. Print the extracted content
+3. Verify:
+   - No "Категорія" or "Новини" in content
+   - No dates at top of content
+   - Title appears only ONCE
+   - Clean paragraph formatting
+   - Minimum 100 chars of actual content
+
+=== FIX 3: UPDATE DATABASE CONTENT ===
+For the existing corrupted article:
+
+1. Find the article with title containing "Оплата праці в ритейлі"
+2. Clean its content using the new cleaning function
+3. Update the database
+4. Show me before/after content
+
+VERIFICATION:
+After fixes, show me:
+1. The updated scraper code (key sections)
+2. Test scraping result (1 article with clean formatting)
+3. Comparison of old vs new content format
+4. Confirmation that metadata is excluded
+
+EXPECTED CLEAN OUTPUT:
+Title: Оплата праці в ритейлі у 2024 році зросла на третину: яка середня зарплата в компанії АТБ
+Content:
+АТБ увійшла до першої трійки вітчизняних ритейлерів за рівнем зарплати / АТБ
+Згідно з оновленими даними Державної служби статистики України, протягом 2024 року зарплати у вітчизняній галузі ритейлу зросли на третину...
+[No metadata, no duplicate title, clean paragraphs]
+
