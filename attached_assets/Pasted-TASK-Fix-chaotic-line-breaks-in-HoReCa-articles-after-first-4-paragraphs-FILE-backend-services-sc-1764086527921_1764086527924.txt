@@ -1,0 +1,159 @@
+TASK: Fix chaotic line breaks in HoReCa articles after first 4 paragraphs
+
+FILE: backend/services/scrapers/horeca_ua_scraper.py
+
+PROBLEM: Article has good formatting initially, then line breaks become random/chaotic
+
+LIKELY CAUSES:
+- Names appearing on separate lines
+- Links or emphasized text breaking paragraphs
+- Inconsistent HTML structure in article body
+- List items or inline elements disrupting flow
+
+COMPREHENSIVE FIX:
+
+Replace _clean_content method with improved version:
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean HoReCa article content with improved line break handling"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove duplicate title at start
+    if content.startswith(title):
+        content = content[len(title):].strip()
+    
+    # Remove footer patterns
+    patterns_to_remove = [
+        r'Pro-HoReCa.*?\n',
+        r'Статті.*?\n',
+        r'Цікаве за цей тиждень:.*',
+        r'Усі представлені фото.*',
+        r'Новини Ресторанів.*',
+        r'Аналітичні огляди.*',
+        r'Тенденції ринку.*',
+        r'Постачальники HoReCa.*?\n',
+    ]
+    
+    for pattern in patterns_to_remove:
+        content = re.sub(pattern, '', content, flags=re.DOTALL)
+    
+    # Split into lines
+    lines = content.split('\n')
+    
+    # First pass: group lines into logical blocks
+    blocks = []
+    current_block = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        if not line:
+            if current_block:
+                blocks.append(' '.join(current_block))
+                current_block = []
+            continue
+        
+        # Skip metadata
+        if ('Pro-HoReCa' in line or 
+            'Постачальники HoReCa' in line or
+            'Цікаве за цей' in line):
+            continue
+        
+        # If line is very short and doesn't end with period
+        # it's likely part of previous sentence (name, link, etc)
+        if len(line) < 50 and not line.endswith(('.', '!', '?', '»', '"')):
+            current_block.append(line)
+        # If line starts with capital and previous block exists
+        # and previous doesn't end with period, continue block
+        elif current_block and not current_block[-1].endswith(('.', '!', '?', '»', '"')):
+            current_block.append(line)
+        # Otherwise start new block
+        else:
+            if current_block:
+                blocks.append(' '.join(current_block))
+            current_block = [line]
+    
+    # Add last block
+    if current_block:
+        blocks.append(' '.join(current_block))
+    
+    # Second pass: join blocks into paragraphs
+    # Detect paragraph boundaries by sentence endings + capital letters
+    paragraphs = []
+    current_para = []
+    
+    for block in blocks:
+        # Split block into sentences
+        sentences = re.split(r'([.!?»"]\s+)', block)
+        
+        for i in range(0, len(sentences)-1, 2):
+            sentence = sentences[i] + (sentences[i+1] if i+1 < len(sentences) else '')
+            sentence = sentence.strip()
+            
+            if sentence:
+                current_para.append(sentence)
+                
+                # Check if this ends a logical paragraph
+                # (quote ending, multiple sentences accumulated, etc)
+                if (sentence.endswith(('».', '".')) or 
+                    len(current_para) >= 3):
+                    paragraphs.append(' '.join(current_para))
+                    current_para = []
+    
+    # Add remaining
+    if current_para:
+        paragraphs.append(' '.join(current_para))
+    
+    # Join paragraphs with double newline
+    content = '\n\n'.join(paragraphs)
+    
+    # Final cleanup
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    content = re.sub(r'  +', ' ', content)  # Remove multiple spaces
+    
+    return content.strip()
+```
+
+ALTERNATIVE SIMPLER APPROACH:
+If above is too complex, use aggressive joining:
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean with aggressive line joining"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove title, patterns
+    if content.startswith(title):
+        content = content[len(title):].strip()
+    
+    # Remove all patterns
+    for pattern in [r'Pro-HoReCa.*?\n', r'Постачальники.*?\n', 
+                    r'Цікаве за цей.*', r'Усі представлені.*']:
+        content = re.sub(pattern, '', content, flags=re.DOTALL)
+    
+    # Join ALL lines into one text block
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    content = ' '.join(lines)
+    
+    # Now split ONLY at proper sentence boundaries
+    # Period/question/exclamation + space + capital letter = paragraph break
+    content = re.sub(r'([.!?»"]\s+)([A-ZА-ЯІЇЄ«"])', r'\1\n\n\2', content)
+    
+    # Clean up
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
+```
+
+TEST:
+Scrape the "Українська кухня в центрі Лондона" article again
+Verify consistent paragraph breaks throughout entire article
+Show full cleaned content
+
+OUTPUT:
+Show cleaned article with proper formatting from start to finish

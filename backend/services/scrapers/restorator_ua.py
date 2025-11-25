@@ -202,19 +202,17 @@ class RestoratorUaScraper(ScraperBase):
             return None
     
     def _clean_content(self, content: str, title: str) -> str:
-        """Clean HoReCa article content - remove metadata, duplicates, fix formatting"""
+        """Clean HoReCa article content with improved line break handling"""
         import re
         
         if not content:
             return ""
         
-        # Remove duplicate title if present anywhere near the start (within first 500 chars)
+        # Remove duplicate title if present at start
         if title and len(title) > 15:
-            # Check for exact match at start
             if content.startswith(title):
                 content = content[len(title):].strip()
             else:
-                # Check if title appears in the first 500 chars
                 title_pos = content[:500].find(title)
                 if title_pos >= 0:
                     content = content[:title_pos] + content[title_pos + len(title):]
@@ -240,57 +238,105 @@ class RestoratorUaScraper(ScraperBase):
         for pattern in patterns_to_remove:
             content = re.sub(pattern, '', content, flags=re.MULTILINE | re.IGNORECASE)
         
-        # Split into lines and clean
-        lines = content.split('\n')
-        cleaned_lines = []
+        # Words/phrases to skip completely
+        skip_phrases = [
+            'Pro-HoReCa', 'Статті', 'Категорія', 'Цікаве за цей тиждень',
+            'Усі представлені фото', 'Аналітичні огляди', 'Тенденції ринку',
+            'Постачальники HoReCa', 'Подивитися всі', 'Поділитися', 'Share',
+            'Facebook', 'Twitter', 'Telegram', 'Viber', 'Коментарі', 'Реклама',
+            'Новини Ресторанів'
+        ]
         
-        # Words/phrases to skip as standalone lines (metadata/UI)
-        skip_words = {
-            'Pro-HoReCa', 'Статті', 'Новини', 'Категорія',
-            'Цікаве за цей тиждень', 'Усі представлені фото',
-            'Аналітичні огляди', 'Тенденції ринку', 'Постачальники HoReCa',
-            'Подивитися всі', 'Поділитися', 'Share', 'Facebook', 'Twitter',
-            'Telegram', 'Viber', 'Коментарі', 'Реклама', 'Новини Ресторанів'
-        }
+        # First pass: filter out metadata lines, join everything else
+        lines = content.split('\n')
+        valid_lines = []
         
         for line in lines:
             line = line.strip()
-            
-            # Skip empty lines
             if not line:
                 continue
             
-            # Skip metadata/UI words
-            if line in skip_words:
+            # Skip standalone metadata words
+            if line in skip_phrases:
                 continue
             
-            # Skip lines containing metadata phrases
+            # Skip short lines containing metadata
             skip_line = False
-            for skip_word in skip_words:
-                if skip_word in line and len(line) < 50:
+            for phrase in skip_phrases:
+                if phrase in line and len(line) < 60:
                     skip_line = True
                     break
             if skip_line:
                 continue
             
-            # Skip very short lines that are likely navigation/UI
-            if len(line) < 10 and not line.endswith('.'):
+            # Skip very short non-sentence lines (likely UI elements)
+            if len(line) < 8 and not line.endswith(('.', '!', '?', '»', '"')):
                 continue
             
-            cleaned_lines.append(line)
+            valid_lines.append(line)
         
-        # Join with double newline for paragraph separation
-        content = '\n\n'.join(cleaned_lines)
+        # Join ALL valid lines into one continuous text block
+        content = ' '.join(valid_lines)
         
-        # Remove multiple consecutive newlines (more than 2)
-        content = re.sub(r'\n{3,}', '\n\n', content)
-        
-        # Remove non-breaking spaces and zero-width spaces
+        # Clean up spacing
         content = content.replace('\xa0', ' ')
         content = content.replace('\u200b', '')
+        content = re.sub(r'  +', ' ', content)
         
-        # Remove multiple spaces
-        content = re.sub(r' +', ' ', content)
+        # Now split at proper sentence boundaries only
+        # Pattern: sentence-ending punctuation + space + capital letter (Latin or Cyrillic)
+        # This creates paragraph breaks at natural sentence boundaries
+        content = re.sub(
+            r'([.!?»"]\s+)([A-ZА-ЯІЇЄҐ«"])',
+            r'\1\n\n\2',
+            content
+        )
+        
+        # Group into larger paragraphs (every 2-3 sentences)
+        # Split by current double newlines
+        paragraphs = content.split('\n\n')
+        grouped_paragraphs = []
+        current_group = []
+        
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            
+            current_group.append(para)
+            
+            # Create paragraph break after 2-3 sentences or if paragraph is long enough
+            total_len = sum(len(p) for p in current_group)
+            if len(current_group) >= 2 or total_len > 300:
+                grouped_paragraphs.append(' '.join(current_group))
+                current_group = []
+        
+        # Add remaining
+        if current_group:
+            grouped_paragraphs.append(' '.join(current_group))
+        
+        # Join with double newlines
+        content = '\n\n'.join(grouped_paragraphs)
+        
+        # Final cleanup
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        content = re.sub(r'  +', ' ', content)
+        
+        # Remove footer block with related articles (appears at end after main content)
+        # Pattern: multiple article titles followed by category names
+        footer_patterns = [
+            r'Новий гастропроєкт.*?Постачальники HoReCa Україна\s*$',
+            r'Гастрономічний Netflix.*?Постачальники HoReCa Україна\s*$',
+            r'Бойківська кухня.*?Постачальники HoReCa Україна\s*$',
+            r'Українська кухня.*?Постачальники HoReCa Україна\s*$',
+            r'Від Чернігова.*?Постачальники HoReCa Україна\s*$',
+            r'У Німеччині.*?Постачальники HoReCa Україна\s*$',
+            r'Новини Кафе\s*Новини Барів\s*Новини Готелів\s*Постачальники HoReCa Україна\s*$',
+            r'Постачальники HoReCa Україна\s*$',
+        ]
+        
+        for pattern in footer_patterns:
+            content = re.sub(pattern, '', content, flags=re.DOTALL)
         
         return content.strip()
     
