@@ -98,13 +98,14 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    fb_status = "configured" if (facebook_poster.page_access_token and facebook_poster.page_id) else "awaiting credentials"
     return {
         "status": "healthy",
         "services": {
             "claude": "configured",
             "database": "connected",
             "image_generator": "ready",
-            "social_poster": "awaiting credentials"
+            "social_poster": fb_status
         }
     }
 
