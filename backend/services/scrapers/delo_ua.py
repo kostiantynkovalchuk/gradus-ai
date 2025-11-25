@@ -308,6 +308,17 @@ class DeloUaScraper(ScraperBase):
         if title and full_text.startswith(title):
             full_text = full_text[len(title):].lstrip()
         
+        # Step 4.6: Remove image captions (pattern: "Caption text / Photo credit")
+        # Only remove when it's clearly a standalone caption, not inline mention
+        # Pattern must be: short caption (no punctuation) + " / " + credit at END of caption
+        # This avoids matching legitimate sentences like "За даними Reuters / AFP..."
+        photo_credits = ['Depositphotos', 'Getty Images', 'Unsplash', 'УНІАН', 'UNIAN', 'Shutterstock', 'iStock']
+        for credit in photo_credits:
+            # Only match at the very start: "Caption / Credit " followed by capital letter
+            # This targets patterns like "Індекс самопочуття ритейлу зріс / Depositphotos Індекс..."
+            caption_pattern = f'^[А-ЯІЇЄҐа-яіїєґA-Za-z0-9\\s]{{5,60}}\\s*/\\s*{re.escape(credit)}\\s+(?=[А-ЯІЇЄҐA-Z])'
+            full_text = re.sub(caption_pattern, '', full_text, flags=re.IGNORECASE)
+        
         # Step 5: Fix spacing issues
         full_text = full_text.replace('\xa0', ' ')
         full_text = full_text.replace('\u200b', '')
