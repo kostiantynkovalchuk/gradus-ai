@@ -109,8 +109,15 @@ class DeloUaScraper(ScraperBase):
             # Get title from heading
             title = heading.get_text(strip=True)
             
-            # Remove "АктуальноАктуально" prefix if present
+            # Remove merged category/metadata prefixes
             title = title.replace('АктуальноАктуально', '').strip()
+            title = title.replace('Актуально', '').strip()
+            
+            # Remove "Новини компаній" and similar prefixes (with or without space)
+            import re
+            title = re.sub(r'^Новин[иі]\s*компаній\s*', '', title).strip()
+            title = re.sub(r'^Новини\s*', '', title).strip()
+            title = re.sub(r'^Категорія\s*', '', title).strip()
             
             if len(title) < 15:  # Too short to be a real article title
                 return None
@@ -215,42 +222,27 @@ class DeloUaScraper(ScraperBase):
             return None
     
     def _clean_content(self, content: str, title: str) -> str:
-        """Clean and format article content - remove metadata, duplicate title, fix formatting"""
+        """Clean Delo.ua content with aggressive line joining to fix chaotic breaks"""
         import re
         
         if not content:
             return ""
         
-        # Remove duplicate title if present anywhere near the start (within first 500 chars)
-        if title and len(title) > 15:
-            # Check for exact match at start
-            if content.startswith(title):
-                content = content[len(title):].strip()
-            else:
-                # Check if title appears in the first 500 chars (after metadata removal)
-                title_pos = content[:500].find(title)
-                if title_pos >= 0:
-                    # Remove the title from content
-                    content = content[:title_pos] + content[title_pos + len(title):]
-                    content = content.strip()
-                # Also check for similar match (first 40 chars of title)
-                elif len(title) > 40:
-                    title_start = title[:40]
-                    title_pos = content[:300].find(title_start)
-                    if title_pos >= 0:
-                        # Find where the title line ends
-                        newline_pos = content.find('\n', title_pos)
-                        if newline_pos > 0:
-                            content = content[:title_pos] + content[newline_pos:]
-                            content = content.strip()
+        # Step 1: Remove merged category pattern at very start
+        # Pattern: "Новини компанійTitle" or "Новині компанійTitle" (typo variant)
+        content = re.sub(r'^Новин[иі] компаній\s*' + re.escape(title) if title else '', title if title else '', content)
+        content = re.sub(r'^Новин[иі] компаній\s*', '', content)
         
-        # Remove Ukrainian metadata patterns with regex
+        # Step 2: Remove metadata patterns
         metadata_patterns = [
-            r'^Категорія\s*\n',
+            r'^Категорія\s*\n\s*[^\n]*\n',
+            r'^Дата публікації\s*\n\s*[^\n]*\n',
             r'^Новини\s*\n',
-            r'^Дата публікації\s*\n',
+            r'^\d{1,2}\s+\w+\s+\d{2}:\d{2}\s*\n',
             r'^\d{1,2}\s+(січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)\s+\d{2}:\d{2}\s*\n',
             r'^\d{1,2}\.\d{1,2}\.\d{4}\s*\n',
+            r'Змінити мову.*?\n',
+            r'Читать на русском.*?\n',
             r'^Автор:?\s*[^\n]*\n',
             r'^Джерело:?\s*[^\n]*\n',
             r'^Фото:?\s*[^\n]*\n',
@@ -259,54 +251,120 @@ class DeloUaScraper(ScraperBase):
         for pattern in metadata_patterns:
             content = re.sub(pattern, '', content, flags=re.MULTILINE | re.IGNORECASE)
         
-        # Split into lines and clean
-        lines = content.split('\n')
-        cleaned_lines = []
-        
         # Words/phrases to skip as standalone lines (metadata/UI)
         skip_words = {
-            'Категорія', 'Новини', 'Дата публікації', 'Автор', 'Джерело', 
-            'Фото', 'Теги', 'Читайте також', 'Поділитися', 'Share',
-            'Facebook', 'Twitter', 'Telegram', 'Viber',
-            'Змінити мову', 'Читать на русском', 'Читати українською',
-            'Коментарі', 'Підписатися', 'Реклама', 'Більше новин'
+            'Категорія', 'Новини', 'Новини компаній', 'Новині компаній',
+            'Дата публікації', 'Автор', 'Джерело', 'Фото', 'Теги', 
+            'Читайте також', 'Поділитися', 'Share', 'Facebook', 'Twitter', 
+            'Telegram', 'Viber', 'Змінити мову', 'Читать на русском', 
+            'Читати українською', 'Коментарі', 'Підписатися', 'Реклама', 
+            'Більше новин', 'Популярне', 'Актуально'
         }
         
+        # Step 3: Get all lines, remove metadata, handle duplicate titles
+        lines = content.split('\n')
+        seen_title = False
+        filtered_lines = []
+        
         for line in lines:
-            line = line.strip()
+            line_stripped = line.strip()
             
             # Skip empty lines
-            if not line:
+            if not line_stripped:
                 continue
             
             # Skip metadata words
-            if line in skip_words:
+            if line_stripped in skip_words:
                 continue
             
-            # Skip very short lines that are likely navigation/UI
-            if len(line) < 10 and not line.endswith('.'):
+            # Skip lines containing only metadata
+            skip_line = False
+            for skip_word in skip_words:
+                if skip_word in line_stripped and len(line_stripped) < 60:
+                    skip_line = True
+                    break
+            if skip_line:
                 continue
             
-            # Skip date-only lines (e.g., "25 листопада 14:30")
-            if re.match(r'^\d{1,2}\s+\w+\s+\d{2}:\d{2}$', line):
+            # Skip date-only lines
+            if re.match(r'^\d{1,2}\s+\w+\s+\d{2}:\d{2}$', line_stripped):
                 continue
             
-            cleaned_lines.append(line)
+            # Skip very short non-sentence lines
+            if len(line_stripped) < 8 and not line_stripped.endswith(('.', '!', '?', '"', '»')):
+                continue
+            
+            # Handle title duplicates (only keep first occurrence)
+            if title and line_stripped == title:
+                if not seen_title:
+                    filtered_lines.append(line_stripped)
+                    seen_title = True
+                continue
+            
+            filtered_lines.append(line_stripped)
         
-        # Join with double newline for paragraph separation
-        content = '\n\n'.join(cleaned_lines)
+        # Step 4: AGGRESSIVE LINE JOINING - join ALL lines into single text block
+        full_text = ' '.join(filtered_lines)
         
-        # Remove multiple consecutive newlines (more than 2)
-        content = re.sub(r'\n{3,}', '\n\n', content)
+        # Step 5: Fix spacing issues
+        full_text = full_text.replace('\xa0', ' ')
+        full_text = full_text.replace('\u200b', '')
+        full_text = re.sub(r'  +', ' ', full_text)
         
-        # Remove non-breaking spaces and zero-width spaces
-        content = content.replace('\xa0', ' ')
-        content = content.replace('\u200b', '')
+        # Fix spacing around quotes
+        full_text = re.sub(r'\s+"', ' "', full_text)
+        full_text = re.sub(r'"\s+', '" ', full_text)
+        full_text = re.sub(r'\s+«', ' «', full_text)
+        full_text = re.sub(r'»\s+', '» ', full_text)
         
-        # Remove multiple spaces
-        content = re.sub(r' +', ' ', content)
+        # Step 6: Rebuild paragraph structure at proper sentence boundaries
+        # After quote + attribution + punctuation
+        full_text = re.sub(r'([.!?][»"]\s*,?\s*)([A-ZА-ЯІЇЄҐ])', r'\1\n\n\2', full_text)
         
-        return content.strip()
+        # After period/question/exclamation + space + capital letter
+        full_text = re.sub(r'([.!?]\s+)([A-ZА-ЯІЇЄҐ][а-яіїєґa-z])', r'\1\n\n\2', full_text)
+        
+        # Before section headers (capital word + colon)
+        full_text = re.sub(r'\.(\s+)([А-ЯІЇЄҐ][^\n]{10,80}:)', r'.\n\n\2', full_text)
+        
+        # Step 7: Group into reasonable paragraphs (2-3 sentences each)
+        paragraphs = full_text.split('\n\n')
+        grouped_paragraphs = []
+        current_group = []
+        
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            
+            current_group.append(para)
+            
+            # Create paragraph break after 2 sentences or if long enough
+            total_len = sum(len(p) for p in current_group)
+            if len(current_group) >= 2 or total_len > 350:
+                grouped_paragraphs.append(' '.join(current_group))
+                current_group = []
+        
+        # Add remaining
+        if current_group:
+            grouped_paragraphs.append(' '.join(current_group))
+        
+        full_text = '\n\n'.join(grouped_paragraphs)
+        
+        # Step 8: Clean up
+        full_text = re.sub(r'\n{3,}', '\n\n', full_text)
+        full_text = re.sub(r'  +', ' ', full_text)
+        
+        # Step 9: Remove trailing incomplete sentences
+        lines = full_text.split('\n')
+        if lines:
+            last_line = lines[-1].strip()
+            if len(last_line) < 50 and not last_line.endswith(('.', '!', '?', '"', '»')):
+                lines = lines[:-1]
+        
+        full_text = '\n'.join(lines)
+        
+        return full_text.strip()
     
     def _clean_text(self, text: str) -> str:
         """Legacy method - redirects to _clean_content"""
