@@ -108,13 +108,43 @@ class JustDrinksScraper(ScraperBase):
             if len(title) < 10:
                 return None
             
-            # Find link
-            link_elem = title_elem.find_parent('a') or element.select_one('a')
+            # Find the article link - need to be careful to get the actual article URL
+            # not the category link (/news/)
+            url = None
             
-            if not link_elem:
-                return None
+            # Strategy 1: Check if title element is inside a link
+            link_elem = title_elem.find_parent('a')
+            if link_elem:
+                href = link_elem.get('href', '')
+                # Make sure it's not just the category page
+                if href and '/news/' in href and href.rstrip('/') != 'https://www.just-drinks.com/news' and href != '/news/':
+                    url = href
             
-            url = link_elem.get('href')
+            # Strategy 2: Check for link inside the title element
+            if not url:
+                link_inside = title_elem.select_one('a')
+                if link_inside:
+                    href = link_inside.get('href', '')
+                    if href and '/news/' in href and href.rstrip('/') != 'https://www.just-drinks.com/news' and href != '/news/':
+                        url = href
+            
+            # Strategy 3: Look for article links in the card element
+            if not url:
+                all_links = element.select('a[href]')
+                for link in all_links:
+                    href = link.get('href', '')
+                    # Skip category links, author links, etc.
+                    if not href:
+                        continue
+                    if href == '/news/' or href.rstrip('/') == 'https://www.just-drinks.com/news':
+                        continue
+                    if '/author/' in href:
+                        continue
+                    # This looks like an article link
+                    if '/news/' in href and len(href) > len('/news/') + 5:
+                        url = href
+                        break
+            
             if not url:
                 return None
             
@@ -169,22 +199,53 @@ class JustDrinksScraper(ScraperBase):
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Try multiple selectors for article content
-            content_elem = (
-                soup.select_one('.article-body') or
-                soup.select_one('.entry-content') or
-                soup.select_one('.post-content') or
-                soup.select_one('article .content') or
-                soup.select_one('article') or
-                soup.select_one('[class*="article-content"]')
-            )
+            # Extended list of content selectors - try in order of specificity
+            content_selectors = [
+                '[itemprop="articleBody"]',    # Schema.org markup (most reliable)
+                '.article-body',                # Main article content
+                '.article__body',               # Alternative naming
+                '.story-body',                  # News story body
+                '.full-article',                # Full article container
+                '.article-content',             # Article content class
+                '.entry-content',               # WordPress style
+                '.post-content',                # Post body
+                '.content-body',                # Content body
+                'article .content',             # Article content wrapper
+                '[class*="article-body"]',      # Partial match
+                '[class*="story-content"]',     # Story content
+                'article',                      # Fallback to article tag
+            ]
+            
+            content_elem = None
+            for selector in content_selectors:
+                content_elem = soup.select_one(selector)
+                if content_elem:
+                    # Check if this has substantial content
+                    text_len = len(content_elem.get_text(strip=True))
+                    if text_len > 100:
+                        logger.debug(f"  Using selector: {selector} ({text_len} chars)")
+                        break
+                    else:
+                        content_elem = None  # Too short, try next selector
             
             if not content_elem:
+                # Fallback: try trafilatura for clean extraction
+                try:
+                    import trafilatura
+                    downloaded = trafilatura.fetch_url(url)
+                    if downloaded:
+                        content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+                        if content and len(content) > 100:
+                            logger.info(f"  Used trafilatura for content extraction")
+                            return self._clean_content(content, title)
+                except Exception as e:
+                    logger.debug(f"  Trafilatura fallback failed: {e}")
+                
                 logger.warning(f"  Could not find content container for: {url}")
                 return None
             
             # Remove unwanted elements (ads, scripts, social, etc.)
-            for unwanted in content_elem.select('script, style, aside, .ads, .advertisement, .social-share, .related-articles, nav, footer, .comments, .share'):
+            for unwanted in content_elem.select('script, style, aside, .ads, .advertisement, .social-share, .related-articles, nav, footer, .comments, .share, .newsletter, .subscription, .promo'):
                 unwanted.decompose()
             
             # Remove metadata elements BEFORE extracting text
@@ -193,14 +254,41 @@ class JustDrinksScraper(ScraperBase):
                 '.date', '.post-date', '.published-date', '.timestamp', 'time',
                 '.article-meta', '.meta', '.post-meta', '.entry-meta',
                 '.social-share', '.share-buttons', '.share-links',
-                '.tags', '.post-tags', '.article-tags'
+                '.tags', '.post-tags', '.article-tags',
+                '.article-teaser', '.teaser', '.preview', '.excerpt'
             ]
             for selector in metadata_selectors:
                 for element in content_elem.select(selector):
                     element.decompose()
             
-            # Extract text
-            content = content_elem.get_text(separator='\n', strip=True)
+            # Extract all paragraph text for better content capture
+            paragraphs = content_elem.select('p')
+            if paragraphs and len(paragraphs) > 2:
+                # Use paragraph-based extraction for better quality
+                content_parts = []
+                for p in paragraphs:
+                    text = p.get_text(strip=True)
+                    if text and len(text) > 20:  # Skip very short paragraphs
+                        content_parts.append(text)
+                content = '\n\n'.join(content_parts)
+            else:
+                # Fallback to full text extraction
+                content = content_elem.get_text(separator='\n', strip=True)
+            
+            # Check content length and warn if too short
+            if len(content) < 200:
+                logger.warning(f"  Just Drinks article too short ({len(content)} chars): {title[:50]}...")
+                # Try trafilatura as fallback
+                try:
+                    import trafilatura
+                    downloaded = trafilatura.fetch_url(url)
+                    if downloaded:
+                        traf_content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+                        if traf_content and len(traf_content) > len(content):
+                            logger.info(f"  Trafilatura recovered more content: {len(traf_content)} chars")
+                            content = traf_content
+                except Exception:
+                    pass
             
             # Clean content (remove metadata patterns, fix formatting)
             content = self._clean_content(content, title)
@@ -274,6 +362,41 @@ class JustDrinksScraper(ScraperBase):
             if any(social in line.lower() for social in ['share this', 'tweet', 'linkedin', 'facebook', 'email this']):
                 if len(line) < 30:
                     continue
+            
+            # Skip Just Drinks promotional/subscription content
+            promo_phrases = [
+                'stay ahead with unbiased news',
+                'combine business intelligence and editorial excellence',
+                'as a trusted provider of data and insights',
+                'gain a deeper understanding of the drinks industry',
+                'ready to stay informed',
+                'subscribeto',  # No space version
+                'subscribe to',
+                'the gold standard of business intelligence',
+                'reach engaged professionals across',
+                'leading media platforms',
+                'unique thought leadership and analysis',
+                'priorities shaping the profession',
+                'just drinks collaborates closely with industry leaders',
+                'sign up for our newsletter',
+                'get the latest news delivered',
+                'unlock exclusive content',
+                'already a subscriber',
+                'sign into access your account',
+                'complete this form',
+                'request more information',
+                'representative will be in touch',
+                'don\'t let policy changes catch you',
+                'stay proactive with real-time data',
+                'gain the recognition you deserve',
+                'just drinks excellence awards',
+                'celebrate innovation, leadership',
+                'elevate your industry profile',
+                'showcase your achievements',
+            ]
+            line_lower = line.lower()
+            if any(phrase in line_lower for phrase in promo_phrases):
+                continue
             
             cleaned_lines.append(line)
         
