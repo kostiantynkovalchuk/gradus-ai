@@ -25,6 +25,8 @@ RUN cd frontend && npm run build
 
 RUN chmod +x start.sh
 
-EXPOSE 5000 8000
+ENV PORT=10000
+
+EXPOSE 10000
 
 CMD ["./start.sh"]

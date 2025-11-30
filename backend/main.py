@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -8,6 +10,7 @@ from contextlib import asynccontextmanager
 import logging
 import threading
 import os
+from pathlib import Path
 
 from models import get_db, init_db
 from models.content import ContentQueue, ApprovalLog
@@ -1213,6 +1216,24 @@ async def get_webhook_info():
         logger.error(f"Failed to get webhook info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Serve frontend static files in production
+# The frontend build is placed in ../frontend/dist
+frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+if frontend_dist.exists():
+    # Serve static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
+    
+    # Catch-all route for SPA - must be last
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # Check if it's a file request
+        file_path = frontend_dist / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        # Return index.html for SPA routes
+        return FileResponse(frontend_dist / "index.html")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
