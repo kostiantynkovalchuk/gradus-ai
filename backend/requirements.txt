@@ -1,0 +1,16 @@
+anthropic
+apscheduler
+beautifulsoup4
+fastapi
+lxml
+openai
+playwright
+psycopg2-binary
+pydantic
+python-dotenv
+python-multipart
+python-telegram-bot
+requests
+sqlalchemy
+trafilatura
+uvicorn
