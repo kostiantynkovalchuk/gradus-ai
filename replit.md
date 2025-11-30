@@ -33,6 +33,10 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
     - **Platform-Specific Scraping:**
       - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, Drinks International
       - Facebook sources (Daily 2:00 AM): Delo.ua, HoReCa-Україна, Just Drinks
+    - **Startup Catch-Up:** On backend restart, automatically checks for missed scraping:
+      - Facebook: catch-up if >24h since last scrape
+      - LinkedIn: catch-up if >48h since last scrape (runs any day if overdue)
+      - Per-platform tracking ensures one platform's recent activity doesn't suppress another
     - **Processing:**
       - AI-driven translation (3x/day at 6am, 2pm, 8pm - only for English sources)
       - Image generation (3x/day at 6:15am, 2:15pm, 8:15pm - for both languages)
