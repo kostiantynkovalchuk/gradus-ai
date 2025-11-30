@@ -1,10 +1,7 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import logging
-import os
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
 from models.content import ContentQueue
@@ -13,31 +10,14 @@ logger = logging.getLogger(__name__)
 
 class ContentScheduler:
     def __init__(self):
-        # Use PostgreSQL for persistent job storage
-        database_url = os.environ.get('DATABASE_URL', '')
-        
-        jobstores = {}
-        if database_url:
-            try:
-                jobstores['default'] = SQLAlchemyJobStore(url=database_url)
-                logger.info("Using PostgreSQL job store for scheduler persistence")
-            except Exception as e:
-                logger.warning(f"Failed to create SQLAlchemy job store: {e}, using memory store")
-        
-        executors = {
-            'default': ThreadPoolExecutor(5)
-        }
-        
-        job_defaults = {
-            'coalesce': True,  # Combine multiple missed runs into one
-            'max_instances': 1,
-            'misfire_grace_time': 3600 * 6  # 6 hours grace period for missed jobs
-        }
-        
+        # Use in-memory scheduler with misfire handling
+        # Startup check handles catch-up for missed jobs
         self.scheduler = BackgroundScheduler(
-            jobstores=jobstores if jobstores else None,
-            executors=executors,
-            job_defaults=job_defaults
+            job_defaults={
+                'coalesce': True,  # Combine multiple missed runs into one
+                'max_instances': 1,
+                'misfire_grace_time': 3600 * 2  # 2 hours grace period
+            }
         )
     
     def _get_db_session(self):
@@ -77,13 +57,13 @@ class ContentScheduler:
                     ).all()
                 )
                 
-                existing_hashes = set(
-                    meta.get('content_hash', '') 
-                    for meta in db.query(ContentQueue.extra_metadata).filter(
-                        ContentQueue.extra_metadata.isnot(None)
-                    ).all()
-                    if meta and meta.get('content_hash')
-                )
+                existing_hashes = set()
+                for row in db.query(ContentQueue.extra_metadata).filter(
+                    ContentQueue.extra_metadata.isnot(None)
+                ).all():
+                    meta = row[0] if isinstance(row, tuple) else row
+                    if meta and isinstance(meta, dict) and meta.get('content_hash'):
+                        existing_hashes.add(meta.get('content_hash'))
                 
                 total_new = 0
                 
@@ -160,13 +140,13 @@ class ContentScheduler:
                     ).all()
                 )
                 
-                existing_hashes = set(
-                    meta.get('content_hash', '') 
-                    for meta in db.query(ContentQueue.extra_metadata).filter(
-                        ContentQueue.extra_metadata.isnot(None)
-                    ).all()
-                    if meta and meta.get('content_hash')
-                )
+                existing_hashes = set()
+                for row in db.query(ContentQueue.extra_metadata).filter(
+                    ContentQueue.extra_metadata.isnot(None)
+                ).all():
+                    meta = row[0] if isinstance(row, tuple) else row
+                    if meta and isinstance(meta, dict) and meta.get('content_hash'):
+                        existing_hashes.add(meta.get('content_hash'))
                 
                 total_new = 0
                 
@@ -584,47 +564,77 @@ class ContentScheduler:
         """
         Check if scraping was missed and run immediately if needed.
         Called on startup to catch up on missed jobs.
+        
+        Checks EACH platform independently to ensure both LinkedIn and Facebook
+        get caught up even if one was scraped recently.
         """
         logger.info("🔍 [SCHEDULER] Checking for missed scraping tasks...")
         
         try:
             db = self._get_db_session()
             try:
-                # Find the most recent scraped article
-                from sqlalchemy import func
-                latest_article = db.query(func.max(ContentQueue.created_at)).scalar()
+                from sqlalchemy import func, cast, String
                 
-                if latest_article:
-                    hours_since_last = (datetime.utcnow() - latest_article).total_seconds() / 3600
-                    logger.info(f"📊 Last article scraped {hours_since_last:.1f} hours ago")
+                # Check Facebook sources (daily requirement)
+                facebook_sources = ['Delo.ua', 'HoReCa-Україна', 'Just Drinks']
+                facebook_last = db.query(func.max(ContentQueue.created_at)).filter(
+                    ContentQueue.source.in_(facebook_sources)
+                ).scalar()
+                
+                # Check LinkedIn sources (Mon/Wed/Fri requirement)
+                linkedin_sources = ['The Spirits Business', 'Drinks International']
+                linkedin_last = db.query(func.max(ContentQueue.created_at)).filter(
+                    ContentQueue.source.in_(linkedin_sources)
+                ).scalar()
+                
+                today = datetime.utcnow().weekday()
+                is_linkedin_day = today in [0, 2, 4]  # Monday=0, Wednesday=2, Friday=4
+                
+                # Facebook catch-up: if more than 24 hours since last Facebook scrape
+                if facebook_last:
+                    fb_hours = (datetime.utcnow() - facebook_last).total_seconds() / 3600
+                    logger.info(f"📊 Facebook sources: last scraped {fb_hours:.1f} hours ago")
                     
-                    # If more than 24 hours since last scrape, run both scraping tasks
-                    if hours_since_last > 24:
-                        logger.info("⚠️ More than 24 hours since last scrape - running catch-up scraping...")
-                        
-                        # Run Facebook sources (daily)
+                    if fb_hours > 24:
+                        logger.info("⚠️ Facebook sources overdue (>24h) - running catch-up...")
                         try:
-                            logger.info("🔄 Running catch-up: Facebook sources...")
                             self.scrape_facebook_sources_task()
                         except Exception as e:
                             logger.error(f"❌ Catch-up Facebook scraping failed: {e}")
+                    else:
+                        logger.info("✅ Facebook sources up-to-date")
+                else:
+                    logger.info("📭 No Facebook articles in database, running initial scrape...")
+                    try:
+                        self.scrape_facebook_sources_task()
+                    except Exception as e:
+                        logger.error(f"❌ Initial Facebook scraping failed: {e}")
+                
+                # LinkedIn catch-up: if Mon/Wed/Fri and more than 48 hours since last LinkedIn scrape
+                # (48h because LinkedIn only runs 3x/week)
+                if is_linkedin_day:
+                    if linkedin_last:
+                        li_hours = (datetime.utcnow() - linkedin_last).total_seconds() / 3600
+                        logger.info(f"📊 LinkedIn sources: last scraped {li_hours:.1f} hours ago")
                         
-                        # Check if today is Mon/Wed/Fri for LinkedIn
-                        today = datetime.utcnow().weekday()
-                        if today in [0, 2, 4]:  # Monday=0, Wednesday=2, Friday=4
+                        if li_hours > 48:  # More than 2 days = missed at least one scheduled run
+                            logger.info("⚠️ LinkedIn sources overdue (>48h) - running catch-up...")
                             try:
-                                logger.info("🔄 Running catch-up: LinkedIn sources...")
                                 self.scrape_linkedin_sources_task()
                             except Exception as e:
                                 logger.error(f"❌ Catch-up LinkedIn scraping failed: {e}")
-                        
-                        logger.info("✅ Catch-up scraping completed")
+                        else:
+                            logger.info("✅ LinkedIn sources up-to-date")
                     else:
-                        logger.info("✅ Scraping is up-to-date, no catch-up needed")
+                        logger.info("📭 No LinkedIn articles in database, running initial scrape...")
+                        try:
+                            self.scrape_linkedin_sources_task()
+                        except Exception as e:
+                            logger.error(f"❌ Initial LinkedIn scraping failed: {e}")
                 else:
-                    logger.info("📭 No articles in database, running initial scrape...")
-                    self.scrape_facebook_sources_task()
-                    self.scrape_linkedin_sources_task()
+                    logger.info(f"📅 Today is not a LinkedIn day (Mon/Wed/Fri) - skipping LinkedIn check")
+                
+                logger.info("✅ Catch-up check completed")
                     
             finally:
                 db.close()
@@ -650,21 +660,11 @@ class ContentScheduler:
         except Exception as e:
             logger.info(f"Scheduler issue, recreating... ({e})")
             # Recreate scheduler with same config
-            database_url = os.environ.get('DATABASE_URL', '')
-            jobstores = {}
-            if database_url:
-                try:
-                    jobstores['default'] = SQLAlchemyJobStore(url=database_url)
-                except:
-                    pass
-            
             self.scheduler = BackgroundScheduler(
-                jobstores=jobstores if jobstores else None,
-                executors={'default': ThreadPoolExecutor(5)},
                 job_defaults={
                     'coalesce': True,
                     'max_instances': 1,
-                    'misfire_grace_time': 3600 * 6
+                    'misfire_grace_time': 3600 * 2
                 }
             )
             self.scheduler.add_job(
