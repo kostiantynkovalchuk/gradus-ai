@@ -6,8 +6,20 @@ This project is an intelligent content management system designed to automate an
 ## User Preferences
 - Language: Ukrainian for content output
 - Tech stack: Python (FastAPI), React, PostgreSQL
-- Deployment: Replit native (no Docker)
+- Deployment: Render (Docker-based) - https://gradus-ai.onrender.com
 - Focus: Content quality with approval workflow
+
+## Render Deployment
+- **Production URL:** https://gradus-ai.onrender.com
+- **GitHub Repo:** https://github.com/kostiantynkovalchuk/gradus-ai
+- **Deployment Method:** Docker (Dockerfile)
+- **Architecture:** Backend serves both API (port 8000) and frontend static files (port 5000)
+- **Required Environment Variables:**
+  - DATABASE_URL, ANTHROPIC_API_KEY, OPENAI_API_KEY
+  - TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+  - FACEBOOK_PAGE_ACCESS_TOKEN, FACEBOOK_PAGE_ID
+  - LINKEDIN_ACCESS_TOKEN, LINKEDIN_ORGANIZATION_URN
+  - APP_URL
 
 ## System Architecture
 The system employs a FastAPI backend and a React frontend to manage a sophisticated content pipeline.
