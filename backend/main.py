@@ -104,8 +104,8 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "health": "/health",
-            "chat": "/chat",
-            "translate": "/translate",
+            "chat": "/api/chat",
+            "translate": "/api/translate",
             "content": "/api/content/*"
         }
     }
@@ -123,7 +123,7 @@ async def health_check():
         }
     }
 
-@app.post("/chat")
+@app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
         response = await claude_service.chat(request.message, request.system_prompt)
@@ -132,7 +132,7 @@ async def chat(request: ChatRequest):
         logger.error(f"Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/translate")
+@app.post("/api/translate")
 async def translate(request: TranslateRequest):
     try:
         translation = await claude_service.translate_to_ukrainian(request.text)
