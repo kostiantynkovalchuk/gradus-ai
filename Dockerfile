@@ -16,6 +16,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
+RUN playwright install chromium --with-deps
+
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm install
 
