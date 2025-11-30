@@ -16,7 +16,7 @@ class NotificationService:
         Send notification with photo and inline approval buttons
         
         Args:
-            content_data: Dict with content info including image_url
+            content_data: Dict with content info including image_url and local_image_path
         """
         if not self.bot_token or not self.chat_id:
             logger.error("Telegram credentials not configured")
@@ -26,6 +26,7 @@ class NotificationService:
         title = content_data.get('translated_title', content_data.get('title', 'Без заголовка'))
         translated_text = content_data.get('translated_text', '')
         image_url = content_data.get('image_url')
+        local_image_path = content_data.get('local_image_path')
         source = content_data.get('source', 'The Spirits Business')
         
         preview_text = translated_text[:150] + "..." if len(translated_text) > 150 else translated_text
@@ -49,7 +50,33 @@ class NotificationService:
             ]
         }
         
+        import json
+        
         try:
+            # PRIORITY 1: Use local image file (never expires)
+            if local_image_path and os.path.exists(local_image_path):
+                url = f"{self.base_url}/sendPhoto"
+                
+                with open(local_image_path, 'rb') as photo_file:
+                    files = {'photo': photo_file}
+                    data = {
+                        'chat_id': self.chat_id,
+                        'caption': caption,
+                        'parse_mode': 'HTML',
+                        'reply_markup': json.dumps(keyboard)
+                    }
+                    
+                    response = requests.post(url, files=files, data=data, timeout=30)
+                    result = response.json()
+                    
+                    if result.get('ok'):
+                        logger.info(f"Approval notification sent with LOCAL image for content {content_id}")
+                        return True
+                    else:
+                        logger.error(f"Telegram API error (local image): {result}")
+                        # Fall through to try URL
+            
+            # PRIORITY 2: Try image URL (may expire)
             if image_url:
                 url = f"{self.base_url}/sendPhoto"
                 payload = {
@@ -59,20 +86,31 @@ class NotificationService:
                     "parse_mode": "HTML",
                     "reply_markup": keyboard
                 }
-            else:
-                url = f"{self.base_url}/sendMessage"
-                payload = {
-                    "chat_id": self.chat_id,
-                    "text": caption,
-                    "parse_mode": "HTML",
-                    "reply_markup": keyboard
-                }
+                
+                response = requests.post(url, json=payload, timeout=15)
+                result = response.json()
+                
+                if result.get('ok'):
+                    logger.info(f"Approval notification sent with URL for content {content_id}")
+                    return True
+                else:
+                    logger.warning(f"Telegram API error (URL - may be expired): {result}")
+                    # Fall through to text-only
+            
+            # PRIORITY 3: Text only (no image)
+            url = f"{self.base_url}/sendMessage"
+            payload = {
+                "chat_id": self.chat_id,
+                "text": caption,
+                "parse_mode": "HTML",
+                "reply_markup": keyboard
+            }
             
             response = requests.post(url, json=payload, timeout=15)
             result = response.json()
             
             if result.get('ok'):
-                logger.info(f"Approval notification with buttons sent for content {content_id}")
+                logger.info(f"Approval notification sent (text only) for content {content_id}")
                 return True
             else:
                 logger.error(f"Telegram API error: {result}")

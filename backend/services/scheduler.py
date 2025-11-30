@@ -316,6 +316,7 @@ class ContentScheduler:
                                 'translated_title': article.translated_title,
                                 'translated_text': article.translated_text or article.original_text or '',
                                 'image_url': article.image_url,
+                                'local_image_path': article.local_image_path,
                                 'source': article.source or 'The Spirits Business',
                                 'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
                             }
