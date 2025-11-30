@@ -2,9 +2,9 @@
 providers = ["python", "node"]
 
 [phases.setup]
-# Keep python3 and gcc for compiling psycopg2
+# Use python312Full which includes pip, plus gcc for compiling psycopg2
 # Use apt for PostgreSQL dev libraries to avoid Nix package collision
-nixPkgs = ["...", "gcc"]
+nixPkgs = ["...", "python312Full", "gcc"]
 aptPkgs = ["libpq-dev"]
 
 [phases.install]
