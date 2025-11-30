@@ -1227,8 +1227,12 @@ if frontend_dist.exists():
     app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
     
     # Catch-all route for SPA - must be last
+    # IMPORTANT: Skip /api/ and /health paths - they should be handled by API routes
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # Skip API routes - let FastAPI handle them
+        if full_path.startswith("api/") or full_path == "health":
+            raise HTTPException(status_code=404, detail="Not found")
         # Check if it's a file request
         file_path = frontend_dist / full_path
         if file_path.is_file():
