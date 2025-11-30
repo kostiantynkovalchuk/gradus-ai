@@ -97,11 +97,9 @@ class CreateContentRequest(BaseModel):
     needs_translation: bool = False
     platforms: List[str] = ["facebook", "linkedin"]
 
-@app.get("/")
-async def root():
-    frontend_index = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
-    if frontend_index.exists():
-        return FileResponse(frontend_index)
+@app.get("/api")
+async def api_info():
+    """API information endpoint - frontend is served by StaticFiles mount"""
     return {
         "message": "Gradus Media AI Agent API",
         "version": "1.0.0",
@@ -1221,24 +1219,12 @@ async def get_webhook_info():
 
 # Serve frontend static files in production
 # The frontend build is placed in ../frontend/dist
+# This must be AFTER all API routes to avoid conflicts
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    # Serve static assets (JS, CSS, images)
-    app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
-    
-    # Catch-all route for SPA - must be last
-    # IMPORTANT: Skip /api/ and /health paths - they should be handled by API routes
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        # Skip API routes - let FastAPI handle them
-        if full_path.startswith("api/") or full_path == "health":
-            raise HTTPException(status_code=404, detail="Not found")
-        # Check if it's a file request
-        file_path = frontend_dist / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        # Return index.html for SPA routes
-        return FileResponse(frontend_dist / "index.html")
+    # Use StaticFiles with html=True for SPA support
+    # This serves index.html for directory requests and 404s
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="spa")
 
 if __name__ == "__main__":
     import uvicorn
