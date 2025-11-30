@@ -610,29 +610,27 @@ class ContentScheduler:
                     except Exception as e:
                         logger.error(f"❌ Initial Facebook scraping failed: {e}")
                 
-                # LinkedIn catch-up: if Mon/Wed/Fri and more than 48 hours since last LinkedIn scrape
-                # (48h because LinkedIn only runs 3x/week)
-                if is_linkedin_day:
-                    if linkedin_last:
-                        li_hours = (datetime.utcnow() - linkedin_last).total_seconds() / 3600
-                        logger.info(f"📊 LinkedIn sources: last scraped {li_hours:.1f} hours ago")
-                        
-                        if li_hours > 48:  # More than 2 days = missed at least one scheduled run
-                            logger.info("⚠️ LinkedIn sources overdue (>48h) - running catch-up...")
-                            try:
-                                self.scrape_linkedin_sources_task()
-                            except Exception as e:
-                                logger.error(f"❌ Catch-up LinkedIn scraping failed: {e}")
-                        else:
-                            logger.info("✅ LinkedIn sources up-to-date")
-                    else:
-                        logger.info("📭 No LinkedIn articles in database, running initial scrape...")
+                # LinkedIn catch-up: if more than 48 hours since last LinkedIn scrape
+                # (48h because LinkedIn only runs 3x/week on Mon/Wed/Fri)
+                # IMPORTANT: Catch-up runs ANY day if overdue, to recover from missed runs
+                if linkedin_last:
+                    li_hours = (datetime.utcnow() - linkedin_last).total_seconds() / 3600
+                    logger.info(f"📊 LinkedIn sources: last scraped {li_hours:.1f} hours ago")
+                    
+                    if li_hours > 48:  # More than 2 days = missed at least one scheduled run
+                        logger.info("⚠️ LinkedIn sources overdue (>48h) - running catch-up...")
                         try:
                             self.scrape_linkedin_sources_task()
                         except Exception as e:
-                            logger.error(f"❌ Initial LinkedIn scraping failed: {e}")
+                            logger.error(f"❌ Catch-up LinkedIn scraping failed: {e}")
+                    else:
+                        logger.info("✅ LinkedIn sources up-to-date")
                 else:
-                    logger.info(f"📅 Today is not a LinkedIn day (Mon/Wed/Fri) - skipping LinkedIn check")
+                    logger.info("📭 No LinkedIn articles in database, running initial scrape...")
+                    try:
+                        self.scrape_linkedin_sources_task()
+                    except Exception as e:
+                        logger.error(f"❌ Initial LinkedIn scraping failed: {e}")
                 
                 logger.info("✅ Catch-up check completed")
                     
