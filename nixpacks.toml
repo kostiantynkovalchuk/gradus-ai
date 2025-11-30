@@ -2,8 +2,10 @@
 providers = ["python", "node"]
 
 [phases.setup]
-# "..." preserves auto-detected packages while adding custom ones
-nixPkgs = ["...", "postgresql_16"]
+# Keep python3 and gcc for compiling psycopg2
+# Use apt for PostgreSQL dev libraries to avoid Nix package collision
+nixPkgs = ["...", "gcc"]
+aptPkgs = ["libpq-dev"]
 
 [phases.install]
 dependsOn = ["setup"]
