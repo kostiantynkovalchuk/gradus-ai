@@ -99,6 +99,9 @@ class CreateContentRequest(BaseModel):
 
 @app.get("/")
 async def root():
+    frontend_index = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
+    if frontend_index.exists():
+        return FileResponse(frontend_index)
     return {
         "message": "Gradus Media AI Agent API",
         "version": "1.0.0",
