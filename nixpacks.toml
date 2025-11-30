@@ -1,21 +1,14 @@
-# Node.js provider only - we'll manually specify Python to avoid conflicts
-providers = ["node"]
-
 [phases.setup]
-# Explicit packages only - no "..." to avoid auto-detected duplicates
-# python312Full includes pip, gcc for compiling, pkg-config for library detection
-nixPkgs = ["python312Full", "gcc", "pkg-config", "nodejs_20"]
+nixPkgs = ["python312", "python312Packages.pip", "python312Packages.setuptools", "gcc", "pkg-config", "nodejs_20"]
 aptPkgs = ["libpq-dev"]
 
 [phases.install]
-dependsOn = ["setup"]
 cmds = [
-    "cd frontend && npm install",
-    "cd backend && pip install -r requirements.txt --no-cache-dir"
+  "cd frontend && npm install",
+  "cd backend && python3.12 -m pip install -r requirements.txt --no-cache-dir"
 ]
 
 [phases.build]
-dependsOn = ["install"]
 cmds = ["cd frontend && npm run build"]
 
 [start]
