@@ -1131,17 +1131,21 @@ async def set_telegram_webhook():
     if not bot_token:
         raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not configured")
     
-    replit_domains = os.getenv('REPLIT_DOMAINS')
-    if not replit_domains:
-        replit_domains = os.getenv('REPLIT_DEV_DOMAIN')
+    app_url = os.getenv('APP_URL')
+    if not app_url:
+        replit_domains = os.getenv('REPLIT_DOMAINS') or os.getenv('REPLIT_DEV_DOMAIN')
+        if replit_domains:
+            app_url = f"https://{replit_domains.split(',')[0]}"
+        else:
+            railway_url = os.getenv('RAILWAY_PUBLIC_DOMAIN')
+            if railway_url:
+                app_url = f"https://{railway_url}"
     
-    if not replit_domains:
+    if not app_url:
         raise HTTPException(
             status_code=500, 
-            detail="Could not determine app URL. Make sure app is running on Replit."
+            detail="Could not determine app URL. Set APP_URL environment variable."
         )
-    
-    app_url = f"https://{replit_domains.split(',')[0]}"
     webhook_url = f"{app_url}/api/telegram/webhook"
     
     telegram_secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
