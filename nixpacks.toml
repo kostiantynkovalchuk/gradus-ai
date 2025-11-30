@@ -1,13 +1,19 @@
+# Use Python and Node.js providers for proper environment setup
+providers = ["python", "node"]
+
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "nodejs_20", "postgresql_16"]
+# "..." preserves auto-detected packages while adding custom ones
+nixPkgs = ["...", "postgresql_16"]
 
 [phases.install]
+dependsOn = ["setup"]
 cmds = [
     "cd frontend && npm install",
-    "cd backend && python3 -m pip install -r requirements.txt"
+    "cd backend && pip install -r requirements.txt --no-cache-dir"
 ]
 
 [phases.build]
+dependsOn = ["install"]
 cmds = ["cd frontend && npm run build"]
 
 [start]
