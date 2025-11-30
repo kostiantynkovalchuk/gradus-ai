@@ -1,7 +1,10 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import logging
+import os
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
 from models.content import ContentQueue
@@ -10,7 +13,32 @@ logger = logging.getLogger(__name__)
 
 class ContentScheduler:
     def __init__(self):
-        self.scheduler = BackgroundScheduler()
+        # Use PostgreSQL for persistent job storage
+        database_url = os.environ.get('DATABASE_URL', '')
+        
+        jobstores = {}
+        if database_url:
+            try:
+                jobstores['default'] = SQLAlchemyJobStore(url=database_url)
+                logger.info("Using PostgreSQL job store for scheduler persistence")
+            except Exception as e:
+                logger.warning(f"Failed to create SQLAlchemy job store: {e}, using memory store")
+        
+        executors = {
+            'default': ThreadPoolExecutor(5)
+        }
+        
+        job_defaults = {
+            'coalesce': True,  # Combine multiple missed runs into one
+            'max_instances': 1,
+            'misfire_grace_time': 3600 * 6  # 6 hours grace period for missed jobs
+        }
+        
+        self.scheduler = BackgroundScheduler(
+            jobstores=jobstores if jobstores else None,
+            executors=executors,
+            job_defaults=job_defaults
+        )
     
     def _get_db_session(self):
         """
@@ -552,6 +580,58 @@ class ContentScheduler:
             import traceback
             logger.error(traceback.format_exc())
     
+    def check_and_run_missed_scraping(self):
+        """
+        Check if scraping was missed and run immediately if needed.
+        Called on startup to catch up on missed jobs.
+        """
+        logger.info("🔍 [SCHEDULER] Checking for missed scraping tasks...")
+        
+        try:
+            db = self._get_db_session()
+            try:
+                # Find the most recent scraped article
+                from sqlalchemy import func
+                latest_article = db.query(func.max(ContentQueue.created_at)).scalar()
+                
+                if latest_article:
+                    hours_since_last = (datetime.utcnow() - latest_article).total_seconds() / 3600
+                    logger.info(f"📊 Last article scraped {hours_since_last:.1f} hours ago")
+                    
+                    # If more than 24 hours since last scrape, run both scraping tasks
+                    if hours_since_last > 24:
+                        logger.info("⚠️ More than 24 hours since last scrape - running catch-up scraping...")
+                        
+                        # Run Facebook sources (daily)
+                        try:
+                            logger.info("🔄 Running catch-up: Facebook sources...")
+                            self.scrape_facebook_sources_task()
+                        except Exception as e:
+                            logger.error(f"❌ Catch-up Facebook scraping failed: {e}")
+                        
+                        # Check if today is Mon/Wed/Fri for LinkedIn
+                        today = datetime.utcnow().weekday()
+                        if today in [0, 2, 4]:  # Monday=0, Wednesday=2, Friday=4
+                            try:
+                                logger.info("🔄 Running catch-up: LinkedIn sources...")
+                                self.scrape_linkedin_sources_task()
+                            except Exception as e:
+                                logger.error(f"❌ Catch-up LinkedIn scraping failed: {e}")
+                        
+                        logger.info("✅ Catch-up scraping completed")
+                    else:
+                        logger.info("✅ Scraping is up-to-date, no catch-up needed")
+                else:
+                    logger.info("📭 No articles in database, running initial scrape...")
+                    self.scrape_facebook_sources_task()
+                    self.scrape_linkedin_sources_task()
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"❌ Error checking missed scraping: {e}")
+    
     def start(self):
         """Start scheduler with platform-specific scraping and posting"""
         if self.scheduler.running:
@@ -567,9 +647,26 @@ class ContentScheduler:
                 name='Scrape LinkedIn sources (TSB, Drinks Int)',
                 replace_existing=True
             )
-        except:
-            logger.info("Scheduler was shutdown, recreating...")
-            self.scheduler = BackgroundScheduler()
+        except Exception as e:
+            logger.info(f"Scheduler issue, recreating... ({e})")
+            # Recreate scheduler with same config
+            database_url = os.environ.get('DATABASE_URL', '')
+            jobstores = {}
+            if database_url:
+                try:
+                    jobstores['default'] = SQLAlchemyJobStore(url=database_url)
+                except:
+                    pass
+            
+            self.scheduler = BackgroundScheduler(
+                jobstores=jobstores if jobstores else None,
+                executors={'default': ThreadPoolExecutor(5)},
+                job_defaults={
+                    'coalesce': True,
+                    'max_instances': 1,
+                    'misfire_grace_time': 3600 * 6
+                }
+            )
             self.scheduler.add_job(
                 self.scrape_linkedin_sources_task,
                 CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),

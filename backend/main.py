@@ -33,6 +33,17 @@ async def lifespan(app: FastAPI):
     content_scheduler.start()
     logger.info("✅ Scheduler started - automation enabled!")
     
+    # Check for missed scraping in background thread (non-blocking)
+    def check_missed_scraping():
+        try:
+            content_scheduler.check_and_run_missed_scraping()
+        except Exception as e:
+            logger.error(f"Error in missed scraping check: {e}")
+    
+    check_thread = threading.Thread(target=check_missed_scraping, daemon=True)
+    check_thread.start()
+    logger.info("🔍 Checking for missed scraping tasks in background...")
+    
     yield
     
     logger.info("Shutting down scheduler...")
