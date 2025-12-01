@@ -1220,44 +1220,79 @@ async def get_webhook_info():
 # Serve frontend static files in production
 # The frontend build is placed in ../frontend/dist
 # Use explicit routes for known SPA paths to avoid conflicts with API routes
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-if frontend_dist.exists():
-    # Serve static assets directory
-    if (frontend_dist / "assets").exists():
-        app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
-    
-    # Explicit SPA routes - these won't conflict with /api/* routes
-    @app.get("/")
-    async def serve_index():
-        return FileResponse(frontend_dist / "index.html")
-    
-    @app.get("/chat")
-    async def serve_chat_page():
-        return FileResponse(frontend_dist / "index.html")
-    
-    @app.get("/content")
-    async def serve_content_page():
-        return FileResponse(frontend_dist / "index.html")
-    
-    @app.get("/approval")
-    async def serve_approval_page():
-        return FileResponse(frontend_dist / "index.html")
-    
-    @app.get("/history")
-    async def serve_history_page():
-        return FileResponse(frontend_dist / "index.html")
-    
-    # Serve specific static files
-    @app.get("/vite.svg")
-    async def serve_vite_svg():
-        return FileResponse(frontend_dist / "vite.svg")
-    
-    @app.get("/favicon.ico")
-    async def serve_favicon():
-        favicon_path = frontend_dist / "favicon.ico"
-        if favicon_path.exists():
-            return FileResponse(favicon_path)
-        raise HTTPException(status_code=404, detail="Not found")
+def get_frontend_dist():
+    """Get frontend dist path - checks multiple possible locations"""
+    possible_paths = [
+        Path(__file__).parent.parent / "frontend" / "dist",  # /app/backend/../frontend/dist
+        Path("/app/frontend/dist"),  # Absolute path in Docker
+        Path("../frontend/dist"),  # Relative from backend dir
+    ]
+    for p in possible_paths:
+        if p.exists():
+            logger.info(f"Frontend dist found at: {p}")
+            return p
+    logger.warning("Frontend dist not found in any location")
+    return None
+
+# Mount static assets if they exist
+frontend_dist = get_frontend_dist()
+if frontend_dist and (frontend_dist / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
+
+# Always define SPA routes - they check path at request time
+@app.get("/")
+async def serve_index():
+    dist = get_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    # Fallback to API info if no frontend
+    return {
+        "message": "Gradus Media AI Agent API",
+        "version": "1.0.0",
+        "note": "Frontend not available - API only mode"
+    }
+
+@app.get("/chat")
+async def serve_chat_page():
+    dist = get_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend not available")
+
+@app.get("/content")
+async def serve_content_page():
+    dist = get_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend not available")
+
+@app.get("/approval")
+async def serve_approval_page():
+    dist = get_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend not available")
+
+@app.get("/history")
+async def serve_history_page():
+    dist = get_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend not available")
+
+@app.get("/vite.svg")
+async def serve_vite_svg():
+    dist = get_frontend_dist()
+    if dist and (dist / "vite.svg").exists():
+        return FileResponse(dist / "vite.svg")
+    raise HTTPException(status_code=404, detail="Not found")
+
+@app.get("/favicon.ico")
+async def serve_favicon():
+    dist = get_frontend_dist()
+    if dist and (dist / "favicon.ico").exists():
+        return FileResponse(dist / "favicon.ico")
+    raise HTTPException(status_code=404, detail="Not found")
 
 if __name__ == "__main__":
     import uvicorn
