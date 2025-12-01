@@ -425,13 +425,18 @@ class ContentScheduler:
             
             db = self._get_db_session()
             try:
+                # Filter for approved articles targeting Facebook
+                from sqlalchemy import cast, String
                 article = db.query(ContentQueue).filter(
-                    ContentQueue.status == 'approved'
+                    ContentQueue.status == 'approved',
+                    cast(ContentQueue.platforms, String).like('%facebook%')
                 ).order_by(ContentQueue.created_at.asc()).first()
                 
                 if not article:
-                    logger.info("[SCHEDULER] No approved content to post to Facebook")
+                    logger.info("[SCHEDULER] No approved Facebook content to post")
                     return
+                
+                logger.info(f"[SCHEDULER] Posting article {article.id} to Facebook: {article.translated_title[:50] if article.translated_title else 'No title'}...")
                 
                 post_data = {
                     'translated_title': article.translated_title or '',
@@ -499,13 +504,18 @@ class ContentScheduler:
             
             db = self._get_db_session()
             try:
+                # Filter for approved articles targeting LinkedIn
+                from sqlalchemy import cast, String
                 article = db.query(ContentQueue).filter(
-                    ContentQueue.status == 'approved'
+                    ContentQueue.status == 'approved',
+                    cast(ContentQueue.platforms, String).like('%linkedin%')
                 ).order_by(ContentQueue.created_at.asc()).first()
                 
                 if not article:
-                    logger.info("[SCHEDULER] No approved content to post to LinkedIn")
+                    logger.info("[SCHEDULER] No approved LinkedIn content to post")
                     return
+                
+                logger.info(f"[SCHEDULER] Posting article {article.id} to LinkedIn: {article.translated_title[:50] if article.translated_title else 'No title'}...")
                 
                 post_data = {
                     'title': article.translated_title or '',
