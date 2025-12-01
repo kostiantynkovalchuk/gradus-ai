@@ -1219,12 +1219,45 @@ async def get_webhook_info():
 
 # Serve frontend static files in production
 # The frontend build is placed in ../frontend/dist
-# This must be AFTER all API routes to avoid conflicts
+# Use explicit routes for known SPA paths to avoid conflicts with API routes
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    # Use StaticFiles with html=True for SPA support
-    # This serves index.html for directory requests and 404s
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="spa")
+    # Serve static assets directory
+    if (frontend_dist / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
+    
+    # Explicit SPA routes - these won't conflict with /api/* routes
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(frontend_dist / "index.html")
+    
+    @app.get("/chat")
+    async def serve_chat_page():
+        return FileResponse(frontend_dist / "index.html")
+    
+    @app.get("/content")
+    async def serve_content_page():
+        return FileResponse(frontend_dist / "index.html")
+    
+    @app.get("/approval")
+    async def serve_approval_page():
+        return FileResponse(frontend_dist / "index.html")
+    
+    @app.get("/history")
+    async def serve_history_page():
+        return FileResponse(frontend_dist / "index.html")
+    
+    # Serve specific static files
+    @app.get("/vite.svg")
+    async def serve_vite_svg():
+        return FileResponse(frontend_dist / "vite.svg")
+    
+    @app.get("/favicon.ico")
+    async def serve_favicon():
+        favicon_path = frontend_dist / "favicon.ico"
+        if favicon_path.exists():
+            return FileResponse(favicon_path)
+        raise HTTPException(status_code=404, detail="Not found")
 
 if __name__ == "__main__":
     import uvicorn
