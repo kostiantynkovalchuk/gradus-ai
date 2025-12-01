@@ -275,6 +275,8 @@ class ContentScheduler:
                 # Get articles ready for images:
                 # 1. Already translated (status='pending_approval')
                 # 2. Ukrainian articles that don't need translation (needs_translation=False)
+                # Filter out articles that already have images OR already had notifications sent
+                from sqlalchemy import not_, cast, String
                 articles_without_images = db.query(ContentQueue).filter(
                     or_(
                         # Translated articles ready for images
@@ -282,7 +284,12 @@ class ContentScheduler:
                         # Ukrainian articles ready for images (skip translation)
                         (ContentQueue.status == 'draft') & (ContentQueue.needs_translation == False)
                     ),
-                    ContentQueue.image_url == None
+                    ContentQueue.image_url == None,
+                    # Exclude articles that already had notification sent (check extra_metadata)
+                    or_(
+                        ContentQueue.extra_metadata == None,
+                        not_(cast(ContentQueue.extra_metadata, String).like('%"notification_sent": true%'))
+                    )
                 ).limit(10).all()
                 
                 if not articles_without_images:
@@ -332,6 +339,11 @@ class ContentScheduler:
                             try:
                                 notification_service.send_approval_notification(notification_data)
                                 notifications_sent += 1
+                                # Mark notification as sent to prevent duplicates
+                                if not article.extra_metadata:
+                                    article.extra_metadata = {}
+                                article.extra_metadata['notification_sent'] = True
+                                article.extra_metadata['notification_sent_at'] = datetime.utcnow().isoformat()
                                 logger.info(f"✅ [SCHEDULER] Notification with image sent for article {article.id}")
                             except Exception as notif_error:
                                 logger.error(f"[SCHEDULER] Failed to send notification for article {article.id}: {notif_error}")
