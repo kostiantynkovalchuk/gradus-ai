@@ -85,38 +85,44 @@ Return ONLY the prompt text, nothing else."""
             logger.error(f"Failed to generate image prompt: {e}")
             return ""
     
-    def download_and_save_image(self, image_url: str) -> Optional[str]:
+    def download_and_save_image(self, image_url: str) -> Optional[Dict[str, any]]:
         """
-        Download image from DALL-E temporary URL and save permanently to filesystem.
-        Returns the ABSOLUTE local file path.
+        Download image from DALL-E temporary URL and save permanently.
+        Returns dict with local_path and image_data (binary).
         """
         try:
             # Download the image
             response = requests.get(image_url, timeout=30)
             response.raise_for_status()
             
+            image_data = response.content
+            
             # Generate unique filename using hash of URL
             url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
             filename = f"dalle_{url_hash}.png"
             filepath = self.image_storage_dir / filename
             
-            # Save to filesystem
+            # Save to filesystem (for local dev/Replit)
             with open(filepath, 'wb') as f:
-                f.write(response.content)
+                f.write(image_data)
             
-            # Return ABSOLUTE path for reliable access
+            # Return ABSOLUTE path and binary data
             absolute_path = str(filepath.absolute())
-            logger.info(f"Image saved permanently to: {absolute_path}")
-            return absolute_path
+            logger.info(f"Image saved permanently to: {absolute_path} ({len(image_data)} bytes)")
+            
+            return {
+                'local_path': absolute_path,
+                'image_data': image_data  # Binary data for database storage
+            }
             
         except Exception as e:
             logger.error(f"Failed to download and save image: {e}")
             return None
     
-    def generate_image(self, prompt: str) -> Optional[Dict[str, str]]:
+    def generate_image(self, prompt: str) -> Optional[Dict]:
         """
         Generate an image using DALL-E based on the provided prompt.
-        Returns dict with both temporary URL and permanent local path.
+        Returns dict with temporary URL, local path, and binary image data.
         """
         if not self.openai_client:
             logger.error("OpenAI client not initialized - missing API key")
@@ -140,12 +146,20 @@ Return ONLY the prompt text, nothing else."""
                 logger.info(f"Image generated successfully: {image_url}")
                 
                 # Download and save immediately to prevent expiration issues
-                local_path = self.download_and_save_image(image_url)
+                save_result = self.download_and_save_image(image_url)
                 
-                return {
-                    'url': image_url,  # Temporary DALL-E URL (expires in 1-2 hours)
-                    'local_path': local_path  # Permanent local file path
-                }
+                if save_result:
+                    return {
+                        'url': image_url,  # Temporary DALL-E URL (expires in 1-2 hours)
+                        'local_path': save_result['local_path'],  # Local file path
+                        'image_data': save_result['image_data']  # Binary data for DB storage
+                    }
+                else:
+                    return {
+                        'url': image_url,
+                        'local_path': None,
+                        'image_data': None
+                    }
             else:
                 logger.error("No image URL in response")
                 return None
@@ -154,27 +168,28 @@ Return ONLY the prompt text, nothing else."""
             logger.error(f"DALL-E image generation error: {str(e)}")
             return None
     
-    def generate_article_image(self, article_data: Dict) -> Dict[str, str]:
+    def generate_article_image(self, article_data: Dict) -> Dict:
         """
         Complete pipeline: generate prompt + generate image
         
         Returns:
-            Dict with 'prompt', 'image_url', and 'local_path'
+            Dict with 'prompt', 'image_url', 'local_path', and 'image_data' (binary)
         """
         dalle_prompt = self.generate_image_prompt(article_data)
         
         if not dalle_prompt:
-            return {"prompt": "", "image_url": "", "local_path": ""}
+            return {"prompt": "", "image_url": "", "local_path": "", "image_data": None}
         
         image_result = self.generate_image(dalle_prompt)
         
         if not image_result:
-            return {"prompt": dalle_prompt, "image_url": "", "local_path": ""}
+            return {"prompt": dalle_prompt, "image_url": "", "local_path": "", "image_data": None}
         
         return {
             "prompt": dalle_prompt,
             "image_url": image_result.get('url', ''),
-            "local_path": image_result.get('local_path', '')
+            "local_path": image_result.get('local_path', ''),
+            "image_data": image_result.get('image_data')  # Binary data for DB storage
         }
 
 image_generator = ImageGenerator()

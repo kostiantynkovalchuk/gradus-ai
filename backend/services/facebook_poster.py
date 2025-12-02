@@ -43,8 +43,13 @@ class FacebookPoster:
         """
         Post to Facebook Page with image
         
+        Priority order for image source:
+        1. image_data (binary from database - most reliable for Render)
+        2. local_image_path (for local development)
+        3. image_url (likely expired - last resort)
+        
         Args:
-            article_data: Dict with all article info including image_url or local_image_path
+            article_data: Dict with all article info including image_data, image_url, or local_image_path
             
         Returns:
             Dict with post_id and post_url, or None if failed
@@ -54,11 +59,19 @@ class FacebookPoster:
             return None
         
         message = self.format_post_text(article_data)
+        image_data = article_data.get('image_data')  # Binary data from database
         local_image_path = article_data.get('local_image_path')
         image_url = article_data.get('image_url')
         
-        # Prefer local image file over URL (URL may be expired)
-        # Try both absolute and relative paths to handle different path formats
+        # Priority 1: Use image_data from database (most reliable for Render)
+        if image_data:
+            logger.info(f"✅ Using image from database ({len(image_data)} bytes)")
+            result = self._post_with_image_data(message, image_data)
+            if result:
+                return result
+            logger.warning("⚠️  Database image posting failed, trying local file...")
+        
+        # Priority 2: Try local image file
         found_path = None
         if local_image_path:
             # Try absolute path first
@@ -76,21 +89,47 @@ class FacebookPoster:
             result = self._post_with_local_image(message, found_path)
             if result:
                 return result
-            # Local image failed, try URL as backup
             logger.warning("⚠️  Local image posting failed, trying URL...")
         
+        # Priority 3: Try image URL (usually expired but worth a try)
         if image_url:
-            if not found_path:
-                logger.warning("⚠️  No local image, trying URL (may expire)")
+            logger.warning("⚠️  Trying image URL (may be expired)")
             result = self._post_with_image_url(message, image_url)
             if result:
                 return result
-            # URL failed too, fallback to text-only
             logger.warning("⚠️  Image URL failed (likely expired), posting text-only as fallback...")
             return self.post_text_only(message)
         else:
             logger.warning("No image provided, posting text only")
             return self.post_text_only(message)
+    
+    def _post_with_image_data(self, message: str, image_data: bytes) -> Optional[Dict]:
+        """Post to Facebook using binary image data from database (Render-compatible)"""
+        url = f"{self.base_url}/{self.page_id}/photos"
+        
+        try:
+            from io import BytesIO
+            
+            # Create a file-like object from bytes
+            image_file = BytesIO(image_data)
+            image_file.name = 'image.png'  # Facebook needs a filename
+            
+            files = {'source': ('image.png', image_file, 'image/png')}
+            data = {
+                'message': message,
+                'access_token': self.page_access_token
+            }
+            
+            logger.info(f"Posting to Facebook with database image ({len(image_data)} bytes)...")
+            response = requests.post(url, files=files, data=data, timeout=30)
+            result = response.json()
+            
+            return self._parse_facebook_response(result)
+            
+        except Exception as e:
+            logger.error(f"Failed to post with database image: {e}")
+            logger.exception("Full traceback:")
+            return None
     
     def _post_with_local_image(self, message: str, local_image_path: str) -> Optional[Dict]:
         """Post to Facebook using local image file (prevents expiration issues)"""

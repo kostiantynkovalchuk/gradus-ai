@@ -49,7 +49,7 @@ class LinkedInPoster:
         Post content to LinkedIn organization page
         
         Args:
-            article_data: Dict with title, text, source_url, image_url, local_image_path (optional)
+            article_data: Dict with title, text, source_url, image_url, local_image_path, image_data (optional)
             
         Returns:
             Dict with status, post_id, post_url
@@ -73,9 +73,10 @@ class LinkedInPoster:
         post_text = self.format_post_text(article_data)
         image_url = article_data.get('image_url')
         local_image_path = article_data.get('local_image_path')
+        image_data = article_data.get('image_data')  # Binary from database
         
-        if image_url or local_image_path:
-            return self._post_with_image(post_text, image_url, local_image_path)
+        if image_url or local_image_path or image_data:
+            return self._post_with_image(post_text, image_url, local_image_path, image_data)
         else:
             return self._post_text_only(post_text)
     
@@ -171,25 +172,58 @@ class LinkedInPoster:
             logger.error(f"Failed to register upload: {e}")
             return None
     
-    def _upload_image(self, upload_url: str, image_url: Optional[str] = None, local_image_path: Optional[str] = None) -> bool:
+    def _upload_image(self, upload_url: str, image_url: Optional[str] = None, local_image_path: Optional[str] = None, db_image_data: Optional[bytes] = None) -> bool:
         """
         Step 2: Upload image to LinkedIn
-        Downloads image from URL or reads from local file, then uploads to LinkedIn's storage
+        Downloads image from URL, reads from local file, or uses database binary data
+        
+        Priority order:
+        1. db_image_data (from database - most reliable for Render)
+        2. local_image_path (for local development)
+        3. image_url (likely expired - last resort)
         
         Args:
             upload_url: Pre-signed LinkedIn upload URL
-            image_url: Remote image URL (tried first)
-            local_image_path: Local file path (fallback)
+            image_url: Remote image URL (last resort, likely expired)
+            local_image_path: Local file path (for local dev)
+            db_image_data: Binary image data from database (Render-persistent)
         
         Note: Pre-signed upload URL handles auth, don't add Authorization header
         """
         image_data = None
-        content_type = 'image/jpeg'
+        content_type = 'image/png'
         
-        # Try remote URL first
-        if image_url:
+        # Priority 1: Use database image data (Render-persistent)
+        if db_image_data:
+            logger.info(f"✅ Using image from database ({len(db_image_data)} bytes)")
+            image_data = db_image_data
+            content_type = 'image/png'
+        
+        # Priority 2: Try local file
+        if not image_data and local_image_path:
             try:
-                logger.info(f"Downloading image from remote URL: {image_url}")
+                import os
+                if os.path.exists(local_image_path):
+                    logger.info(f"Using local image: {local_image_path}")
+                    with open(local_image_path, 'rb') as f:
+                        image_data = f.read()
+                    
+                    # Determine content type from file extension
+                    if local_image_path.lower().endswith('.png'):
+                        content_type = 'image/png'
+                    elif local_image_path.lower().endswith('.jpg') or local_image_path.lower().endswith('.jpeg'):
+                        content_type = 'image/jpeg'
+                    
+                    logger.info(f"Loaded local image (Content-Type: {content_type})")
+                else:
+                    logger.warning(f"Local image path not found: {local_image_path}")
+            except Exception as e:
+                logger.error(f"Failed to read local image: {e}")
+        
+        # Priority 3: Try remote URL (usually expired)
+        if not image_data and image_url:
+            try:
+                logger.warning(f"Trying remote URL (may be expired): {image_url}")
                 img_response = requests.get(image_url, timeout=30)
                 
                 if img_response.status_code == 200:
@@ -206,27 +240,9 @@ class LinkedInPoster:
             except Exception as e:
                 logger.warning(f"Exception downloading from remote URL: {e}")
         
-        # Fallback to local file if remote failed
-        if not image_data and local_image_path:
-            try:
-                logger.info(f"Falling back to local image: {local_image_path}")
-                with open(local_image_path, 'rb') as f:
-                    image_data = f.read()
-                
-                # Determine content type from file extension
-                if local_image_path.lower().endswith('.png'):
-                    content_type = 'image/png'
-                elif local_image_path.lower().endswith('.jpg') or local_image_path.lower().endswith('.jpeg'):
-                    content_type = 'image/jpeg'
-                
-                logger.info(f"Loaded local image (Content-Type: {content_type})")
-            except Exception as e:
-                logger.error(f"Failed to read local image: {e}")
-                return False
-        
         # If we still don't have image data, fail
         if not image_data:
-            logger.error("No valid image data available from remote URL or local file")
+            logger.error("No valid image data available from database, local file, or remote URL")
             return False
         
         # Upload to LinkedIn
@@ -256,20 +272,21 @@ class LinkedInPoster:
             logger.error(f"Exception during LinkedIn upload: {e}")
             return False
     
-    def _post_with_image(self, text: str, image_url: Optional[str] = None, local_image_path: Optional[str] = None) -> Dict:
+    def _post_with_image(self, text: str, image_url: Optional[str] = None, local_image_path: Optional[str] = None, db_image_data: Optional[bytes] = None) -> Dict:
         """
         Post content with image to LinkedIn using proper asset upload workflow
         
         Steps:
         1. Register upload to get asset URN
-        2. Upload image binary (tries remote URL first, falls back to local file)
+        2. Upload image binary (priority: database > local file > URL)
         3. Create post with asset URN
         4. If image upload fails, degrades to text-only post
         
         Args:
             text: Post text content
-            image_url: Remote image URL (optional)
-            local_image_path: Local image file path (optional fallback)
+            image_url: Remote image URL (optional, likely expired)
+            local_image_path: Local image file path (optional)
+            db_image_data: Binary image data from database (Render-persistent)
         """
         
         # Step 1: Register upload
@@ -278,8 +295,8 @@ class LinkedInPoster:
             logger.warning("Image upload registration failed, posting text-only")
             return self._post_text_only(text)
         
-        # Step 2: Upload image (with fallback)
-        upload_success = self._upload_image(upload_info['upload_url'], image_url, local_image_path)
+        # Step 2: Upload image (priority: database > local > URL)
+        upload_success = self._upload_image(upload_info['upload_url'], image_url, local_image_path, db_image_data)
         if not upload_success:
             logger.warning("Image upload failed, degrading to text-only post")
             return self._post_text_only(text)

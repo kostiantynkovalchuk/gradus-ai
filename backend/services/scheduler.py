@@ -312,6 +312,7 @@ class ContentScheduler:
                             article.image_url = result['image_url']
                             article.image_prompt = result['prompt']
                             article.local_image_path = result.get('local_path', '')
+                            article.image_data = result.get('image_data')  # Store binary in DB for Render persistence
                             
                             # Mark Ukrainian articles as pending_approval after image generation
                             if not article.needs_translation and article.status == 'draft':
@@ -474,7 +475,8 @@ class ContentScheduler:
                     'source': article.source or 'The Spirits Business',
                     'author': article.extra_metadata.get('author', '') if article.extra_metadata else '',
                     'image_url': article.image_url,
-                    'local_image_path': article.local_image_path
+                    'local_image_path': article.local_image_path,
+                    'image_data': article.image_data  # Binary from database (Render-persistent)
                 }
                 
                 result = facebook_poster.post_with_image(post_data)
@@ -558,7 +560,8 @@ class ContentScheduler:
                     'source': article.source or 'The Spirits Business',
                     'source_url': article.source_url or '',
                     'image_url': article.image_url,
-                    'local_image_path': article.local_image_path
+                    'local_image_path': article.local_image_path,
+                    'image_data': article.image_data  # Binary from database (Render-persistent)
                 }
                 
                 result = linkedin_poster.post_to_linkedin(post_data)
