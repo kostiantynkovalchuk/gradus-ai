@@ -57,7 +57,7 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - API monitoring (8:00 AM)
 - **Telegram Quick Approval:** Allows one-click content approval/rejection directly from Telegram notifications, including image previews.
 - **Image Generation:** Utilizes Claude AI to craft DALL-E 3 prompts for 1024x1024, text-free, professional social media images.
-- **Permanent Image Storage:** DALL-E generated images are downloaded and stored locally in `attached_assets/generated_images/` to prevent link expiration.
+- **Permanent Image Storage:** DALL-E generated images are stored as binary data (BYTEA) in PostgreSQL database for Render persistence. Priority: Database → Local file → URL.
 - **Scheduled Posting:** Approved content is automatically posted at optimal engagement times:
     - **Facebook:** Daily at 18:00.
     - **LinkedIn:** Monday, Wednesday, Friday at 09:00.
@@ -70,6 +70,34 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Database Schema:** `ContentQueue` for reviewable content and `ApprovalLog` for audit trails, storing comprehensive metadata.
+
+## Database Setup
+
+### Schema Initialization
+Run the initialization script to ensure all tables and columns exist:
+
+```bash
+# Local development
+cd backend && python init_db.py
+
+# On Render Shell
+python init_db.py
+
+# Verify schema only
+python init_db.py --verify-only
+
+# Show current schema
+python init_db.py --show-schema
+```
+
+### Manual Column Addition (if needed)
+```bash
+python -c "import os, psycopg2; conn = psycopg2.connect(os.environ['DATABASE_URL']); cur = conn.cursor(); cur.execute('ALTER TABLE table_name ADD COLUMN IF NOT EXISTS column_name TYPE'); conn.commit(); print('Done'); conn.close()"
+```
+
+### Documentation
+- Schema details: `backend/docs/database_schema.md`
+- Deployment guide: `backend/docs/deployment_checklist.md`
 
 ## External Dependencies
 - **Claude AI (Anthropic):** Content generation, DALL-E prompt creation, English-to-Ukrainian translation.
