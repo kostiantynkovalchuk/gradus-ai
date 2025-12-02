@@ -1241,6 +1241,7 @@ if frontend_dist and (frontend_dist / "assets").exists():
 
 # Always define SPA routes - they check path at request time
 @app.get("/")
+@app.head("/")  # Support HEAD requests for health checks
 async def serve_index():
     dist = get_frontend_dist()
     if dist and (dist / "index.html").exists():
