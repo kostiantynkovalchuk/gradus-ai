@@ -73,10 +73,21 @@ class FacebookPoster:
                 logger.warning(f"⚠️  Local image path not found: {local_image_path}")
         
         if found_path:
-            return self._post_with_local_image(message, found_path)
-        elif image_url:
-            logger.warning("⚠️  No local image, trying URL (may expire)")
-            return self._post_with_image_url(message, image_url)
+            result = self._post_with_local_image(message, found_path)
+            if result:
+                return result
+            # Local image failed, try URL as backup
+            logger.warning("⚠️  Local image posting failed, trying URL...")
+        
+        if image_url:
+            if not found_path:
+                logger.warning("⚠️  No local image, trying URL (may expire)")
+            result = self._post_with_image_url(message, image_url)
+            if result:
+                return result
+            # URL failed too, fallback to text-only
+            logger.warning("⚠️  Image URL failed (likely expired), posting text-only as fallback...")
+            return self.post_text_only(message)
         else:
             logger.warning("No image provided, posting text only")
             return self.post_text_only(message)

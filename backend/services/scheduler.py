@@ -438,14 +438,31 @@ class ContentScheduler:
             db = self._get_db_session()
             try:
                 # Filter for approved articles targeting Facebook
-                from sqlalchemy import cast, String
+                # Skip articles that have failed too many times (max 3 retries)
+                from sqlalchemy import cast, String, or_, not_
                 article = db.query(ContentQueue).filter(
                     ContentQueue.status == 'approved',
-                    cast(ContentQueue.platforms, String).like('%facebook%')
+                    cast(ContentQueue.platforms, String).like('%facebook%'),
+                    # Skip articles with 3+ failed attempts
+                    or_(
+                        ContentQueue.extra_metadata == None,
+                        not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 3%')),
+                        not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 4%')),
+                        not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 5%'))
+                    )
                 ).order_by(ContentQueue.created_at.asc()).first()
                 
                 if not article:
                     logger.info("[SCHEDULER] No approved Facebook content to post")
+                    return
+                
+                # Check retry count
+                retry_count = 0
+                if article.extra_metadata and 'fb_post_retries' in article.extra_metadata:
+                    retry_count = article.extra_metadata.get('fb_post_retries', 0)
+                
+                if retry_count >= 3:
+                    logger.warning(f"[SCHEDULER] Article {article.id} has failed {retry_count} times, skipping...")
                     return
                 
                 logger.info(f"[SCHEDULER] Posting article {article.id} to Facebook: {article.translated_title[:50] if article.translated_title else 'No title'}...")
@@ -492,7 +509,13 @@ class ContentScheduler:
                     notification_service.send_custom_notification(message)
                     
                 else:
-                    logger.error(f"❌ [SCHEDULER] Facebook posting failed for article {article.id}")
+                    # Track failed attempts
+                    if not article.extra_metadata:
+                        article.extra_metadata = {}
+                    article.extra_metadata['fb_post_retries'] = retry_count + 1
+                    article.extra_metadata['fb_last_error'] = datetime.utcnow().isoformat()
+                    db.commit()
+                    logger.error(f"❌ [SCHEDULER] Facebook posting failed for article {article.id} (attempt {retry_count + 1}/3)")
                     
             finally:
                 db.close()
