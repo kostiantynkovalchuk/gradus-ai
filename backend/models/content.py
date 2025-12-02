@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, CheckConstraint, ARRAY, JSON, Boolean
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, CheckConstraint, ARRAY, JSON, Boolean, LargeBinary
 from sqlalchemy.sql import func
 from .import Base
 
@@ -16,6 +16,7 @@ class ContentQueue(Base):
     image_url = Column(Text)
     image_prompt = Column(Text)
     local_image_path = Column(Text)
+    image_data = Column(LargeBinary)  # Persistent image storage (binary data)
     scheduled_post_time = Column(TIMESTAMP)
     platforms = Column(ARRAY(String))
     created_at = Column(TIMESTAMP, server_default=func.now())
