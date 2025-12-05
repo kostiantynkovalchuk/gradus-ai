@@ -229,6 +229,13 @@ async def approve_content(
         if not content:
             raise HTTPException(status_code=404, detail="Content not found")
         
+        # Check for intermediate posting states (scheduler may be processing this article)
+        if content.status in ["posting_facebook", "posting_linkedin"]:
+            raise HTTPException(status_code=400, detail="Content is currently being posted by the scheduler")
+        
+        if content.status == "posted":
+            raise HTTPException(status_code=400, detail="Content has already been posted")
+        
         if content.status != "pending_approval":
             raise HTTPException(status_code=400, detail="Content is not pending approval")
         
@@ -264,37 +271,41 @@ async def approve_content(
         
         fb_result = None
         if "facebook" in [p.lower() for p in request.platforms]:
-            post_data = {
-                'translated_title': content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else ''),
-                'translated_content': content.translated_text or '',
-                'url': content.source_url or '',
-                'source': content.source or 'The Spirits Business',
-                'author': (content.extra_metadata.get('author', '') if content.extra_metadata else ''),
-                'image_url': content.image_url,
-                'local_image_path': content.local_image_path
-            }
-            
-            fb_result = facebook_poster.post_with_image(post_data)
-            
-            if fb_result:
-                content.status = "posted"
+            # IDEMPOTENCY CHECK: Verify article wasn't already posted
+            if content.extra_metadata and content.extra_metadata.get('fb_post_id'):
+                logger.warning(f"Content {content_id} already has fb_post_id - skipping Facebook post to prevent duplicate")
+            else:
+                post_data = {
+                    'translated_title': content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else ''),
+                    'translated_content': content.translated_text or '',
+                    'url': content.source_url or '',
+                    'source': content.source or 'The Spirits Business',
+                    'author': (content.extra_metadata.get('author', '') if content.extra_metadata else ''),
+                    'image_url': content.image_url,
+                    'local_image_path': content.local_image_path
+                }
                 
-                if not content.extra_metadata:
-                    content.extra_metadata = {}
-                content.extra_metadata['fb_post_id'] = fb_result['post_id']
-                content.extra_metadata['fb_post_url'] = fb_result['post_url']
+                fb_result = facebook_poster.post_with_image(post_data)
                 
-                db.commit()
-                
-                notification_service.notify_content_posted({
-                    'id': content_id,
-                    'title': post_data['translated_title'],
-                    'platforms': ['Facebook'],
-                    'fb_post_url': fb_result['post_url'],
-                    'posted_at': fb_result['posted_at']
-                })
-                
-                logger.info(f"Content {content_id} posted to Facebook: {fb_result['post_url']}")
+                if fb_result:
+                    content.status = "posted"
+                    
+                    if not content.extra_metadata:
+                        content.extra_metadata = {}
+                    content.extra_metadata['fb_post_id'] = fb_result['post_id']
+                    content.extra_metadata['fb_post_url'] = fb_result['post_url']
+                    
+                    db.commit()
+                    
+                    notification_service.notify_content_posted({
+                        'id': content_id,
+                        'title': post_data['translated_title'],
+                        'platforms': ['Facebook'],
+                        'fb_post_url': fb_result['post_url'],
+                        'posted_at': fb_result['posted_at']
+                    })
+                    
+                    logger.info(f"Content {content_id} posted to Facebook: {fb_result['post_url']}")
         
         if fb_result:
             return {

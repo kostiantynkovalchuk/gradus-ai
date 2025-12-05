@@ -429,6 +429,9 @@ class ContentScheduler:
         Post approved content to Facebook at scheduled time
         Runs: Every day at 6:00 PM
         Posts oldest approved content (FIFO queue)
+        
+        Uses database locking (SELECT FOR UPDATE SKIP LOCKED) to prevent
+        duplicate posts when multiple containers run simultaneously.
         """
         logger.info("🤖 [SCHEDULER] Facebook scheduled posting...")
         
@@ -440,6 +443,7 @@ class ContentScheduler:
             try:
                 # Filter for approved articles targeting Facebook
                 # Skip articles that have failed too many times (max 3 retries)
+                # Use FOR UPDATE SKIP LOCKED to prevent race conditions with multiple containers
                 from sqlalchemy import cast, String, or_, not_
                 article = db.query(ContentQueue).filter(
                     ContentQueue.status == 'approved',
@@ -451,10 +455,23 @@ class ContentScheduler:
                         not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 4%')),
                         not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 5%'))
                     )
-                ).order_by(ContentQueue.created_at.asc()).first()
+                ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
                 
                 if not article:
-                    logger.info("[SCHEDULER] No approved Facebook content to post")
+                    logger.info("[SCHEDULER] No approved Facebook content to post (or already being processed)")
+                    return
+                
+                # IMMEDIATELY change status to 'posting' to prevent race conditions
+                # This ensures no other process can pick up this article
+                article_id = article.id
+                article.status = 'posting_facebook'
+                db.commit()
+                logger.info(f"[SCHEDULER] Locked article {article_id} for Facebook posting")
+                
+                # Re-fetch the article to ensure we have fresh data
+                article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+                if not article:
+                    logger.error(f"[SCHEDULER] Article {article_id} disappeared after locking")
                     return
                 
                 # Check retry count
@@ -464,9 +481,19 @@ class ContentScheduler:
                 
                 if retry_count >= 3:
                     logger.warning(f"[SCHEDULER] Article {article.id} has failed {retry_count} times, skipping...")
+                    article.status = 'approved'  # Reset status
+                    db.commit()
                     return
                 
                 logger.info(f"[SCHEDULER] Posting article {article.id} to Facebook: {article.translated_title[:50] if article.translated_title else 'No title'}...")
+                
+                # IDEMPOTENCY CHECK: Verify article wasn't already posted by another worker
+                # This catches race conditions where another worker posted between our lock and now
+                if article.extra_metadata and article.extra_metadata.get('fb_post_id'):
+                    logger.warning(f"[SCHEDULER] Article {article.id} already has fb_post_id - skipping to prevent duplicate")
+                    article.status = 'posted'  # Ensure status is correct
+                    db.commit()
+                    return
                 
                 post_data = {
                     'translated_title': article.translated_title or '',
@@ -511,7 +538,8 @@ class ContentScheduler:
                     notification_service.send_custom_notification(message)
                     
                 else:
-                    # Track failed attempts
+                    # Track failed attempts and reset status back to 'approved'
+                    article.status = 'approved'  # Reset so it can be retried
                     if not article.extra_metadata:
                         article.extra_metadata = {}
                     article.extra_metadata['fb_post_retries'] = retry_count + 1
@@ -526,12 +554,27 @@ class ContentScheduler:
             logger.error(f"❌ [SCHEDULER] Facebook posting task failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # Try to reset article status if we have context
+            try:
+                if 'article_id' in locals():
+                    db = self._get_db_session()
+                    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+                    if article and article.status == 'posting_facebook':
+                        article.status = 'approved'
+                        db.commit()
+                        logger.info(f"[SCHEDULER] Reset article {article_id} status to 'approved' after exception")
+                    db.close()
+            except Exception as reset_error:
+                logger.error(f"[SCHEDULER] Failed to reset article status: {reset_error}")
     
     def post_to_linkedin_task(self):
         """
         Post approved content to LinkedIn at scheduled time
         Runs: Mon/Wed/Fri at 9:00 AM
         Posts oldest approved content (FIFO queue)
+        
+        Uses database locking (SELECT FOR UPDATE SKIP LOCKED) to prevent
+        duplicate posts when multiple containers run simultaneously.
         """
         logger.info("🤖 [SCHEDULER] LinkedIn scheduled posting...")
         
@@ -542,17 +585,39 @@ class ContentScheduler:
             db = self._get_db_session()
             try:
                 # Filter for approved articles targeting LinkedIn
+                # Use FOR UPDATE SKIP LOCKED to prevent race conditions with multiple containers
                 from sqlalchemy import cast, String
                 article = db.query(ContentQueue).filter(
                     ContentQueue.status == 'approved',
                     cast(ContentQueue.platforms, String).like('%linkedin%')
-                ).order_by(ContentQueue.created_at.asc()).first()
+                ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
                 
                 if not article:
-                    logger.info("[SCHEDULER] No approved LinkedIn content to post")
+                    logger.info("[SCHEDULER] No approved LinkedIn content to post (or already being processed)")
+                    return
+                
+                # IMMEDIATELY change status to 'posting' to prevent race conditions
+                # This ensures no other process can pick up this article
+                article_id = article.id
+                article.status = 'posting_linkedin'
+                db.commit()
+                logger.info(f"[SCHEDULER] Locked article {article_id} for LinkedIn posting")
+                
+                # Re-fetch the article to ensure we have fresh data
+                article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+                if not article:
+                    logger.error(f"[SCHEDULER] Article {article_id} disappeared after locking")
                     return
                 
                 logger.info(f"[SCHEDULER] Posting article {article.id} to LinkedIn: {article.translated_title[:50] if article.translated_title else 'No title'}...")
+                
+                # IDEMPOTENCY CHECK: Verify article wasn't already posted by another worker
+                # This catches race conditions where another worker posted between our lock and now
+                if article.extra_metadata and article.extra_metadata.get('linkedin_post_id'):
+                    logger.warning(f"[SCHEDULER] Article {article.id} already has linkedin_post_id - skipping to prevent duplicate")
+                    article.status = 'posted'  # Ensure status is correct
+                    db.commit()
+                    return
                 
                 post_data = {
                     'title': article.translated_title or '',
@@ -598,6 +663,9 @@ class ContentScheduler:
                     notification_service.send_custom_notification(message)
                     
                 else:
+                    # Reset status back to 'approved' so it can be retried
+                    article.status = 'approved'
+                    db.commit()
                     logger.error(f"❌ [SCHEDULER] LinkedIn posting failed: {result.get('message', 'Unknown error')}")
                     
             finally:
@@ -607,6 +675,18 @@ class ContentScheduler:
             logger.error(f"❌ [SCHEDULER] LinkedIn posting task failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # Try to reset article status if we have context
+            try:
+                if 'article_id' in locals():
+                    db = self._get_db_session()
+                    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+                    if article and article.status == 'posting_linkedin':
+                        article.status = 'approved'
+                        db.commit()
+                        logger.info(f"[SCHEDULER] Reset article {article_id} status to 'approved' after exception")
+                    db.close()
+            except Exception as reset_error:
+                logger.error(f"[SCHEDULER] Failed to reset article status: {reset_error}")
     
     def check_and_run_missed_scraping(self):
         """
