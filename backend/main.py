@@ -1106,11 +1106,6 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
     Security: Set TELEGRAM_WEBHOOK_SECRET environment variable and configure webhook:
     https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>&secret_token=<SECRET>
     """
-    logger.error("🚨 WEBHOOK CALLED - START")
-    print("=" * 80)
-    print("🚨 TELEGRAM WEBHOOK ENDPOINT HIT!")
-    print("=" * 80)
-    
     try:
         telegram_secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
         if telegram_secret:
