@@ -26,6 +26,8 @@ class TelegramWebhookHandler:
         Returns:
             Dict with status and message
         """
+        logger.error(f"🚨 CALLBACK HANDLER CALLED - Data: {callback_query.get('data')}")
+        print(f"🚨 Processing callback: {callback_query.get('data')}")
         callback_id = callback_query.get('id')
         callback_data = callback_query.get('data')
         message = callback_query.get('message')
@@ -67,9 +69,12 @@ class TelegramWebhookHandler:
         Approve content for scheduled posting (NO IMMEDIATE POST)
         Marks as 'approved' - scheduler will post at optimal times
         """
+        logger.error(f"🚨 APPROVE CALLED for content_id: {content_id}")
+        print(f"🚨 Attempting to approve article ID: {content_id}")
         
         try:
             article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
+            logger.error(f"🚨 Database query result: {'Found' if article else 'NOT FOUND'}")
             
             if not article:
                 self._answer_callback_query(callback_id, "❌ Article not found")
