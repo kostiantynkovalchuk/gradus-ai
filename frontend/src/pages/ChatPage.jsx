@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Send, Languages, Sparkles } from 'lucide-react'
+import { Send, Languages } from 'lucide-react'
 import axios from 'axios'
 import { API_URL } from '../lib/api'
 
@@ -44,8 +44,7 @@ function ChatPage() {
 
   return (
     <div className="fade-in">
-      <div className="flex items-center space-x-3 mb-6">
-        <Sparkles className="text-cyan-400 h-8 w-8" />
+      <div className="mb-6">
         <h1 className="text-3xl font-bold gradient-text">Chat & Translation</h1>
       </div>
 
