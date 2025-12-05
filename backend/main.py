@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -733,6 +733,58 @@ async def translate_pending_articles(limit: int = 10, db: Session = Depends(get_
         db.rollback()
         logger.error(f"Batch translation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/images/serve/{article_id}")
+async def serve_article_image(article_id: int, db: Session = Depends(get_db)):
+    """
+    Serve image for an article from database binary data or local file.
+    Priority: Database binary → Local file → Original URL redirect
+    """
+    try:
+        article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+        
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        if not article.image_url and not article.image_data and not article.local_image_path:
+            raise HTTPException(status_code=404, detail="No image available for this article")
+        
+        if article.image_data:
+            logger.info(f"Serving image from database for article {article_id}")
+            return Response(
+                content=article.image_data,
+                media_type="image/png",
+                headers={"Cache-Control": "public, max-age=31536000"}
+            )
+        
+        if article.local_image_path:
+            local_path = Path(article.local_image_path)
+            if not local_path.is_absolute():
+                backend_dir = Path(__file__).parent
+                local_path = backend_dir / article.local_image_path
+            if local_path.exists():
+                suffix = local_path.suffix.lower()
+                media_type = "image/png" if suffix == ".png" else "image/jpeg" if suffix in [".jpg", ".jpeg"] else "image/png"
+                logger.info(f"Serving image from local file for article {article_id}: {local_path}")
+                return FileResponse(
+                    str(local_path),
+                    media_type=media_type,
+                    headers={"Cache-Control": "public, max-age=31536000"}
+                )
+        
+        if article.image_url:
+            from fastapi.responses import RedirectResponse
+            logger.info(f"Redirecting to original URL for article {article_id}")
+            return RedirectResponse(url=article.image_url)
+        
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving image for article {article_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/images/generate/{article_id}")
 async def generate_image_for_article(article_id: int, db: Session = Depends(get_db)):

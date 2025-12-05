@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { MessageSquare, FileText, TrendingUp, Clock, CheckCircle, XCircle, Sparkles } from 'lucide-react'
+import { MessageSquare, FileText, TrendingUp, Clock, CheckCircle, XCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import api from '../lib/api'
 
@@ -64,10 +64,7 @@ function HomePage() {
   return (
     <div className="fade-in">
       <div className="mb-8">
-        <div className="flex items-center space-x-3 mb-2">
-          <Sparkles className="text-cyan-400 h-8 w-8" />
-          <h1 className="text-3xl font-bold gradient-text">Gradus AI Dashboard</h1>
-        </div>
+        <h1 className="text-3xl font-bold gradient-text mb-2">GradusMedia Dashboard</h1>
         <p className="text-white/60">Automated content creation and approval system for social media</p>
       </div>
 

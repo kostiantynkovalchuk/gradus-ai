@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { CheckCircle, XCircle, Clock, TrendingUp, Image, RefreshCw, Sparkles } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, Image, RefreshCw } from 'lucide-react'
 import api from '../lib/api'
 
 function MiniStatCard({ label, value, colorClass }) {
@@ -105,8 +105,7 @@ function ContentApproval() {
 
   return (
     <div className="fade-in">
-      <div className="flex items-center space-x-3 mb-6">
-        <Sparkles className="text-cyan-400 h-8 w-8" />
+      <div className="mb-6">
         <h1 className="text-3xl font-bold gradient-text">Content Approval</h1>
       </div>
 
@@ -179,9 +178,13 @@ function ContentApproval() {
                   </h4>
                   <div className="bg-white/5 p-4 rounded-xl border border-white/10">
                     <img 
-                      src={content.image_url} 
+                      src={`/api/images/serve/${content.id}`} 
                       alt="Generated" 
                       className="w-full max-w-md rounded-lg shadow-2xl mb-3"
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = content.image_url;
+                      }}
                     />
                     {content.image_prompt && (
                       <p className="text-xs text-white/40 italic mb-3">

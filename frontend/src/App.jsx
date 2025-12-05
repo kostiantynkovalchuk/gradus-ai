@@ -33,7 +33,7 @@ function Navigation() {
               <Sparkles className="h-8 w-8 text-cyan-400 group-hover:text-cyan-300 transition-colors" />
               <div className="absolute inset-0 blur-lg bg-cyan-400/30 group-hover:bg-cyan-300/40 transition-colors"></div>
             </div>
-            <h1 className="text-xl font-bold gradient-text">Gradus AI</h1>
+            <h1 className="text-xl font-bold gradient-text">GradusMedia</h1>
           </Link>
           
           <div className="hidden md:flex items-center space-x-2">
