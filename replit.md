@@ -61,6 +61,12 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **Scheduled Posting:** Approved content is automatically posted at optimal engagement times:
     - **Facebook:** Daily at 18:00.
     - **LinkedIn:** Monday, Wednesday, Friday at 09:00.
+- **Duplicate Post Prevention:** Race condition protection for multi-container Render deployments:
+    - Database row locking (`SELECT FOR UPDATE SKIP LOCKED`) prevents multiple workers from grabbing the same article
+    - Intermediate posting states (`posting_facebook`, `posting_linkedin`) mark articles during posting
+    - Idempotency checks verify `fb_post_id`/`linkedin_post_id` doesn't exist before API calls
+    - Automatic status reset to 'approved' on posting failure for retry
+    - Manual approval endpoint respects intermediate states to avoid conflicts
 - **LinkedIn Integration:** Supports organization page posting with robust asset upload, local image fallback, and graceful degradation to text-only posts.
 - **API Monitoring:** Daily health checks for all external services with proactive Telegram alerts for issues.
 
