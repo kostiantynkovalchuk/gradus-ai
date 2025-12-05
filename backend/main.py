@@ -194,7 +194,32 @@ async def get_pending_content(db: Session = Depends(get_db)):
         content = db.query(ContentQueue).filter(
             ContentQueue.status == "pending_approval"
         ).order_by(ContentQueue.created_at.desc()).all()
-        return content
+        
+        return [
+            {
+                "id": article.id,
+                "status": article.status,
+                "source": article.source,
+                "source_url": article.source_url,
+                "source_title": article.source_title,
+                "original_text": article.original_text,
+                "translated_title": article.translated_title,
+                "translated_text": article.translated_text,
+                "image_url": article.image_url,
+                "image_prompt": article.image_prompt,
+                "local_image_path": article.local_image_path,
+                "scheduled_post_time": article.scheduled_post_time.isoformat() if article.scheduled_post_time else None,
+                "platforms": article.platforms,
+                "created_at": article.created_at.isoformat() if article.created_at else None,
+                "reviewed_at": article.reviewed_at.isoformat() if article.reviewed_at else None,
+                "reviewed_by": article.reviewed_by,
+                "rejection_reason": article.rejection_reason,
+                "extra_metadata": article.extra_metadata,
+                "language": article.language,
+                "needs_translation": article.needs_translation,
+            }
+            for article in content
+        ]
     except Exception as e:
         logger.error(f"Error fetching pending content: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -212,7 +237,29 @@ async def get_content_history(
             query = query.filter(ContentQueue.status == status)
         
         content = query.order_by(ContentQueue.created_at.desc()).limit(limit).all()
-        return content
+        
+        return [
+            {
+                "id": article.id,
+                "status": article.status,
+                "source": article.source,
+                "source_url": article.source_url,
+                "original_text": article.original_text,
+                "translated_title": article.translated_title,
+                "translated_text": article.translated_text,
+                "image_url": article.image_url,
+                "local_image_path": article.local_image_path,
+                "platforms": article.platforms,
+                "created_at": article.created_at.isoformat() if article.created_at else None,
+                "posted_at": article.posted_at.isoformat() if article.posted_at else None,
+                "reviewed_at": article.reviewed_at.isoformat() if article.reviewed_at else None,
+                "reviewed_by": article.reviewed_by,
+                "rejection_reason": article.rejection_reason,
+                "extra_metadata": article.extra_metadata,
+                "language": article.language,
+            }
+            for article in content
+        ]
     except Exception as e:
         logger.error(f"Error fetching content history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

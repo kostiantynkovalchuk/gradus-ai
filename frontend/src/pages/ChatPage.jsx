@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Send, Languages } from 'lucide-react'
+import { Send, Languages, Sparkles } from 'lucide-react'
 import axios from 'axios'
 import { API_URL } from '../lib/api'
 
@@ -43,25 +43,30 @@ function ChatPage() {
   }
 
   return (
-    <div>
-      <h1 className="text-3xl font-bold text-gray-900 mb-6">Chat & Translation</h1>
+    <div className="fade-in">
+      <div className="flex items-center space-x-3 mb-6">
+        <Sparkles className="text-cyan-400 h-8 w-8" />
+        <h1 className="text-3xl font-bold gradient-text">Chat & Translation</h1>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="glass-card p-6">
           <div className="flex items-center space-x-2 mb-4">
-            <Send className="text-purple-600" />
-            <h2 className="text-xl font-semibold">Chat with Claude</h2>
+            <div className="p-2 rounded-lg bg-purple-500/20">
+              <Send className="text-purple-400" size={20} />
+            </div>
+            <h2 className="text-xl font-semibold text-white">Chat with Claude</h2>
           </div>
 
           <form onSubmit={handleChat} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-white/70 mb-2">
                 Your Message
               </label>
               <textarea
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-white/40 focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500/50 transition-all"
                 rows="4"
                 placeholder="Type your message here..."
               />
@@ -70,35 +75,37 @@ function ChatPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 transition"
+              className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Processing...' : 'Send Message'}
             </button>
           </form>
 
           {chatResponse && (
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm font-medium text-gray-700 mb-2">Response:</p>
-              <p className="text-gray-900 whitespace-pre-wrap">{chatResponse}</p>
+            <div className="mt-4 p-4 bg-white/5 border border-white/10 rounded-xl">
+              <p className="text-sm font-medium text-white/70 mb-2">Response:</p>
+              <p className="text-white whitespace-pre-wrap">{chatResponse}</p>
             </div>
           )}
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="glass-card p-6">
           <div className="flex items-center space-x-2 mb-4">
-            <Languages className="text-purple-600" />
-            <h2 className="text-xl font-semibold">English → Ukrainian</h2>
+            <div className="p-2 rounded-lg bg-cyan-500/20">
+              <Languages className="text-cyan-400" size={20} />
+            </div>
+            <h2 className="text-xl font-semibold text-white">English → Ukrainian</h2>
           </div>
 
           <form onSubmit={handleTranslate} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-white/70 mb-2">
                 English Text
               </label>
               <textarea
                 value={textToTranslate}
                 onChange={(e) => setTextToTranslate(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-white/40 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all"
                 rows="4"
                 placeholder="Enter English text to translate..."
               />
@@ -107,16 +114,16 @@ function ChatPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 transition"
+              className="w-full py-3 px-6 bg-gradient-to-r from-cyan-500/80 to-purple-500/80 hover:from-cyan-500 hover:to-purple-500 text-white font-medium rounded-xl border border-white/20 transition-all duration-300 hover:transform hover:-translate-y-0.5 hover:shadow-lg hover:shadow-cyan-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Translating...' : 'Translate to Ukrainian'}
             </button>
           </form>
 
           {translation && (
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm font-medium text-gray-700 mb-2">Ukrainian Translation:</p>
-              <p className="text-gray-900 whitespace-pre-wrap text-lg">{translation}</p>
+            <div className="mt-4 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
+              <p className="text-sm font-medium text-cyan-400 mb-2">Ukrainian Translation:</p>
+              <p className="text-white whitespace-pre-wrap text-lg">{translation}</p>
             </div>
           )}
         </div>
