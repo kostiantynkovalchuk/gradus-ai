@@ -2,6 +2,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
 import logging
+import os
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
 from models.content import ContentQueue
@@ -433,6 +434,11 @@ class ContentScheduler:
         Uses database locking (SELECT FOR UPDATE SKIP LOCKED) to prevent
         duplicate posts when multiple containers run simultaneously.
         """
+        # Kill switch for automated posting
+        if os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true":
+            logger.info("🛑 [SCHEDULER] Auto-posting to Facebook disabled via DISABLE_AUTO_POSTING environment variable")
+            return
+        
         logger.info("🤖 [SCHEDULER] Facebook scheduled posting...")
         
         try:
@@ -576,6 +582,11 @@ class ContentScheduler:
         Uses database locking (SELECT FOR UPDATE SKIP LOCKED) to prevent
         duplicate posts when multiple containers run simultaneously.
         """
+        # Kill switch for automated posting
+        if os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true":
+            logger.info("🛑 [SCHEDULER] Auto-posting to LinkedIn disabled via DISABLE_AUTO_POSTING environment variable")
+            return
+        
         logger.info("🤖 [SCHEDULER] LinkedIn scheduled posting...")
         
         try:

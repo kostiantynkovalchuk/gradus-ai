@@ -1,0 +1,56 @@
+REPLIT AGENT TASK: Add Kill Switch for Automated Posting
+Objective
+Add an environment variable kill switch to pause automated Facebook and LinkedIn posting without stopping content scraping, translation, or Telegram approval workflows.
+Implementation Required
+1. Modify Facebook Posting Task
+In backend/services/scheduler.py, find the post_to_facebook_task() function and add this check at the very beginning (after the function definition, before any other code):
+pythonasync def post_to_facebook_task():
+    # Kill switch for automated posting
+    if os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true":
+        logger.info("🛑 Auto-posting to Facebook disabled via DISABLE_AUTO_POSTING environment variable")
+        return
+    
+    # ... rest of existing function code
+2. Modify LinkedIn Posting Task
+In the same file, find the post_to_linkedin_task() function and add the same check:
+pythonasync def post_to_linkedin_task():
+    # Kill switch for automated posting
+    if os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true":
+        logger.info("🛑 Auto-posting to LinkedIn disabled via DISABLE_AUTO_POSTING environment variable")
+        return
+    
+    # ... rest of existing function code
+3. Ensure os module is imported
+At the top of backend/services/scheduler.py, verify this import exists:
+pythonimport os
+If it's not there, add it.
+Requirements
+
+Use .lower() == "true" for case-insensitive comparison
+Default to "false" if variable is not set (so posting continues by default)
+Add clear log messages with 🛑 emoji so we can see in logs when kill switch is active
+Don't modify any other logic in the posting functions
+Don't touch scraping, translation, or Telegram approval code
+
+Testing
+After making changes:
+
+Show me the modified sections of code
+Confirm the logic: when DISABLE_AUTO_POSTING=true, posting stops but everything else continues
+
+Expected Behavior
+When DISABLE_AUTO_POSTING is not set or = "false":
+
+Posting runs normally at scheduled times (18:00 for Facebook, 18:30 for LinkedIn)
+
+When DISABLE_AUTO_POSTING = "true":
+
+Scheduler jobs still trigger at 18:00/18:30
+Functions immediately return with log message
+No articles are posted
+Articles stay in queue with status='approved'
+Scraping, translation, and Telegram approval continue normally
+
+Additional Context
+This kill switch is needed for Facebook reach recovery. We want to pause automated posting for 3-4 days while keeping the content pipeline running. The user will set this variable in Render's environment settings.
+Start by showing me the current post_to_facebook_task() and post_to_linkedin_task() function signatures so I can verify the changes.
