@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
-import { Home, MessageSquare, FileText, Sparkles } from 'lucide-react'
+import { Home, MessageSquare, FileText } from 'lucide-react'
 import HomePage from './pages/HomePage'
 import ChatPage from './pages/ChatPage'
 import ContentApproval from './pages/ContentApproval'
@@ -28,11 +28,7 @@ function Navigation() {
     <nav className="glass sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          <Link to="/" className="flex items-center space-x-3 group">
-            <div className="relative">
-              <Sparkles className="h-8 w-8 text-cyan-400 group-hover:text-cyan-300 transition-colors" />
-              <div className="absolute inset-0 blur-lg bg-cyan-400/30 group-hover:bg-cyan-300/40 transition-colors"></div>
-            </div>
+          <Link to="/" className="group">
             <h1 className="text-xl font-bold gradient-text">Gradus AI</h1>
           </Link>
           
