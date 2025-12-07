@@ -1,0 +1,131 @@
+# Add this to your existing FastAPI app file (main.py or app.py)
+# Just copy and paste this entire section
+
+from datetime import datetime, timedelta
+from fastapi import APIRouter
+import os
+
+# Create status router
+status_router = APIRouter()
+
+@status_router.get("/status")
+async def get_system_status():
+    """
+    Quick system status check - works without database dependency
+    Shows kill switch, environment, and basic health
+    """
+    try:
+        from database import SessionLocal
+        from models import Article
+        from sqlalchemy import desc
+        
+        db = SessionLocal()
+        
+        try:
+            # Pending approvals
+            pending = db.query(Article).filter(
+                Article.status == 'pending_approval'
+            ).count()
+            
+            # Approved today
+            approved_today = db.query(Article).filter(
+                Article.status == 'approved',
+                Article.created_at >= datetime.now().date()
+            ).count()
+            
+            # Last Facebook post
+            last_fb_post = db.query(Article).filter(
+                Article.facebook_post_id.isnot(None)
+            ).order_by(desc(Article.posted_at)).first()
+            
+            # Last scrape
+            last_scrape = db.query(Article).order_by(
+                desc(Article.created_at)
+            ).first()
+            
+            # Hours since last scrape
+            hours_since_scrape = None
+            if last_scrape:
+                hours_since_scrape = (datetime.now() - last_scrape.created_at).total_seconds() / 3600
+            
+            # Posts in last 24h
+            posts_24h = db.query(Article).filter(
+                Article.facebook_post_id.isnot(None),
+                Article.posted_at >= datetime.now() - timedelta(hours=24)
+            ).count()
+            
+            # Total articles
+            total_articles = db.query(Article).count()
+            
+            # Kill switch status
+            kill_switch = os.getenv("KILL_SWITCH", "false").lower() == "true"
+            
+            # Overall health
+            overall_health = "healthy"
+            if kill_switch:
+                overall_health = "paused"
+            elif hours_since_scrape and hours_since_scrape > 24:
+                overall_health = "warning"
+            
+            status_data = {
+                "status": overall_health,
+                "timestamp": datetime.now().isoformat(),
+                "automation": {
+                    "enabled": not kill_switch,
+                    "kill_switch": "active" if kill_switch else "inactive"
+                },
+                "content": {
+                    "pending_approvals": pending,
+                    "approved_today": approved_today,
+                    "total_articles": total_articles
+                },
+                "scraping": {
+                    "last_scrape": last_scrape.created_at.isoformat() if last_scrape else None,
+                    "hours_since_last": round(hours_since_scrape, 2) if hours_since_scrape else None,
+                    "status": "ok" if hours_since_scrape and hours_since_scrape < 24 else "warning"
+                },
+                "facebook": {
+                    "last_post": last_fb_post.posted_at.isoformat() if last_fb_post else None,
+                    "posts_last_24h": posts_24h,
+                    "status": "operational" if last_fb_post else "no_posts"
+                },
+                "database": {
+                    "status": "connected",
+                    "provider": "Neon PostgreSQL"
+                }
+            }
+            
+            db.close()
+            return status_data
+            
+        except Exception as db_error:
+            db.close()
+            raise db_error
+            
+    except Exception as e:
+        # Fallback status if database fails
+        kill_switch = os.getenv("KILL_SWITCH", "false").lower() == "true"
+        return {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "automation": {
+                "enabled": not kill_switch,
+                "kill_switch": "active" if kill_switch else "inactive"
+            },
+            "error": str(e),
+            "message": "Database connection failed, showing basic status only"
+        }
+
+
+@status_router.get("/health")
+async def health_check():
+    """Simple health check endpoint"""
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Gradus AI - GradusMedia"
+    }
+
+
+# ADD THIS LINE to your app initialization (after 'app = FastAPI()')
+# app.include_router(status_router)

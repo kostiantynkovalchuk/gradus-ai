@@ -1,11 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 import logging
 import threading
@@ -66,6 +67,106 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+status_router = APIRouter()
+
+@status_router.get("/status")
+async def get_system_status(db: Session = Depends(get_db)):
+    """
+    Quick system status check - shows kill switch, environment, and basic health
+    """
+    try:
+        pending = db.query(ContentQueue).filter(
+            ContentQueue.status == 'pending_approval'
+        ).count()
+        
+        approved_today = db.query(ContentQueue).filter(
+            ContentQueue.status == 'approved',
+            ContentQueue.created_at >= datetime.now().date()
+        ).count()
+        
+        last_fb_post = db.query(ContentQueue).filter(
+            ContentQueue.posted_at.isnot(None)
+        ).order_by(desc(ContentQueue.posted_at)).first()
+        
+        last_scrape = db.query(ContentQueue).order_by(
+            desc(ContentQueue.created_at)
+        ).first()
+        
+        hours_since_scrape = None
+        if last_scrape and last_scrape.created_at:
+            hours_since_scrape = (datetime.now() - last_scrape.created_at).total_seconds() / 3600
+        
+        posts_24h = db.query(ContentQueue).filter(
+            ContentQueue.posted_at.isnot(None),
+            ContentQueue.posted_at >= datetime.now() - timedelta(hours=24)
+        ).count()
+        
+        total_articles = db.query(ContentQueue).count()
+        
+        kill_switch = os.getenv("KILL_SWITCH", "false").lower() == "true"
+        
+        overall_health = "healthy"
+        if kill_switch:
+            overall_health = "paused"
+        elif hours_since_scrape and hours_since_scrape > 24:
+            overall_health = "warning"
+        
+        has_fb_post = last_fb_post and last_fb_post.extra_metadata and last_fb_post.extra_metadata.get('fb_post_id')
+        
+        return {
+            "status": overall_health,
+            "timestamp": datetime.now().isoformat(),
+            "automation": {
+                "enabled": not kill_switch,
+                "kill_switch": "active" if kill_switch else "inactive"
+            },
+            "content": {
+                "pending_approvals": pending,
+                "approved_today": approved_today,
+                "total_articles": total_articles
+            },
+            "scraping": {
+                "last_scrape": last_scrape.created_at.isoformat() if last_scrape and last_scrape.created_at else None,
+                "hours_since_last": round(hours_since_scrape, 2) if hours_since_scrape else None,
+                "status": "ok" if hours_since_scrape and hours_since_scrape < 24 else "warning"
+            },
+            "facebook": {
+                "last_post": last_fb_post.posted_at.isoformat() if last_fb_post and last_fb_post.posted_at else None,
+                "posts_last_24h": posts_24h,
+                "status": "operational" if has_fb_post else "no_posts"
+            },
+            "database": {
+                "status": "connected",
+                "provider": "Neon PostgreSQL"
+            }
+        }
+        
+    except Exception as e:
+        kill_switch = os.getenv("KILL_SWITCH", "false").lower() == "true"
+        return {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "automation": {
+                "enabled": not kill_switch,
+                "kill_switch": "active" if kill_switch else "inactive"
+            },
+            "error": str(e),
+            "message": "Database connection failed, showing basic status only"
+        }
+
+
+@status_router.get("/health")
+async def health_check():
+    """Simple health check endpoint"""
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Gradus AI - GradusMedia"
+    }
+
+
+app.include_router(status_router)
 
 class ChatRequest(BaseModel):
     message: str
