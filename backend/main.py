@@ -73,7 +73,8 @@ status_router = APIRouter()
 @status_router.get("/status")
 async def get_system_status(db: Session = Depends(get_db)):
     """
-    Quick system status check - shows kill switch, environment, and basic health
+    System status - accurately reflects that only FB posting is paused
+    Scraping, translation, and Telegram approvals are still operational
     """
     try:
         pending = db.query(ContentQueue).filter(
@@ -104,37 +105,47 @@ async def get_system_status(db: Session = Depends(get_db)):
         
         total_articles = db.query(ContentQueue).count()
         
-        kill_switch = os.getenv("KILL_SWITCH", "false").lower() == "true"
+        fb_posting_disabled = os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true"
         
-        overall_health = "healthy"
-        if kill_switch:
-            overall_health = "paused"
-        elif hours_since_scrape and hours_since_scrape > 24:
-            overall_health = "warning"
+        overall_status = "operational"
+        if hours_since_scrape and hours_since_scrape > 24:
+            overall_status = "degraded"
         
         has_fb_post = last_fb_post and last_fb_post.extra_metadata and last_fb_post.extra_metadata.get('fb_post_id')
         
         return {
-            "status": overall_health,
+            "status": overall_status,
             "timestamp": datetime.now().isoformat(),
-            "automation": {
-                "enabled": not kill_switch,
-                "kill_switch": "active" if kill_switch else "inactive"
+            "system_components": {
+                "scraping": {
+                    "status": "ok" if hours_since_scrape and hours_since_scrape < 24 else "warning",
+                    "last_run": last_scrape.created_at.isoformat() if last_scrape and last_scrape.created_at else None,
+                    "hours_since_last": round(hours_since_scrape, 2) if hours_since_scrape else None
+                },
+                "translation": {
+                    "status": "operational",
+                    "note": "Claude API - automatic on scrape"
+                },
+                "telegram_approvals": {
+                    "status": "operational",
+                    "pending_count": pending,
+                    "approved_today": approved_today
+                },
+                "facebook_posting": {
+                    "status": "paused" if fb_posting_disabled else "operational",
+                    "reason": "Professional Dashboard recovery" if fb_posting_disabled else None,
+                    "last_post": last_fb_post.posted_at.isoformat() if last_fb_post and last_fb_post.posted_at else None,
+                    "posts_last_24h": posts_24h
+                },
+                "linkedin_posting": {
+                    "status": "pending_api_access",
+                    "note": "Awaiting LinkedIn API approval"
+                }
             },
             "content": {
                 "pending_approvals": pending,
                 "approved_today": approved_today,
                 "total_articles": total_articles
-            },
-            "scraping": {
-                "last_scrape": last_scrape.created_at.isoformat() if last_scrape and last_scrape.created_at else None,
-                "hours_since_last": round(hours_since_scrape, 2) if hours_since_scrape else None,
-                "status": "ok" if hours_since_scrape and hours_since_scrape < 24 else "warning"
-            },
-            "facebook": {
-                "last_post": last_fb_post.posted_at.isoformat() if last_fb_post and last_fb_post.posted_at else None,
-                "posts_last_24h": posts_24h,
-                "status": "operational" if has_fb_post else "no_posts"
             },
             "database": {
                 "status": "connected",
@@ -143,16 +154,17 @@ async def get_system_status(db: Session = Depends(get_db)):
         }
         
     except Exception as e:
-        kill_switch = os.getenv("KILL_SWITCH", "false").lower() == "true"
+        fb_posting_disabled = os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true"
         return {
             "status": "error",
             "timestamp": datetime.now().isoformat(),
-            "automation": {
-                "enabled": not kill_switch,
-                "kill_switch": "active" if kill_switch else "inactive"
+            "system_components": {
+                "facebook_posting": {
+                    "status": "paused" if fb_posting_disabled else "unknown"
+                }
             },
             "error": str(e),
-            "message": "Database connection failed, showing basic status only"
+            "message": "Database connection failed"
         }
 
 

@@ -1,0 +1,118 @@
+NO - Don't just change the variable name. The entire logic is wrong.
+
+When DISABLE_AUTO_POSTING=true:
+- Scraping is STILL RUNNING ✅
+- Translation is STILL RUNNING ✅
+- Telegram approvals are STILL RUNNING ✅
+- ONLY Facebook posting is paused ⏸️
+
+So the status should be "operational", NOT "paused".
+
+Replace the ENTIRE get_system_status() function (lines 73-156) with this corrected code:
+```python
+@status_router.get("/status")
+async def get_system_status(db: Session = Depends(get_db)):
+    """
+    System status - accurately reflects that only FB posting is paused
+    Scraping, translation, and Telegram approvals are still operational
+    """
+    try:
+        pending = db.query(ContentQueue).filter(
+            ContentQueue.status == 'pending_approval'
+        ).count()
+        
+        approved_today = db.query(ContentQueue).filter(
+            ContentQueue.status == 'approved',
+            ContentQueue.created_at >= datetime.now().date()
+        ).count()
+        
+        last_fb_post = db.query(ContentQueue).filter(
+            ContentQueue.posted_at.isnot(None)
+        ).order_by(desc(ContentQueue.posted_at)).first()
+        
+        last_scrape = db.query(ContentQueue).order_by(
+            desc(ContentQueue.created_at)
+        ).first()
+        
+        hours_since_scrape = None
+        if last_scrape and last_scrape.created_at:
+            hours_since_scrape = (datetime.now() - last_scrape.created_at).total_seconds() / 3600
+        
+        posts_24h = db.query(ContentQueue).filter(
+            ContentQueue.posted_at.isnot(None),
+            ContentQueue.posted_at >= datetime.now() - timedelta(hours=24)
+        ).count()
+        
+        total_articles = db.query(ContentQueue).count()
+        
+        # Check if FB posting is disabled (NOT entire system)
+        fb_posting_disabled = os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true"
+        
+        # Overall system health - operational even if FB posting paused
+        overall_status = "operational"
+        if hours_since_scrape and hours_since_scrape > 24:
+            overall_status = "degraded"  # Scraping stopped = real problem
+        
+        has_fb_post = last_fb_post and last_fb_post.extra_metadata and last_fb_post.extra_metadata.get('fb_post_id')
+        
+        return {
+            "status": overall_status,
+            "timestamp": datetime.now().isoformat(),
+            "system_components": {
+                "scraping": {
+                    "status": "ok" if hours_since_scrape and hours_since_scrape < 24 else "warning",
+                    "last_run": last_scrape.created_at.isoformat() if last_scrape and last_scrape.created_at else None,
+                    "hours_since_last": round(hours_since_scrape, 2) if hours_since_scrape else None
+                },
+                "translation": {
+                    "status": "operational",
+                    "note": "Claude API - automatic on scrape"
+                },
+                "telegram_approvals": {
+                    "status": "operational",
+                    "pending_count": pending,
+                    "approved_today": approved_today
+                },
+                "facebook_posting": {
+                    "status": "paused" if fb_posting_disabled else "operational",
+                    "reason": "Professional Dashboard recovery" if fb_posting_disabled else None,
+                    "last_post": last_fb_post.posted_at.isoformat() if last_fb_post and last_fb_post.posted_at else None,
+                    "posts_last_24h": posts_24h
+                },
+                "linkedin_posting": {
+                    "status": "pending_api_access",
+                    "note": "Awaiting LinkedIn API approval"
+                }
+            },
+            "content": {
+                "pending_approvals": pending,
+                "approved_today": approved_today,
+                "total_articles": total_articles
+            },
+            "database": {
+                "status": "connected",
+                "provider": "Neon PostgreSQL"
+            }
+        }
+        
+    except Exception as e:
+        fb_posting_disabled = os.getenv("DISABLE_AUTO_POSTING", "false").lower() == "true"
+        return {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "system_components": {
+                "facebook_posting": {
+                    "status": "paused" if fb_posting_disabled else "unknown"
+                }
+            },
+            "error": str(e),
+            "message": "Database connection failed"
+        }
+```
+
+After making this change, test it locally to verify it shows:
+- "status": "operational" (NOT "paused")
+- "facebook_posting": {"status": "paused"}
+- "scraping": {"status": "ok"}
+
+Only push after confirming this works correctly.
