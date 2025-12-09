@@ -178,14 +178,15 @@ class DeloUaScraper(ScraperBase):
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Try multiple selectors for article content
+            # Try multiple selectors for article content (delo.ua specific first)
             content_elem = (
+                soup.select_one('.c-post__content') or  # Delo.ua specific - most accurate
+                soup.select_one('.c-post__body') or     # Delo.ua fallback
                 soup.select_one('.article-content') or
                 soup.select_one('.post-content') or
                 soup.select_one('.entry-content') or
-                soup.select_one('article') or
                 soup.select_one('.article-body') or
-                soup.select_one('[class*="content"]')
+                soup.select_one('[class*="post__content"]')  # Avoid generic 'article' tag
             )
             
             if not content_elem:
@@ -372,7 +373,7 @@ class DeloUaScraper(ScraperBase):
         lines = full_text.split('\n')
         if lines:
             last_line = lines[-1].strip()
-            if len(last_line) < 50 and not last_line.endswith(('.', '!', '?', '"', '»')):
+            if len(last_line) < 50 and not last_line.endswith(('.', '!', '?', '"', '»', ')')):
                 lines = lines[:-1]
         
         full_text = '\n'.join(lines)
