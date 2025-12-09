@@ -157,23 +157,38 @@ class RestoratorUaScraper(ScraperBase):
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Try multiple selectors for article content
+            # Try selectors for article content - prioritize specific content containers
             content_elem = (
+                soup.select_one('.entry-content') or  # Most specific - horeca-ukraine.com uses this
                 soup.select_one('.post-content') or
-                soup.select_one('article') or
-                soup.select_one('.content') or
-                soup.select_one('.entry-content') or
-                soup.select_one('.article-body') or
-                soup.select_one('[class*="content"]')
+                soup.select_one('.article-content') or
+                soup.select_one('.the-content') or
+                soup.select_one('.article-body')
+                # Avoid generic 'article' tag - it includes related posts, sidebar, footer
             )
             
             if not content_elem:
                 logger.warning(f"  Could not find content container for: {url}")
                 return None
             
-            # Remove unwanted elements (ads, scripts, social, etc.)
-            for unwanted in content_elem.select('script, style, aside, .ads, .advertisement, nav, footer, .related, .comments, .share'):
+            # Remove unwanted elements (ads, scripts, social, related articles, etc.)
+            unwanted_selectors = [
+                'script', 'style', 'aside', 'nav', 'footer',
+                '.ads', '.advertisement', '.comments', '.share', '.social',
+                '.related', '.related-posts', '.related-articles',
+                '.widget', '.sidebar', '.more-stories', '.read-more',
+                '.td-related-column', '.td_block_related_posts',
+                '.post-navigation', '.nav-links',
+                '.wp-block-group'  # HoReCa-Україна: contains "Цікаве за цей тиждень" related articles
+            ]
+            for unwanted in content_elem.select(', '.join(unwanted_selectors)):
                 unwanted.decompose()
+            
+            # Remove footer disclaimer and hashtag sections
+            for elem in content_elem.select('p.has-small-font-size, h1.has-small-font-size'):
+                text = elem.get_text()
+                if 'Усі представлені фото' in text or '#Новини' in text:
+                    elem.decompose()
             
             # Remove metadata elements BEFORE extracting text
             metadata_selectors = [
