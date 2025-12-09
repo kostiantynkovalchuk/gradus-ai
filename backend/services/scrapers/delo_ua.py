@@ -312,7 +312,7 @@ class DeloUaScraper(ScraperBase):
         # Only remove when it's clearly a standalone caption, not inline mention
         # Pattern must be: short caption (no punctuation) + " / " + credit at END of caption
         # This avoids matching legitimate sentences like "За даними Reuters / AFP..."
-        photo_credits = ['Depositphotos', 'Getty Images', 'Unsplash', 'УНІАН', 'UNIAN', 'Shutterstock', 'iStock']
+        photo_credits = ['Depositphotos', 'Getty Images', 'Unsplash', 'УНІАН', 'UNIAN', 'Shutterstock', 'iStock', 'Freepik', 'Freepic']
         for credit in photo_credits:
             # Only match at the very start: "Caption / Credit " followed by capital letter
             # This targets patterns like "Індекс самопочуття ритейлу зріс / Depositphotos Індекс..."
