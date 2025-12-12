@@ -8,6 +8,7 @@ dependencies = [
     "apscheduler>=3.11.1",
     "beautifulsoup4>=4.14.2",
     "fastapi>=0.121.1",
+    "httpx>=0.28.1",
     "lxml>=6.0.2",
     "openai>=2.7.2",
     "playwright>=1.56.0",

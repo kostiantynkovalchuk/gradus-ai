@@ -25,6 +25,7 @@ from services.facebook_poster import facebook_poster
 from services.scheduler import content_scheduler
 from services.telegram_webhook import telegram_webhook_handler
 from services.api_token_monitor import api_token_monitor
+from routes.facebook_insights import router as facebook_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -179,6 +180,7 @@ async def health_check():
 
 
 app.include_router(status_router)
+app.include_router(facebook_router, prefix="/api/facebook", tags=["facebook"])
 
 class ChatRequest(BaseModel):
     message: str
