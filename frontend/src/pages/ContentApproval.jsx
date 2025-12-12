@@ -15,6 +15,7 @@ function ContentApproval() {
   const [pendingContent, setPendingContent] = useState([])
   const [stats, setStats] = useState({ pending: 0, approved: 0, posted: 0, rejected: 0 })
   const [loading, setLoading] = useState(true)
+  const [imageVersions, setImageVersions] = useState({}) // Track cache-busting versions per article
 
   useEffect(() => {
     fetchData()
@@ -86,8 +87,17 @@ function ContentApproval() {
   const handleRegenerateImage = async (contentId) => {
     try {
       console.log('Regenerating image for content', contentId)
-      await api.post(`/images/regenerate/${contentId}`)
-      alert('Image regenerated successfully!')
+      const response = await api.post(`/images/regenerate/${contentId}`)
+      
+      if (response.data.status === 'success') {
+        // Update image version to force browser cache refresh
+        setImageVersions(prev => ({
+          ...prev,
+          [contentId]: Date.now()
+        }))
+        alert('Image regenerated successfully!')
+      }
+      
       fetchData()
     } catch (error) {
       console.error('Error regenerating image:', error)
@@ -178,7 +188,7 @@ function ContentApproval() {
                   </h4>
                   <div className="bg-white/5 p-4 rounded-xl border border-white/10">
                     <img 
-                      src={`/api/images/serve/${content.id}`} 
+                      src={`/api/images/serve/${content.id}${imageVersions[content.id] ? `?v=${imageVersions[content.id]}` : ''}`} 
                       alt="Generated" 
                       className="w-full max-w-md rounded-lg shadow-2xl mb-3"
                       onError={(e) => {
