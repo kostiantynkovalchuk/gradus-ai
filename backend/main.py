@@ -848,10 +848,12 @@ async def translate_pending_articles(limit: int = 10, db: Session = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/images/serve/{article_id}")
-async def serve_article_image(article_id: int, db: Session = Depends(get_db)):
+async def serve_article_image(article_id: int, v: int = None, db: Session = Depends(get_db)):
     """
     Serve image for an article from database binary data or local file.
     Priority: Database binary → Local file → Original URL redirect
+    
+    v parameter is for cache busting (ignored, just forces browser to reload)
     """
     try:
         article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
@@ -951,6 +953,7 @@ async def regenerate_image(
 ):
     """
     Regenerate image for article (generates new prompt and new image)
+    Updates both local file path AND database binary for persistence
     """
     try:
         article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
@@ -971,14 +974,37 @@ async def regenerate_image(
             article.image_url = result['image_url']
             article.image_prompt = result['prompt']
             article.local_image_path = result.get('local_path', '')
+            
+            # Read the saved image file and store in database for persistence
+            local_path = result.get('local_path', '')
+            if local_path:
+                try:
+                    # Resolve absolute path
+                    image_path = Path(local_path)
+                    if not image_path.is_absolute():
+                        backend_dir = Path(__file__).parent
+                        image_path = backend_dir / local_path
+                    
+                    if image_path.exists():
+                        with open(image_path, 'rb') as f:
+                            article.image_data = f.read()
+                        logger.info(f"Stored regenerated image in database for article {article_id}")
+                except Exception as e:
+                    logger.warning(f"Could not store image in database: {e}")
+            
+            article.updated_at = datetime.now()
             db.commit()
             
             logger.info(f"Image regenerated for article {article_id}")
             
+            # Return with cache-busting timestamp
+            import time
+            timestamp = int(time.time())
+            
             return {
                 "status": "success",
                 "article_id": article_id,
-                "image_url": result['image_url'],
+                "image_url": f"/api/images/serve/{article_id}?v={timestamp}",
                 "prompt": result['prompt']
             }
         else:

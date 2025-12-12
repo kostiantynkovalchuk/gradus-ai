@@ -55,10 +55,6 @@ externalPort = 80
 localPort = 8000
 externalPort = 8000
 
-[[ports]]
-localPort = 37575
-externalPort = 3000
-
 [deployment]
 deploymentTarget = "vm"
 run = ["bash", "-c", "cd backend && uvicorn main:app --host 0.0.0.0 --port 5000 --log-level info"]

@@ -1,0 +1,54 @@
+I need to fix the image regeneration feature. The regeneration is generating new images successfully, but they're not showing up in the UI after page reload.
+
+PROBLEM ANALYSIS FROM LOGS:
+- The /api/images/regenerate/{article_id} endpoint successfully generates new DALL-E images
+- New images are saved to disk at /app/backend/attached_assets/generated_images/
+- However, the /api/images/serve/{article_id} endpoint serves images from the database image_data field
+- The regenerate endpoint is NOT updating the image_data field in the database
+- Result: UI still shows old image because database wasn't updated
+
+FIX REQUIRED:
+
+1. Update the /api/images/regenerate/{article_id} endpoint to:
+   a) After generating and saving the new image to disk, READ the saved image file back into memory
+   b) Update the article.image_data field with the new image bytes
+   c) Update article.updated_at timestamp
+   d) Commit changes to database
+   e) Add cache-busting timestamp to the response URL
+
+2. Update the /api/images/serve/{article_id} endpoint to:
+   a) Accept an optional query parameter 'v' (for cache busting)
+   b) Ignore the 'v' parameter (it's only for browser cache busting)
+
+EXPECTED CODE CHANGES:
+
+In the regenerate endpoint, after generating the image:
+```python
+# After image generation (which saves to disk)
+# Read the saved image file back
+local_file_path = # path to the saved dalle_*.png file
+with open(local_file_path, 'rb') as f:
+    image_bytes = f.read()
+
+# Update database
+article.image_data = image_bytes
+article.updated_at = datetime.now()
+db.commit()
+
+# Return with cache-busting URL
+import time
+timestamp = int(time.time())
+return {
+    "status": "success", 
+    "image_url": f"/api/images/serve/{article_id}?v={timestamp}",
+    "message": "Image regenerated successfully"
+}
+```
+
+In the serve endpoint signature:
+```python
+@app.get("/api/images/serve/{article_id}")
+async def serve_image(article_id: int, v: int = None, db: Session = Depends(get_db)):
+    # v parameter ignored, just for cache busting
+    # ... rest of existing code unchanged
+```
