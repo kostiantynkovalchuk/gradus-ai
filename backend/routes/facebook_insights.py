@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 import httpx
 import os
 import logging
+from datetime import datetime, timedelta
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,6 +65,58 @@ async def get_recent_posts(limit: int = 20):
         
     except Exception as e:
         logger.error(f"Facebook API error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/insights")
+async def get_page_insights(days: int = 7):
+    """Get page insights - returns graceful error if data not available yet"""
+    if not FACEBOOK_PAGE_ID or not FACEBOOK_ACCESS_TOKEN:
+        raise HTTPException(status_code=500, detail="Facebook credentials not configured")
+    
+    try:
+        since = int((datetime.now() - timedelta(days=days)).timestamp())
+        until = int(datetime.now().timestamp())
+        
+        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/insights"
+        params = {
+            "metric": "page_impressions,page_impressions_unique,page_post_engagements,page_fans",
+            "period": "day",
+            "since": since,
+            "until": until,
+            "access_token": FACEBOOK_ACCESS_TOKEN
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params)
+            
+            if response.status_code == 400:
+                return {
+                    "status": "not_available_yet",
+                    "message": "Insights data not available yet. Reasons: page too new, not enough followers, or posts too recent.",
+                    "recommendation": "Try again in 24-48 hours after posting and getting some followers",
+                    "insights": []
+                }
+            
+            response.raise_for_status()
+            data = response.json()
+        
+        return {
+            "status": "success",
+            "insights": data.get("data", []),
+            "period": f"last_{days}_days"
+        }
+        
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            return {
+                "status": "not_available_yet",
+                "message": "Insights data not ready. Page needs activity and time.",
+                "insights": []
+            }
+        logger.error(f"Facebook API error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/health")
