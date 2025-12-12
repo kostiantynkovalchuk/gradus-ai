@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException
 import httpx
 import os
-from datetime import datetime, timedelta
 import logging
 
 router = APIRouter()
@@ -38,15 +37,15 @@ async def get_page_info():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/posts")
-async def get_recent_posts(limit: int = 10):
-    """Get recent posts and their metrics"""
+async def get_recent_posts(limit: int = 20):
+    """Get recent posts - NO insights, just post data"""
     if not FACEBOOK_PAGE_ID or not FACEBOOK_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="Facebook credentials not configured")
     
     try:
         url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/posts"
         params = {
-            "fields": "id,message,created_time,permalink_url,insights.metric(post_impressions,post_engaged_users,post_reactions_by_type_total)",
+            "fields": "id,message,created_time,full_picture,permalink_url",
             "limit": limit,
             "access_token": FACEBOOK_ACCESS_TOKEN
         }
@@ -56,63 +55,13 @@ async def get_recent_posts(limit: int = 10):
             response.raise_for_status()
             data = response.json()
         
-        posts = []
-        for post in data.get("data", []):
-            post_data = {
-                "id": post.get("id"),
-                "message": post.get("message", "")[:200],
-                "created_time": post.get("created_time"),
-                "url": post.get("permalink_url"),
-                "metrics": {}
-            }
-            
-            if "insights" in post and "data" in post["insights"]:
-                for insight in post["insights"]["data"]:
-                    metric_name = insight.get("name")
-                    values = insight.get("values", [])
-                    if values:
-                        post_data["metrics"][metric_name] = values[0].get("value", 0)
-            
-            posts.append(post_data)
-        
         return {
             "status": "success",
-            "posts": posts,
-            "count": len(posts)
-        }
-    except Exception as e:
-        logger.error(f"Facebook API error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/insights")
-async def get_page_insights(days: int = 7):
-    """Get page insights for the last N days"""
-    if not FACEBOOK_PAGE_ID or not FACEBOOK_ACCESS_TOKEN:
-        raise HTTPException(status_code=500, detail="Facebook credentials not configured")
-    
-    try:
-        since = int((datetime.now() - timedelta(days=days)).timestamp())
-        until = int(datetime.now().timestamp())
-        
-        url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/insights"
-        params = {
-            "metric": "page_impressions,page_impressions_unique,page_post_engagements,page_fans",
-            "period": "day",
-            "since": since,
-            "until": until,
-            "access_token": FACEBOOK_ACCESS_TOKEN
+            "posts": data.get("data", []),
+            "count": len(data.get("data", [])),
+            "note": "Metrics unavailable - page too new (insights need 24-48 hours)"
         }
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-        
-        return {
-            "status": "success",
-            "insights": data.get("data", []),
-            "period": f"last_{days}_days"
-        }
     except Exception as e:
         logger.error(f"Facebook API error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
