@@ -1,0 +1,96 @@
+🔧 Implementation Steps for Your Backend
+Step 1: Add the Code to Your FastAPI Project
+Option A - Create new file (Recommended):
+bash# In your FastAPI project root:
+/your-fastapi-project/
+  ├── main.py
+  ├── articles_api.py  ← CREATE THIS NEW FILE
+  └── ...
+Option B - Add to existing routes file:
+If you already have a routes.py or similar, you can add it there.
+
+Step 2: Adapt Database Queries to Your Setup
+The code has placeholders that need your actual database connection. Here's what to replace:
+Find this in the code:
+pythonasync def get_published_articles(...):
+    query = """..."""
+    # Replace with your actual database query
+    pass  # ← REPLACE THIS
+Replace with your actual database code. Since you're using PostgreSQL on Neon, you probably have something like:
+If using asyncpg directly:
+pythonasync def get_published_articles(limit: int = 20, offset: int = 0, category: Optional[str] = None):
+    query = """
+        SELECT * FROM content 
+        WHERE approval_status IN ('published', 'approved')
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as conn:
+        results = await conn.fetch(query, limit, offset)
+        return results
+If using SQLAlchemy:
+pythonfrom sqlalchemy import select
+from your_models import Content
+
+async def get_published_articles(limit: int = 20, offset: int = 0, category: Optional[str] = None):
+    async with async_session() as session:
+        query = select(Content).where(
+            Content.approval_status.in_(['published', 'approved'])
+        ).order_by(Content.created_at.desc()).limit(limit).offset(offset)
+        
+        result = await session.execute(query)
+        return result.scalars().all()
+Do the same for:
+
+get_article_by_slug()
+search_articles()
+
+
+Step 3: Update main.py
+Add these lines to your main.py:
+pythonfrom fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from articles_api import articles_router  # ← ADD THIS
+
+app = FastAPI()
+
+# CORS configuration - ADD THIS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://gradusmedia.org",
+        "http://localhost:3000",  # For development
+        "https://*.vercel.app",   # For Vercel previews
+    ],
+    allow_credentials=True,
+    allow_methods=["GET"],  # Public API only needs GET
+    allow_headers=["*"],
+)
+
+# Include the articles router - ADD THIS
+app.include_router(articles_router)
+
+# Your existing routes...
+
+Step 4: Test Locally
+bash# Run your FastAPI server
+uvicorn main:app --reload
+
+# Test the endpoints:
+# http://localhost:8000/api/articles
+# http://localhost:8000/api/articles/search?q=whisky
+# http://localhost:8000/api/articles/article-slug-123
+
+Step 5: Deploy to Render.com
+bash# Commit changes
+git add .
+git commit -m "Add public articles API for gradusmedia.org"
+git push origin main
+
+# Render.com will auto-deploy
+
+Step 6: Verify It Works
+After deployment, test:
+
+https://gradus-ai.onrender.com/api/articles
+https://gradus-ai.onrender.com/docs (should show new endpoints)
