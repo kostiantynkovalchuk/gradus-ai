@@ -1159,6 +1159,54 @@ async def migrate_images_to_local_storage(db: Session = Depends(get_db)):
         logger.error(f"Migration error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/images/fix-missing")
+async def fix_missing_images(limit: int = 100, db: Session = Depends(get_db)):
+    """Regenerate images for articles with expired DALL-E URLs but no stored image_data"""
+    try:
+        articles = db.query(ContentQueue).filter(
+            ContentQueue.image_url != None,
+            ContentQueue.image_data == None,
+            ContentQueue.status.in_(['approved', 'posted'])
+        ).limit(limit).all()
+        
+        if not articles:
+            return {"message": "No articles need fixing", "count": 0}
+        
+        fixed_count = 0
+        for article in articles:
+            try:
+                title = article.translated_title or article.source_title or ""
+                content = article.translated_text or article.original_text or ""
+                
+                article_data = {
+                    'title': title,
+                    'content': content[:1000]
+                }
+                
+                result = image_generator.generate_article_image(article_data)
+                
+                if result and result.get('image_data'):
+                    article.image_data = result['image_data']
+                    article.image_url = result.get('image_url', article.image_url)
+                    article.local_image_path = result.get('local_path')
+                    article.image_prompt = result.get('prompt')
+                    db.commit()
+                    fixed_count += 1
+                    logger.info(f"Fixed image for article {article.id}")
+            except Exception as e:
+                logger.error(f"Failed to fix image for article {article.id}: {e}")
+                continue
+        
+        return {
+            "status": "success",
+            "message": f"Fixed {fixed_count} articles",
+            "total_found": len(articles),
+            "fixed": fixed_count
+        }
+    except Exception as e:
+        logger.error(f"Error in fix-missing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/facebook/test")
 async def test_facebook_connection():
     """Test Facebook API connection"""
