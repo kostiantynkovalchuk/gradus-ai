@@ -61,7 +61,7 @@ async def get_published_articles(
             content=article.translated_text or article.original_text,
             source=article.source,
             source_url=article.source_url,
-            image_url=f"/api/content/{article.id}/image" if article.image_data else article.image_url,
+            image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
             platforms=article.platforms,
             published_at=article.posted_at or article.reviewed_at or article.created_at,
             language=article.language
@@ -103,7 +103,7 @@ async def search_articles(
             "title": article.translated_title or article.source_title,
             "content": (article.translated_text or article.original_text or "")[:300] + "...",
             "source": article.source,
-            "image_url": f"/api/content/{article.id}/image" if article.image_data else article.image_url,
+            "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
             "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None
         })
     
@@ -135,7 +135,7 @@ async def get_article_by_id(
         "content": article.translated_text or article.original_text,
         "source": article.source,
         "source_url": article.source_url,
-        "image_url": f"/api/content/{article.id}/image" if article.image_data else article.image_url,
+        "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
         "platforms": article.platforms,
         "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None,
         "language": article.language
