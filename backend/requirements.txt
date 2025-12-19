@@ -14,7 +14,6 @@ python-dotenv
 python-multipart
 python-telegram-bot
 requests
-sentence-transformers==2.7.0
 sqlalchemy
 trafilatura
 uvicorn

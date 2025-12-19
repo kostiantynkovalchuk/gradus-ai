@@ -26,15 +26,12 @@ chat_claude = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 PINECONE_AVAILABLE = False
 chat_index = None
-chat_embedder = None
 
 try:
-    from sentence_transformers import SentenceTransformer
     from pinecone import Pinecone, ServerlessSpec
     
     pinecone_key = os.getenv("PINECONE_API_KEY")
     if pinecone_key:
-        chat_embedder = SentenceTransformer('all-MiniLM-L6-v2')
         chat_pc = Pinecone(api_key=pinecone_key)
         
         INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "gradus-media")
@@ -47,7 +44,7 @@ try:
             try:
                 chat_pc.create_index(
                     name=INDEX_NAME,
-                    dimension=384,
+                    dimension=1536,
                     metric="cosine",
                     spec=ServerlessSpec(cloud="aws", region="us-east-1")
                 )
@@ -58,7 +55,7 @@ try:
     else:
         logger.warning("PINECONE_API_KEY not set - RAG features disabled")
 except ImportError as e:
-    logger.warning(f"Pinecone/sentence-transformers not installed: {e}")
+    logger.warning(f"Pinecone not installed: {e}")
 except Exception as e:
     logger.error(f"Error initializing Pinecone: {e}")
 
@@ -87,7 +84,7 @@ async def chat_with_avatars(request: ChatRequest):
         url = urls[0]
         company_name = extract_company_name_from_url(url)
         
-        result = await ingest_website(url, company_name, chat_index, chat_embedder)
+        result = await ingest_website(url, company_name, chat_index)
         
         if result['status'] == 'success':
             response_text = f"""{result['message']}
@@ -120,7 +117,7 @@ async def chat_with_avatars(request: ChatRequest):
     rag_context = ""
     sources = []
     if PINECONE_AVAILABLE:
-        rag_context, sources = await retrieve_context(message, chat_index, chat_embedder)
+        rag_context, sources = await retrieve_context(message, chat_index)
         
         if rag_context:
             system_prompt += f"\n\n{rag_context}\n\nIMPORTANT: Use the above information when relevant. Mention sources."
@@ -189,7 +186,7 @@ async def knowledge_stats():
         return {
             "total_vectors": stats.total_vector_count,
             "namespaces": dict(stats.namespaces) if stats.namespaces else {},
-            "dimension": 384,
+            "dimension": 1536,
             "index_name": os.getenv("PINECONE_INDEX_NAME", "gradus-media")
         }
     except Exception as e:

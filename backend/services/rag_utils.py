@@ -1,11 +1,28 @@
 import re
+import os
 import httpx
 import logging
 from typing import List, Tuple, Optional
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def get_embedding(text: str) -> List[float]:
+    """Get embedding using OpenAI text-embedding-3-small"""
+    try:
+        text = text[:8000]
+        response = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        logger.error(f"Embedding error: {e}")
+        raise
 
 def extract_urls(text: str) -> List[str]:
     """Extract URLs from text"""
@@ -83,7 +100,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     
     return chunks
 
-async def ingest_website(url: str, company_name: str, index, embedder) -> dict:
+async def ingest_website(url: str, company_name: str, index) -> dict:
     """Ingest website content into vector database"""
     try:
         scraped = await scrape_website_content(url)
@@ -105,7 +122,7 @@ async def ingest_website(url: str, company_name: str, index, embedder) -> dict:
         
         vectors = []
         for i, chunk in enumerate(chunks):
-            embedding = embedder.encode(chunk).tolist()
+            embedding = get_embedding(chunk)
             
             vectors.append({
                 'id': f"{company_name}_{i}",
@@ -135,10 +152,10 @@ async def ingest_website(url: str, company_name: str, index, embedder) -> dict:
             'message': f"Помилка при обробці: {str(e)}"
         }
 
-async def retrieve_context(query: str, index, embedder, top_k: int = 3) -> Tuple[str, List[str]]:
+async def retrieve_context(query: str, index, top_k: int = 3) -> Tuple[str, List[str]]:
     """Retrieve relevant context from vector database"""
     try:
-        query_embedding = embedder.encode(query).tolist()
+        query_embedding = get_embedding(query)
         
         results = index.query(
             vector=query_embedding,
