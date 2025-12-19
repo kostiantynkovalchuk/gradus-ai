@@ -1,0 +1,130 @@
+Enhance AVTD brand ingestion to create rich contextual knowledge for better RAG retrieval.
+
+CURRENT ISSUE:
+- AVTD ingestion gets repetitive menu text: "GREENDAY, HELSINKI, ADJARI та інші"
+- Scores low (0.45-0.5) because no context about what these brands ARE
+- Need: "GREENDAY is a premium vodka brand from AVTD..." format
+- Target: 0.7+ retrieval scores
+
+SOLUTION:
+Update backend/services/rag_utils.py to add smart brand extraction and context enrichment.
+
+ADD NEW FUNCTION after is_ingestion_request():
+```python
+def extract_brands_from_content(content: str, company_name: str) -> list:
+    """
+    Extract brand names and create rich contextual descriptions.
+    
+    Returns list of dicts: [{"name": "GREENDAY", "context": "GREENDAY is a premium vodka..."}]
+    """
+    # Common brand patterns in AVTD content
+    brand_patterns = {
+        'vodka': ['GREENDAY', 'HELSINKI', 'MARLIN', 'UKRAINKA'],
+        'cognac': ['ADJARI', 'DOVBUSH'],
+        'wine': ['VILLA UA', 'KRISTI VALLEY', 'KOSHER', 'LUIGI ANTONIO', 
+                 'VIAGGIO', 'DIDI LARI', 'PEDRO MARTINEZ'],
+        'soju': ['FUNJU']
+    }
+    
+    enriched_brands = []
+    content_lower = content.lower()
+    
+    # Extract brands found in content
+    for category, brands in brand_patterns.items():
+        for brand in brands:
+            if brand.lower() in content_lower:
+                # Create rich contextual description
+                if category == 'vodka':
+                    context = f"{brand} is a premium vodka brand distributed by {company_name}, one of Ukraine's largest alcohol distributors with 40,000+ retail points. {brand} vodka is part of AVTD's diverse spirits portfolio."
+                elif category == 'cognac':
+                    context = f"{brand} is a premium cognac brand distributed by {company_name}. {brand} cognac represents AVTD's commitment to quality spirits in the Ukrainian market."
+                elif category == 'wine':
+                    context = f"{brand} is a wine brand in the portfolio of {company_name}. {brand} wine is distributed through AVTD's extensive network of 40,000+ retail locations across Ukraine."
+                elif category == 'soju':
+                    context = f"{brand} is a Korean-style soju distributed by {company_name}. {brand} soju represents AVTD's expansion into Asian spirit categories."
+                
+                enriched_brands.append({
+                    'name': brand,
+                    'category': category,
+                    'context': context
+                })
+    
+    return enriched_brands
+
+
+def enrich_company_content(documents: list, company_name: str, url: str) -> list:
+    """
+    Transform raw scraped content into rich, searchable brand descriptions.
+    """
+    from langchain.schema import Document
+    
+    if not documents or not documents[0].page_content:
+        return documents
+    
+    original_content = documents[0].page_content
+    enriched_docs = []
+    
+    # Extract and enrich brands
+    brands = extract_brands_from_content(original_content, company_name)
+    
+    if brands:
+        # Create separate rich documents for each brand
+        for brand_info in brands:
+            enriched_text = f"""
+{brand_info['context']}
+
+About {company_name}:
+{company_name} (AVTD) is Ukraine's leading alcohol distributor with direct deliveries to over 40,000 retail locations nationwide. The company specializes in premium spirits, wines, and innovative beverage brands.
+
+Brand: {brand_info['name']}
+Category: {brand_info['category'].title()}
+Distributor: {company_name}
+Website: {url}
+            """.strip()
+            
+            enriched_docs.append(Document(
+                page_content=enriched_text,
+                metadata={
+                    "source": url,
+                    "brand": brand_info['name'],
+                    "category": brand_info['category'],
+                    "company": company_name
+                }
+            ))
+    
+    # Also keep original content as fallback
+    enriched_docs.append(documents[0])
+    
+    return enriched_docs
+```
+
+UPDATE ingest_website() FUNCTION:
+
+After loading documents (WebBaseLoader or Playwright), add enrichment:
+```python
+async def ingest_website(url: str, company_name: str, index, embedder=None) -> dict:
+    try:
+        # ... existing loading code ...
+        
+        # After getting documents, BEFORE chunking:
+        if documents and len(documents) > 0:
+            print(f"Enriching content with brand context...")
+            documents = enrich_company_content(documents, company_name, url)
+            print(f"✅ Created {len(documents)} enriched documents")
+        
+        # ... rest of function (chunking, embeddings, upload) ...
+```
+
+BENEFITS:
+1. Creates brand-specific chunks: "GREENDAY is a premium vodka brand from AVTD..."
+2. Adds company context: "AVTD distributes to 40,000+ locations"
+3. Includes category info: vodka, cognac, wine, soju
+4. Better semantic matching → higher scores (target 0.7+)
+
+TEST:
+1. Delete existing AVTD vectors from Pinecone (to start fresh)
+2. Re-ingest: curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Вивчи https://avtd.com"}'
+3. Test retrieval: curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Розкажи про GREENDAY vodka", "avatar": "maya"}'
+4. Check scores with debug script - should now be 0.7+
+
+Deploy after successful tests.

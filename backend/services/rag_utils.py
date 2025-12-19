@@ -2,7 +2,7 @@ import re
 import os
 import httpx
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -46,6 +46,66 @@ def extract_company_name_from_url(url: str) -> str:
     domain = parsed.netloc.replace('www.', '')
     company_name = domain.split('.')[0]
     return company_name.upper()
+
+def extract_brands_from_content(content: str, company_name: str) -> List[Dict]:
+    """Extract brand names and create rich contextual descriptions."""
+    brand_patterns = {
+        'vodka': ['GREENDAY', 'HELSINKI', 'MARLIN', 'UKRAINKA'],
+        'cognac': ['ADJARI', 'DOVBUSH'],
+        'wine': ['VILLA UA', 'KRISTI VALLEY', 'KOSHER', 'LUIGI ANTONIO', 
+                 'VIAGGIO', 'DIDI LARI', 'PEDRO MARTINEZ'],
+        'soju': ['FUNJU']
+    }
+    
+    enriched_brands = []
+    content_lower = content.lower()
+    
+    for category, brands in brand_patterns.items():
+        for brand in brands:
+            if brand.lower() in content_lower:
+                if category == 'vodka':
+                    context = f"{brand} is a premium vodka brand distributed by {company_name}, one of Ukraine's largest alcohol distributors with 40,000+ retail points. {brand} vodka is part of AVTD's diverse spirits portfolio."
+                elif category == 'cognac':
+                    context = f"{brand} is a premium cognac brand distributed by {company_name}. {brand} cognac represents AVTD's commitment to quality spirits in the Ukrainian market."
+                elif category == 'wine':
+                    context = f"{brand} is a wine brand in the portfolio of {company_name}. {brand} wine is distributed through AVTD's extensive network of 40,000+ retail locations across Ukraine."
+                elif category == 'soju':
+                    context = f"{brand} is a Korean-style soju distributed by {company_name}. {brand} soju represents AVTD's expansion into Asian spirit categories."
+                else:
+                    context = f"{brand} is a brand distributed by {company_name}."
+                
+                enriched_brands.append({
+                    'name': brand,
+                    'category': category,
+                    'context': context
+                })
+    
+    return enriched_brands
+
+def enrich_company_content(content: str, company_name: str, url: str) -> List[str]:
+    """Transform raw scraped content into rich, searchable brand descriptions."""
+    enriched_chunks = []
+    
+    brands = extract_brands_from_content(content, company_name)
+    
+    if brands:
+        logger.info(f"Found {len(brands)} brands to enrich")
+        for brand_info in brands:
+            enriched_text = f"""
+{brand_info['context']}
+
+About {company_name}:
+{company_name} (AVTD) is Ukraine's leading alcohol distributor with direct deliveries to over 40,000 retail locations nationwide. The company specializes in premium spirits, wines, and innovative beverage brands.
+
+Brand: {brand_info['name']}
+Category: {brand_info['category'].title()}
+Distributor: {company_name}
+Website: {url}
+            """.strip()
+            
+            enriched_chunks.append(enriched_text)
+    
+    return enriched_chunks
 
 async def scrape_website_content(url: str) -> dict:
     """Scrape website content - tries httpx first, falls back to Playwright for JS sites"""
@@ -151,7 +211,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     return chunks
 
 async def ingest_website(url: str, company_name: str, index) -> dict:
-    """Ingest website content into vector database"""
+    """Ingest website content into vector database with brand enrichment"""
     try:
         logger.info(f"Starting ingestion of {url}...")
         scraped = await scrape_website_content(url)
@@ -172,19 +232,28 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
         method = scraped.get('method', 'unknown')
         logger.info(f"Successfully scraped {len(content)} chars using {method}")
         
-        chunks = chunk_text(content)
+        enriched_chunks = enrich_company_content(content, company_name, url)
+        logger.info(f"Created {len(enriched_chunks)} enriched brand documents")
+        
+        original_chunks = chunk_text(content)
+        
+        all_chunks = enriched_chunks + original_chunks
         
         vectors = []
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate(all_chunks):
             embedding = get_embedding(chunk)
             
+            is_enriched = i < len(enriched_chunks)
+            chunk_type = "brand" if is_enriched else "original"
+            
             vectors.append({
-                'id': f"{company_name}_{i}",
+                'id': f"{company_name}_{chunk_type}_{i}",
                 'values': embedding,
                 'metadata': {
                     'company': company_name,
                     'url': url,
                     'chunk_index': i,
+                    'chunk_type': chunk_type,
                     'text': chunk[:1000]
                 }
             })
@@ -193,9 +262,10 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
         
         return {
             'status': 'success',
-            'message': f"Успішно завантажено {len(chunks)} фрагментів з {company_name}",
+            'message': f"Успішно завантажено {len(all_chunks)} фрагментів з {company_name} ({len(enriched_chunks)} брендів)",
             'company': company_name,
-            'chunks_count': len(chunks),
+            'chunks_count': len(all_chunks),
+            'brand_chunks': len(enriched_chunks),
             'url': url,
             'method': method
         }
