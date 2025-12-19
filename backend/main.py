@@ -27,7 +27,7 @@ from services.telegram_webhook import telegram_webhook_handler
 from services.api_token_monitor import api_token_monitor
 from routes.facebook_insights import router as facebook_router
 from routes.articles_api import router as articles_router
-from routes.chat_endpoints import chat_router
+from routes.chat_endpoints import chat_router, chat_with_avatars, ChatRequest as AvatarChatRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -244,13 +244,9 @@ async def health_check():
     }
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
-    try:
-        response = await claude_service.chat(request.message, request.system_prompt)
-        return {"response": response}
-    except Exception as e:
-        logger.error(f"Chat error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def chat(request: AvatarChatRequest):
+    """Main chat endpoint - uses new RAG + Avatar system"""
+    return await chat_with_avatars(request)
 
 @app.post("/api/translate")
 async def translate(request: TranslateRequest):
