@@ -1,0 +1,106 @@
+Add name-based avatar triggering - messages starting with "Maya", "Майя", "Alex", "Алекс" select that avatar.
+
+FEATURE REQUEST:
+Allow users to explicitly select avatar by starting message with avatar name:
+- "Maya, які тренди..." → Maya responds
+- "Майя, розкажи про..." → Maya responds  
+- "Alex, як приготувати..." → Alex responds
+- "Алекс, яка маржа..." → Alex responds
+
+IN backend/services/avatar_personalities.py:
+
+UPDATE detect_avatar_role function to check for name prefix FIRST:
+```python
+def detect_avatar_role(message: str) -> str:
+    """
+    Detect which avatar should respond based on message content.
+    Priority: 1) Name prefix, 2) Topic keywords
+    """
+    message_lower = message.lower().strip()
+    
+    # NEW: Check if message starts with avatar name (highest priority)
+    name_triggers = {
+        'maya': ['maya', 'майя'],
+        'alex': ['alex', 'алекс']
+    }
+    
+    # Check first word of message
+    first_word = message_lower.split()[0] if message_lower else ''
+    
+    # Remove punctuation from first word (handle "Maya," or "Майя:")
+    first_word_clean = first_word.rstrip(',:!.?')
+    
+    for avatar, names in name_triggers.items():
+        if first_word_clean in names:
+            return avatar
+    
+    # EXISTING: Topic-based detection (fallback if no name prefix)
+    maya_keywords = ['тренд', 'ринок', 'маркетинг', 'стратегія', 'бренд', 
+                     'новини', 'бізнес', 'аналіз', 'позиціонування']
+    alex_keywords = ['коктейль', 'рецепт', 'бар', 'напій', 'drink', 
+                     'міксологія', 'маржа', 'собівартість']
+    
+    if any(keyword in message_lower for keyword in maya_keywords):
+        return 'maya'
+    elif any(keyword in message_lower for keyword in alex_keywords):
+        return 'alex'
+    
+    return 'general'
+```
+
+BENEFITS:
+- Explicit control for users
+- Works in any language (Maya/Майя)
+- Handles punctuation: "Maya, how..." or "Майя: що..."
+- Falls back to topic detection if no name
+
+EXAMPLES:
+
+Input: "Maya, які бренди є в AVTD?"
+→ Returns: "maya" (name prefix detected)
+
+Input: "Майя, проаналізуй ринок"
+→ Returns: "maya" (Cyrillic name detected)
+
+Input: "Alex, як приготувати Martini?"
+→ Returns: "alex" (name prefix detected)
+
+Input: "Алекс: яка маржа на Moscow Mule?"
+→ Returns: "alex" (handles punctuation)
+
+Input: "Які тренди в горілці?"
+→ Returns: "maya" (topic keyword fallback)
+
+Test after changes:
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Maya, що таке DOVBUSH?"}'
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Майя, які бренди горілки?"}'
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Alex, як приготувати Moscow Mule?"}'
+
+📝 How It Will Work:
+Priority System:
+
+Name prefix (highest) - "Maya, ..." or "Майя, ..."
+Topic keywords (fallback) - "тренд", "коктейль"
+General (default) - if neither above
+
+Examples:
+"Maya, що таке DOVBUSH?"
+→ Maya (name trigger) ✅
+
+"Майя: розкажи про тренди"
+→ Maya (Cyrillic name) ✅
+
+"Alex, яка маржа на коктейль?"
+→ Alex (name trigger) ✅
+
+"Алекс, як приготувати..."
+→ Alex (Cyrillic name) ✅
+
+"Які тренди в горілці?"
+→ Maya (topic keyword: тренди) ✅
+
+"Як приготувати Moscow Mule?"
+→ Alex (topic keyword: приготувати) ✅
+
+"Що таке AVTD?"
+→ General (no triggers) ✅

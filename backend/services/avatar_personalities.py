@@ -37,8 +37,23 @@ ALEX_KEYWORDS = [
 ]
 
 def detect_avatar_role(message: str, history: list = None) -> str:
-    """Detect which avatar should respond based on message content"""
-    message_lower = message.lower()
+    """
+    Detect which avatar should respond based on message content.
+    Priority: 1) Name prefix, 2) Topic keywords
+    """
+    message_lower = message.lower().strip()
+    
+    name_triggers = {
+        'maya': ['maya', 'майя'],
+        'alex': ['alex', 'алекс']
+    }
+    
+    first_word = message_lower.split()[0] if message_lower else ''
+    first_word_clean = first_word.rstrip(',:!.?')
+    
+    for avatar, names in name_triggers.items():
+        if first_word_clean in names:
+            return avatar
     
     maya_score = sum(1 for kw in MAYA_KEYWORDS if kw in message_lower)
     alex_score = sum(1 for kw in ALEX_KEYWORDS if kw in message_lower)
