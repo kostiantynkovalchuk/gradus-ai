@@ -226,7 +226,7 @@ async def retrieve_context(query: str, index, top_k: int = 3) -> Tuple[str, List
         sources = []
         
         for match in results.matches:
-            if match.score > 0.5:
+            if match.score > 0.45:
                 metadata = match.metadata
                 contexts.append(metadata.get('text', ''))
                 source = f"{metadata.get('company', 'Unknown')} ({metadata.get('url', '')})"
