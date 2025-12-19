@@ -1,7 +1,22 @@
-from playwright.async_api import async_playwright
-import asyncio
-import re
+Update carousel scraper to click through each SKU container and extract detailed product information.
 
+IMPORTANT DISCOVERY:
+Company websites (ukrainka.ua, etc.) have this structure:
+1. Carousel shows product containers (cards/thumbnails)
+2. Each container is CLICKABLE
+3. Clicking opens detail page/modal with full info: name, size, ABV, features, description
+4. Need to click EACH product to get complete details
+
+CURRENT PROBLEM:
+Carousel scraper only reads visible carousel content, doesn't click through to product details.
+
+SOLUTION:
+Update carousel_scraper.py to click each product container and extract detailed info.
+
+UPDATE backend/services/carousel_scraper.py:
+
+Replace scrape_product_carousel function with click-through version:
+```python
 async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
     """
     Scrape product details by clicking through carousel items.
@@ -15,10 +30,12 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
         page = await context.new_page()
         
         try:
+            # Navigate
             await page.goto(url, wait_until="networkidle", timeout=45000)
             print("✅ Page loaded, waiting for carousel...")
             await page.wait_for_timeout(4000)
             
+            # Find all product containers/cards in carousel
             product_containers = []
             container_selectors = [
                 '.product', '.product-card', '.product-item', '.item',
@@ -27,13 +44,11 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                 'a[href*="product"]', 'a[href*="#"]'
             ]
             
-            found_selector = None
             for selector in container_selectors:
                 containers = await page.query_selector_all(selector)
                 if containers and len(containers) > 1:
                     print(f"✅ Found {len(containers)} containers with: {selector}")
                     product_containers = containers
-                    found_selector = selector
                     break
             
             if not product_containers:
@@ -46,21 +61,26 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
             
             products = []
             
-            for idx in range(min(len(product_containers), 20)):
+            # Click through each container
+            for idx in range(min(len(product_containers), 20)):  # Limit to 20 products
                 try:
-                    print(f"  🖱️  Clicking product {idx + 1}/{min(len(product_containers), 20)}...")
+                    print(f"  🖱️  Clicking product {idx + 1}/{len(product_containers)}...")
                     
-                    containers = await page.query_selector_all(found_selector)
+                    # Re-query containers (page may have changed)
+                    containers = await page.query_selector_all(container_selectors[0])
                     if idx >= len(containers):
                         break
                     
                     container = containers[idx]
                     
+                    # Get href if it's a link
                     href = await container.get_attribute('href')
                     
+                    # Click the container
                     await container.click()
-                    await page.wait_for_timeout(2000)
+                    await page.wait_for_timeout(2000)  # Wait for modal/page
                     
+                    # Extract detailed product info from modal/new page
                     product_info = await page.evaluate('''() => {
                         const getText = (selectors) => {
                             if (typeof selectors === 'string') selectors = [selectors];
@@ -75,6 +95,7 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                             return '';
                         };
                         
+                        // Extract from modal or detail page
                         const modal = document.querySelector('.modal, [role="dialog"], .popup, [class*="modal"], [class*="popup"]');
                         const context = modal || document.body;
                         
@@ -86,14 +107,17 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                             ]),
                             size: getText([
                                 '.size', '.volume', '.capacity', '.ml', '.liters',
-                                '[class*="size"]', '[class*="volume"]', '[class*="capacity"]'
+                                '[class*="size"]', '[class*="volume"]', '[class*="capacity"]',
+                                'span:has-text("л")', 'span:has-text("ml")', 'div:has-text("обʼєм")'
                             ]),
                             abv: getText([
                                 '.abv', '.alcohol', '.strength', '.percent',
-                                '[class*="abv"]', '[class*="alcohol"]', '[class*="strength"]'
+                                '[class*="abv"]', '[class*="alcohol"]', '[class*="strength"]',
+                                'span:has-text("%")', 'div:has-text("міцність")'
                             ]),
                             price: getText([
-                                '.price', '[class*="price"]', '[data-price]'
+                                '.price', '[class*="price"]', '[data-price]',
+                                'span:has-text("₴")', 'div:has-text("грн")'
                             ]),
                             description: getText([
                                 '.description', '.desc', '.details', '.info',
@@ -104,10 +128,12 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                                 '.features', '.characteristics', '.specs',
                                 '[class*="features"]', '[class*="characteristics"]'
                             ]),
+                            // Get all visible text as fallback
                             allText: (modal || context).innerText || ''
                         };
                     }''')
                     
+                    # Clean and validate
                     if (product_info.get('name') or 
                         product_info.get('size') or 
                         len(product_info.get('allText', '')) > 50):
@@ -125,8 +151,11 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                         products.append(cleaned)
                         print(f"    ✅ Extracted: {cleaned['name'][:50] or 'Product ' + str(idx+1)}")
                     
+                    # Close modal or go back
+                    # Try to find close button
                     close_selectors = [
                         'button[class*="close"]', '[data-dismiss]', '.close',
+                        'button:has-text("×")', 'button:has-text("Close")',
                         '[aria-label*="close"]', '[aria-label*="Close"]'
                     ]
                     
@@ -142,16 +171,20 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                             except:
                                 pass
                     
+                    # If no close button, try ESC key or back navigation
                     if not closed:
                         if href and href.startswith('#'):
+                            # Hash link, try ESC
                             await page.keyboard.press('Escape')
                             await page.wait_for_timeout(500)
                         else:
+                            # Full page navigation, go back
                             await page.go_back()
                             await page.wait_for_timeout(1500)
                 
                 except Exception as e:
                     print(f"    ⚠️ Error processing product {idx + 1}: {e}")
+                    # Try to recover - go back to main page
                     try:
                         await page.goto(url, wait_until="networkidle", timeout=15000)
                         await page.wait_for_timeout(2000)
@@ -159,6 +192,7 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                         pass
                     continue
             
+            # Get page text as fallback
             await page.goto(url, wait_until="networkidle")
             raw_text = await page.evaluate('() => document.body.innerText')
             
@@ -182,46 +216,30 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
                 'error': str(e),
                 'carousel_detected': False
             }
+```
 
+IMPROVEMENTS:
+1. Finds all product containers in carousel
+2. Clicks EACH container (up to 20)
+3. Waits for modal/detail page to load
+4. Extracts complete product info (name, size, ABV, description, features)
+5. Closes modal or navigates back
+6. Repeats for all products
 
-def create_product_enrichment(products: list, brand_name: str, company_name: str, url: str) -> str:
-    """Create rich text description from product details."""
-    if not products:
-        return ""
-    
-    lines = [f"\n{brand_name} Product Line and Range:\n"]
-    lines.append(f"{brand_name} offers the following products:\n")
-    
-    for idx, product in enumerate(products, 1):
-        name = product.get('name', f'{brand_name} Product {idx}')
-        size = product.get('size', '')
-        abv = product.get('abv', '')
-        price = product.get('price', '')
-        desc = product.get('description', '')
-        features = product.get('features', '')
-        all_text = product.get('allText', '')
-        
-        parts = [f"{idx}. {name}"]
-        if size: parts.append(f"Volume: {size}")
-        if abv: parts.append(f"Alcohol: {abv}")
-        if price: parts.append(f"Price: {price}")
-        if desc: parts.append(f"Description: {desc}")
-        if features: parts.append(f"Features: {features}")
-        elif all_text and len(all_text) > 20:
-            parts.append(f"Details: {all_text[:150]}")
-        
-        lines.append(" | ".join(parts))
-    
-    enriched = f"""
-{brand_name} is a {'brand distributed by ' + company_name if company_name != brand_name else 'premium brand'}.
+BENEFITS:
+- Gets detailed SKU information, not just carousel thumbnails
+- Handles both modals and full page navigation
+- Extracts features, descriptions, specs
+- Maya can answer detailed product questions
 
-Product Portfolio:
-{chr(10).join(lines)}
+TEST:
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Вивчи https://ukrainka.ua/#more"}'
 
-Total products in {brand_name} range: {len(products)}
+Should extract detailed info for each UKRAINKA product by clicking through carousel.
 
-All {brand_name} products are available for distribution.
-Official website: {url}
-    """.strip()
-    
-    return enriched
+Then test:
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Maya, які продукти є в лінійці UKRAINKA?"}'
+
+Should list products with sizes, ABV, descriptions, features.
+
+Deploy after tests pass.
