@@ -265,38 +265,40 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
         logger.info(f"Created {len(enriched_chunks)} enriched brand documents")
         
         product_chunks = []
-        has_carousel_keywords = any(word in url.lower() for word in [
-            'product', 'produkciya', 'brands', '#more', 'portfolio', 'ukrainka'
-        ]) or any(word in content.lower()[:1000] for word in [
-            'carousel', 'swiper', 'slider', 'product', 'volume', 'abv', 'горілка', 'vodka'
-        ])
+        section_chunks = []
         
-        if has_carousel_keywords:
-            logger.info("🎠 Detected potential carousel content, using enhanced scraper...")
-            try:
-                from services.carousel_scraper import scrape_product_carousel, create_product_enrichment
+        logger.info("🌐 Starting full website scrape (all sections)...")
+        try:
+            from services.carousel_scraper import scrape_full_website, create_product_enrichment
+            
+            full_site_data = await scrape_full_website(url, company_name)
+            
+            if full_site_data.get('sections'):
+                for section_name, section_data in full_site_data['sections'].items():
+                    if section_data.get('text') and len(section_data['text']) > 100:
+                        section_chunks.append(f"=== {section_name.upper()} ===\n{section_data['text'][:2000]}")
+                logger.info(f"✅ Scraped {len(section_chunks)} website sections")
+            
+            if full_site_data.get('products'):
+                logger.info(f"✅ Extracted {len(full_site_data['products'])} products")
                 
-                carousel_data = await scrape_product_carousel(url, company_name)
+                product_text = create_product_enrichment(
+                    full_site_data['products'], 
+                    company_name,
+                    company_name,
+                    url
+                )
                 
-                if carousel_data.get('products'):
-                    logger.info(f"✅ Extracted {len(carousel_data['products'])} products from carousel")
+                if product_text:
+                    product_chunks.append(product_text)
+                    logger.info(f"✅ Added product catalog enrichment")
                     
-                    product_text = create_product_enrichment(
-                        carousel_data['products'], 
-                        company_name,
-                        company_name,
-                        url
-                    )
-                    
-                    if product_text:
-                        product_chunks.append(product_text)
-                        logger.info(f"✅ Added product catalog enrichment")
-            except Exception as e:
-                logger.warning(f"Carousel scraping failed (non-fatal): {e}")
+        except Exception as e:
+            logger.warning(f"Full site scraping failed (non-fatal): {e}")
         
         original_chunks = chunk_text(content)
         
-        all_chunks = enriched_chunks + product_chunks + original_chunks
+        all_chunks = enriched_chunks + product_chunks + section_chunks + original_chunks
         
         vectors = []
         for i, chunk in enumerate(all_chunks):
@@ -306,6 +308,8 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
                 chunk_type = "brand"
             elif i < len(enriched_chunks) + len(product_chunks):
                 chunk_type = "product"
+            elif i < len(enriched_chunks) + len(product_chunks) + len(section_chunks):
+                chunk_type = "section"
             else:
                 chunk_type = "original"
             
@@ -324,13 +328,15 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
         index.upsert(vectors=vectors, namespace="company_knowledge")
         
         products_info = f", {len(product_chunks)} продуктів" if product_chunks else ""
+        sections_info = f", {len(section_chunks)} секцій" if section_chunks else ""
         return {
             'status': 'success',
-            'message': f"Успішно завантажено {len(all_chunks)} фрагментів з {company_name} ({len(enriched_chunks)} брендів{products_info})",
+            'message': f"Успішно завантажено {len(all_chunks)} фрагментів з {company_name} ({len(enriched_chunks)} брендів{products_info}{sections_info})",
             'company': company_name,
             'chunks_count': len(all_chunks),
             'brand_chunks': len(enriched_chunks),
             'product_chunks': len(product_chunks),
+            'section_chunks': len(section_chunks),
             'url': url,
             'method': method
         }

@@ -1,6 +1,169 @@
 from playwright.async_api import async_playwright
 import asyncio
 import re
+from urllib.parse import urljoin, urlparse
+
+async def scrape_full_website(url: str, brand_name: str = None) -> dict:
+    """
+    Comprehensive website scraper that clicks through ALL nav sections.
+    Collects content from: About, Products, History, Contact, etc.
+    """
+    print(f"🌐 Starting full website scraper for {url}")
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+        
+        try:
+            base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+            await page.goto(url, wait_until="networkidle", timeout=45000)
+            print("✅ Homepage loaded")
+            await page.wait_for_timeout(2000)
+            
+            homepage_text = await page.evaluate('() => document.body.innerText')
+            
+            nav_links = []
+            nav_selectors = ['nav a', 'header a', '.menu a', '.nav a', '.navbar a', '[class*="menu"] a']
+            
+            for nav_sel in nav_selectors:
+                links = await page.query_selector_all(nav_sel)
+                for link in links:
+                    try:
+                        text = (await link.inner_text() or '').strip()
+                        href = await link.get_attribute('href') or ''
+                        
+                        if not text or len(text) > 50:
+                            continue
+                        if href.startswith('mailto:') or href.startswith('tel:'):
+                            continue
+                        if href.startswith('http') and base_url not in href:
+                            continue
+                        
+                        full_href = urljoin(base_url, href) if not href.startswith('http') else href
+                        
+                        if (text, full_href) not in [(l['text'], l['href']) for l in nav_links]:
+                            nav_links.append({'text': text, 'href': full_href, 'original': href})
+                    except:
+                        continue
+                if nav_links:
+                    break
+            
+            print(f"🔗 Found {len(nav_links)} navigation links: {[l['text'] for l in nav_links]}")
+            
+            sections = {
+                'homepage': {'text': homepage_text[:3000], 'url': url}
+            }
+            products = []
+            
+            product_keywords = ['product', 'продукція', 'продукти', 'товари', 'portfolio', 'brands', 'бренди', 'асортимент', 'каталог', 'catalog']
+            about_keywords = ['about', 'про нас', 'про компанію', 'історія', 'history', 'company']
+            contact_keywords = ['contact', 'контакти', 'зв\'язок']
+            
+            for nav in nav_links[:10]:
+                try:
+                    text_lower = nav['text'].lower()
+                    href_lower = nav['href'].lower()
+                    
+                    section_type = 'other'
+                    if any(kw in text_lower or kw in href_lower for kw in product_keywords):
+                        section_type = 'products'
+                    elif any(kw in text_lower or kw in href_lower for kw in about_keywords):
+                        section_type = 'about'
+                    elif any(kw in text_lower or kw in href_lower for kw in contact_keywords):
+                        section_type = 'contact'
+                    
+                    print(f"  📄 Visiting [{section_type}]: {nav['text']} -> {nav['href'][:50]}...")
+                    
+                    if nav['original'].startswith('#'):
+                        anchor = await page.query_selector(f"a[href='{nav['original']}']")
+                        if anchor:
+                            await anchor.click()
+                            await page.wait_for_timeout(1500)
+                    else:
+                        await page.goto(nav['href'], wait_until="networkidle", timeout=20000)
+                        await page.wait_for_timeout(2000)
+                    
+                    section_text = await page.evaluate('() => document.body.innerText')
+                    sections[nav['text']] = {
+                        'text': section_text[:3000],
+                        'url': nav['href'],
+                        'type': section_type
+                    }
+                    print(f"    ✅ Scraped {len(section_text)} chars from {nav['text']}")
+                    
+                    if section_type == 'products':
+                        product_result = await scrape_products_on_page(page)
+                        if product_result:
+                            products.extend(product_result)
+                            print(f"    ✅ Found {len(product_result)} products")
+                    
+                except Exception as e:
+                    print(f"    ⚠️ Error visiting {nav['text']}: {e}")
+                    try:
+                        await page.goto(url, wait_until="networkidle", timeout=15000)
+                    except:
+                        pass
+                    continue
+            
+            await browser.close()
+            
+            all_text = "\n\n".join([
+                f"=== {name} ===\n{data['text']}" 
+                for name, data in sections.items()
+            ])
+            
+            print(f"✅ Full site scrape complete: {len(sections)} sections, {len(products)} products, {len(all_text)} chars")
+            
+            return {
+                'sections': sections,
+                'products': products,
+                'all_text': all_text,
+                'section_count': len(sections),
+                'product_count': len(products)
+            }
+            
+        except Exception as e:
+            await browser.close()
+            print(f"❌ Full site scraping error: {e}")
+            return {
+                'sections': {},
+                'products': [],
+                'all_text': '',
+                'error': str(e)
+            }
+
+
+async def scrape_products_on_page(page) -> list:
+    """Extract products from current page (helper function)."""
+    products = []
+    
+    container_selectors = [
+        '.product', '.product-card', '.product-item',
+        '.swiper-slide', '.slick-slide', '.carousel-item',
+        '[class*="product"]'
+    ]
+    
+    for selector in container_selectors:
+        containers = await page.query_selector_all(selector)
+        if containers and len(containers) > 1:
+            for idx, container in enumerate(containers[:15]):
+                try:
+                    product_info = await container.evaluate('''(el) => ({
+                        name: el.querySelector('h1,h2,h3,h4,.name,.title,[class*="name"]')?.innerText || '',
+                        size: el.querySelector('.size,.volume,[class*="size"]')?.innerText || '',
+                        abv: el.querySelector('.abv,.alcohol,[class*="abv"]')?.innerText || '',
+                        allText: el.innerText?.substring(0, 300) || ''
+                    })''')
+                    
+                    if product_info.get('name') or len(product_info.get('allText', '')) > 30:
+                        products.append(product_info)
+                except:
+                    continue
+            break
+    
+    return products
+
 
 async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
     """
