@@ -264,16 +264,50 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
         enriched_chunks = enrich_company_content(content, company_name, url)
         logger.info(f"Created {len(enriched_chunks)} enriched brand documents")
         
+        product_chunks = []
+        has_carousel_keywords = any(word in url.lower() for word in [
+            'product', 'produkciya', 'brands', '#more', 'portfolio', 'ukrainka'
+        ]) or any(word in content.lower()[:1000] for word in [
+            'carousel', 'swiper', 'slider', 'product', 'volume', 'abv', 'горілка', 'vodka'
+        ])
+        
+        if has_carousel_keywords:
+            logger.info("🎠 Detected potential carousel content, using enhanced scraper...")
+            try:
+                from services.carousel_scraper import scrape_product_carousel, create_product_enrichment
+                
+                carousel_data = await scrape_product_carousel(url, company_name)
+                
+                if carousel_data.get('products'):
+                    logger.info(f"✅ Extracted {len(carousel_data['products'])} products from carousel")
+                    
+                    product_text = create_product_enrichment(
+                        carousel_data['products'], 
+                        company_name,
+                        company_name,
+                        url
+                    )
+                    
+                    if product_text:
+                        product_chunks.append(product_text)
+                        logger.info(f"✅ Added product catalog enrichment")
+            except Exception as e:
+                logger.warning(f"Carousel scraping failed (non-fatal): {e}")
+        
         original_chunks = chunk_text(content)
         
-        all_chunks = enriched_chunks + original_chunks
+        all_chunks = enriched_chunks + product_chunks + original_chunks
         
         vectors = []
         for i, chunk in enumerate(all_chunks):
             embedding = get_embedding(chunk)
             
-            is_enriched = i < len(enriched_chunks)
-            chunk_type = "brand" if is_enriched else "original"
+            if i < len(enriched_chunks):
+                chunk_type = "brand"
+            elif i < len(enriched_chunks) + len(product_chunks):
+                chunk_type = "product"
+            else:
+                chunk_type = "original"
             
             vectors.append({
                 'id': f"{company_name}_{chunk_type}_{i}",
@@ -289,12 +323,14 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
         
         index.upsert(vectors=vectors, namespace="company_knowledge")
         
+        products_info = f", {len(product_chunks)} продуктів" if product_chunks else ""
         return {
             'status': 'success',
-            'message': f"Успішно завантажено {len(all_chunks)} фрагментів з {company_name} ({len(enriched_chunks)} брендів)",
+            'message': f"Успішно завантажено {len(all_chunks)} фрагментів з {company_name} ({len(enriched_chunks)} брендів{products_info})",
             'company': company_name,
             'chunks_count': len(all_chunks),
             'brand_chunks': len(enriched_chunks),
+            'product_chunks': len(product_chunks),
             'url': url,
             'method': method
         }
