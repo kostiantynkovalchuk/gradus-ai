@@ -48,8 +48,9 @@ def extract_company_name_from_url(url: str) -> str:
     return company_name.upper()
 
 async def scrape_website_content(url: str) -> dict:
-    """Scrape website content"""
+    """Scrape website content - tries httpx first, falls back to Playwright for JS sites"""
     try:
+        logger.info(f"Scraping {url} with httpx...")
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -59,24 +60,73 @@ async def scrape_website_content(url: str) -> dict:
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
+            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'noscript']):
                 tag.decompose()
             
             title = soup.title.string if soup.title else ""
             
-            paragraphs = soup.find_all(['p', 'h1', 'h2', 'h3', 'li'])
+            paragraphs = soup.find_all(['p', 'h1', 'h2', 'h3', 'li', 'span', 'div'])
             text_content = ' '.join([p.get_text(strip=True) for p in paragraphs])
+            text_content = ' '.join(text_content.split())[:5000]
+            
+            if len(text_content.strip()) > 100:
+                logger.info(f"httpx loaded {len(text_content)} chars from {url}")
+                return {
+                    'url': url,
+                    'title': title,
+                    'content': text_content,
+                    'status': 'success',
+                    'method': 'httpx'
+                }
+            
+            logger.info(f"httpx got insufficient content ({len(text_content)} chars), trying Playwright...")
+            
+    except Exception as e:
+        logger.warning(f"httpx failed for {url}: {e}, trying Playwright...")
+    
+    try:
+        from playwright.async_api import async_playwright
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+            
+            title = await page.title()
+            
+            text_content = await page.evaluate('''() => {
+                const scripts = document.querySelectorAll('script, style, noscript, nav, footer, header');
+                scripts.forEach(s => s.remove());
+                return document.body.innerText || document.body.textContent || '';
+            }''')
+            
+            await browser.close()
             
             text_content = ' '.join(text_content.split())[:5000]
+            
+            logger.info(f"Playwright loaded {len(text_content)} chars from {url}")
+            
+            if len(text_content.strip()) < 100:
+                return {
+                    'url': url,
+                    'title': '',
+                    'content': '',
+                    'status': 'error',
+                    'error': 'Не знайдено контенту на сторінці'
+                }
             
             return {
                 'url': url,
                 'title': title,
                 'content': text_content,
-                'status': 'success'
+                'status': 'success',
+                'method': 'playwright'
             }
+            
     except Exception as e:
-        logger.error(f"Failed to scrape {url}: {e}")
+        logger.error(f"Playwright also failed for {url}: {e}")
         return {
             'url': url,
             'title': '',
@@ -103,6 +153,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
 async def ingest_website(url: str, company_name: str, index) -> dict:
     """Ingest website content into vector database"""
     try:
+        logger.info(f"Starting ingestion of {url}...")
         scraped = await scrape_website_content(url)
         
         if scraped['status'] == 'error':
@@ -112,11 +163,14 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
             }
         
         content = scraped['content']
-        if not content:
+        if not content or len(content.strip()) < 100:
             return {
                 'status': 'error',
                 'message': 'Не знайдено контенту на сторінці'
             }
+        
+        method = scraped.get('method', 'unknown')
+        logger.info(f"Successfully scraped {len(content)} chars using {method}")
         
         chunks = chunk_text(content)
         
@@ -142,7 +196,8 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
             'message': f"Успішно завантажено {len(chunks)} фрагментів з {company_name}",
             'company': company_name,
             'chunks_count': len(chunks),
-            'url': url
+            'url': url,
+            'method': method
         }
         
     except Exception as e:
