@@ -1,0 +1,78 @@
+CRITICAL FIX: Backend starts but Pinecone module not found, causing RAG to fail.
+
+DIAGNOSIS:
+- Error: "Pinecone not installed: No module named 'pinecone'" at startup
+- Port 8000 already in use from previous process
+- packages installed with pip but not persisting/accessible
+- chat_endpoints.py trying to import Pinecone but failing silently
+
+ROOT CAUSE:
+The import error is being caught somewhere, allowing the app to start but with RAG disabled.
+
+REQUIRED FIXES:
+
+1. Kill all running backend processes:
+   Run: pkill -f "python backend/main.py"
+   Run: pkill -f "uvicorn"
+
+2. Verify backend/requirements.txt has these packages:
+   - pinecone-client==3.0.0
+   - langchain==0.1.0
+   - langchain-community==0.0.10
+   - openai (should already be there)
+   - NO sentence-transformers line
+
+3. Install packages using pip (not poetry, not conda):
+   Run: pip install --upgrade pip
+   Run: pip install -r backend/requirements.txt
+   Verify with: pip list | grep pinecone
+   Should show: pinecone-client 3.0.0
+
+4. Check backend/routes/chat_endpoints.py imports:
+   At the top, verify these imports exist and are NOT in a try/except:
+```python
+   from pinecone import Pinecone, ServerlessSpec
+```
+   
+   Remove any try/except around Pinecone imports that might be hiding errors.
+   
+   If there's a try/except like this:
+```python
+   try:
+       from pinecone import Pinecone
+   except:
+       Pinecone = None
+```
+   REMOVE the try/except - let it fail loudly if import fails.
+
+5. Verify backend/services/rag_utils.py has:
+```python
+   from openai import OpenAI
+```
+   NOT:
+```python
+   from sentence_transformers import SentenceTransformer
+```
+
+6. After fixes, test:
+   Run: python -c "from pinecone import Pinecone; print('✅ Pinecone imports!')"
+   Should print: ✅ Pinecone imports!
+   
+   If this fails, the package isn't installed properly.
+
+7. Start backend:
+   Run: python backend/main.py
+   
+   Should see NO "Pinecone not installed" error
+   Should see: "Uvicorn running on http://0.0.0.0:8000"
+
+8. Test in another terminal:
+   Run: curl http://localhost:8000/chat/health | python3 -m json.tool
+   
+   Should show:
+   "pinecone_connected": true
+   "rag_enabled": true
+
+CRITICAL: If pinecone import fails, the app should FAIL TO START, not continue with RAG disabled. Remove any error catching around Pinecone imports.
+
+Execute all steps, report results.
