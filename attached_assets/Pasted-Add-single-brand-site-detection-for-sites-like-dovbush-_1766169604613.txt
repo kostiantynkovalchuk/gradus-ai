@@ -1,0 +1,83 @@
+Add single-brand site detection for sites like dovbush.com.ua (entire site = one brand).
+
+ISSUE: 
+- AVTD.com lists multiple brands → enrichment works ✅
+- Dovbush.com.ua IS the brand → enrichment finds 0 brands ❌
+
+SOLUTION:
+IN backend/services/rag_utils.py, update enrich_company_content function:
+
+ADD SINGLE-BRAND DETECTION before existing brand extraction:
+```python
+def enrich_company_content(documents: list, company_name: str, url: str) -> list:
+    """Transform raw scraped content into rich, searchable brand descriptions."""
+    from langchain.schema import Document
+    
+    if not documents or not documents[0].page_content:
+        return documents
+    
+    original_content = documents[0].page_content
+    enriched_docs = []
+    
+    # NEW: Detect single-brand sites (URL = brand name)
+    single_brand_patterns = {
+        'dovbush': ('DOVBUSH', 'cognac', 'DOVBUSH is a premium Ukrainian cognac brand known for quality and tradition. The brand represents authentic Ukrainian craftsmanship in cognac production.'),
+        'greenday': ('GREENDAY', 'vodka', 'GREENDAY is a premium vodka brand with modern positioning and eco-conscious values.'),
+        'helsinki': ('HELSINKI', 'vodka', 'HELSINKI is a premium vodka brand inspired by Nordic purity and quality.'),
+    }
+    
+    # Check if this is a single-brand site
+    url_lower = url.lower()
+    for pattern, (brand_name, category, description) in single_brand_patterns.items():
+        if pattern in url_lower:
+            # Create enriched document for the brand
+            enriched_text = f"""
+{description}
+
+About {brand_name}:
+{brand_name} is featured on their official website at {url}. As a {category} brand, {brand_name} represents quality and expertise in the Ukrainian spirits market.
+
+Brand: {brand_name}
+Category: {category.title()}
+Official Website: {url}
+
+Additional Information:
+{original_content[:500]}
+            """.strip()
+            
+            enriched_docs.append(Document(
+                page_content=enriched_text,
+                metadata={
+                    "source": url,
+                    "brand": brand_name,
+                    "category": category,
+                    "company": company_name,
+                    "site_type": "single_brand"
+                }
+            ))
+            
+            print(f"✅ Detected single-brand site: {brand_name}")
+            
+            # For single-brand sites, all content is about this brand
+            # So we can skip multi-brand extraction
+            enriched_docs.append(documents[0])
+            return enriched_docs
+    
+    # EXISTING: Multi-brand extraction for distributor sites
+    brands = extract_brands_from_content(original_content, company_name)
+    # ... rest of existing code ...
+```
+
+BENEFIT:
+- dovbush.com.ua → Auto-creates "DOVBUSH is a premium Ukrainian cognac..." 
+- No need to find brand names in text
+- Better context = higher scores (0.7+)
+
+TEST:
+1. Re-ingest: curl -X POST http://localhost:8000/api/chat -d '{"message": "Вивчи https://www.dovbush.com.ua/"}'
+   Should show: "1 brand enriched" (DOVBUSH)
+
+2. Query: curl -X POST http://localhost:8000/api/chat -d '{"message": "Що таке Dovbush cognac?", "avatar": "maya"}'
+   Should get rich response about premium Ukrainian cognac
+
+Deploy after tests pass.

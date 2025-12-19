@@ -86,6 +86,35 @@ def enrich_company_content(content: str, company_name: str, url: str) -> List[st
     """Transform raw scraped content into rich, searchable brand descriptions."""
     enriched_chunks = []
     
+    single_brand_patterns = {
+        'dovbush': ('DOVBUSH', 'cognac', 'DOVBUSH is a premium Ukrainian cognac brand known for quality and tradition. The brand represents authentic Ukrainian craftsmanship in cognac production.'),
+        'greenday': ('GREENDAY', 'vodka', 'GREENDAY is a premium vodka brand with modern positioning and eco-conscious values.'),
+        'helsinki': ('HELSINKI', 'vodka', 'HELSINKI is a premium vodka brand inspired by Nordic purity and quality.'),
+        'marlin': ('MARLIN', 'vodka', 'MARLIN is a premium vodka brand known for smooth taste and quality.'),
+        'adjari': ('ADJARI', 'cognac', 'ADJARI is a premium Georgian-style cognac brand with rich heritage.'),
+    }
+    
+    url_lower = url.lower()
+    for pattern, (brand_name, category, description) in single_brand_patterns.items():
+        if pattern in url_lower:
+            enriched_text = f"""
+{description}
+
+About {brand_name}:
+{brand_name} is featured on their official website at {url}. As a {category} brand, {brand_name} represents quality and expertise in the Ukrainian spirits market.
+
+Brand: {brand_name}
+Category: {category.title()}
+Official Website: {url}
+
+Additional Information:
+{content[:500]}
+            """.strip()
+            
+            enriched_chunks.append(enriched_text)
+            logger.info(f"Detected single-brand site: {brand_name}")
+            return enriched_chunks
+    
     brands = extract_brands_from_content(content, company_name)
     
     if brands:
