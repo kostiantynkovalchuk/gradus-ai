@@ -27,6 +27,7 @@ from services.telegram_webhook import telegram_webhook_handler
 from services.api_token_monitor import api_token_monitor
 from routes.facebook_insights import router as facebook_router
 from routes.articles_api import router as articles_router
+from routes.chat_endpoints import chat_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -183,6 +184,7 @@ async def health_check():
 app.include_router(status_router)
 app.include_router(facebook_router, prefix="/api/facebook", tags=["facebook"])
 app.include_router(articles_router)
+app.include_router(chat_router)
 
 class ChatRequest(BaseModel):
     message: str
