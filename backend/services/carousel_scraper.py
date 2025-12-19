@@ -5,7 +5,7 @@ import re
 async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
     """
     Scrape product details by clicking through carousel items.
-    Handles sites where each carousel item links to detailed product page.
+    First looks for Products nav link, then scrapes carousel items.
     """
     print(f"🔍 Starting click-through carousel scraper for {url}")
     
@@ -16,8 +16,43 @@ async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
         
         try:
             await page.goto(url, wait_until="networkidle", timeout=45000)
-            print("✅ Page loaded, waiting for carousel...")
-            await page.wait_for_timeout(4000)
+            print("✅ Page loaded, looking for Products nav link...")
+            await page.wait_for_timeout(2000)
+            
+            nav_keywords = [
+                'products', 'product', 'продукція', 'продукти', 'товари',
+                'portfolio', 'brands', 'бренди', 'асортимент', 'каталог',
+                'catalog', 'range', 'collection', 'колекція'
+            ]
+            
+            nav_clicked = False
+            nav_selectors = ['nav a', 'header a', '.menu a', '.nav a', 'a[href*="product"]', 'a[href*="catalog"]']
+            
+            for nav_sel in nav_selectors:
+                if nav_clicked:
+                    break
+                links = await page.query_selector_all(nav_sel)
+                for link in links:
+                    try:
+                        text = await link.inner_text()
+                        href = await link.get_attribute('href') or ''
+                        text_lower = text.lower().strip()
+                        href_lower = href.lower()
+                        
+                        if any(kw in text_lower or kw in href_lower for kw in nav_keywords):
+                            print(f"🔗 Found Products nav link: '{text}' -> {href}")
+                            await link.click()
+                            await page.wait_for_timeout(3000)
+                            nav_clicked = True
+                            print("✅ Navigated to Products page")
+                            break
+                    except:
+                        continue
+            
+            if not nav_clicked:
+                print("ℹ️ No Products nav link found, staying on current page")
+            
+            await page.wait_for_timeout(2000)
             
             product_containers = []
             container_selectors = [
