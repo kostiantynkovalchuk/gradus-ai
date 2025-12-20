@@ -10,6 +10,7 @@ router = APIRouter()
 
 VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "gradus_maya_webhook_2025")
 APP_SECRET = os.getenv("FACEBOOK_APP_SECRET")
+PAGE_ID = os.getenv("FACEBOOK_PAGE_ID")
 
 
 @router.get("/webhook")
@@ -135,7 +136,7 @@ async def send_typing_indicator(recipient_id: str, typing: bool):
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                "https://graph.facebook.com/v18.0/me/messages",
+                f"https://graph.facebook.com/v18.0/{PAGE_ID}/messages",
                 params={"access_token": facebook_poster.page_access_token},
                 json={
                     "recipient": {"id": recipient_id},
@@ -163,7 +164,7 @@ async def send_messenger_reply(recipient_id: str, text: str):
         async with httpx.AsyncClient(timeout=10.0) as client:
             for msg in messages:
                 response = await client.post(
-                    "https://graph.facebook.com/v18.0/me/messages",
+                    f"https://graph.facebook.com/v18.0/{PAGE_ID}/messages",
                     params={"access_token": facebook_poster.page_access_token},
                     json={
                         "recipient": {"id": recipient_id},
