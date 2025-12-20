@@ -11,6 +11,7 @@ router = APIRouter()
 VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "gradus_maya_webhook_2025")
 APP_SECRET = os.getenv("FACEBOOK_APP_SECRET")
 PAGE_ID = os.getenv("FACEBOOK_PAGE_ID")
+MAYA_PERSONA_ID = os.getenv("MAYA_PERSONA_ID")
 
 
 @router.get("/webhook")
@@ -129,26 +130,31 @@ async def get_facebook_user_info(user_id: str) -> dict:
 
 
 async def send_typing_indicator(recipient_id: str, typing: bool):
-    """Show/hide typing indicator"""
+    """Show/hide typing indicator as Maya"""
     if not facebook_poster.page_access_token:
         return
     
     try:
+        payload = {
+            "recipient": {"id": recipient_id},
+            "sender_action": "typing_on" if typing else "typing_off"
+        }
+        
+        if MAYA_PERSONA_ID:
+            payload["persona_id"] = MAYA_PERSONA_ID
+        
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
                 f"https://graph.facebook.com/v18.0/{PAGE_ID}/messages",
                 params={"access_token": facebook_poster.page_access_token},
-                json={
-                    "recipient": {"id": recipient_id},
-                    "sender_action": "typing_on" if typing else "typing_off"
-                }
+                json=payload
             )
     except Exception as e:
         logger.warning(f"⚠️ Error sending typing indicator: {e}")
 
 
 async def send_messenger_reply(recipient_id: str, text: str):
-    """Send message to Facebook Messenger user"""
+    """Send message as Maya persona"""
     if not facebook_poster.page_access_token:
         logger.error("❌ No Facebook access token available")
         return
@@ -163,21 +169,27 @@ async def send_messenger_reply(recipient_id: str, text: str):
         
         async with httpx.AsyncClient(timeout=10.0) as client:
             for msg in messages:
+                payload = {
+                    "recipient": {"id": recipient_id},
+                    "message": {"text": msg},
+                    "messaging_type": "RESPONSE"
+                }
+                
+                if MAYA_PERSONA_ID:
+                    payload["persona_id"] = MAYA_PERSONA_ID
+                    logger.info(f"📸 Sending as Maya persona")
+                
                 response = await client.post(
                     f"https://graph.facebook.com/v18.0/{PAGE_ID}/messages",
                     params={"access_token": facebook_poster.page_access_token},
-                    json={
-                        "recipient": {"id": recipient_id},
-                        "message": {"text": msg},
-                        "messaging_type": "RESPONSE"
-                    }
+                    json=payload
                 )
                 
                 if response.status_code != 200:
                     logger.error(f"❌ Facebook send error: {response.text}")
                     raise Exception(f"Facebook API error: {response.status_code}")
                 
-                logger.info(f"✅ Message sent to {recipient_id}")
+                logger.info(f"✅ Message sent as Maya to {recipient_id}")
     
     except Exception as e:
         logger.error(f"❌ Error sending Messenger reply: {e}")

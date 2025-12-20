@@ -1,0 +1,133 @@
+Set up Maya's Facebook Messenger persona with her photo and configure the code to use it.
+
+OBJECTIVE:
+Create a Facebook Messenger persona so Maya has her own profile photo and identity separate from the GradusMedia page.
+
+STEP 1: Upload Maya's Photo to Backend
+
+Copy the persona photo to accessible location:
+```bash
+cp /mnt/user-data/uploads/mayagradus.png backend/attached_assets/mayagradus.png
+```
+
+STEP 2: Create Persona via Facebook Graph API
+
+Run this curl command to create the persona:
+```bash
+curl -X POST "https://graph.facebook.com/v18.0/me/personas" \
+  -F "name=Maya Gradus" \
+  -F "profile_picture_url=https://gradus-ai.onrender.com/attached_assets/mayagradus.png" \
+  -F "access_token=EAAOriMZBE5rkBQO39g6FEEGdO9ZAfIw7b9WRKrWqgiZAXGZB4OMVZCmGUbnin014ziK4oUhItnAfqHE0GygfqWqDZAnoWCAR7ZAbYZBOOlhea6ZBKQm6FcNq7jFRlmYu5vB4cstgxbyrJcQEyuY0jNwQxAoolVhSAOZBpsHzf7ZAike70lFGqPvtfEpROfTONzfFhUOTn5lu10ZD"
+```
+
+The response will contain a persona ID like: {"id": "123456789012345"}
+
+SAVE THAT PERSONA_ID - we'll need it!
+
+STEP 3: Update messenger_webhook.py to Use Persona
+
+In backend/routes/messenger_webhook.py:
+
+Add at top with other environment variables:
+```python
+MAYA_PERSONA_ID = os.getenv("MAYA_PERSONA_ID")  # Will be set in Render
+```
+
+Update send_messenger_reply function:
+```python
+async def send_messenger_reply(recipient_id: str, text: str):
+    """Send message as Maya persona"""
+    
+    if not facebook_poster.page_access_token:
+        print("❌ No Facebook access token available")
+        return
+    
+    try:
+        max_length = 2000
+        
+        if len(text) > max_length:
+            messages = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+        else:
+            messages = [text]
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for msg in messages:
+                payload = {
+                    "recipient": {"id": recipient_id},
+                    "message": {"text": msg},
+                    "messaging_type": "RESPONSE"
+                }
+                
+                # Add Maya's persona if configured
+                if MAYA_PERSONA_ID:
+                    payload["persona_id"] = MAYA_PERSONA_ID
+                    print(f"📸 Sending as Maya persona ({MAYA_PERSONA_ID[:10]}...)")
+                
+                response = await client.post(
+                    f"https://graph.facebook.com/v18.0/{PAGE_ID}/messages",
+                    params={"access_token": facebook_poster.page_access_token},
+                    json=payload,
+                    timeout=10.0
+                )
+                
+                if response.status_code != 200:
+                    print(f"❌ Facebook send error: {response.text}")
+                    raise Exception(f"Facebook API error: {response.status_code}")
+                
+                print(f"✅ Message sent as Maya to {recipient_id}")
+    
+    except Exception as e:
+        print(f"❌ Error sending Messenger reply: {e}")
+        raise
+```
+
+Update send_typing_indicator function:
+```python
+async def send_typing_indicator(recipient_id: str, typing: bool):
+    """Show/hide typing indicator as Maya"""
+    if not facebook_poster.page_access_token:
+        return
+    
+    try:
+        payload = {
+            "recipient": {"id": recipient_id},
+            "sender_action": "typing_on" if typing else "typing_off"
+        }
+        
+        # Add persona for typing indicator
+        if MAYA_PERSONA_ID:
+            payload["persona_id"] = MAYA_PERSONA_ID
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"https://graph.facebook.com/v18.0/{PAGE_ID}/messages",
+                params={"access_token": facebook_poster.page_access_token},
+                json=payload,
+                timeout=5.0
+            )
+    except Exception as e:
+        print(f"⚠️ Error sending typing indicator: {e}")
+```
+
+STEP 4: Commit and Report Persona ID
+
+After running the curl command, report the persona_id from the response.
+User will need to add it to Render environment as MAYA_PERSONA_ID.
+
+Git commands:
+```bash
+git add backend/attached_assets/mayagradus.png backend/routes/messenger_webhook.py
+git commit -m "Add Maya persona photo and update messenger to use persona"
+git push origin main
+```
+
+BENEFITS:
+- Maya appears with her own photo in Messenger
+- Users see "Maya Gradus" as sender
+- GradusMedia page keeps its original branding
+- Professional bot identity
+
+NEXT STEPS FOR USER:
+1. Copy the persona_id from the curl response
+2. Add to Render environment: MAYA_PERSONA_ID = <that_id>
+3. Test messaging - Maya's photo will appear!
