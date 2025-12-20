@@ -1,0 +1,243 @@
+Add Facebook Messenger webhook to existing Facebook integration for Maya chatbot.
+
+CONTEXT:
+Project already has Facebook posting system (facebook_poster.py, facebook_token_manager.py).
+Auto-posting temporarily disabled via DISABLE_AUTO_POSTING=true.
+Page ID: 872791199248105
+
+GOAL:
+Add incoming message handling so users can chat with Maya via Facebook Messenger.
+Reuse existing PAGE_ACCESS_TOKEN from facebook_poster.
+
+STEP 1: CREATE backend/routes/messenger_webhook.py
+```python
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import Response
+import hmac
+import hashlib
+import os
+import httpx
+from services.avatar_personalities import get_avatar_response
+from services.facebook_poster import facebook_poster  # Reuse existing
+
+router = APIRouter()
+
+# Reuse existing token from facebook_poster
+VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "gradus_maya_webhook_2025")
+
+@router.get("/webhook")
+async def verify_messenger_webhook(request: Request):
+    """
+    Facebook Messenger webhook verification.
+    Called when setting up webhook in Facebook App.
+    """
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+    
+    print(f"📞 Webhook verification request - mode: {mode}, token matches: {token == VERIFY_TOKEN}")
+    
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("✅ Messenger webhook verified successfully!")
+        return Response(content=challenge, media_type="text/plain")
+    else:
+        print(f"❌ Webhook verification failed - expected token: {VERIFY_TOKEN[:10]}...")
+        raise HTTPException(status_code=403, detail="Verification token mismatch")
+
+
+@router.post("/webhook")
+async def handle_messenger_webhook(request: Request):
+    """
+    Handle incoming Facebook Messenger messages.
+    Connects users to Maya avatar.
+    """
+    data = await request.json()
+    
+    # Process messaging events
+    if data.get("object") == "page":
+        for entry in data.get("entry", []):
+            for event in entry.get("messaging", []):
+                # Handle message asynchronously
+                await process_messenger_event(event)
+    
+    # Always return 200 OK quickly (Facebook requires fast response)
+    return {"status": "received"}
+
+
+async def process_messenger_event(event: dict):
+    """Process individual Messenger event"""
+    try:
+        sender_id = event.get("sender", {}).get("id")
+        message = event.get("message", {})
+        
+        # Ignore echo messages (messages we sent)
+        if message.get("is_echo"):
+            return
+        
+        message_text = message.get("text", "")
+        
+        if not message_text or not sender_id:
+            return
+        
+        print(f"📨 Messenger message from {sender_id}: {message_text[:50]}...")
+        
+        # Get user's name from Facebook
+        user_info = await get_facebook_user_info(sender_id)
+        user_name = user_info.get("first_name", "Friend")
+        
+        # Show typing indicator
+        await send_typing_indicator(sender_id, True)
+        
+        # Get Maya's response using existing chat system
+        # Always use Maya for Facebook Messenger - she's the engagement expert
+        response_data = await get_avatar_response(
+            message=message_text,
+            avatar="maya",  # Always Maya for customer engagement
+            user_context={
+                "platform": "facebook_messenger",
+                "user_name": user_name,
+                "user_id": sender_id
+            }
+        )
+        
+        response_text = response_data.get("response", "Вибачте, виникла тимчасова помилка. Спробуйте ще раз! 🙏")
+        
+        # Send response
+        await send_messenger_reply(sender_id, response_text)
+        
+        print(f"✅ Maya responded to {user_name} ({sender_id})")
+        
+    except Exception as e:
+        print(f"❌ Error processing Messenger event: {e}")
+        # Try to send error message to user
+        try:
+            await send_messenger_reply(
+                sender_id, 
+                "Вибачте, виникла помилка. Наша команда вже працює над цим! 🔧"
+            )
+        except:
+            pass
+
+
+async def get_facebook_user_info(user_id: str) -> dict:
+    """Get user profile info from Facebook Graph API"""
+    if not facebook_poster.page_access_token:
+        return {}
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"https://graph.facebook.com/v18.0/{user_id}",
+                params={
+                    "fields": "first_name,last_name",
+                    "access_token": facebook_poster.page_access_token
+                }
+            )
+            if response.status_code == 200:
+                return response.json()
+    except Exception as e:
+        print(f"⚠️ Error getting Facebook user info: {e}")
+    
+    return {}
+
+
+async def send_typing_indicator(recipient_id: str, typing: bool):
+    """Show/hide typing indicator"""
+    if not facebook_poster.page_access_token:
+        return
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                "https://graph.facebook.com/v18.0/me/messages",
+                params={"access_token": facebook_poster.page_access_token},
+                json={
+                    "recipient": {"id": recipient_id},
+                    "sender_action": "typing_on" if typing else "typing_off"
+                },
+                timeout=5.0
+            )
+    except Exception as e:
+        print(f"⚠️ Error sending typing indicator: {e}")
+
+
+async def send_messenger_reply(recipient_id: str, text: str):
+    """Send message to Facebook Messenger user"""
+    if not facebook_poster.page_access_token:
+        print("❌ No Facebook access token available")
+        return
+    
+    try:
+        # Split long messages (Facebook Messenger limit: 2000 chars)
+        max_length = 2000
+        
+        if len(text) > max_length:
+            messages = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+        else:
+            messages = [text]
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for msg in messages:
+                response = await client.post(
+                    "https://graph.facebook.com/v18.0/me/messages",
+                    params={"access_token": facebook_poster.page_access_token},
+                    json={
+                        "recipient": {"id": recipient_id},
+                        "message": {"text": msg},
+                        "messaging_type": "RESPONSE"
+                    },
+                    timeout=10.0
+                )
+                
+                if response.status_code != 200:
+                    print(f"❌ Facebook send error: {response.text}")
+                    raise Exception(f"Facebook API error: {response.status_code}")
+                
+                print(f"✅ Message sent to {recipient_id}")
+    
+    except Exception as e:
+        print(f"❌ Error sending Messenger reply: {e}")
+        raise
+```
+
+STEP 2: UPDATE backend/main.py
+
+Add Messenger webhook router (find where facebook_router is included, add nearby):
+```python
+# Add import at top with other route imports
+from routes.messenger_webhook import router as messenger_router
+
+# Add router with other routers (near line 185 where facebook_router is)
+app.include_router(messenger_router, prefix="/api/messenger", tags=["messenger"])
+```
+
+STEP 3: ADD ENVIRONMENT VARIABLE
+
+Add to Replit Secrets AND Render Environment:
+- FB_VERIFY_TOKEN: "gradus_maya_webhook_2025" (or any secret string you choose)
+
+The PAGE_ACCESS_TOKEN is already in facebook_poster, we reuse it!
+
+BENEFITS:
+✅ Reuses existing Facebook infrastructure
+✅ Uses existing PAGE_ACCESS_TOKEN from facebook_poster
+✅ Doesn't interfere with existing posting system
+✅ Maya handles all incoming messages
+✅ Typing indicators for natural feel
+✅ Gets user names for personalization
+✅ Error handling and logging
+✅ Works alongside existing Facebook features
+
+NEXT STEPS AFTER DEPLOY:
+1. Go to developers.facebook.com → Your App
+2. Add Messenger product (if not already added)
+3. In Messenger Settings → Webhooks:
+   - Callback URL: https://gradus-ai.onrender.com/api/messenger/webhook
+   - Verify Token: gradus_maya_webhook_2025
+   - Subscribe to: messages, messaging_postbacks
+4. Test by messaging your GradusMedia page!
+
+Deploy with:
+git add -A
+git commit -m "Add Facebook Messenger webhook for Maya chatbot"
+git push origin main
