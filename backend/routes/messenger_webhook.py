@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "gradus_maya_webhook_2025")
+APP_SECRET = os.getenv("FACEBOOK_APP_SECRET")
 
 
 @router.get("/webhook")
