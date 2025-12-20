@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel
@@ -244,6 +244,23 @@ async def health_check():
             "social_poster": fb_status
         }
     }
+
+@app.get("/privacy-policy", response_class=HTMLResponse)
+async def privacy_policy():
+    """Serve privacy policy page for Facebook app review"""
+    policy_path = Path(__file__).parent / "templates" / "privacy-policy.html"
+    
+    if policy_path.exists():
+        return policy_path.read_text(encoding='utf-8')
+    
+    return """
+    <html>
+    <body style="font-family: Arial; max-width: 800px; margin: 0 auto; padding: 20px;">
+        <h1>Privacy Policy - Gradus AI</h1>
+        <p>Privacy policy coming soon. Contact privacy@gradusmedia.com for information.</p>
+    </body>
+    </html>
+    """
 
 @app.post("/api/chat")
 async def chat(request: AvatarChatRequest):
