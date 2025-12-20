@@ -1540,6 +1540,12 @@ frontend_dist = get_frontend_dist()
 if frontend_dist and (frontend_dist / "assets").exists():
     app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
 
+# Mount backend attached_assets for Maya persona photo
+backend_assets = Path(__file__).parent / "attached_assets"
+if backend_assets.exists():
+    app.mount("/attached_assets", StaticFiles(directory=backend_assets), name="backend_assets")
+    logger.info(f"Backend assets mounted at /attached_assets")
+
 # Always define SPA routes - they check path at request time
 @app.get("/")
 @app.head("/")  # Support HEAD requests for health checks
