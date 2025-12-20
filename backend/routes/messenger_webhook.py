@@ -79,7 +79,12 @@ async def process_messenger_event(event: dict):
             )
             response_data = await chat_with_avatars(chat_request)
             
-            response_text = response_data.get("response", "Вибачте, виникла тимчасова помилка. Спробуйте ще раз! 🙏")
+            if hasattr(response_data, 'response'):
+                response_text = response_data.response
+            elif isinstance(response_data, dict):
+                response_text = response_data.get("response", "Вибачте, виникла помилка.")
+            else:
+                response_text = str(response_data)
         except Exception as e:
             logger.error(f"Error getting Maya response: {e}")
             response_text = "Привіт! Я Майя з Gradus Media. Зараз у мене технічні складнощі, але я скоро повернусь! 💫"
