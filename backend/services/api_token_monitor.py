@@ -1,3 +1,16 @@
+"""
+API Token Monitor
+
+Monitors critical API tokens for health, expiration, and usage.
+
+Active checks:
+- Anthropic (Claude API): usage, rate limits, key validity
+- OpenAI (embeddings, DALL-E): usage, rate limits, key validity
+
+Removed checks:
+- Facebook: Using non-expiring Business Portfolio token, monitoring redundant
+"""
+
 import os
 import requests
 import logging
@@ -37,7 +50,6 @@ class APITokenMonitor:
         services_to_check = [
             ('anthropic', self.check_anthropic_api),
             ('openai', self.check_openai_api),
-            ('facebook', self.check_facebook_token),
             ('telegram', self.check_telegram_bot)
         ]
         
