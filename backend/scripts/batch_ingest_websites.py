@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
 
-from services.carousel_scraper import scrape_website_with_carousels
+from services.carousel_scraper import scrape_full_website
 from services.rag_service import add_documents_to_rag
 
 WEBSITES = [
@@ -65,7 +65,18 @@ async def scrape_single_website(website_info):
     print(f"\n🔍 Scraping {website_info['name']} ({website_info['url']})...")
     
     try:
-        content = await scrape_website_with_carousels(website_info['url'])
+        result = await scrape_full_website(
+            url=website_info['url'],
+            brand_name=website_info['brand']
+        )
+        
+        # Extract content from result dict
+        if result and 'full_text' in result:
+            content = result['full_text']
+        elif result and 'content' in result:
+            content = result['content']
+        else:
+            content = None
         
         if content:
             enriched_content = enrich_content_with_rebrand(
