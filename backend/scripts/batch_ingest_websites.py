@@ -10,7 +10,59 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from services.carousel_scraper import scrape_full_website
-from services.rag_service import add_documents_to_rag
+from services.rag_utils import chunk_text, get_embedding
+from pinecone import Pinecone
+
+
+def ingest_scraped_content_to_pinecone(content: str, metadata: dict):
+    """
+    Ingest pre-scraped and enriched content to Pinecone.
+    Content is already scraped and enriched with Best Brands rebrand.
+    """
+    
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+    
+    chunks = chunk_text(content, chunk_size=500, overlap=50)
+    
+    print(f"   📦 Created {len(chunks)} chunks")
+    
+    vectors_to_upsert = []
+    
+    for i, chunk in enumerate(chunks):
+        try:
+            embedding = get_embedding(chunk)
+            
+            timestamp = datetime.now().timestamp()
+            vector_id = f"{metadata['brand']}_{metadata['category']}_{i}_{int(timestamp)}"
+            
+            vector = {
+                "id": vector_id,
+                "values": embedding,
+                "metadata": {
+                    **metadata,
+                    "text": chunk,
+                    "chunk_index": i
+                }
+            }
+            vectors_to_upsert.append(vector)
+            
+        except Exception as e:
+            print(f"   ⚠️ Error creating embedding for chunk {i}: {e}")
+            continue
+    
+    if vectors_to_upsert:
+        batch_size = 100
+        for i in range(0, len(vectors_to_upsert), batch_size):
+            batch = vectors_to_upsert[i:i+batch_size]
+            index.upsert(
+                vectors=batch,
+                namespace="company_knowledge"
+            )
+        
+        print(f"   📤 Uploaded {len(vectors_to_upsert)} vectors to Pinecone")
+    else:
+        print(f"   ⚠️ No vectors to upload")
 
 WEBSITES = [
     {"url": "https://avtd.com/", "name": "Best Brands Main", "brand": "Best Brands", "type": "distributor"},
@@ -124,26 +176,29 @@ async def batch_scrape_websites():
     return results
 
 def ingest_to_rag(scraped_data):
-    """Ingest enriched data to Pinecone"""
+    """Ingest all scraped and enriched data to Pinecone"""
     print("\n📤 Ingesting to RAG...")
     
     success_count = 0
+    
     for item in scraped_data:
         try:
-            add_documents_to_rag(
-                documents=[{
-                    "content": item["content"],
-                    "metadata": item["metadata"]
-                }],
-                namespace="company_knowledge"
+            print(f"\n🔄 Processing {item['metadata']['brand']}...")
+            
+            ingest_scraped_content_to_pinecone(
+                content=item["content"],
+                metadata=item["metadata"]
             )
+            
             print(f"✅ Ingested {item['metadata']['brand']}")
             success_count += 1
             
         except Exception as e:
             print(f"❌ Error ingesting {item['metadata']['brand']}: {e}")
+            import traceback
+            traceback.print_exc()
     
-    print(f"\n📊 Ingested {success_count}/{len(scraped_data)} successfully")
+    print(f"\n📊 Successfully ingested {success_count}/{len(scraped_data)} brands")
 
 async def main():
     """Main batch processing"""
