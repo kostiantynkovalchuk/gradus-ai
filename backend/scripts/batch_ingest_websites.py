@@ -161,9 +161,7 @@ async def scrape_single_website(website_info):
         product_sections = []
         
         if result and isinstance(result, dict):
-            content = result.get('full_text', '')
-            if not content:
-                content = result.get('content', '') or result.get('text', '')
+            content = result.get('all_text', '')
             
             sections = result.get('sections', {})
             for section_name, section_data in sections.items():

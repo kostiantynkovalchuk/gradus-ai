@@ -1,0 +1,102 @@
+content = result.get('all_text')  ✅ This exists!
+```
+
+---
+
+## 🔧 **QUICK FIX - Replit Agent Prompt:**
+```
+Fix content extraction key in batch_ingest_websites.py - use 'all_text' not 'full_text'.
+
+BUG FOUND:
+scrape_full_website() returns dict with key 'all_text', but batch script looks for 'full_text'.
+This causes 0/11 scraped even though scraping succeeds.
+
+FIX in backend/scripts/batch_ingest_websites.py:
+
+Find scrape_single_website function (around line 80) and update:
+```python
+async def scrape_single_website(website_info):
+    """Scrape and enrich a single website with special product data handling"""
+    print(f"\n🔍 Scraping {website_info['name']} ({website_info['url']})...")
+    
+    try:
+        # Scrape full website
+        result = await scrape_full_website(
+            url=website_info['url'],
+            brand_name=website_info['brand']
+        )
+        
+        # Extract content from result dict
+        content = None
+        product_sections = []
+        
+        if result and isinstance(result, dict):
+            # FIXED: Use 'all_text' key (the actual key returned!)
+            content = result.get('all_text', '')
+            
+            # CRITICAL: Extract product sections separately
+            sections = result.get('sections', {})
+            for section_name, section_data in sections.items():
+                # Identify product sections by keywords
+                product_keywords = ['продукція', 'асортимент', 'наші вина', 'products', 
+                                   'collection', 'wines', 'portfolio', 'бренди']
+                
+                if any(keyword in section_name.lower() for keyword in product_keywords):
+                    if section_data.get('text'):
+                        product_sections.append({
+                            'name': section_name,
+                            'text': section_data['text'],
+                            'url': section_data.get('url', '')
+                        })
+                        print(f"   🎯 Found PRODUCT section: {section_name} ({len(section_data['text'])} chars)")
+        
+        if not content or len(content) < 100:
+            print(f"⚠️ Insufficient content from {website_info['name']} ({len(content) if content else 0} chars)")
+            return None
+        
+        # ENRICH: Replace AVTD → Best Brands
+        enriched_content = enrich_content_with_rebrand(content, website_info['brand'])
+        
+        print(f"✅ Scraped {website_info['name']}: {len(content)} chars")
+        print(f"   📝 Enriched with Best Brands context")
+        print(f"   🎯 Product sections found: {len(product_sections)}")
+        
+        return {
+            "content": enriched_content,
+            "product_sections": product_sections,
+            "metadata": {
+                "source": website_info['url'],
+                "source_type": "company_website",
+                "brand": website_info['brand'],
+                "category": website_info['type'],
+                "company": "Best Brands",
+                "enriched": True,
+                "has_products": len(product_sections) > 0,
+                "product_section_count": len(product_sections),
+                "scraped_at": datetime.now().isoformat()
+            }
+        }
+            
+    except Exception as e:
+        print(f"❌ Error scraping {website_info['name']}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+```
+
+KEY FIX:
+Line ~90: Changed from result.get('full_text') to result.get('all_text')
+
+This will immediately fix the 0/11 scraped issue!
+```
+
+---
+
+## ⏰ **Timeline to Fix:**
+```
+00:00 - Paste prompt into Replit Agent
+00:02 - Change made
+00:03 - Push to GitHub
+00:05 - Render deploys
+00:07 - Re-run script
+00:22 - SUCCESS! 11/11 scraped! 🎉
