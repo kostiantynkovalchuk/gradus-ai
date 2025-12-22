@@ -3,6 +3,7 @@ import os
 import re
 import sys
 from datetime import datetime
+from unidecode import unidecode
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -12,6 +13,19 @@ load_dotenv()
 from services.carousel_scraper import scrape_full_website
 from services.rag_utils import chunk_text, get_embedding
 from pinecone import Pinecone
+
+
+def sanitize_vector_id(text: str) -> str:
+    """
+    Convert text to ASCII-safe string for Pinecone vector IDs.
+    Handles Ukrainian/Cyrillic characters.
+    """
+    ascii_text = unidecode(text)
+    ascii_text = ascii_text.replace(' ', '_')
+    ascii_text = re.sub(r'[^a-zA-Z0-9_-]', '', ascii_text)
+    if len(ascii_text) > 50:
+        ascii_text = ascii_text[:50]
+    return ascii_text
 
 
 def ingest_scraped_content_to_pinecone(content: str, product_sections: list, metadata: dict):
@@ -40,7 +54,9 @@ def ingest_scraped_content_to_pinecone(content: str, product_sections: list, met
                 try:
                     embedding = get_embedding(chunk)
                     timestamp = datetime.now().timestamp()
-                    vector_id = f"{metadata['brand']}_PRODUCT_{prod_section['name']}_{i}_{int(timestamp)}"
+                    safe_section_name = sanitize_vector_id(prod_section['name'])
+                    safe_brand = sanitize_vector_id(metadata['brand'])
+                    vector_id = f"{safe_brand}_PRODUCT_{safe_section_name}_{i}_{int(timestamp)}"
                     
                     vector = {
                         "id": vector_id,
@@ -69,7 +85,8 @@ def ingest_scraped_content_to_pinecone(content: str, product_sections: list, met
         try:
             embedding = get_embedding(chunk)
             timestamp = datetime.now().timestamp()
-            vector_id = f"{metadata['brand']}_GENERAL_{i}_{int(timestamp)}"
+            safe_brand = sanitize_vector_id(metadata['brand'])
+            vector_id = f"{safe_brand}_GENERAL_{i}_{int(timestamp)}"
             
             vector = {
                 "id": vector_id,
