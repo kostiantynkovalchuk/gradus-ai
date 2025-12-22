@@ -1,0 +1,136 @@
+cd backend
+cat > scripts/cleanup_all_old_data.py << 'EOF'
+"""
+Comprehensive cleanup: Remove old GREENDAY + excessive Best Brands chunks
+Keep only high-quality PRODUCT data
+"""
+
+import os
+import sys
+sys.path.insert(0, '/home/runner/workspace/backend')
+
+from pinecone import Pinecone
+from services.rag_utils import get_embedding
+
+def cleanup_all():
+    PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
+    PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME")
+    
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    index = pc.Index(PINECONE_INDEX_NAME)
+    
+    print("🔍 Comprehensive cleanup starting...\n")
+    
+    # Get current stats
+    stats = index.describe_index_stats()
+    print(f"📊 Current total: {stats['total_vector_count']} vectors")
+    print(f"📊 Namespace: {stats['namespaces']}\n")
+    
+    to_delete = []
+    
+    # === PART 1: Clean GREENDAY ===
+    print("="*60)
+    print("PART 1: GREENDAY Cleanup")
+    print("="*60)
+    
+    query_vector = get_embedding("GREENDAY vodka")
+    results = index.query(
+        vector=query_vector,
+        top_k=100,
+        namespace="company_knowledge",
+        include_metadata=True
+    )
+    
+    greenday_manual = []
+    greenday_old = []
+    
+    for match in results['matches']:
+        vector_id = match['id']
+        metadata = match.get('metadata', {})
+        text = metadata.get('text', '').lower()
+        
+        if 'greenday' in text or metadata.get('brand') == 'GREENDAY':
+            if 'GREENDAY_PRODUCT_MANUAL' in vector_id:
+                greenday_manual.append(vector_id)
+                print(f"✅ KEEP: {vector_id[:60]}")
+            else:
+                greenday_old.append(vector_id)
+                to_delete.append(vector_id)
+                print(f"❌ DELETE: {vector_id[:60]}")
+    
+    print(f"\nGREENDAY Summary:")
+    print(f"   ✅ Keep: {len(greenday_manual)} manual PRODUCT chunks")
+    print(f"   ❌ Delete: {len(greenday_old)} old chunks")
+    
+    # === PART 2: Clean Best Brands ===
+    print("\n" + "="*60)
+    print("PART 2: Best Brands Cleanup")
+    print("="*60)
+    
+    query_vector = get_embedding("Best Brands company")
+    results = index.query(
+        vector=query_vector,
+        top_k=100,
+        namespace="company_knowledge",
+        include_metadata=True
+    )
+    
+    bb_chunks = []
+    for match in results['matches']:
+        vector_id = match['id']
+        metadata = match.get('metadata', {})
+        
+        if metadata.get('brand') == 'Best Brands' and 'Best_Brands_GENERAL' in vector_id:
+            bb_chunks.append({
+                'id': vector_id,
+                'text': metadata.get('text', '')[:100]
+            })
+    
+    print(f"Found {len(bb_chunks)} Best Brands GENERAL chunks")
+    
+    # Keep only first 3, delete rest
+    if len(bb_chunks) > 3:
+        print(f"\n✅ Keeping first 3 Best Brands chunks")
+        for chunk in bb_chunks[:3]:
+            print(f"   KEEP: {chunk['id'][:60]}")
+        
+        print(f"\n❌ Deleting {len(bb_chunks) - 3} excessive Best Brands chunks")
+        for chunk in bb_chunks[3:]:
+            to_delete.append(chunk['id'])
+            print(f"   DELETE: {chunk['id'][:60]}")
+    
+    # === SUMMARY ===
+    print("\n" + "="*60)
+    print("CLEANUP SUMMARY")
+    print("="*60)
+    print(f"Total vectors to delete: {len(to_delete)}")
+    print(f"   - GREENDAY old: {len(greenday_old)}")
+    print(f"   - Best Brands excess: {len(bb_chunks) - 3 if len(bb_chunks) > 3 else 0}")
+    
+    if to_delete:
+        print(f"\n⚠️  This will delete {len(to_delete)} vectors")
+        confirm = input("Proceed? (yes/no): ")
+        
+        if confirm.lower() == 'yes':
+            # Delete in batches
+            batch_size = 100
+            for i in range(0, len(to_delete), batch_size):
+                batch = to_delete[i:i+batch_size]
+                index.delete(ids=batch, namespace="company_knowledge")
+                print(f"   🗑️  Deleted batch {i//batch_size + 1}")
+            
+            print(f"\n✅ Cleanup complete!")
+            
+            # Show new stats
+            stats = index.describe_index_stats()
+            print(f"📊 New total: {stats['total_vector_count']} vectors")
+        else:
+            print("❌ Cleanup cancelled")
+    else:
+        print("\n✅ No cleanup needed!")
+
+if __name__ == "__main__":
+    cleanup_all()
+EOF
+
+python3 scripts/cleanup_all_old_data.py
