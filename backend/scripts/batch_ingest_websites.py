@@ -14,27 +14,62 @@ from services.rag_utils import chunk_text, get_embedding
 from pinecone import Pinecone
 
 
-def ingest_scraped_content_to_pinecone(content: str, metadata: dict):
+def ingest_scraped_content_to_pinecone(content: str, product_sections: list, metadata: dict):
     """
-    Ingest pre-scraped and enriched content to Pinecone.
-    Content is already scraped and enriched with Best Brands rebrand.
+    Ingest content with SPECIAL handling for product data.
+    Product sections get priority metadata tagging.
     """
     
     pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
     index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
     
-    chunks = chunk_text(content, chunk_size=500, overlap=50)
-    
-    print(f"   📦 Created {len(chunks)} chunks")
-    
     vectors_to_upsert = []
     
-    for i, chunk in enumerate(chunks):
+    if product_sections:
+        print(f"   🎯 Processing {len(product_sections)} PRODUCT sections...")
+        
+        for prod_section in product_sections:
+            enriched_product = enrich_content_with_rebrand(
+                prod_section['text'], 
+                metadata['brand']
+            )
+            
+            product_chunks = chunk_text(enriched_product, chunk_size=500, overlap=50)
+            
+            for i, chunk in enumerate(product_chunks):
+                try:
+                    embedding = get_embedding(chunk)
+                    timestamp = datetime.now().timestamp()
+                    vector_id = f"{metadata['brand']}_PRODUCT_{prod_section['name']}_{i}_{int(timestamp)}"
+                    
+                    vector = {
+                        "id": vector_id,
+                        "values": embedding,
+                        "metadata": {
+                            **metadata,
+                            "text": chunk,
+                            "chunk_index": i,
+                            "content_type": "PRODUCT",
+                            "section_name": prod_section['name'],
+                            "is_product_info": True,
+                            "section_url": prod_section.get('url', '')
+                        }
+                    }
+                    vectors_to_upsert.append(vector)
+                    
+                except Exception as e:
+                    print(f"   ⚠️ Error with product chunk {i}: {e}")
+            
+            print(f"      ✅ {prod_section['name']}: {len(product_chunks)} chunks")
+    
+    print(f"   📄 Processing general content...")
+    general_chunks = chunk_text(content, chunk_size=500, overlap=50)
+    
+    for i, chunk in enumerate(general_chunks):
         try:
             embedding = get_embedding(chunk)
-            
             timestamp = datetime.now().timestamp()
-            vector_id = f"{metadata['brand']}_{metadata['category']}_{i}_{int(timestamp)}"
+            vector_id = f"{metadata['brand']}_GENERAL_{i}_{int(timestamp)}"
             
             vector = {
                 "id": vector_id,
@@ -42,25 +77,25 @@ def ingest_scraped_content_to_pinecone(content: str, metadata: dict):
                 "metadata": {
                     **metadata,
                     "text": chunk,
-                    "chunk_index": i
+                    "chunk_index": i,
+                    "content_type": "GENERAL"
                 }
             }
             vectors_to_upsert.append(vector)
             
         except Exception as e:
-            print(f"   ⚠️ Error creating embedding for chunk {i}: {e}")
             continue
+    
+    print(f"      ✅ General content: {len(general_chunks)} chunks")
     
     if vectors_to_upsert:
         batch_size = 100
         for i in range(0, len(vectors_to_upsert), batch_size):
             batch = vectors_to_upsert[i:i+batch_size]
-            index.upsert(
-                vectors=batch,
-                namespace="company_knowledge"
-            )
+            index.upsert(vectors=batch, namespace="company_knowledge")
         
-        print(f"   📤 Uploaded {len(vectors_to_upsert)} vectors to Pinecone")
+        product_count = sum(1 for v in vectors_to_upsert if v['metadata'].get('content_type') == 'PRODUCT')
+        print(f"   📤 Uploaded {len(vectors_to_upsert)} vectors ({product_count} PRODUCT, {len(vectors_to_upsert)-product_count} GENERAL)")
     else:
         print(f"   ⚠️ No vectors to upload")
 
@@ -113,7 +148,7 @@ def enrich_content_with_rebrand(content: str, brand: str) -> str:
     return enriched + enrichment
 
 async def scrape_single_website(website_info):
-    """Scrape and enrich a single website"""
+    """Scrape and enrich a single website with special product data handling"""
     print(f"\n🔍 Scraping {website_info['name']} ({website_info['url']})...")
     
     try:
@@ -122,41 +157,58 @@ async def scrape_single_website(website_info):
             brand_name=website_info['brand']
         )
         
-        # Extract content from result dict
-        if result and 'full_text' in result:
-            content = result['full_text']
-        elif result and 'content' in result:
-            content = result['content']
-        else:
-            content = None
+        content = None
+        product_sections = []
         
-        if content:
-            enriched_content = enrich_content_with_rebrand(
-                content, 
-                website_info['brand']
-            )
+        if result and isinstance(result, dict):
+            content = result.get('full_text', '')
+            if not content:
+                content = result.get('content', '') or result.get('text', '')
             
-            print(f"✅ Scraped {website_info['name']}: {len(content)} chars")
-            print(f"   📝 Enriched with Best Brands context")
-            
-            return {
-                "content": enriched_content,
-                "metadata": {
-                    "source": website_info['url'],
-                    "source_type": "company_website",
-                    "brand": website_info['brand'],
-                    "category": website_info['type'],
-                    "company": "Best Brands",
-                    "enriched": True,
-                    "scraped_at": datetime.now().isoformat()
-                }
-            }
-        else:
-            print(f"⚠️ No content from {website_info['name']}")
+            sections = result.get('sections', {})
+            for section_name, section_data in sections.items():
+                product_keywords = ['продукція', 'асортимент', 'наші вина', 'products', 
+                                   'collection', 'wines', 'portfolio']
+                
+                if any(keyword in section_name.lower() for keyword in product_keywords):
+                    if section_data.get('text'):
+                        product_sections.append({
+                            'name': section_name,
+                            'text': section_data['text'],
+                            'url': section_data.get('url', '')
+                        })
+                        print(f"   🎯 Found PRODUCT section: {section_name} ({len(section_data['text'])} chars)")
+        
+        if not content or len(content) < 100:
+            print(f"⚠️ Insufficient content from {website_info['name']}")
             return None
+        
+        enriched_content = enrich_content_with_rebrand(content, website_info['brand'])
+        
+        print(f"✅ Scraped {website_info['name']}: {len(content)} chars")
+        print(f"   📝 Enriched with Best Brands context")
+        print(f"   🎯 Product sections found: {len(product_sections)}")
+        
+        return {
+            "content": enriched_content,
+            "product_sections": product_sections,
+            "metadata": {
+                "source": website_info['url'],
+                "source_type": "company_website",
+                "brand": website_info['brand'],
+                "category": website_info['type'],
+                "company": "Best Brands",
+                "enriched": True,
+                "has_products": len(product_sections) > 0,
+                "product_section_count": len(product_sections),
+                "scraped_at": datetime.now().isoformat()
+            }
+        }
             
     except Exception as e:
         print(f"❌ Error scraping {website_info['name']}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 async def batch_scrape_websites():
@@ -176,10 +228,11 @@ async def batch_scrape_websites():
     return results
 
 def ingest_to_rag(scraped_data):
-    """Ingest all scraped and enriched data to Pinecone"""
+    """Ingest all data with product section handling"""
     print("\n📤 Ingesting to RAG...")
     
     success_count = 0
+    total_product_sections = 0
     
     for item in scraped_data:
         try:
@@ -187,8 +240,12 @@ def ingest_to_rag(scraped_data):
             
             ingest_scraped_content_to_pinecone(
                 content=item["content"],
+                product_sections=item.get("product_sections", []),
                 metadata=item["metadata"]
             )
+            
+            if item.get("product_sections"):
+                total_product_sections += len(item["product_sections"])
             
             print(f"✅ Ingested {item['metadata']['brand']}")
             success_count += 1
@@ -199,6 +256,7 @@ def ingest_to_rag(scraped_data):
             traceback.print_exc()
     
     print(f"\n📊 Successfully ingested {success_count}/{len(scraped_data)} brands")
+    print(f"🎯 Total PRODUCT sections ingested: {total_product_sections}")
 
 async def main():
     """Main batch processing"""

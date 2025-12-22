@@ -1,0 +1,223 @@
+Fix content extraction AND add special product data handling for critical SKU/volume/description information.
+
+CRITICAL CONTEXT:
+Product information (SKUs, volumes, descriptions) from Products sections is THE MOST IMPORTANT data. Must ensure this reaches the AI agent properly with special tagging and structure.
+
+PHASE 1: Fix content extraction from scrape_full_website
+
+In backend/scripts/batch_ingest_websites.py, update scrape_single_website function:
+```python
+async def scrape_single_website(website_info):
+    """Scrape and enrich a single website with special product data handling"""
+    print(f"\n🔍 Scraping {website_info['name']} ({website_info['url']})...")
+    
+    try:
+        # Scrape full website
+        result = await scrape_full_website(
+            url=website_info['url'],
+            brand_name=website_info['brand']
+        )
+        
+        # Extract content from result dict
+        content = None
+        product_sections = []
+        
+        if result and isinstance(result, dict):
+            # Get main content
+            content = result.get('full_text', '')
+            if not content:
+                content = result.get('content', '') or result.get('text', '')
+            
+            # CRITICAL: Extract product sections separately
+            sections = result.get('sections', {})
+            for section_name, section_data in sections.items():
+                # Identify product sections by keywords
+                product_keywords = ['продукція', 'асортимент', 'наші вина', 'products', 
+                                   'collection', 'wines', 'portfolio']
+                
+                if any(keyword in section_name.lower() for keyword in product_keywords):
+                    if section_data.get('text'):
+                        product_sections.append({
+                            'name': section_name,
+                            'text': section_data['text'],
+                            'url': section_data.get('url', '')
+                        })
+                        print(f"   🎯 Found PRODUCT section: {section_name} ({len(section_data['text'])} chars)")
+        
+        if not content or len(content) < 100:
+            print(f"⚠️ Insufficient content from {website_info['name']}")
+            return None
+        
+        # ENRICH: Replace AVTD → Best Brands
+        enriched_content = enrich_content_with_rebrand(content, website_info['brand'])
+        
+        print(f"✅ Scraped {website_info['name']}: {len(content)} chars")
+        print(f"   📝 Enriched with Best Brands context")
+        print(f"   🎯 Product sections found: {len(product_sections)}")
+        
+        return {
+            "content": enriched_content,
+            "product_sections": product_sections,  # Separate product data!
+            "metadata": {
+                "source": website_info['url'],
+                "source_type": "company_website",
+                "brand": website_info['brand'],
+                "category": website_info['type'],
+                "company": "Best Brands",
+                "enriched": True,
+                "has_products": len(product_sections) > 0,
+                "product_section_count": len(product_sections),
+                "scraped_at": datetime.now().isoformat()
+            }
+        }
+            
+    except Exception as e:
+        print(f"❌ Error scraping {website_info['name']}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+```
+
+PHASE 2: Update ingestion to handle product data specially
+
+Update ingest_scraped_content_to_pinecone function:
+```python
+def ingest_scraped_content_to_pinecone(content: str, product_sections: list, metadata: dict):
+    """
+    Ingest content with SPECIAL handling for product data.
+    Product sections get priority metadata tagging.
+    """
+    
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+    
+    vectors_to_upsert = []
+    
+    # STEP 1: Process PRODUCT sections with special metadata
+    if product_sections:
+        print(f"   🎯 Processing {len(product_sections)} PRODUCT sections...")
+        
+        for prod_section in product_sections:
+            # Enrich product section
+            enriched_product = enrich_content_with_rebrand(
+                prod_section['text'], 
+                metadata['brand']
+            )
+            
+            # Chunk product section
+            product_chunks = chunk_text(enriched_product, chunk_size=500, overlap=50)
+            
+            for i, chunk in enumerate(product_chunks):
+                try:
+                    embedding = get_embedding(chunk)
+                    timestamp = datetime.now().timestamp()
+                    vector_id = f"{metadata['brand']}_PRODUCT_{prod_section['name']}_{i}_{int(timestamp)}"
+                    
+                    vector = {
+                        "id": vector_id,
+                        "values": embedding,
+                        "metadata": {
+                            **metadata,
+                            "text": chunk,
+                            "chunk_index": i,
+                            "content_type": "PRODUCT",  # SPECIAL TAG!
+                            "section_name": prod_section['name'],
+                            "is_product_info": True,  # PRIORITY FLAG!
+                            "section_url": prod_section.get('url', '')
+                        }
+                    }
+                    vectors_to_upsert.append(vector)
+                    
+                except Exception as e:
+                    print(f"   ⚠️ Error with product chunk {i}: {e}")
+            
+            print(f"      ✅ {prod_section['name']}: {len(product_chunks)} chunks")
+    
+    # STEP 2: Process general content
+    print(f"   📄 Processing general content...")
+    general_chunks = chunk_text(content, chunk_size=500, overlap=50)
+    
+    for i, chunk in enumerate(general_chunks):
+        try:
+            embedding = get_embedding(chunk)
+            timestamp = datetime.now().timestamp()
+            vector_id = f"{metadata['brand']}_GENERAL_{i}_{int(timestamp)}"
+            
+            vector = {
+                "id": vector_id,
+                "values": embedding,
+                "metadata": {
+                    **metadata,
+                    "text": chunk,
+                    "chunk_index": i,
+                    "content_type": "GENERAL"
+                }
+            }
+            vectors_to_upsert.append(vector)
+            
+        except Exception as e:
+            continue
+    
+    print(f"      ✅ General content: {len(general_chunks)} chunks")
+    
+    # STEP 3: Upload all vectors
+    if vectors_to_upsert:
+        batch_size = 100
+        for i in range(0, len(vectors_to_upsert), batch_size):
+            batch = vectors_to_upsert[i:i+batch_size]
+            index.upsert(vectors=batch, namespace="company_knowledge")
+        
+        product_count = sum(1 for v in vectors_to_upsert if v['metadata'].get('content_type') == 'PRODUCT')
+        print(f"   📤 Uploaded {len(vectors_to_upsert)} vectors ({product_count} PRODUCT, {len(vectors_to_upsert)-product_count} GENERAL)")
+```
+
+PHASE 3: Update ingest_to_rag to pass product_sections
+```python
+def ingest_to_rag(scraped_data):
+    """Ingest all data with product section handling"""
+    print("\n📤 Ingesting to RAG...")
+    
+    success_count = 0
+    total_product_chunks = 0
+    
+    for item in scraped_data:
+        try:
+            print(f"\n🔄 Processing {item['metadata']['brand']}...")
+            
+            # Pass both content AND product_sections
+            ingest_scraped_content_to_pinecone(
+                content=item["content"],
+                product_sections=item.get("product_sections", []),
+                metadata=item["metadata"]
+            )
+            
+            if item.get("product_sections"):
+                total_product_chunks += len(item["product_sections"])
+            
+            print(f"✅ Ingested {item['metadata']['brand']}")
+            success_count += 1
+            
+        except Exception as e:
+            print(f"❌ Error ingesting {item['metadata']['brand']}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"\n📊 Successfully ingested {success_count}/{len(scraped_data)} brands")
+    print(f"🎯 Total PRODUCT sections ingested: {total_product_chunks}")
+```
+
+WHY THIS MATTERS:
+- Product sections tagged with content_type="PRODUCT" ✅
+- Special metadata flag: is_product_info=True ✅
+- Section names preserved (Продукція, Асортимент, etc.) ✅
+- Product data can be prioritized in RAG retrieval ✅
+- Maya can give more weight to product-tagged chunks ✅
+
+WHEN MAYA RETRIEVES:
+User: "Які об'єми GREENDAY?"
+RAG will prioritize chunks with:
+- brand="GREENDAY" ✅
+- is_product_info=True ✅
+- content_type="PRODUCT" ✅
+
+This ensures SKU names, volumes, and descriptions reach Maya first!
