@@ -348,7 +348,7 @@ async def ingest_website(url: str, company_name: str, index) -> dict:
             'message': f"Помилка при обробці: {str(e)}"
         }
 
-async def retrieve_context(query: str, index, top_k: int = 3) -> Tuple[str, List[str]]:
+async def retrieve_context(query: str, index, top_k: int = 15) -> Tuple[str, List[str]]:
     """Retrieve relevant context from vector database"""
     try:
         query_embedding = get_embedding(query)
@@ -367,10 +367,10 @@ async def retrieve_context(query: str, index, top_k: int = 3) -> Tuple[str, List
         sources = []
         
         for match in results.matches:
-            if match.score > 0.45:
+            if match.score > 0.40:
                 metadata = match.metadata
                 contexts.append(metadata.get('text', ''))
-                source = f"{metadata.get('company', 'Unknown')} ({metadata.get('url', '')})"
+                source = f"{metadata.get('company', 'Unknown')} ({metadata.get('source', '')})"
                 if source not in sources:
                     sources.append(source)
         
