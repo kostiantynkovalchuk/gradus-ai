@@ -1,6 +1,6 @@
 """
 Manual product ingestion for GREENDAY - COMPLETE PRODUCT LINE
-All 9 products with technology details
+All 10 products with technology details
 """
 
 import os
@@ -13,7 +13,7 @@ from pinecone import Pinecone
 
 PRODUCTS = {
     "GREENDAY": """
-GREENDAY VODKA - COMPLETE PRODUCT LINE (9 Products)
+GREENDAY VODKA - COMPLETE PRODUCT LINE (10 Products)
 
 === CORE LINE (6 Products) ===
 
@@ -51,7 +51,7 @@ GreenDay Green Tea - найкращий зелений чай роблять у 
 Capacity: 0.5L
 Alcohol: 40%
 
-=== PREMIUM LINE (3 Products) ===
+=== EVOLUTION LINE (4 Products) ===
 
 GREENDAY EVOLUTION
 GREENDAY EVOLUTION vodka is a vodka that meets high international standards in the vodka industry and boldly challenges global brands. This product stands out from others with its ultra-modern design. GREENDAY EVOLUTION sets itself apart with its ultra-modern design and represents the pinnacle of the company's evolution, during which the brand's team created a flawless product.
@@ -65,6 +65,11 @@ Alcohol: 40%
 
 GREENDAY DISCOVERY
 GREENDAY DISCOVERY is a world-class elite vodka for those who are open to change and derive pleasure from everything happening in their lives. GREENDAY DISCOVERY is made specifically for them. The name DISCOVERY was chosen deliberately. It truly embodies the discovery of purity of taste and delicate smoothness.
+Capacity: 0.5L, 0.75L
+Alcohol: 40%
+
+GREENDAY ORGANIC
+Premium organic vodka in the Evolution line. Made with organic ingredients and eco-conscious production methods, representing GREENDAY's commitment to natural quality and environmental responsibility.
 Capacity: 0.5L, 0.75L
 Alcohol: 40%
 
@@ -109,7 +114,7 @@ def manual_ingest():
         
         chunks = chunk_text(enriched, chunk_size=500, overlap=50)
         print(f"   📦 Created {len(chunks)} chunks")
-        print(f"   🎯 Covering 9 products + technology details")
+        print(f"   🎯 Covering 10 products + technology details")
         
         vectors = []
         
@@ -152,7 +157,7 @@ def manual_ingest():
             
             print(f"   📤 Uploaded {len(vectors)} vectors")
             print(f"   🎯 All tagged with content_type='PRODUCT'")
-            print(f"   ✅ Maya now knows ALL 9 GREENDAY products!")
+            print(f"   ✅ Maya now knows ALL 10 GREENDAY products!")
             total_uploaded += len(vectors)
         
         print(f"✅ Ingested {brand}")
@@ -161,7 +166,7 @@ def manual_ingest():
     print(f"✅ MANUAL INGESTION COMPLETE!")
     print(f"📊 Total vectors uploaded: {total_uploaded}")
     print(f"🎯 All tagged as PRODUCT for priority retrieval!")
-    print(f"🍸 Coverage: 9 products + filtration technology + serving")
+    print(f"🍸 Coverage: 10 products + filtration technology + serving")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
