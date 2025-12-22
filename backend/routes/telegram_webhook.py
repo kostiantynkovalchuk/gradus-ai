@@ -49,7 +49,7 @@ async def process_telegram_message(message: dict):
                     chat_id,
                     "Я Maya - ваш AI-консультант з алкогольної індустрії! 🥂\n\n"
                     "Можу розповісти про:\n"
-                    "• Бренди BestBrands (GREENDAY, HELSINKI, UKRAINKA, MARLIN)\n"
+                    "• Бренди Best Brands (GREENDAY, HELSINKI, UKRAINKA, MARLIN)\n"
                     "• DOVBUSH коньяк\n"
                     "• Коктейлі та їх приготування\n"
                     "• Маркетингові тренди\n\n"
