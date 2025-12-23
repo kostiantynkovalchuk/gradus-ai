@@ -185,8 +185,8 @@ async def health_check():
 app.include_router(status_router)
 app.include_router(facebook_router, prefix="/api/facebook", tags=["facebook"])
 app.include_router(messenger_router, prefix="/api/messenger", tags=["messenger"])
-# from routes.telegram_webhook import router as telegram_router
-# app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
+from routes.telegram_webhook import router as telegram_router
+app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
 app.include_router(articles_router)
 app.include_router(chat_router)
 
@@ -1404,41 +1404,6 @@ async def get_scheduler_status():
         "jobs": jobs,
         "total_jobs": len(jobs)
     }
-
-@app.post("/api/telegram/webhook")
-async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
-    """
-    Telegram webhook endpoint to handle inline button callbacks
-    
-    Receives updates from Telegram Bot API when users click inline buttons
-    
-    Security: Set TELEGRAM_WEBHOOK_SECRET environment variable and configure webhook:
-    https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>&secret_token=<SECRET>
-    """
-    try:
-        telegram_secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
-        if telegram_secret:
-            provided_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
-            if provided_secret != telegram_secret:
-                logger.warning("Telegram webhook: Invalid or missing secret token")
-                raise HTTPException(status_code=403, detail="Forbidden")
-        
-        payload = await request.json()
-        
-        if 'callback_query' in payload:
-            result = telegram_webhook_handler.handle_callback_query(
-                payload['callback_query'],
-                db
-            )
-            return result
-        
-        return {"status": "ok", "message": "No callback_query found"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Telegram webhook error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/telegram/set-webhook")
 async def set_telegram_webhook():

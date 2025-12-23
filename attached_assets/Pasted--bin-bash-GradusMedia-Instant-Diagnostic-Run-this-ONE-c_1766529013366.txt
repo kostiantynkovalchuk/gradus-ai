@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# GradusMedia Instant Diagnostic - Run this ONE command in Render shell
+# This will tell you exactly what's broken
+
+echo "🔍 GradusMedia Approval Diagnostic"
+echo "=================================="
+echo ""
+
+# Test 1: Check if handler is registered
+echo "Test 1: Checking if callback handler is registered..."
+python << 'EOF'
+try:
+    from main import application
+    handlers = application.handlers.get(0, [])
+    callback_handlers = [h for h in handlers if 'Callback' in type(h).__name__]
+    
+    if callback_handlers:
+        print("✅ PASS: Callback handler IS registered")
+        for handler in callback_handlers:
+            if hasattr(handler, 'pattern'):
+                pattern = handler.pattern.pattern if hasattr(handler.pattern, 'pattern') else handler.pattern
+                print(f"   Pattern: {pattern}")
+    else:
+        print("❌ FAIL: NO callback handler registered!")
+        print("   This is your problem!")
+        print("   Add this line to your bot setup:")
+        print("   application.add_handler(CallbackQueryHandler(handle_approval_callback, pattern='^(approve|reject)_video_'))")
+        exit(1)
+except Exception as e:
+    print(f"❌ ERROR: Could not import application: {e}")
+    print("   Try: from app.main import application")
+    exit(1)
+EOF
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "🚨 DIAGNOSIS: Handler not registered - that's why buttons don't work!"
+    exit 1
+fi
+
+echo ""
+
+# Test 2: Check environment variables
+echo "Test 2: Checking environment variables..."
+python << 'EOF'
+import os
+
+required = {
+    'TELEGRAM_BOT_TOKEN': os.getenv('TELEGRAM_BOT_TOKEN'),
+    'FACEBOOK_ACCESS_TOKEN': os.getenv('FACEBOOK_ACCESS_TOKEN'),
+    'FACEBOOK_PAGE_ID': os.getenv('FACEBOOK_PAGE_ID'),
+    'DISABLE_AUTO_POSTING': os.getenv('DISABLE_AUTO_POSTING', 'false'),
+}
+
+all_ok = True
+for key, value in required.items():
+    if value and key != 'DISABLE_AUTO_POSTING':
+        masked = value[:8] + '...' if len(value) > 8 else value
+        print(f"✅ {key}: {masked}")
+    elif key == 'DISABLE_AUTO_POSTING':
+        status = "disabled" if value.lower() == 'true' else "enabled"
+        print(f"ℹ️  Auto posting: {status}")
+    else:
+        print(f"❌ {key}: MISSING")
+        all_ok = False
+
+if not all_ok:
+    print("⚠️  Missing environment variables")
+    exit(1)
+EOF
+
+echo ""
+
+# Test 3: Check database connection
+echo "Test 3: Checking database..."
+python << 'EOF'
+try:
+    from app.database import engine, Video
+    from sqlalchemy.orm import Session
+    
+    with Session(engine) as session:
+        pending = session.query(Video).filter(Video.status == 'pending').count()
+        approved = session.query(Video).filter(Video.status == 'approved').count()
+        
+        print(f"✅ Database connected")
+        print(f"   Pending videos: {pending}")
+        print(f"   Approved videos: {approved}")
+except Exception as e:
+    print(f"❌ Database error: {e}")
+    exit(1)
+EOF
+
+echo ""
+
+# Test 4: Check Facebook token
+echo "Test 4: Testing Facebook API..."
+python << 'EOF'
+import os
+import requests
+
+token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+page_id = os.getenv('FACEBOOK_PAGE_ID')
+
+if not token or not page_id:
+    print("❌ Missing Facebook credentials")
+    exit(1)
+
+url = f"https://graph.facebook.com/v18.0/{page_id}"
+params = {'access_token': token, 'fields': 'id,name'}
+
+try:
+    response = requests.get(url, params=params, timeout=5)
+    if response.status_code == 200:
+        page = response.json()
+        print(f"✅ Facebook API working")
+        print(f"   Page: {page.get('name')}")
+    else:
+        print(f"❌ Facebook API error: {response.status_code}")
+        print(f"   Response: {response.json()}")
+        if response.status_code == 190:
+            print("   Token expired - generate new one!")
+        exit(1)
+except Exception as e:
+    print(f"❌ Facebook connection failed: {e}")
+    exit(1)
+EOF
+
+echo ""
+echo "=================================="
+echo "✅ ALL TESTS PASSED"
+echo ""
+echo "If approval still doesn't work, add debug logging:"
+echo "1. Add to your webhook:"
+echo '   logger.info(f"Callback received: {data}")'
+echo "2. Add to your handler:"
+echo '   logger.info("Handler called!")'
+echo ""
+echo "Then click Approve and check logs for those messages."
