@@ -1,0 +1,80 @@
+# Replit Agent Prompt: Fix Duplicate Article Notifications
+
+## Problem
+User is receiving DUPLICATE articles in Telegram approval notifications with different images for the same article.
+
+## Tasks
+
+### 1. Diagnose the Issue
+
+Create a diagnostic script that:
+
+1. **Checks the database for duplicate articles:**
+   - Find articles with the same `translated_title` created in the last 7 days
+   - Show article ID, status, source URL, and creation timestamp
+   - Identify if duplicates are from the same source URL or different sources
+
+2. **Checks the scraper scheduler:**
+   - List all active APScheduler jobs
+   - Identify if there are duplicate scraper jobs running
+   - Show job triggers and next run times
+
+3. **Checks for database constraints:**
+   - Verify if there's a unique constraint on `source_url` in the articles table
+   - Check if the scraper has duplicate detection logic
+
+### 2. Provide Analysis
+
+Based on the diagnostic results, identify the root cause:
+- **Scheduler issue**: Multiple instances of the same scraper job
+- **No duplicate prevention**: Missing unique constraint on source_url
+- **Image regeneration bug**: Regenerating images creates new articles instead of updating existing ones
+- **Different sources**: Same article scraped from different publications (expected behavior)
+
+### 3. Implement Fix
+
+Based on the root cause, implement one of these fixes:
+
+**If duplicate scheduler jobs:**
+- Remove duplicate jobs from APScheduler
+- Add job ID checks to prevent duplicate registration
+
+**If missing unique constraint:**
+- Add database migration to create unique constraint on `source_url`
+- Update scraper to check for existing articles before creating new ones
+
+**If image regeneration creates duplicates:**
+- Fix the image regeneration endpoint to update the existing article instead of creating a new one
+
+**If expected from multiple sources:**
+- Add deduplication logic based on content similarity or article title hash
+
+### 4. Create Prevention
+
+Add safeguards to prevent future duplicates:
+- Database unique constraint on `source_url`
+- Scraper checks existing articles before insert
+- APScheduler job registration validation
+
+## File Locations to Check
+
+- **Scraper jobs**: `backend/main.py` (APScheduler setup)
+- **Article model**: `backend/models/content.py` or `backend/models/article.py`
+- **Database setup**: `backend/database.py` or similar
+- **Image regeneration**: Look for `/api/images/regenerate` endpoint
+- **Telegram notifications**: `backend/services/notification_service.py` or similar
+
+## Output
+
+Provide:
+1. **Diagnostic report** showing duplicate articles and scheduler status
+2. **Root cause analysis** with specific line numbers and code references
+3. **Code changes** to fix the issue
+4. **Verification steps** to confirm the fix works
+
+## Important
+
+- **Do not guess at imports or file locations** - use the actual codebase
+- **Show the actual code** before making changes
+- **Test the fix** with a verification script
+- **Preserve all existing functionality** - don't break working features

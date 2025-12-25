@@ -32,6 +32,9 @@ class ContentQueue(Base):
     language = Column(String(10), default='en')
     needs_translation = Column(Boolean, default=True)
     
+    # Notification tracking to prevent duplicate Telegram notifications
+    notification_sent = Column(Boolean, default=False)
+    
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted')",

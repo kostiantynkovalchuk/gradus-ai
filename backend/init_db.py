@@ -50,6 +50,7 @@ REQUIRED_COLUMNS = {
         ('posted_at', 'TIMESTAMP'),
         ('language', "VARCHAR(10) DEFAULT 'en'"),
         ('needs_translation', 'BOOLEAN DEFAULT TRUE'),
+        ('notification_sent', 'BOOLEAN DEFAULT FALSE'),
     ],
     'approval_log': [
         ('content_id', 'INTEGER'),
