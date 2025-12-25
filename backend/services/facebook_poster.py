@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class FacebookPoster:
     def __init__(self):
-        self.page_access_token = os.getenv('FACEBOOK_PAGE_ACCESS_TOKEN')
+        self.page_access_token = os.getenv('FACEBOOK_ACCESS_TOKEN') or os.getenv('FACEBOOK_PAGE_ACCESS_TOKEN')
         self.page_id = os.getenv('FACEBOOK_PAGE_ID')
         self.graph_api_version = 'v18.0'
         self.base_url = f'https://graph.facebook.com/{self.graph_api_version}'
