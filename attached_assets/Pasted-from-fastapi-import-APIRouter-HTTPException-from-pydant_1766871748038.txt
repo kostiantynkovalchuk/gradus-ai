@@ -3,10 +3,12 @@ from pydantic import BaseModel
 from datetime import datetime
 import os
 
+# Import the existing chat function
 from routes.chat_endpoints import chat_with_avatars, ChatRequest as ChatEndpointRequest
 
 router = APIRouter(prefix="/api/maya", tags=["maya"])
 
+# Rate limiting storage
 rate_limit_storage = {}
 
 class ChatRequest(BaseModel):
@@ -48,6 +50,7 @@ async def chat_with_maya(request: ChatRequest):
     Uses the same chat endpoint as Telegram Maya
     """
     try:
+        # Check rate limit
         remaining = check_rate_limit(request.session_id)
         
         if remaining <= 0:
@@ -56,16 +59,19 @@ async def chat_with_maya(request: ChatRequest):
                 detail="Ви досягли ліміту безкоштовних питань на сьогодні"
             )
         
+        # Call the existing chat endpoint with Maya avatar
         chat_request = ChatEndpointRequest(
             message=request.message,
-            avatar="maya",
+            avatar="maya",  # Force Maya personality
             conversation_history=[]
         )
         
         response = await chat_with_avatars(chat_request)
         
+        # Increment usage
         increment_usage(request.session_id)
         
+        # Check remaining after increment
         remaining_after = check_rate_limit(request.session_id)
         
         return ChatResponse(
