@@ -543,6 +543,26 @@ class ContentScheduler:
                     
                     notification_service.send_custom_notification(message)
                     
+                    # Ingest to Pinecone for Maya's knowledge base
+                    try:
+                        from routes.chat_endpoints import chat_index, PINECONE_AVAILABLE
+                        from services.rag_utils import ingest_article
+                        import asyncio
+                        
+                        if PINECONE_AVAILABLE and chat_index:
+                            loop = asyncio.get_event_loop()
+                            ingestion_result = loop.run_until_complete(
+                                ingest_article(article, chat_index)
+                            )
+                            if ingestion_result:
+                                logger.info(f"📚 Article #{article.id} added to Maya's knowledge")
+                            else:
+                                logger.warning(f"⚠️ Article ingestion failed for #{article.id}")
+                        else:
+                            logger.debug("Pinecone not available, skipping article ingestion")
+                    except Exception as e:
+                        logger.warning(f"Could not ingest article to RAG: {e}")
+                    
                 else:
                     # Track failed attempts and reset status back to 'approved'
                     article.status = 'approved'  # Reset so it can be retried
@@ -672,6 +692,26 @@ class ContentScheduler:
 🕐 {datetime.utcnow().strftime('%H:%M, %d %b %Y')}"""
                     
                     notification_service.send_custom_notification(message)
+                    
+                    # Ingest to Pinecone for Maya's knowledge base
+                    try:
+                        from routes.chat_endpoints import chat_index, PINECONE_AVAILABLE
+                        from services.rag_utils import ingest_article
+                        import asyncio
+                        
+                        if PINECONE_AVAILABLE and chat_index:
+                            loop = asyncio.get_event_loop()
+                            ingestion_result = loop.run_until_complete(
+                                ingest_article(article, chat_index)
+                            )
+                            if ingestion_result:
+                                logger.info(f"📚 Article #{article.id} added to Maya's knowledge")
+                            else:
+                                logger.warning(f"⚠️ Article ingestion failed for #{article.id}")
+                        else:
+                            logger.debug("Pinecone not available, skipping article ingestion")
+                    except Exception as e:
+                        logger.warning(f"Could not ingest article to RAG: {e}")
                     
                 else:
                     # Reset status back to 'approved' so it can be retried

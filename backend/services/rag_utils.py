@@ -387,3 +387,110 @@ async def retrieve_context(query: str, index, top_k: int = 15) -> Tuple[str, Lis
     except Exception as e:
         logger.error(f"Retrieval error: {e}")
         return "", []
+
+
+async def ingest_article(article, index):
+    """
+    Ingest a scraped article into Pinecone for RAG knowledge
+    
+    Args:
+        article: ContentQueue database object with title, content, category, etc.
+        index: Pinecone index instance
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        content = article.translated_text or article.content or ''
+        if not content or len(content.strip()) < 100:
+            logger.warning(f"Article #{article.id} too short, skipping ingestion")
+            return False
+        
+        title = article.translated_title or article.title or 'No title'
+        
+        article_text = f"""TITLE: {title}
+
+CATEGORY: {article.category or 'Industry News'}
+
+SUMMARY: {content[:500]}
+
+FULL CONTENT:
+{content}
+
+SOURCE: {article.source or 'Unknown'}
+SOURCE URL: {article.source_url or 'N/A'}
+PUBLISHED: {article.published_at}
+LANGUAGE: {article.language or 'uk'}
+
+This is a news article published by Gradus Media, covering trends, news, and insights in the alcohol and HoReCa industry."""
+        
+        embedding = get_embedding(article_text)
+        
+        from datetime import datetime
+        vector = {
+            "id": f"article_{article.id}_{int(datetime.now().timestamp())}",
+            "values": embedding,
+            "metadata": {
+                "text": article_text[:1000],
+                "article_id": str(article.id),
+                "title": title[:200],
+                "category": article.category or "general",
+                "source": (article.source[:100] if article.source else "Unknown"),
+                "source_url": (article.source_url[:200] if article.source_url else ""),
+                "published_at": str(article.published_at),
+                "language": article.language or "uk",
+                "content_type": "news_article",
+                "is_gradus_content": True,
+                "gradus_media_url": f"https://gradusmedia.org/article/{article.id}",
+                "created_at": datetime.now().isoformat()
+            }
+        }
+        
+        index.upsert(vectors=[vector], namespace="company_knowledge")
+        
+        logger.info(f"✅ Article ingested: #{article.id} '{title[:50]}...'")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to ingest article #{article.id}: {e}", exc_info=True)
+        return False
+
+
+async def ingest_existing_articles(db_session, index, limit: int = 50):
+    """
+    Ingest existing approved articles from database
+    
+    Use this to backfill Pinecone with already-published articles
+    
+    Args:
+        db_session: SQLAlchemy session
+        index: Pinecone index
+        limit: Max articles to ingest (default 50, prevents overload)
+    """
+    from models.content import ContentQueue
+    
+    try:
+        articles = db_session.query(ContentQueue).filter(
+            ContentQueue.status == 'posted'
+        ).order_by(
+            ContentQueue.published_at.desc()
+        ).limit(limit).all()
+        
+        logger.info(f"📚 Starting backfill: {len(articles)} articles")
+        
+        success_count = 0
+        for article in articles:
+            result = await ingest_article(article, index)
+            if result:
+                success_count += 1
+        
+        logger.info(f"✅ Backfill complete: {success_count}/{len(articles)} articles ingested")
+        return {
+            "total": len(articles),
+            "success": success_count,
+            "failed": len(articles) - success_count
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Backfill failed: {e}", exc_info=True)
+        return {"error": str(e)}
