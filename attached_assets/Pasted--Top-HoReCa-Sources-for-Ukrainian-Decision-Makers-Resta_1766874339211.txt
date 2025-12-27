@@ -1,0 +1,120 @@
+🌍 Top HoReCa Sources for Ukrainian Decision-Makers:
+Restaurant & Food Service:
+
+Restaurant Business Online (restaurantbusinessonline.com) - US trends, franchising, operations
+QSR Magazine (qsrmagazine.com) - Fast casual & quick service insights
+Nation's Restaurant News (nrn.com) - Industry news, tech, labor
+FSR Magazine (fsrmagazine.com) - Full-service restaurant strategies
+
+Hotels & Hospitality:
+
+Hospitality Net (hospitalitynet.org) - Global hotel industry news
+Hotel Management (hotelmanagement.net) - Operations, technology, design
+
+European Perspective:
+
+The Caterer (thecaterer.com) - UK/Europe hospitality (closest to Ukrainian market)
+Propel (propelmag.com) - European hospitality trends
+
+Equipment & Tech:
+
+Foodservice Equipment & Supplies (fesmag.com) - Kitchen tech, equipment
+Modern Restaurant Management (modernrestaurantmanagement.com) - Tech, trends, operations
+
+
+🤖 Replit Agent Prompt - Auto-Ingest HoReCa Sources:
+Create a HoReCa knowledge ingestion system to expand Maya's expertise beyond alcohol.
+
+TASK:
+Build a script that ingests articles from leading HoReCa industry sources into Pinecone for Maya's RAG system.
+
+CREATE FILE: backend/scripts/ingest_horeca_sources.py
+
+REQUIREMENTS:
+
+1. **Source Configuration:**
+   Define top HoReCa sources with metadata:
+   - Restaurant Business Online (US restaurant trends)
+   - QSR Magazine (fast casual insights)
+   - Hospitality Net (global hotel news)
+   - The Caterer (European hospitality)
+   - Hotel Management (hotel operations)
+   
+2. **Article Selection:**
+   For each source, ingest 10-15 most recent/relevant articles about:
+   - Restaurant operations & profitability
+   - Hotel management & guest experience
+   - Kitchen technology & equipment
+   - Labor management & staffing
+   - Menu trends & pricing strategies
+   - Customer experience & service
+   
+3. **Smart Scraping:**
+   - Use existing scraping functions from services/rag_utils.py
+   - Handle different site structures gracefully
+   - Extract: title, content, publish date, author
+   - Skip paywalled content
+   
+4. **Rich Context Creation:**
+   Each article should be embedded with context like:
+SOURCE: Restaurant Business Online
+CATEGORY: Restaurant Operations
+REGION: Global (applicable to Ukraine)
+RELEVANCE: Staffing strategies for post-pandemic recovery
+TITLE: [article title]
+CONTENT: [article content]
+This is industry knowledge from a leading HoReCa publication,
+providing insights for restaurant, hotel, and cafe operators.
+
+5. **Metadata for Retrieval:**
+```python
+   metadata = {
+       "source": "Restaurant Business Online",
+       "source_url": "...",
+       "category": "restaurant_operations",  # or hotel_management, kitchen_tech, etc.
+       "region": "global",
+       "content_type": "industry_article",
+       "is_gradus_content": False,  # External source
+       "industry_sector": "restaurant",  # or hotel, cafe, bar
+       "published_date": "2024-12-20",
+       "relevance": "high"  # for Ukrainian HoReCa
+   }
+```
+
+6. **Execution:**
+   - Process 10-15 articles per source
+   - Total ~50-75 articles for initial knowledge base
+   - Log progress and errors
+   - Handle rate limiting (sleep between requests)
+   
+7. **Output:**
+🌍 HoReCa Knowledge Ingestion
+📰 Restaurant Business Online
+✓ "5 Ways to Reduce Labor Costs" - ingested
+✓ "Menu Pricing Strategies 2024" - ingested
+[10 articles total]
+🏨 Hospitality Net
+✓ "Hotel Tech Trends" - ingested
+[15 articles total]
+📊 SUMMARY:
+Total processed: 75
+Successfully ingested: 72
+Failed: 3
+✅ Maya now has HoReCa industry knowledge!
+
+IMPLEMENTATION NOTES:
+- Reuse httpx and BeautifulSoup from existing scraper
+- Reuse get_embedding() from rag_utils.py
+- Upsert to same Pinecone index: "gradus-media"
+- Use namespace: "company_knowledge"
+- Each article = 1 vector
+- Add error handling for 403/404/timeout
+- Respect robots.txt
+
+TESTING:
+After ingestion, Maya should be able to answer:
+- "Як знизити витрати на персонал у ресторані?"
+- "Які тренди в готельному бізнесі 2024?"
+- "Як покращити досвід гостя?"
+
+The script should be reusable - we can run it monthly to refresh knowledge.
