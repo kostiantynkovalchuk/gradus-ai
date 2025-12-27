@@ -1,0 +1,117 @@
+🔧 Fix: Update backend/services/rag_utils.py
+Replace BOTH functions (ingest_article and ingest_existing_articles) with these corrected versions:
+pythonasync def ingest_article(article, index):
+    """
+    Ingest a scraped article into Pinecone for RAG knowledge
+    
+    Args:
+        article: ContentQueue database object
+        index: Pinecone index instance
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Use correct column names from ContentQueue model
+        title = article.translated_title or article.source_title or "Untitled"
+        content = article.translated_text or article.original_text or ""
+        
+        # Skip if no content
+        if not content or len(content.strip()) < 100:
+            logger.warning(f"Article #{article.id} too short, skipping ingestion")
+            return False
+        
+        # Extract category from metadata if exists
+        category = "Industry News"
+        if article.extra_metadata and isinstance(article.extra_metadata, dict):
+            category = article.extra_metadata.get('category', 'Industry News')
+        
+        # Create rich searchable text
+        article_text = f"""TITLE: {title}
+
+CATEGORY: {category}
+
+FULL CONTENT:
+{content}
+
+SOURCE: {article.source or 'Gradus Media'}
+SOURCE URL: {article.source_url or 'N/A'}
+PUBLISHED: {article.posted_at or article.created_at}
+LANGUAGE: {article.language or 'uk'}
+
+This is a news article published by Gradus Media, covering trends, news, and insights in the alcohol and HoReCa industry."""
+        
+        # Get embedding from OpenAI
+        embedding = get_embedding(article_text)
+        
+        # Create vector with rich metadata
+        from datetime import datetime
+        vector = {
+            "id": f"article_{article.id}_{int(datetime.now().timestamp())}",
+            "values": embedding,
+            "metadata": {
+                "text": article_text[:1000],  # First 1000 chars for display
+                "article_id": str(article.id),
+                "title": title[:200],
+                "category": category,
+                "source": (article.source or "Gradus Media")[:100],
+                "source_url": (article.source_url or "")[:200],
+                "posted_at": str(article.posted_at or article.created_at),
+                "language": article.language or "uk",
+                "content_type": "news_article",
+                "is_gradus_content": True,
+                "gradus_media_url": f"https://gradusmedia.org/article/{article.id}",
+                "created_at": datetime.now().isoformat()
+            }
+        }
+        
+        # Upload to Pinecone
+        index.upsert(vectors=[vector], namespace="company_knowledge")
+        
+        logger.info(f"✅ Article ingested: #{article.id} '{title[:50]}...'")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to ingest article #{article.id}: {e}", exc_info=True)
+        return False
+
+
+async def ingest_existing_articles(db_session, index, limit: int = 50):
+    """
+    Ingest existing approved articles from database
+    
+    Use this to backfill Pinecone with already-published articles
+    
+    Args:
+        db_session: SQLAlchemy session
+        index: Pinecone index
+        limit: Max articles to ingest (default 50, prevents overload)
+    """
+    from models.content import ContentQueue
+    
+    try:
+        # Get recently posted articles (use posted_at, not published_at)
+        articles = db_session.query(ContentQueue).filter(
+            ContentQueue.status == 'posted'
+        ).order_by(
+            ContentQueue.posted_at.desc()
+        ).limit(limit).all()
+        
+        logger.info(f"📚 Starting backfill: {len(articles)} articles")
+        
+        success_count = 0
+        for article in articles:
+            result = await ingest_article(article, index)
+            if result:
+                success_count += 1
+        
+        logger.info(f"✅ Backfill complete: {success_count}/{len(articles)} articles ingested")
+        return {
+            "total": len(articles),
+            "success": success_count,
+            "failed": len(articles) - success_count
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Backfill failed: {e}", exc_info=True)
+        return {"error": str(e)}

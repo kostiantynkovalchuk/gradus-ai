@@ -394,32 +394,34 @@ async def ingest_article(article, index):
     Ingest a scraped article into Pinecone for RAG knowledge
     
     Args:
-        article: ContentQueue database object with title, content, category, etc.
+        article: ContentQueue database object
         index: Pinecone index instance
         
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        content = article.translated_text or article.content or ''
+        title = article.translated_title or article.source_title or "Untitled"
+        content = article.translated_text or article.original_text or ""
+        
         if not content or len(content.strip()) < 100:
             logger.warning(f"Article #{article.id} too short, skipping ingestion")
             return False
         
-        title = article.translated_title or article.title or 'No title'
+        category = "Industry News"
+        if article.extra_metadata and isinstance(article.extra_metadata, dict):
+            category = article.extra_metadata.get('category', 'Industry News')
         
         article_text = f"""TITLE: {title}
 
-CATEGORY: {article.category or 'Industry News'}
-
-SUMMARY: {content[:500]}
+CATEGORY: {category}
 
 FULL CONTENT:
 {content}
 
-SOURCE: {article.source or 'Unknown'}
+SOURCE: {article.source or 'Gradus Media'}
 SOURCE URL: {article.source_url or 'N/A'}
-PUBLISHED: {article.published_at}
+PUBLISHED: {article.posted_at or article.created_at}
 LANGUAGE: {article.language or 'uk'}
 
 This is a news article published by Gradus Media, covering trends, news, and insights in the alcohol and HoReCa industry."""
@@ -434,10 +436,10 @@ This is a news article published by Gradus Media, covering trends, news, and ins
                 "text": article_text[:1000],
                 "article_id": str(article.id),
                 "title": title[:200],
-                "category": article.category or "general",
-                "source": (article.source[:100] if article.source else "Unknown"),
-                "source_url": (article.source_url[:200] if article.source_url else ""),
-                "published_at": str(article.published_at),
+                "category": category,
+                "source": (article.source or "Gradus Media")[:100],
+                "source_url": (article.source_url or "")[:200],
+                "posted_at": str(article.posted_at or article.created_at),
                 "language": article.language or "uk",
                 "content_type": "news_article",
                 "is_gradus_content": True,
@@ -473,7 +475,7 @@ async def ingest_existing_articles(db_session, index, limit: int = 50):
         articles = db_session.query(ContentQueue).filter(
             ContentQueue.status == 'posted'
         ).order_by(
-            ContentQueue.published_at.desc()
+            ContentQueue.posted_at.desc()
         ).limit(limit).all()
         
         logger.info(f"📚 Starting backfill: {len(articles)} articles")
