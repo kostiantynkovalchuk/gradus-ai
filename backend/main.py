@@ -187,6 +187,8 @@ app.include_router(facebook_router, prefix="/api/facebook", tags=["facebook"])
 app.include_router(messenger_router, prefix="/api/messenger", tags=["messenger"])
 from routes.telegram_webhook import router as telegram_router
 app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
+from routes.maya import router as maya_router
+app.include_router(maya_router)
 app.include_router(articles_router)
 app.include_router(chat_router)
 

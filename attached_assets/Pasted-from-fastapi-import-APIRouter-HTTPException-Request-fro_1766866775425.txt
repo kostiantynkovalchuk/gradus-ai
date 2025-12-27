@@ -1,0 +1,109 @@
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+from datetime import datetime, timedelta
+import os
+from anthropic import Anthropic
+
+router = APIRouter(prefix="/api/maya", tags=["maya"])
+
+# Initialize Claude
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Simple in-memory rate limiting (use Redis in production)
+rate_limit_storage = {}
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str
+
+class ChatResponse(BaseModel):
+    reply: str
+    remaining_questions: int
+
+def check_rate_limit(session_id: str) -> int:
+    """Check how many questions remain for this session today"""
+    today = datetime.now().date()
+    key = f"{session_id}:{today}"
+    
+    if key not in rate_limit_storage:
+        rate_limit_storage[key] = {"count": 0, "date": today}
+    
+    # Reset if different day
+    if rate_limit_storage[key]["date"] != today:
+        rate_limit_storage[key] = {"count": 0, "date": today}
+    
+    used = rate_limit_storage[key]["count"]
+    remaining = max(0, 5 - used)
+    
+    return remaining
+
+def increment_usage(session_id: str):
+    """Increment usage count for this session"""
+    today = datetime.now().date()
+    key = f"{session_id}:{today}"
+    
+    if key not in rate_limit_storage:
+        rate_limit_storage[key] = {"count": 0, "date": today}
+    
+    rate_limit_storage[key]["count"] += 1
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_with_maya(request: ChatRequest):
+    """
+    Maya AI chat endpoint
+    
+    Free tier: 5 questions per day per session
+    """
+    try:
+        # Check rate limit
+        remaining = check_rate_limit(request.session_id)
+        
+        if remaining <= 0:
+            raise HTTPException(
+                status_code=429, 
+                detail="Ви досягли ліміту безкоштовних питань на сьогодні"
+            )
+        
+        # Call Claude API (use your existing Maya system prompt)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system="""Ти - Maya, AI-експертка з HoReCa індустрії в Україні від Gradus Media. 
+            
+Твоя роль:
+- Консультувати власників барів, ресторанів, готелів з питань алкогольного бізнесу
+- Розповідати про тренди коктейлів, преміум алкоголю
+- Давати поради про постачальників в Україні
+- Пояснювати процес ліцензування
+- Допомагати з оптимізацією витрат
+
+Стиль спілкування:
+- Українською мовою
+- Професійно, але дружньо
+- Конкретні поради, не загальні фрази
+- Посилайся на реалії українського ринку
+
+Якщо не знаєш відповіді - чесно кажи і пропонуй альтернативу.""",
+            messages=[
+                {"role": "user", "content": request.message}
+            ]
+        )
+        
+        reply = response.content[0].text
+        
+        # Increment usage
+        increment_usage(request.session_id)
+        
+        # Check remaining after increment
+        remaining_after = check_rate_limit(request.session_id)
+        
+        return ChatResponse(
+            reply=reply,
+            remaining_questions=remaining_after
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Maya chat error: {e}")
+        raise HTTPException(status_code=500, detail="Вибачте, сталася помилка. Спробуйте ще раз.")
