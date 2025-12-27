@@ -52,8 +52,7 @@ def extract_brands_from_content(content: str, company_name: str) -> List[Dict]:
     brand_patterns = {
         'vodka': ['GREENDAY', 'HELSINKI', 'MARLIN', 'UKRAINKA'],
         'cognac': ['ADJARI', 'DOVBUSH'],
-        'wine': ['VILLA UA', 'KRISTI VALLEY', 'KOSHER', 'LUIGI ANTONIO', 
-                 'VIAGGIO', 'DIDI LARI', 'PEDRO MARTINEZ'],
+        'wine': ['VILLA', 'KRISTI VALLEY', 'DIDI LARI', 'WINEVIAGGIO', 'ADJARI'],
         'soju': ['FUNJU']
     }
     
