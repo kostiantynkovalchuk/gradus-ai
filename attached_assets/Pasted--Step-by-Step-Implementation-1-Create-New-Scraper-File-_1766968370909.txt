@@ -1,0 +1,122 @@
+📝 Step-by-Step Implementation:
+1. Create New Scraper File:
+Create backend/services/scrapers/modern_restaurant_management.py:
+python"""
+Modern Restaurant Management Scraper
+Scrapes HoReCa industry news and trends from modernrestaurantmanagement.com
+"""
+
+import logging
+from typing import List
+from bs4 import BeautifulSoup
+import feedparser
+from .base import BaseScraper, ArticlePayload
+
+logger = logging.getLogger(__name__)
+
+class ModernRestaurantManagementScraper(BaseScraper):
+    """Scraper for Modern Restaurant Management"""
+    
+    def __init__(self):
+        super().__init__(
+            source_name="Modern Restaurant Management",
+            base_url="https://modernrestaurantmanagement.com",
+            enabled=True
+        )
+    
+    def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
+        """Scrape articles from RSS feed"""
+        articles = []
+        
+        try:
+            rss_url = f"{self.base_url}/feed/"
+            logger.info(f"📡 Fetching RSS: {rss_url}")
+            
+            feed = feedparser.parse(rss_url)
+            
+            if not feed.entries:
+                logger.warning("No entries in RSS feed")
+                return articles
+            
+            logger.info(f"📋 Found {len(feed.entries)} articles in RSS")
+            
+            for entry in feed.entries[:limit]:
+                try:
+                    title = entry.get('title', 'No title')
+                    url = entry.get('link', '')
+                    
+                    # Extract content
+                    content = ""
+                    if hasattr(entry, 'content'):
+                        content = entry.content[0].value
+                    elif hasattr(entry, 'summary'):
+                        content = entry.summary
+                    
+                    # Clean HTML
+                    if content:
+                        soup = BeautifulSoup(content, 'html.parser')
+                        content = soup.get_text(separator='\n', strip=True)
+                    
+                    # Skip if too short
+                    if len(content) < 200:
+                        logger.debug(f"Skipping short article: {title[:50]}")
+                        continue
+                    
+                    article = ArticlePayload(
+                        title=title,
+                        content=content,
+                        url=url,
+                        source_name=self.source_name,
+                        language='en',
+                        needs_translation=True
+                    )
+                    
+                    articles.append(article)
+                    logger.info(f"  ✅ {title[:60]}...")
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing entry: {e}")
+                    continue
+            
+            logger.info(f"✅ Scraped {len(articles)} articles from {self.source_name}")
+            
+        except Exception as e:
+            logger.error(f"❌ RSS scraping failed: {e}")
+        
+        return articles
+
+2. Update Manager - Add to backend/services/scrapers/manager.py:
+Add import (top of file, around line 10):
+pythonfrom .modern_restaurant_management import ModernRestaurantManagementScraper
+Add to scrapers dict (around line 22):
+pythonself.scrapers = {
+    'spirits_business': SpiritsBusinessScraper(),
+    'delo_ua': DeloUaScraper(),
+    'drinks_international': DrinksInternationalScraper(),
+    'just_drinks': JustDrinksScraper(),
+    'restorator_ua': RestoratorUaScraper(),
+    'modern_restaurant_management': ModernRestaurantManagementScraper(),  # NEW
+}
+
+3. Update backend/services/scrapers/__init__.py:
+Add import:
+pythonfrom .modern_restaurant_management import ModernRestaurantManagementScraper
+
+4. Update Scheduler - Edit backend/services/scheduler.py:
+Find line ~120 (in scrape_facebook_sources_task):
+python# Facebook sources - 2 Ukrainian + 1 English
+facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks']
+Change to:
+python# Facebook sources - 2 Ukrainian + 2 HoReCa English
+facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks', 'modern_restaurant_management']
+Also update the catch-up check (around line 200):
+pythonfacebook_sources = ['Delo.ua', 'HoReCa-Україна', 'Just Drinks', 'Modern Restaurant Management']
+
+🚀 Deploy:
+bashgit add backend/services/scrapers/modern_restaurant_management.py \
+        backend/services/scrapers/manager.py \
+        backend/services/scrapers/__init__.py \
+        backend/services/scheduler.py
+
+git commit -m "feat: Add Modern Restaurant Management scraper to daily schedule"
+git push origin main
