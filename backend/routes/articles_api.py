@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, or_, func
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -139,4 +139,48 @@ async def get_article_by_id(
         "platforms": article.platforms,
         "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None,
         "language": article.language
+    }
+
+@router.get("/debug/status-count")
+async def debug_status_count(db: Session = Depends(get_db)):
+    """
+    Debug endpoint: Show article status distribution in database.
+    Helps diagnose why dashboard shows different counts than API.
+    """
+    from sqlalchemy import cast, String
+    
+    counts = db.query(
+        ContentQueue.status,
+        func.count(ContentQueue.id)
+    ).group_by(ContentQueue.status).all()
+    
+    facebook_approved = db.query(ContentQueue).filter(
+        ContentQueue.status == 'approved',
+        cast(ContentQueue.platforms, String).like('%facebook%')
+    ).count()
+    
+    linkedin_approved = db.query(ContentQueue).filter(
+        ContentQueue.status == 'approved',
+        cast(ContentQueue.platforms, String).like('%linkedin%')
+    ).count()
+    
+    sample_approved = db.query(ContentQueue).filter(
+        ContentQueue.status == 'approved'
+    ).order_by(desc(ContentQueue.created_at)).limit(5).all()
+    
+    return {
+        "status_counts": {status: count for status, count in counts},
+        "total": sum(count for _, count in counts),
+        "facebook_approved": facebook_approved,
+        "linkedin_approved": linkedin_approved,
+        "sample_approved_articles": [
+            {
+                "id": a.id,
+                "title": (a.translated_title or a.source_title or "")[:50],
+                "status": a.status,
+                "platforms": a.platforms,
+                "has_fb_post_id": bool(a.extra_metadata and a.extra_metadata.get('fb_post_id')),
+                "has_linkedin_post_id": bool(a.extra_metadata and a.extra_metadata.get('linkedin_post_id'))
+            } for a in sample_approved
+        ]
     }
