@@ -1,0 +1,65 @@
+Fix missing dependency and scheduler configuration for Modern Restaurant Management scraper.
+
+ISSUE:
+Deployment failed with error: "No module named 'feedparser'"
+Modern Restaurant Management scraper was created but not added to scheduler configuration.
+
+TASKS:
+
+1. **Add feedparser to dependencies:**
+   - Add "feedparser" to backend/requirements.txt
+   - This is required for RSS feed parsing
+
+2. **Update scheduler to include Modern Restaurant Management:**
+   
+   Edit backend/services/scheduler.py:
+   
+   Find line ~120 in scrape_facebook_sources_task() function:
+```python
+   facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks']
+```
+   
+   Change to:
+```python
+   facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks', 'modern_restaurant_management']
+```
+   
+   Find line ~200 in check_and_run_missed_scraping() function:
+```python
+   facebook_sources = ['Delo.ua', 'HoReCa-Україна', 'Just Drinks']
+```
+   
+   Change to:
+```python
+   facebook_sources = ['Delo.ua', 'HoReCa-Україна', 'Just Drinks', 'Modern Restaurant Management']
+```
+   
+   Find line ~500 in start() function (scheduler startup log):
+```python
+   INFO:services.scheduler:   Facebook (Daily):
+   INFO:services.scheduler:      • Delo.ua 🇺🇦
+   INFO:services.scheduler:      • HoReCa-Україна 🇺🇦
+   INFO:services.scheduler:      • Just Drinks 🇬🇧
+```
+   
+   Add after Just Drinks:
+```python
+   INFO:services.scheduler:      • Modern Restaurant Management 🍽️
+```
+
+3. **Verify the scraper file exists:**
+   - Confirm backend/services/scrapers/modern_restaurant_management.py is present
+   - Confirm it's imported in backend/services/scrapers/manager.py
+   - Confirm it's imported in backend/services/scrapers/__init__.py
+
+EXPECTED RESULT:
+After fix, scheduler should show:
+- ✅ feedparser installed
+- ✅ LinkedIn scraper runs without errors
+- ✅ Facebook scraper includes Modern Restaurant Management
+- ✅ Startup log shows "Modern Restaurant Management 🍽️" in sources list
+
+After making changes, commit with message:
+"fix: Add feedparser dependency and integrate Modern Restaurant Management into scheduler"
+
+Then push to trigger Render deployment.

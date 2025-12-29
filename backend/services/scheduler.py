@@ -930,6 +930,7 @@ class ContentScheduler:
         logger.info("      • Delo.ua 🇺🇦")
         logger.info("      • HoReCa-Україна 🇺🇦")
         logger.info("      • Just Drinks 🇬🇧")
+        logger.info("      • Modern Restaurant Management 🍽️")
         logger.info("")
         logger.info("📅 SCRAPING SCHEDULE:")
         logger.info("   • LinkedIn: Mon/Wed/Fri 1:00 AM")
