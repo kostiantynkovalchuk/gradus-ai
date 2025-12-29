@@ -13,7 +13,7 @@ Main table for tracking content through the pipeline: scraping → translation �
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | SERIAL | NO | Primary key |
-| `status` | VARCHAR(20) | NO | Current status: draft, pending_approval, approved, rejected, posted |
+| `status` | VARCHAR(20) | NO | Current status: draft, pending_approval, approved, rejected, posted, posting_facebook, posting_linkedin |
 | `source` | VARCHAR(255) | YES | Source name (e.g., "The Spirits Business", "Delo.ua") |
 | `source_url` | VARCHAR(500) | YES | Original article URL |
 | `source_title` | TEXT | YES | Original title from source |
@@ -39,9 +39,12 @@ Main table for tracking content through the pipeline: scraping → translation �
 
 **Status Flow:**
 ```
-draft → pending_approval → approved → posted
+draft → pending_approval → approved → posting_facebook → posted
+                                    → posting_linkedin → posted
                         ↘ rejected
 ```
+
+**Intermediate statuses** (`posting_facebook`, `posting_linkedin`) are used during the posting process to prevent race conditions in multi-container deployments.
 
 ### approval_log
 

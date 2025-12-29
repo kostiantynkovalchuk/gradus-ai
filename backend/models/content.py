@@ -37,7 +37,7 @@ class ContentQueue(Base):
     
     __table_args__ = (
         CheckConstraint(
-            "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted')",
+            "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted', 'posting_facebook', 'posting_linkedin')",
             name='valid_status'
         ),
     )
