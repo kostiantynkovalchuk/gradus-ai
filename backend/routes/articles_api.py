@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import desc, or_, func
 from typing import Optional, List
 from pydantic import BaseModel
@@ -41,24 +41,30 @@ async def get_published_articles(
     """
     Get published articles for gradusmedia.org
     Returns approved and posted content.
+    Excludes binary image_data to prevent memory issues.
     """
-    query = db.query(ContentQueue).filter(
+    base_query = db.query(ContentQueue).filter(
         ContentQueue.status.in_(['approved', 'posted'])
     )
     
     if platform:
-        query = query.filter(ContentQueue.platforms.contains([platform]))
+        from sqlalchemy import cast, String
+        base_query = base_query.filter(cast(ContentQueue.platforms, String).like(f'%{platform}%'))
     
-    total = query.count()
+    total = base_query.count()
     
-    articles = query.order_by(desc(ContentQueue.created_at)).offset(offset).limit(limit).all()
+    articles = base_query.options(
+        defer(ContentQueue.image_data),
+        defer(ContentQueue.original_text),
+        defer(ContentQueue.translated_text)
+    ).order_by(desc(ContentQueue.created_at)).offset(offset).limit(limit).all()
     
     result = []
     for article in articles:
         result.append(ArticleResponse(
             id=article.id,
             title=article.translated_title or article.source_title,
-            content=article.translated_text or article.original_text,
+            content=None,
             source=article.source,
             source_url=article.source_url,
             image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
@@ -78,11 +84,12 @@ async def get_published_articles(
 @router.get("/search")
 async def search_articles(
     q: str = Query(..., min_length=2, description="Search query"),
-    limit: int = Query(default=20, le=100, ge=1),
+    limit: int = Query(default=20, le=50, ge=1),
     db: Session = Depends(get_db)
 ):
     """
     Search published articles by title or content.
+    Excludes binary image_data to prevent memory issues.
     """
     search_term = f"%{q}%"
     
@@ -90,10 +97,12 @@ async def search_articles(
         ContentQueue.status.in_(['approved', 'posted']),
         or_(
             ContentQueue.translated_title.ilike(search_term),
-            ContentQueue.translated_text.ilike(search_term),
-            ContentQueue.source_title.ilike(search_term),
-            ContentQueue.original_text.ilike(search_term)
+            ContentQueue.source_title.ilike(search_term)
         )
+    ).options(
+        defer(ContentQueue.image_data),
+        defer(ContentQueue.original_text),
+        defer(ContentQueue.translated_text)
     ).order_by(desc(ContentQueue.created_at)).limit(limit).all()
     
     result = []
@@ -101,7 +110,6 @@ async def search_articles(
         result.append({
             "id": article.id,
             "title": article.translated_title or article.source_title,
-            "content": (article.translated_text or article.original_text or "")[:300] + "...",
             "source": article.source,
             "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
             "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None
@@ -120,10 +128,13 @@ async def get_article_by_id(
 ):
     """
     Get a single published article by ID.
+    Excludes binary image_data to prevent memory issues.
     """
     article = db.query(ContentQueue).filter(
         ContentQueue.id == article_id,
         ContentQueue.status.in_(['approved', 'posted'])
+    ).options(
+        defer(ContentQueue.image_data)
     ).first()
     
     if not article:
