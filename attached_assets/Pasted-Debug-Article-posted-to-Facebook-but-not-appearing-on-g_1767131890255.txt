@@ -1,0 +1,91 @@
+Debug: Article posted to Facebook but not appearing on gradusmedia.org website.
+
+ISSUE:
+Article "Hacien Tequila розглядає нові ринки після інвестицій" was successfully posted to Facebook by the scheduler, but it's not showing up on the website at gradusmedia.org.
+
+INVESTIGATION NEEDED:
+
+1. **Find the article in database:**
+   Search for the article by title in the database
+   Check its current status and all fields
+   Expected: status should be 'posted' after Facebook posting
+```python
+   # Show article details
+   article = db.query(ContentQueue).filter(
+       ContentQueue.translated_title.contains('Hacien Tequila')
+   ).first()
+```
+
+2. **Check /api/articles endpoint logic:**
+   File: backend/routes/articles_api.py
+   
+   Questions:
+   - What filters does it apply?
+   - Does it only return articles with certain criteria?
+   - Is there a limit (currently returns only 20)?
+   - Does it require specific fields to be non-null?
+   - Does it filter by posted_at date?
+   
+   Show me the complete query logic.
+
+3. **Check required fields for website display:**
+   What fields must be populated for an article to appear on website?
+   - translated_title? ✓
+   - translated_text? ✓
+   - image_data or image_url? 
+   - posted_at timestamp?
+   - Any other required fields?
+
+4. **Compare with working articles:**
+   Get 1 article that IS showing on website
+   Get the Hacien Tequila article that is NOT showing
+   
+   Show side-by-side comparison of all fields
+   Identify what's different
+
+5. **Check frontend filtering:**
+   File: frontend/src/pages/index.tsx (or similar)
+   Does the React app filter articles client-side?
+
+6. **Create diagnostic endpoint:**
+```python
+   @app.get("/api/debug/article/{article_id}")
+   async def debug_article(article_id: int, db: Session = Depends(get_db)):
+       article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+       if not article:
+           return {"error": "Article not found"}
+       
+       # Check why it might not appear on website
+       issues = []
+       if not article.translated_title:
+           issues.append("Missing translated_title")
+       if not article.translated_text:
+           issues.append("Missing translated_text")
+       if not article.image_data and not article.image_url:
+           issues.append("Missing image")
+       if not article.posted_at:
+           issues.append("Missing posted_at timestamp")
+       if article.status != 'posted':
+           issues.append(f"Status is '{article.status}', not 'posted'")
+       
+       return {
+           "id": article.id,
+           "title": article.translated_title,
+           "status": article.status,
+           "posted_at": str(article.posted_at),
+           "has_image": bool(article.image_data or article.image_url),
+           "has_content": bool(article.translated_text),
+           "potential_issues": issues,
+           "should_appear_on_website": len(issues) == 0
+       }
+```
+
+EXPECTED OUTPUT:
+1. Article ID and current database state
+2. Exact reason why it's not appearing on /api/articles
+3. Fix suggestion (either update article fields or fix API query)
+
+Most likely causes:
+- Article missing required field (image, posted_at, etc.)
+- API filters articles by date and this is too old/new
+- API has limit=20 and this article is not in top 20
