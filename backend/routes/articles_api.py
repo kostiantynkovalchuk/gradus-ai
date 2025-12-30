@@ -55,16 +55,18 @@ async def get_published_articles(
     
     articles = base_query.options(
         defer(ContentQueue.image_data),
-        defer(ContentQueue.original_text),
-        defer(ContentQueue.translated_text)
+        defer(ContentQueue.original_text)
     ).order_by(desc(ContentQueue.created_at)).offset(offset).limit(limit).all()
     
     result = []
     for article in articles:
+        content_preview = None
+        if article.translated_text:
+            content_preview = article.translated_text[:500] + "..." if len(article.translated_text) > 500 else article.translated_text
         result.append(ArticleResponse(
             id=article.id,
             title=article.translated_title or article.source_title,
-            content=None,
+            content=content_preview,
             source=article.source,
             source_url=article.source_url,
             image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
@@ -101,15 +103,18 @@ async def search_articles(
         )
     ).options(
         defer(ContentQueue.image_data),
-        defer(ContentQueue.original_text),
-        defer(ContentQueue.translated_text)
+        defer(ContentQueue.original_text)
     ).order_by(desc(ContentQueue.created_at)).limit(limit).all()
     
     result = []
     for article in articles:
+        content_preview = ""
+        if article.translated_text:
+            content_preview = article.translated_text[:300] + "..." if len(article.translated_text) > 300 else article.translated_text
         result.append({
             "id": article.id,
             "title": article.translated_title or article.source_title,
+            "content": content_preview,
             "source": article.source,
             "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
             "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None
