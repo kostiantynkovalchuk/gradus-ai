@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle, XCircle, Clock, Image, RefreshCw } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import api from '../lib/api'
 
 function MiniStatCard({ label, value, colorClass }) {
@@ -167,14 +168,14 @@ function ContentApproval() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm font-medium text-white/60 mb-2">Original Content (English):</p>
-                    <div className="p-3 bg-white/5 border border-white/10 rounded-lg text-white/70 text-sm max-h-48 overflow-y-auto">
-                      {content.original_text || 'No content'}
+                    <div className="p-3 bg-white/5 border border-white/10 rounded-lg text-white/70 text-sm max-h-48 overflow-y-auto prose prose-invert prose-sm max-w-none">
+                      <ReactMarkdown>{content.original_text || 'No content'}</ReactMarkdown>
                     </div>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-cyan-400/80 mb-2">Translated Content (Ukrainian):</p>
-                    <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-white text-sm max-h-48 overflow-y-auto">
-                      {content.translated_text || 'No translation'}
+                    <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-white text-sm max-h-48 overflow-y-auto prose prose-invert prose-sm max-w-none">
+                      <ReactMarkdown>{content.translated_text || 'No translation'}</ReactMarkdown>
                     </div>
                   </div>
                 </div>
