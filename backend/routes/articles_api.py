@@ -20,6 +20,7 @@ class ArticleResponse(BaseModel):
     platforms: Optional[List[str]]
     published_at: Optional[datetime]
     language: Optional[str]
+    category: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -36,6 +37,7 @@ async def get_published_articles(
     limit: int = Query(default=20, le=100, ge=1),
     offset: int = Query(default=0, ge=0),
     platform: Optional[str] = Query(default=None, description="Filter by platform: facebook, linkedin"),
+    category: Optional[str] = Query(default=None, description="Filter by category: news, reviews, trends"),
     db: Session = Depends(get_db)
 ):
     """
@@ -50,6 +52,9 @@ async def get_published_articles(
     if platform:
         from sqlalchemy import cast, String
         base_query = base_query.filter(cast(ContentQueue.platforms, String).like(f'%{platform}%'))
+    
+    if category and category in ['news', 'reviews', 'trends']:
+        base_query = base_query.filter(ContentQueue.category == category)
     
     total = base_query.count()
     
@@ -72,7 +77,8 @@ async def get_published_articles(
             image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
             platforms=article.platforms,
             published_at=article.posted_at or article.reviewed_at or article.created_at,
-            language=article.language
+            language=article.language,
+            category=article.category
         ))
     
     return ArticlesListResponse(
@@ -117,7 +123,8 @@ async def search_articles(
             "content": content_preview,
             "source": article.source,
             "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
-            "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None
+            "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None,
+            "category": article.category
         })
     
     return {
@@ -154,7 +161,8 @@ async def get_article_by_id(
         "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
         "platforms": article.platforms,
         "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None,
-        "language": article.language
+        "language": article.language,
+        "category": article.category
     }
 
 @router.get("/debug/status-count")

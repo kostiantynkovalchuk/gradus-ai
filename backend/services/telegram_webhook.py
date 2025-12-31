@@ -82,6 +82,17 @@ class TelegramWebhookHandler:
             article.reviewed_at = datetime.utcnow()
             article.reviewed_by = 'telegram_bot'
             
+            if not article.category:
+                try:
+                    from services.categorization import categorize_article
+                    article.category = categorize_article(
+                        article.translated_title or article.source_title,
+                        (article.translated_text or article.original_text or "")[:2000]
+                    )
+                    logger.info(f"Auto-categorized article {content_id} as '{article.category}'")
+                except Exception as e:
+                    logger.warning(f"Auto-categorization failed for {content_id}: {e}")
+            
             if not article.extra_metadata:
                 article.extra_metadata = {}
             article.extra_metadata['approved_at'] = datetime.utcnow().isoformat()
