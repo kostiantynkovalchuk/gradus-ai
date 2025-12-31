@@ -72,6 +72,10 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 
 **Feature Specifications:**
 - **Content Management:** API for managing pending, approved, and rejected content with editing and history.
+- **Article Categorization:** AI-powered classification into News, Reviews, or Trends:
+    - Uses keyword matching + Claude AI fallback for accuracy
+    - Auto-categorizes articles on Telegram approval
+    - API supports filtering: `/api/articles?category=news|reviews|trends`
 - **AI Services:** Endpoints for Claude AI chat and English-to-Ukrainian translation.
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
