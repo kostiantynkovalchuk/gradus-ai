@@ -1,0 +1,244 @@
+Implement automatic article categorization system with AI-powered classification.
+
+GOAL:
+Add category field to database and auto-categorize all 80 existing articles into News, Reviews, or Trends based on content analysis.
+
+TASKS:
+
+1. **Update Database Model**
+   File: backend/models/content.py
+   
+   Add category column to ContentQueue:
+```python
+   category = Column(String, nullable=True, default=None)
+```
+   
+   Update CheckConstraint to include valid categories:
+```python
+   CheckConstraint(
+       "category IS NULL OR category IN ('news', 'reviews', 'trends')",
+       name='valid_category'
+   )
+```
+
+2. **Create Categorization Logic**
+   File: backend/services/categorization.py (NEW)
+   
+   Create function that uses keywords + Claude API to categorize articles:
+```python
+   import anthropic
+   from os import getenv
+   
+   def categorize_article(title: str, content: str) -> str:
+       """
+       Categorize article into: news, reviews, or trends
+       
+       Categories:
+       - news: Market updates, company announcements, acquisitions, investments
+       - reviews: Product reviews, tastings, awards, ratings, recommendations
+       - trends: Industry forecasts, predictions, future outlook, year-ahead analysis
+       """
+       
+       # Keyword-based quick classification (fallback)
+       title_lower = title.lower()
+       content_lower = content.lower()
+       
+       trend_keywords = ['2025', '2026', 'forecast', 'trend', 'future', 'prediction', 'outlook', 'next year']
+       review_keywords = ['review', 'tasting', 'award', 'rating', 'flavor', 'taste', 'recommend', 'best']
+       news_keywords = ['announces', 'launches', 'acquires', 'invests', 'opens', 'expands', 'partnership']
+       
+       # Count keyword matches
+       trend_score = sum(1 for kw in trend_keywords if kw in title_lower or kw in content_lower)
+       review_score = sum(1 for kw in review_keywords if kw in title_lower or kw in content_lower)
+       news_score = sum(1 for kw in news_keywords if kw in title_lower or kw in content_lower)
+       
+       # Use highest score
+       scores = {'trends': trend_score, 'reviews': review_score, 'news': news_score}
+       
+       # If clear winner (score >= 2), use it
+       max_category = max(scores, key=scores.get)
+       if scores[max_category] >= 2:
+           return max_category
+       
+       # Otherwise use Claude for accurate categorization
+       try:
+           client = anthropic.Anthropic(api_key=getenv("ANTHROPIC_API_KEY"))
+           
+           prompt = f"""Categorize this Ukrainian alcohol industry article into ONE category:
+
+Title: {title}
+Content: {content[:1000]}
+
+Categories:
+- news: Company announcements, market updates, acquisitions, investments, launches
+- reviews: Product tastings, awards, ratings, recommendations, quality assessments  
+- trends: Industry forecasts, predictions, future outlook, trend analysis
+
+Respond with ONLY one word: news, reviews, or trends"""
+
+           message = client.messages.create(
+               model="claude-sonnet-4-20250514",
+               max_tokens=10,
+               messages=[{"role": "user", "content": prompt}]
+           )
+           
+           category = message.content[0].text.strip().lower()
+           
+           if category in ['news', 'reviews', 'trends']:
+               return category
+               
+       except Exception as e:
+           print(f"Claude categorization failed: {e}")
+       
+       # Default fallback
+       return 'news'
+```
+
+3. **Create Migration Script**
+   File: backend/scripts/categorize_articles.py (NEW)
+```python
+   """Categorize all existing articles"""
+   
+   import sys
+   import os
+   sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+   
+   from sqlalchemy import text
+   from models import engine
+   from models.content import ContentQueue
+   from sqlalchemy.orm import Session
+   from services.categorization import categorize_article
+   
+   def categorize_all_articles():
+       print("🏷️ Starting article categorization...")
+       
+       with Session(engine) as db:
+           # Get all posted articles without category
+           articles = db.query(ContentQueue).filter(
+               ContentQueue.status == 'posted',
+               ContentQueue.category.is_(None)
+           ).all()
+           
+           print(f"Found {len(articles)} articles to categorize\n")
+           
+           categories_count = {'news': 0, 'reviews': 0, 'trends': 0}
+           
+           for i, article in enumerate(articles, 1):
+               try:
+                   category = categorize_article(
+                       article.translated_title,
+                       article.translated_text[:2000]  # First 2000 chars
+                   )
+                   
+                   article.category = category
+                   categories_count[category] += 1
+                   
+                   print(f"{i}/{len(articles)} - [{category.upper()}] {article.translated_title[:60]}...")
+                   
+                   # Commit every 10 articles
+                   if i % 10 == 0:
+                       db.commit()
+                       print(f"  ✅ Saved batch\n")
+                       
+               except Exception as e:
+                   print(f"  ❌ Error: {e}")
+                   continue
+           
+           # Final commit
+           db.commit()
+           
+           print(f"\n✅ Categorization complete!")
+           print(f"   News: {categories_count['news']}")
+           print(f"   Reviews: {categories_count['reviews']}")
+           print(f"   Trends: {categories_count['trends']}")
+   
+   if __name__ == "__main__":
+       categorize_all_articles()
+```
+
+4. **Update API Endpoint**
+   File: backend/routes/articles_api.py
+   
+   Update the articles endpoint to filter by category:
+```python
+   @app.get("/api/articles")
+   async def get_articles(
+       category: Optional[str] = None,
+       limit: int = 50,
+       db: Session = Depends(get_db)
+   ):
+       query = db.query(ContentQueue).filter(
+           ContentQueue.status == 'posted'
+       ).options(
+           defer(ContentQueue.image_data),
+           defer(ContentQueue.original_text)
+       )
+       
+       # Filter by category if provided
+       if category:
+           query = query.filter(ContentQueue.category == category)
+       
+       articles = query.order_by(
+           ContentQueue.posted_at.desc()
+       ).limit(limit).all()
+       
+       return {
+           "articles": [
+               {
+                   "id": a.id,
+                   "title": a.translated_title,
+                   "content": a.translated_text[:500] + "..." if a.translated_text else "",
+                   "source": a.source,
+                   "source_url": a.source_url,
+                   "image_url": f"/api/images/serve/{a.id}",
+                   "platforms": a.platforms,
+                   "published_at": str(a.posted_at),
+                   "language": a.language,
+                   "category": a.category  # Add category to response
+               }
+               for a in articles
+           ]
+       }
+```
+
+5. **Update Future Article Workflow**
+   File: backend/services/telegram_webhook.py
+   
+   Add auto-categorization when article is approved:
+```python
+   from services.categorization import categorize_article
+   
+   # In _approve_content function, after status update:
+   article.category = categorize_article(
+       article.translated_title,
+       article.translated_text
+   )
+   db.commit()
+```
+
+DEPLOYMENT STEPS:
+1. Test categorization locally:
+```bash
+   cd backend
+   python scripts/categorize_articles.py
+```
+
+2. Push to GitHub
+
+3. Run on Render production:
+```bash
+   cd backend && python scripts/categorize_articles.py
+```
+
+4. Update database constraint on Neon:
+```sql
+   ALTER TABLE content_queue 
+   ADD CONSTRAINT valid_category 
+   CHECK (category IS NULL OR category IN ('news', 'reviews', 'trends'));
+```
+
+EXPECTED RESULT:
+- ✅ All 80 articles categorized
+- ✅ Category pages show filtered results
+- ✅ Future articles auto-categorized on approval
+- ✅ API returns category field

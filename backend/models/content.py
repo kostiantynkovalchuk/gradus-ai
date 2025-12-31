@@ -35,6 +35,9 @@ class ContentQueue(Base):
     # Notification tracking to prevent duplicate Telegram notifications
     notification_sent = Column(Boolean, default=False)
     
+    # Article category for filtering
+    category = Column(String(20), nullable=True, default=None)
+    
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted', 'posting_facebook', 'posting_linkedin')",
