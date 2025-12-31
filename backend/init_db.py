@@ -51,6 +51,7 @@ REQUIRED_COLUMNS = {
         ('language', "VARCHAR(10) DEFAULT 'en'"),
         ('needs_translation', 'BOOLEAN DEFAULT TRUE'),
         ('notification_sent', 'BOOLEAN DEFAULT FALSE'),
+        ('category', 'VARCHAR(20)'),
     ],
     'approval_log': [
         ('content_id', 'INTEGER'),

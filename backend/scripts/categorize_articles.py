@@ -4,11 +4,12 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from sqlalchemy import text
-from models import engine
-from models.content import ContentQueue
+from sqlalchemy import text, create_engine
 from sqlalchemy.orm import Session
-from services.categorization import categorize_article
+from models.content import ContentQueue
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
 
 def add_category_column():
     """Add category column if it doesn't exist"""
@@ -26,6 +27,8 @@ def add_category_column():
             print("Category column already exists")
 
 def categorize_all_articles():
+    from services.categorization import categorize_article
+    
     print("Starting article categorization...")
     
     add_category_column()
