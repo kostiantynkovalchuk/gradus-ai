@@ -1,0 +1,61 @@
+INVESTIGATE AND FIX: Maya AI responds with "ЗИМУ 2024" instead of current year 2026
+
+PROBLEM: 
+Maya Gradus AI personality is responding with references to 2024 (e.g., "ТРЕНДОВІ НАПРЯМКИ НА ЗИМУ 2024") when she should be using 2026 (current year).
+
+INVESTIGATION REQUIRED:
+1. Find ALL instances where Maya's system prompt or context is defined
+2. Search for any hardcoded "2024" references in Maya-related code
+3. Check the Claude API call that generates Maya's responses
+4. Verify date/time utilities used in Maya context
+
+LOCATIONS TO CHECK:
+- Backend FastAPI endpoints handling Maya chat
+- System prompt definitions for Maya persona
+- Claude API call configuration (messages, system parameter)
+- Any RAG context preparation for Maya
+- Database queries that might inject date context
+- Telegram bot handlers if Maya responds there too
+
+FIX REQUIREMENTS:
+1. Replace ALL static "2024" references with dynamic date generation
+2. Update Maya's system prompt to include current date/year dynamically:
+   - Use datetime.now() to get current date
+   - Format as: "Поточна дата: {datetime.now().strftime('%d %B %Y року')}"
+   - Include "Поточний рік: 2026" explicitly in Ukrainian
+
+3. Ensure system prompt for Maya looks like:
+```python
+   from datetime import datetime
+   
+   current_date = datetime.now()
+   system_prompt = f"""Ти — Майя Градус, експерт з маркетингу в алкогольній індустрії.
+   
+   Поточна дата: {current_date.strftime('%d %B %Y року')}
+   Поточний рік: {current_date.year}
+   
+   Коли говориш про тренди, події або сезони, завжди використовуй ПОТОЧНИЙ рік ({current_date.year}), а не минулі роки.
+   
+   [rest of Maya's persona description...]
+   """
+```
+
+4. Search and replace any hardcoded month/season patterns like:
+   - "зиму 2024" → should generate dynamically based on current year
+   - "літо 2024" → should generate dynamically
+   - "трендові напрямки на 2024" → use current year
+
+OUTPUT REQUIREMENTS:
+After fixing, provide:
+1. List of ALL files modified
+2. Summary of what was changed in each file
+3. Code snippets showing before/after for system prompt
+4. Confirmation that no other hardcoded 2024 references remain in Maya context
+
+TEST VERIFICATION:
+After implementing fixes, test that Maya responds with "2026" when discussing:
+- Current seasonal trends
+- Upcoming events
+- Industry forecasts
+
+Please investigate thoroughly and implement the fix across ALL instances where Maya's responses might reference the year.

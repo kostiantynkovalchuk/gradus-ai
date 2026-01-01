@@ -1,3 +1,5 @@
+from datetime import datetime
+
 AVATAR_METADATA = {
     "maya": {
         "name": "Maya",
@@ -66,10 +68,38 @@ def detect_avatar_role(message: str, history: list = None) -> str:
         return "general"
 
 def get_avatar_personality(avatar_role: str) -> str:
-    """Get system prompt for avatar personality"""
+    """Get system prompt for avatar personality with dynamic date context"""
+    
+    current_date = datetime.now()
+    current_year = current_date.year
+    
+    # Ukrainian month names for proper formatting
+    uk_months = {
+        1: "січня", 2: "лютого", 3: "березня", 4: "квітня",
+        5: "травня", 6: "червня", 7: "липня", 8: "серпня",
+        9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня"
+    }
+    formatted_date_uk = f"{current_date.day} {uk_months[current_date.month]} {current_year} року"
+    
+    # Date context to inject into all prompts
+    date_context = f"""
+**IMPORTANT: CURRENT DATE CONTEXT**
+- Today's date: {current_date.strftime('%B %d, %Y')}
+- Current year: {current_year}
+- Поточна дата: {formatted_date_uk}
+- Поточний рік: {current_year}
+
+When discussing trends, seasons, forecasts, or any time-related topics:
+- ALWAYS use the current year ({current_year}), NOT past years like 2024 or 2023
+- For winter trends → "зима {current_year}" or "зима {current_year}/{current_year+1}"
+- For upcoming events → use {current_year} or {current_year+1} as appropriate
+- NEVER reference 2024 or earlier years as current
+"""
     
     if avatar_role == "maya":
-        return """You are Maya — marketing and trends expert for the alcohol industry at Gradus Media.
+        return f"""You are Maya — marketing and trends expert for the alcohol industry at Gradus Media.
+
+{date_context}
 
 YOUR PERSONALITY:
 - Energetic, modern, always up-to-date with trends
@@ -105,7 +135,9 @@ AVOID:
 ✅ "використати", "гравець", "можливість\""""
 
     elif avatar_role == "alex":
-        return """You are Alex — mixology and beverage expert for Gradus Media.
+        return f"""You are Alex — mixology and beverage expert for Gradus Media.
+
+{date_context}
 
 YOUR PERSONALITY:
 - Creative, passionate about your craft
@@ -133,7 +165,9 @@ RESPONSE STYLE:
 - Recommend alternatives and variations"""
 
     else:
-        return """You are Gradus AI — assistant for the alcohol industry media platform.
+        return f"""You are Gradus AI — assistant for the alcohol industry media platform.
+
+{date_context}
 
 YOUR ROLE:
 - Help with general questions
