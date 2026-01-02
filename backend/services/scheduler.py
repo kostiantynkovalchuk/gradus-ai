@@ -429,7 +429,7 @@ class ContentScheduler:
         """
         Post approved content to Facebook at scheduled time
         Runs: Every day at 6:00 PM
-        Posts oldest approved content (FIFO queue)
+        Posts newest approved content first (freshness priority)
         
         Uses database locking (SELECT FOR UPDATE SKIP LOCKED) to prevent
         duplicate posts when multiple containers run simultaneously.
@@ -461,7 +461,7 @@ class ContentScheduler:
                         not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 4%')),
                         not_(cast(ContentQueue.extra_metadata, String).like('%"fb_post_retries": 5%'))
                     )
-                ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
+                ).order_by(ContentQueue.created_at.desc()).with_for_update(skip_locked=True).first()
                 
                 if not article:
                     logger.info("[SCHEDULER] No approved Facebook content to post (or already being processed)")
@@ -597,7 +597,7 @@ class ContentScheduler:
         """
         Post approved content to LinkedIn at scheduled time
         Runs: Mon/Wed/Fri at 9:00 AM
-        Posts oldest approved content (FIFO queue)
+        Posts newest approved content first (freshness priority)
         
         Uses database locking (SELECT FOR UPDATE SKIP LOCKED) to prevent
         duplicate posts when multiple containers run simultaneously.
@@ -621,7 +621,7 @@ class ContentScheduler:
                 article = db.query(ContentQueue).filter(
                     ContentQueue.status == 'approved',
                     cast(ContentQueue.platforms, String).like('%linkedin%')
-                ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
+                ).order_by(ContentQueue.created_at.desc()).with_for_update(skip_locked=True).first()
                 
                 if not article:
                     logger.info("[SCHEDULER] No approved LinkedIn content to post (or already being processed)")
