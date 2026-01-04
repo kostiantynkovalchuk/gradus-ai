@@ -12,6 +12,7 @@ from .drinks_international import DrinksInternationalScraper
 from .just_drinks import JustDrinksScraper
 from .restorator_ua import RestoratorUaScraper
 from .modern_restaurant_management import ModernRestaurantManagementScraper
+from .class_magazine import ClassMagazineScraper
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ class ScraperManager:
             'drinks_international': DrinksInternationalScraper(),
             'just_drinks': JustDrinksScraper(),
             'restorator_ua': RestoratorUaScraper(),
-            'modern_restaurant_management': ModernRestaurantManagementScraper()
+            'modern_restaurant_management': ModernRestaurantManagementScraper(),
+            'class_magazine': ClassMagazineScraper()
         }
         
         logger.info(f"✅ ScraperManager initialized with {len(self.scrapers)} sources")

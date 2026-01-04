@@ -33,11 +33,13 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **Database:** PostgreSQL with SQLAlchemy ORM for robust data persistence.
 - **Human-in-the-loop Workflow:** Critical for content quality control, enabling review and approval before publishing.
 - **Service-Oriented Architecture:** Modular design supporting extensibility and maintainability.
-- **Multi-Source Scraping Architecture:** Modular scraper system with ScraperManager coordinating 5 active sources:
+- **Multi-Source Scraping Architecture:** Modular scraper system with ScraperManager coordinating 7 active sources:
     - **English sources (need translation):**
       - The Spirits Business - Professional industry news
       - Just Drinks - Lighter, more accessible drinks industry content
       - Drinks International - Vodka and spirits industry news
+      - Modern Restaurant Management - US HoReCa industry trends
+      - Class Magazine - UK bar and cocktail industry (classbarmag.com)
     - **Ukrainian sources (no translation):**
       - Delo.ua - Ukrainian retail and business news (uses Playwright for JavaScript rendering)
       - HoReCa-Україна - Ukrainian HoReCa industry news
