@@ -46,7 +46,7 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **Automated Content Pipeline:** 24/7 automation via APScheduler with platform-optimized scheduling:
     - **Platform-Specific Scraping:**
       - LinkedIn sources (Mon/Wed/Fri 1:00 AM): The Spirits Business, Drinks International
-      - Facebook sources (Daily 2:00 AM): Delo.ua, HoReCa-Україна, Just Drinks
+      - Facebook sources (Daily 2:00 AM): Delo.ua, HoReCa-Україна, Just Drinks, Modern Restaurant Management, Class Magazine
     - **Startup Catch-Up:** On backend restart, automatically checks for missed scraping:
       - Facebook: catch-up if >24h since last scrape
       - LinkedIn: catch-up if >48h since last scrape (runs any day if overdue)

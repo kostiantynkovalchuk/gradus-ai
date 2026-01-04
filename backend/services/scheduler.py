@@ -130,7 +130,7 @@ class ContentScheduler:
             from services.scrapers.manager import scraper_manager
             
             # Facebook sources - 2 Ukrainian + 2 HoReCa English
-            facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks', 'modern_restaurant_management']
+            facebook_sources = ['delo_ua', 'restorator_ua', 'just_drinks', 'modern_restaurant_management', 'class_magazine']
             
             db = self._get_db_session()
             try:
@@ -755,7 +755,7 @@ class ContentScheduler:
                 from sqlalchemy import func, cast, String
                 
                 # Check Facebook sources (daily requirement)
-                facebook_sources = ['Delo.ua', 'HoReCa-Україна', 'Just Drinks', 'Modern Restaurant Management']
+                facebook_sources = ['Delo.ua', 'HoReCa-Україна', 'Just Drinks', 'Modern Restaurant Management', 'Class Magazine']
                 facebook_last = db.query(func.max(ContentQueue.created_at)).filter(
                     ContentQueue.source.in_(facebook_sources)
                 ).scalar()
