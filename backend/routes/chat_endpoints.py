@@ -18,6 +18,7 @@ from services.rag_utils import (
     extract_company_name_from_url
 )
 from services.query_expansion import expand_brand_query
+from config.models import CLAUDE_MODEL_CHAT
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ async def chat_with_avatars(request: ChatRequest):
     
     try:
         response = chat_claude.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_MODEL_CHAT,
             max_tokens=1500,
             system=system_prompt,
             messages=messages

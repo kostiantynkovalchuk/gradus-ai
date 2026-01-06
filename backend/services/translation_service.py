@@ -3,6 +3,7 @@ from anthropic import Anthropic
 from typing import Dict, Optional
 from datetime import datetime
 import logging
+from config.models import CLAUDE_MODEL_CONTENT
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +51,14 @@ class TranslationService:
 
         try:
             title_message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL_CONTENT,
                 max_tokens=200,
                 messages=[{"role": "user", "content": title_prompt}]
             )
             translated_title = title_message.content[0].text.strip()
             
             content_message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL_CONTENT,
                 max_tokens=4000,
                 messages=[{"role": "user", "content": content_prompt}]
             )

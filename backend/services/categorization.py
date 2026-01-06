@@ -1,5 +1,6 @@
 import anthropic
 from os import getenv
+from config.models import CLAUDE_MODEL_CONTENT
 
 def categorize_article(title: str, content: str) -> str:
     """
@@ -44,7 +45,7 @@ Categories:
 Respond with ONLY one word: news, reviews, or trends"""
 
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_MODEL_CONTENT,
             max_tokens=10,
             messages=[{"role": "user", "content": prompt}]
         )

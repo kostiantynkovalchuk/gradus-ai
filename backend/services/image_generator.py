@@ -6,6 +6,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 from typing import Dict, Optional
 import logging
+from config.models import CLAUDE_MODEL_CONTENT
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ Return ONLY the prompt text, nothing else."""
 
         try:
             message = self.claude_client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL_CONTENT,
                 max_tokens=300,
                 messages=[{
                     "role": "user",

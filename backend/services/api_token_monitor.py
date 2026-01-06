@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from anthropic import Anthropic
 from openai import OpenAI
+from config.models import CLAUDE_MODEL_CHAT
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class APITokenMonitor:
             client = Anthropic(api_key=api_key)
             
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CLAUDE_MODEL_CHAT,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "test"}]
             )

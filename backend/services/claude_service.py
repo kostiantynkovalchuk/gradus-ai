@@ -1,11 +1,12 @@
 import os
 from anthropic import Anthropic
 from typing import Optional
+from config.models import CLAUDE_MODEL_CONTENT
 
 class ClaudeService:
     def __init__(self):
         self.client = None
-        self.model = "claude-sonnet-4-5"
+        self.model = CLAUDE_MODEL_CONTENT
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
     
     def _ensure_client(self):
