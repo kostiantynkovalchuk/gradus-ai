@@ -119,7 +119,8 @@ async def process_telegram_message(message: dict):
             
             chat_request = ChatRequest(
                 message=text,
-                avatar="maya"
+                avatar="maya",
+                source="telegram"
             )
             response_data = await chat_with_avatars(chat_request)
             

@@ -18,7 +18,7 @@ from services.rag_utils import (
     extract_company_name_from_url
 )
 from services.query_expansion import expand_brand_query
-from config.models import CLAUDE_MODEL_CHAT
+from config.models import CLAUDE_MODEL_TELEGRAM, CLAUDE_MODEL_WEBSITE
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,7 @@ class ChatRequest(BaseModel):
     message: str
     conversation_history: Optional[List[dict]] = None
     avatar: Optional[str] = None
+    source: Optional[str] = "website"  # "telegram" or "website"
 
 class ChatResponse(BaseModel):
     response: str
@@ -129,8 +130,12 @@ async def chat_with_avatars(request: ChatRequest):
     messages.append({"role": "user", "content": message})
     
     try:
+        # Select model based on source channel
+        model_to_use = CLAUDE_MODEL_TELEGRAM if request.source == "telegram" else CLAUDE_MODEL_WEBSITE
+        logger.info(f"Chat using model {model_to_use} for source: {request.source}")
+        
         response = chat_claude.messages.create(
-            model=CLAUDE_MODEL_CHAT,
+            model=model_to_use,
             max_tokens=1500,
             system=system_prompt,
             messages=messages
