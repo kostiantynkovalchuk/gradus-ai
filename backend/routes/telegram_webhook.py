@@ -99,6 +99,17 @@ async def process_telegram_message(message: dict):
                 )
             return
         
+        from services.bestbrands_video import detect_bestbrands_trigger, handle_bestbrands_request
+        
+        if detect_bestbrands_trigger(text):
+            logger.info(f"🎬 Best Brands trigger detected from {chat_id}")
+            await send_typing_action(chat_id)
+            success = await handle_bestbrands_request(chat_id)
+            if success:
+                logger.info(f"✅ Best Brands video/text sent to {chat_id}")
+                return
+            logger.warning(f"Best Brands handler failed, falling back to AI")
+        
         logger.info(f"📨 Telegram message from {chat_id}: {text[:50]}...")
         
         await send_typing_action(chat_id)

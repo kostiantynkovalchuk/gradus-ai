@@ -81,7 +81,12 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 - **AI Services:** Endpoints for Claude AI chat and English-to-Ukrainian translation.
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
-- **Database Schema:** `ContentQueue` for reviewable content and `ApprovalLog` for audit trails, storing comprehensive metadata.
+- **Best Brands Video Feature:** Maya sends vertical 9:16 video presentation when users ask about Best Brands:
+    - Supports Ukrainian, Russian, English, and code-switching (e.g., "розкажи про best brands")
+    - Uses Telegram file_id caching for instant subsequent sends
+    - Falls back to text description if video unavailable
+    - Video file: `backend/assets/bestbrands-presentation.mp4`
+- **Database Schema:** `ContentQueue` for reviewable content, `ApprovalLog` for audit trails, `MediaFile` for Telegram file_id caching.
 
 ## Database Setup
 

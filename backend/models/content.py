@@ -54,3 +54,16 @@ class ApprovalLog(Base):
     moderator = Column(String(100))
     timestamp = Column(TIMESTAMP, server_default=func.now())
     details = Column(JSON)
+
+
+class MediaFile(Base):
+    """Store Telegram file_ids for reusable media (videos, images, etc.)"""
+    __tablename__ = "media_files"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    media_type = Column(String(50), nullable=False)  # 'video', 'image', 'document'
+    media_key = Column(String(100), nullable=False, unique=True)  # e.g., 'bestbrands_presentation'
+    file_id = Column(String(255), nullable=False)  # Telegram file_id
+    description = Column(Text)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
