@@ -92,19 +92,14 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
         r'автд',
     ]
     
-    identity_patterns = [
-        r'^хто\s+ви\??$',
-        r'^who\s+are\s+you\??$',
-        r'^кто\s+вы\??$',
-        r'^ким\s+ви\s+є\??$',
+    company_only_patterns = [
         r'^про\s+компанію\??$',
         r'^о\s+компании\??$',
-        r'^про\s+вас\??$',
         r'^about\s+the\s+company\??$',
         r'^about\s+your\s+company\??$',
     ]
     
-    for pattern in identity_patterns:
+    for pattern in company_only_patterns:
         if re.search(pattern, message_lower):
             return True
     
