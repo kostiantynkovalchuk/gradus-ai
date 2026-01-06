@@ -86,6 +86,12 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
     - Uses Telegram file_id caching for instant subsequent sends
     - Falls back to text description if video unavailable
     - Video file: `backend/assets/bestbrands-presentation.mp4`
+- **Query Expansion for RAG:** Brand name queries auto-expand with category keywords for better retrieval:
+    - "greenday" → "greenday vodka горілка" (finds all GreenDay docs)
+    - "довбуш" → "dovbush spirits горілка настоянка"
+    - "funju" → "funju cocktails коктейлі"
+    - "villa" → "villa wine вино"
+    - Expansion only for retrieval, original message used for response
 - **Database Schema:** `ContentQueue` for reviewable content, `ApprovalLog` for audit trails, `MediaFile` for Telegram file_id caching.
 
 ## Database Setup

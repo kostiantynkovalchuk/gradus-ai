@@ -17,6 +17,7 @@ from services.rag_utils import (
     is_ingestion_request,
     extract_company_name_from_url
 )
+from services.query_expansion import expand_brand_query
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,8 @@ async def chat_with_avatars(request: ChatRequest):
     rag_context = ""
     sources = []
     if PINECONE_AVAILABLE:
-        rag_context, sources = await retrieve_context(message, chat_index)
+        expanded_query = expand_brand_query(message)
+        rag_context, sources = await retrieve_context(expanded_query, chat_index)
         
         if rag_context:
             system_prompt += f"\n\n{rag_context}\n\nIMPORTANT: Use the above information when relevant. Mention sources."

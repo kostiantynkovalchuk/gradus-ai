@@ -1,0 +1,162 @@
+# Fix Brand Name Recognition in RAG Retrieval
+
+## Problem
+When users ask "розкажи про greenday" (without saying "vodka"), RAG doesn't find the GreenDay documents and Maya asks for clarification. But "greenday vodka" works perfectly.
+
+## Solution
+Add query expansion for Best Brands product names BEFORE RAG retrieval.
+
+---
+
+## Implementation
+
+**Create new file: `backend/services/query_expansion.py`**
+```python
+"""
+Query expansion service to improve RAG retrieval for Best Brands products.
+Expands brand names with category keywords to match stored documents.
+"""
+
+def expand_brand_query(user_message: str) -> str:
+    """
+    Expand brand name queries with product category keywords.
+    
+    This improves RAG retrieval when users mention brand names without 
+    specifying the product category (e.g., "greenday" without "vodka").
+    
+    Examples:
+    - "розкажи про greenday" → "розкажи про greenday (greenday vodka горілка водка)"
+    - "що таке довбуш" → "що таке довбуш (dovbush spirits горілка настоянка)"
+    
+    Args:
+        user_message: Original user query
+        
+    Returns:
+        Expanded query for better RAG matching (or original if no expansion needed)
+    """
+    message_lower = user_message.lower().strip()
+    
+    # Best Brands product mappings with multilingual keywords
+    brand_expansions = {
+        # GreenDay vodka
+        'greenday': 'greenday vodka горілка водка',
+        'грінді': 'greenday vodka горілка водка',
+        'green day': 'greenday vodka горілка vodka',
+        
+        # Dovbush spirits  
+        'довбуш': 'dovbush spirits горілка настоянка liqueur',
+        'dovbush': 'dovbush spirits горілка настоянка liqueur',
+        
+        # Funju cocktails
+        'funju': 'funju cocktails коктейлі ready-to-drink',
+        'фунжу': 'funju cocktails коктейлі ready-to-drink',
+        
+        # Villa wine
+        'villa': 'villa wine вино',
+        'вілла': 'villa wine вино',
+        'villa.ua': 'villa wine вино',
+    }
+    
+    # Category keywords that indicate product type is already specified
+    category_keywords = [
+        'vodka', 'водка', 'горілка', 'горилка',
+        'wine', 'вино', 'вина',
+        'spirits', 'спірт', 'алкоголь',
+        'коктейлі', 'коктейль', 'cocktails', 'cocktail',
+        'настоянка', 'liqueur', 'лікер',
+    ]
+    
+    # Check if any brand name is mentioned
+    for brand, expansion in brand_expansions.items():
+        if brand in message_lower:
+            # Check if user already specified category
+            has_category = any(keyword in message_lower for keyword in category_keywords)
+            
+            if not has_category:
+                # Expand query by appending keywords in parentheses
+                # RAG will search for these additional terms
+                return f"{user_message} ({expansion})"
+    
+    # No expansion needed
+    return user_message
+```
+
+---
+
+## Integration
+
+**Find the message handler** where RAG retrieval happens (likely `backend/routes/telegram_webhook.py` or similar).
+
+Add query expansion BEFORE RAG retrieval:
+```python
+from backend.services.query_expansion import expand_brand_query
+
+async def handle_user_message(message):
+    user_text = message.text
+    
+    # Check for Best Brands video trigger first
+    if detect_bestbrands_trigger(user_text):
+        await send_bestbrands_video(...)
+        return
+    
+    # Expand brand queries for better RAG retrieval
+    expanded_query = expand_brand_query(user_text)
+    
+    # Retrieve from knowledge base with expanded query
+    rag_results = retrieve_from_knowledge_base(expanded_query)
+    
+    # Generate Maya's response using ORIGINAL user text
+    # (expansion is only for retrieval, not for response generation)
+    response = await generate_maya_response(
+        user_message=user_text,  # Original question
+        rag_context=rag_results
+    )
+    
+    await send_message(response)
+```
+
+---
+
+## Testing
+
+After implementation, test these scenarios:
+
+**Should now work (find GreenDay docs):**
+- [ ] "розкажи про greenday" ✅
+- [ ] "що таке greenday" ✅  
+- [ ] "greenday" ✅
+- [ ] "грінді" ✅
+
+**Should still work (no double expansion):**
+- [ ] "розкажи про greenday vodka" ✅
+- [ ] "greenday водка" ✅
+
+**Other brands should work:**
+- [ ] "довбуш" → Finds Dovbush ✅
+- [ ] "funju" → Finds Funju ✅
+- [ ] "villa" → Finds Villa ✅
+
+---
+
+## Expected Behavior
+
+**Before:**
+```
+User: розкажи про greenday
+Maya: К сожалению, мне нужно больше контекста о линейке Greenday...
+```
+
+**After:**
+```
+User: розкажи про greenday
+Maya: [Full detailed response about all 10 GreenDay SKUs as trained]
+```
+
+---
+
+## Files to Create/Modify
+
+1. **CREATE:** `backend/services/query_expansion.py` (new file)
+2. **MODIFY:** Message handler where RAG retrieval happens (add expand_brand_query call)
+
+That's it! No changes to response generation or prompts needed.
