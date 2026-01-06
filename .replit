@@ -5,7 +5,7 @@ integrations = ["python_openai:1.0.0", "python_database:1.0.0", "python_anthropi
 
 [nix]
 channel = "stable-25_05"
-packages = ["alsa-lib", "at-spi2-atk", "atk", "cairo", "cups", "gitFull", "libgbm", "libxcrypt", "libxkbcommon", "mesa", "nspr", "nss", "pango", "playwright-driver", "xcodebuild", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXfixes", "xorg.libxcb", "zlib"]
+packages = ["alsa-lib", "at-spi2-atk", "atk", "cairo", "cups", "gitFull", "libgbm", "libxcrypt", "libxkbcommon", "mesa", "nspr", "nss", "pango", "playwright-driver", "xcodebuild", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXfixes", "xorg.libxcb", "zlib", "ffmpeg"]
 
 [workflows]
 runButton = "Project"
