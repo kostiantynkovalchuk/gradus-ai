@@ -55,6 +55,9 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Large media files (deploy separately)
+backend/assets/bestbrands-presentation.mp4
+
 # Replit specific (keep these)
 !.replit
 !replit.nix
