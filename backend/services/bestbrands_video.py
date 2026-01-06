@@ -10,6 +10,7 @@ import re
 import logging
 import httpx
 from typing import Optional, Tuple
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,32 @@ BESTBRANDS_TEXT_FALLBACK = """🏢 Best Brands — найбільший дист
 Які питання маєш про наші продукти чи послуги? 😊"""
 
 
+def fuzzy_match(str1: str, str2: str, threshold: float = 0.85) -> bool:
+    """
+    Check if two strings are similar (handles typos).
+    
+    Args:
+        str1: First string
+        str2: Second string  
+        threshold: Similarity threshold (0.0 to 1.0)
+        
+    Returns:
+        True if strings are similar enough
+    """
+    ratio = SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+    return ratio >= threshold
+
+
 def detect_bestbrands_trigger(message_text: str) -> bool:
     """
     Detects if user is asking about Best Brands company.
     Supports code-switching (e.g., "розкажи про best brands").
+    Includes fuzzy matching for typos (e.g., "best brends", "bast brands").
     
     Returns True if message contains:
     - Any question phrase (UA/RU/EN) + company name variation
     - OR identity questions ("хто ви", "who are you")
+    - OR fuzzy match to "best brands" / "бест брендс"
     
     Case-insensitive matching.
     """
@@ -124,6 +143,17 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     for pattern in simple_about_patterns:
         if re.search(pattern, message_lower):
             logger.debug(f"✅ Best Brands trigger matched: simple pattern")
+            return True
+    
+    words = message_lower.split()
+    for i in range(len(words) - 1):
+        two_word_phrase = f"{words[i]} {words[i+1]}"
+        
+        if fuzzy_match(two_word_phrase, "best brands", threshold=0.85):
+            logger.debug(f"✅ Best Brands trigger matched: fuzzy 'best brands' ({two_word_phrase})")
+            return True
+        if fuzzy_match(two_word_phrase, "бест брендс", threshold=0.85):
+            logger.debug(f"✅ Best Brands trigger matched: fuzzy 'бест брендс' ({two_word_phrase})")
             return True
     
     logger.debug(f"❌ No Best Brands trigger in: {message_text[:50]}...")
