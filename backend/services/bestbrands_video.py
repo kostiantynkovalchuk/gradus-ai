@@ -101,6 +101,7 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     
     for pattern in company_only_patterns:
         if re.search(pattern, message_lower):
+            logger.debug(f"✅ Best Brands trigger matched: company-only pattern")
             return True
     
     all_question_patterns = question_patterns_ua + question_patterns_ru + question_patterns_en
@@ -109,6 +110,7 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     has_company_name = any(re.search(p, message_lower) for p in company_names)
     
     if has_question and has_company_name:
+        logger.debug(f"✅ Best Brands trigger matched: question + company name")
         return True
     
     simple_about_patterns = [
@@ -121,8 +123,10 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     
     for pattern in simple_about_patterns:
         if re.search(pattern, message_lower):
+            logger.debug(f"✅ Best Brands trigger matched: simple pattern")
             return True
     
+    logger.debug(f"❌ No Best Brands trigger in: {message_text[:50]}...")
     return False
 
 
