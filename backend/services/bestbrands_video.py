@@ -115,8 +115,8 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
         r'^про\s+best\s*brands?',
         r'^про\s+бест\s*брендс?',
         r'^about\s+best\s*brands?',
-        r'^best\s*brands?\s*\?',
-        r'^бест\s*брендс?\s*\?',
+        r'^best\s*brands?\s*\??$',
+        r'^бест\s*брендс?\s*\??$',
     ]
     
     for pattern in simple_about_patterns:
