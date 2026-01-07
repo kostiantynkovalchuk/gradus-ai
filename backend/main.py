@@ -27,6 +27,7 @@ from services.telegram_webhook import telegram_webhook_handler
 from services.api_token_monitor import api_token_monitor
 from routes.facebook_insights import router as facebook_router
 from routes.articles_api import router as articles_router
+from routes.admin_articles import router as admin_articles_router
 from routes.chat_endpoints import chat_router, chat_with_avatars, ChatRequest as AvatarChatRequest
 from routes.messenger_webhook import router as messenger_router
 
@@ -190,6 +191,7 @@ app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
 from routes.maya import router as maya_router
 app.include_router(maya_router)
 app.include_router(articles_router)
+app.include_router(admin_articles_router)
 app.include_router(chat_router)
 
 class ChatRequest(BaseModel):

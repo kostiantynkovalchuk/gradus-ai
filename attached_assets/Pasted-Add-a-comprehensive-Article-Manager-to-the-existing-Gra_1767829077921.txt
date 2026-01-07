@@ -1,0 +1,183 @@
+Add a comprehensive Article Manager to the existing GradusMedia dashboard with deletion capabilities.
+
+CONTEXT:
+- Dashboard URL: https://gradus-ai.onrender.com/
+- FastAPI backend with React/TypeScript frontend
+- PostgreSQL database on Neon
+- Dashboard is in English
+- Need web UI for managing articles (view, search, delete)
+
+REQUIREMENTS:
+
+## 1. BACKEND API ENDPOINTS (FastAPI)
+
+Add to `backend/main.py` or create `backend/routes/articles.py`:
+
+### Endpoints needed:
+```python
+GET /api/admin/articles
+  - Query params: limit, offset, search, status, date_from, date_to
+  - Returns: list of articles with metadata
+  - Include: article details + platform counts (facebook_posts, telegram_posts)
+
+GET /api/admin/articles/{article_id}
+  - Returns: full article details + all related platform posts
+  - Include: facebook post IDs, telegram message IDs
+
+DELETE /api/admin/articles/{article_id}
+  - Deletes article + all related posts from all platforms
+  - Returns: deletion summary (what was deleted)
+
+POST /api/admin/articles/bulk-delete
+  - Body: {"article_ids": [1, 2, 3]}
+  - Deletes multiple articles
+  - Returns: success/failure for each
+
+POST /api/admin/articles/delete-by-date
+  - Body: {"date_from": "2025-01-01", "date_to": "2025-01-07"}
+  - Deletes articles in date range
+  - Returns: count deleted
+
+GET /api/admin/articles/export
+  - Query params: same as GET articles
+  - Returns: CSV/JSON export
+```
+
+### Features:
+- Proper error handling with detailed messages
+- Transaction support (rollback on failure)
+- Deletion logging to database table or file
+- Authentication middleware (check if admin user)
+- CORS configuration for frontend
+
+## 2. FRONTEND DASHBOARD UI
+
+Create new component: `frontend/src/components/ArticleManager.tsx`
+
+### UI Requirements:
+
+**Layout:**
+- Header: "Article Manager" with stats (total articles, published, pending)
+- Filters bar: Search input, date range picker, status dropdown
+- Article table with columns:
+  - ID
+  - Title (clickable to view details)
+  - Category
+  - Published Date
+  - Platforms (icons: 🌐 Website | 📱 Facebook | ✈️ Telegram)
+  - Actions (View | Delete buttons)
+
+**Features:**
+1. **Article List View:**
+   - Sortable columns
+   - Pagination (20 per page)
+   - Real-time search
+   - Multi-select checkboxes for bulk actions
+   - Loading states and error handling
+
+2. **Article Details Modal:**
+   - Full article info
+   - List of all platform posts (with IDs and links)
+   - Preview thumbnail if image exists
+   - Delete button
+
+3. **Delete Confirmation:**
+   - Modal with warning
+   - Show what will be deleted:
+     * Article ID and title
+     * Number of Facebook posts
+     * Number of Telegram posts
+   - Require typing "DELETE" to confirm
+   - Red danger button
+
+4. **Bulk Actions:**
+   - Checkbox to select multiple articles
+   - "Delete Selected" button
+   - Confirmation modal with list of articles
+
+5. **Date Range Deletion:**
+   - Collapsible "Advanced" section
+   - Date pickers (from/to)
+   - Preview count before deleting
+   - Confirmation required
+
+6. **Export Function:**
+   - "Export" button
+   - Downloads CSV with current filter/search results
+
+**Styling:**
+- Use existing dashboard design system
+- Consistent with other dashboard pages
+- Responsive (mobile-friendly)
+- Loading spinners for async actions
+- Success/error toast notifications
+
+## 3. DATABASE & SAFETY
+
+**Add deletion log table:**
+```sql
+CREATE TABLE IF NOT EXISTS deletion_log (
+    id SERIAL PRIMARY KEY,
+    article_id INTEGER,
+    article_title TEXT,
+    deleted_by TEXT,
+    deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    platforms_affected JSONB
+);
+```
+
+**Transaction handling:**
+- Wrap all deletions in transactions
+- Rollback if any platform deletion fails
+- Log successful deletions
+
+## 4. NAVIGATION
+
+Add to dashboard sidebar:
+- Icon: 🗑️ or 📝
+- Label: "Article Manager"
+- Route: `/admin/articles` or `/dashboard/articles`
+- Highlight when active
+
+## 5. AUTHENTICATION
+
+- Check user role/permissions before allowing deletions
+- Show error if unauthorized
+- Log which user performed deletion
+
+## 6. ERROR HANDLING
+
+Frontend:
+- Network errors
+- API errors (400, 404, 500)
+- Toast notifications for all actions
+- Graceful degradation
+
+Backend:
+- Database connection errors
+- Foreign key constraint errors
+- Transaction rollback errors
+- Detailed error messages in logs
+
+## 7. TESTING CONSIDERATIONS
+
+Add comments for:
+- Which endpoints need authentication
+- Expected error scenarios
+- How to handle concurrent deletions
+- Rate limiting if needed
+
+EXISTING CODE TO PRESERVE:
+- Current dashboard layout and navigation
+- Authentication system
+- Database connection setup
+- Existing article display/approval workflows
+
+OUTPUT:
+1. Complete backend routes file
+2. Complete frontend component
+3. Update to navigation/routing
+4. Database migration if needed
+5. Brief setup instructions
+
+Make it production-ready, user-friendly, and consistent with existing dashboard design.

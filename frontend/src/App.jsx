@@ -1,8 +1,9 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
-import { Home, MessageSquare, FileText } from 'lucide-react'
+import { Home, MessageSquare, FileText, Trash2 } from 'lucide-react'
 import HomePage from './pages/HomePage'
 import ChatPage from './pages/ChatPage'
 import ContentApproval from './pages/ContentApproval'
+import ArticleManager from './pages/ArticleManager'
 
 function NavLink({ to, icon: Icon, children }) {
   const location = useLocation()
@@ -36,6 +37,7 @@ function Navigation() {
             <NavLink to="/" icon={Home}>Home</NavLink>
             <NavLink to="/chat" icon={MessageSquare}>Chat</NavLink>
             <NavLink to="/content" icon={FileText}>Content</NavLink>
+            <NavLink to="/articles" icon={Trash2}>Manager</NavLink>
           </div>
 
           <div className="md:hidden flex items-center space-x-4">
@@ -47,6 +49,9 @@ function Navigation() {
             </Link>
             <Link to="/content" className="text-white/70 hover:text-white p-2">
               <FileText size={20} />
+            </Link>
+            <Link to="/articles" className="text-white/70 hover:text-white p-2">
+              <Trash2 size={20} />
             </Link>
           </div>
         </div>
@@ -65,6 +70,7 @@ function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/content" element={<ContentApproval />} />
+            <Route path="/articles" element={<ArticleManager />} />
           </Routes>
         </main>
       </div>
