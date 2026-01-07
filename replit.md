@@ -74,6 +74,13 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
 
 **Feature Specifications:**
 - **Content Management:** API for managing pending, approved, and rejected content with editing and history.
+- **Article Manager (Admin Dashboard):** Full-featured article management interface at `/articles`:
+    - Paginated listing with real-time search and status/date filters
+    - Single article deletion with confirmation modal
+    - Bulk deletion by date range with status filter
+    - CSV export with current filters applied
+    - Real-time stats (total, by status, by category)
+    - Backend: `backend/routes/admin_articles.py` with secure admin endpoints
 - **Article Categorization:** AI-powered classification into News, Reviews, or Trends:
     - Uses keyword matching + Claude AI fallback for accuracy
     - Auto-categorizes articles on Telegram approval
