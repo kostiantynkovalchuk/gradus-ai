@@ -1,5 +1,7 @@
 """
-Remove discontinued products (Marlin, Adjari) from Pinecone vector database
+Remove discontinued products from Pinecone vector database
+- Marlin, Adjari (removed earlier)
+- KRISTI VALLEY (removed January 2026)
 """
 import os
 import sys
@@ -22,7 +24,15 @@ def get_embedding(text):
 search_terms = [
     'marlin vodka', 'марлін горілка', 'marlin водка',
     'adjari cognac', 'аджарі коньяк', 'adjari коньяк',
-    'adjari wine', 'аджарі вино'
+    'adjari wine', 'аджарі вино',
+    'kristi valley', 'kristal valley', 'крісті веллі', 'крістал веллі',
+    'kristi valley wine', 'kristi valley вино'
+]
+
+keywords_to_match = [
+    'marlin', 'marlín', 'марлін',
+    'adjari', 'аджарі',
+    'kristi', 'kristal', 'крісті', 'крістал'
 ]
 
 print("🔍 Searching for discontinued products in vector DB...")
@@ -42,7 +52,7 @@ for term in search_terms:
     
     for match in results.matches:
         metadata_text = str(match.metadata).lower()
-        if any(word in metadata_text for word in ['marlin', 'marlín', 'марлін', 'adjari', 'аджарі']):
+        if any(word in metadata_text for word in keywords_to_match):
             all_ids_to_delete.add(match.id)
             source = match.metadata.get('source', 'unknown')[:50]
             print(f"  📌 Found: {match.id[:30]}... | score: {match.score:.3f} | source: {source}")
