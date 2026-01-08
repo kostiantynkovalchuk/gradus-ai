@@ -87,19 +87,46 @@ class DateRangeDeleteRequest(BaseModel):
     status_filter: Optional[str] = None
 
 
-@router.get("", response_model=AdminArticlesListResponse)
-async def get_admin_articles(
-    limit: int = Query(default=20, le=100, ge=1),
-    offset: int = Query(default=0, ge=0),
+@router.get("/stats")
+async def get_article_stats(db: Session = Depends(get_db)):
+    """Get article statistics"""
+    total = db.query(func.count(ContentQueue.id)).scalar() or 0
+    
+    status_counts = db.query(
+        ContentQueue.status,
+        func.count(ContentQueue.id)
+    ).group_by(ContentQueue.status).all()
+    
+    by_status = {status: count for status, count in status_counts if status}
+    
+    category_counts = db.query(
+        ContentQueue.category,
+        func.count(ContentQueue.id)
+    ).group_by(ContentQueue.category).all()
+    
+    by_category = {cat or 'uncategorized': count for cat, count in category_counts}
+    
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_category": by_category
+    }
+
+
+@router.get("/export/csv")
+async def export_articles_csv(
     search: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
     db: Session = Depends(get_db)
 ):
-    """Get articles with filtering for admin dashboard"""
+    """Export articles as CSV"""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
     
-    base_query = db.query(ContentQueue).options(
+    query = db.query(ContentQueue).options(
         defer(ContentQueue.image_data),
         defer(ContentQueue.original_text),
         defer(ContentQueue.translated_text)
@@ -107,7 +134,7 @@ async def get_admin_articles(
     
     if search:
         search_term = f"%{search}%"
-        base_query = base_query.filter(
+        query = query.filter(
             or_(
                 ContentQueue.source_title.ilike(search_term),
                 ContentQueue.translated_title.ilike(search_term)
@@ -115,133 +142,44 @@ async def get_admin_articles(
         )
     
     if status:
-        base_query = base_query.filter(ContentQueue.status == status)
+        query = query.filter(ContentQueue.status == status)
     
     if date_from:
-        base_query = base_query.filter(ContentQueue.created_at >= datetime.combine(date_from, datetime.min.time()))
+        query = query.filter(ContentQueue.created_at >= datetime.combine(date_from, datetime.min.time()))
     
     if date_to:
         from datetime import timedelta
-        base_query = base_query.filter(ContentQueue.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
+        query = query.filter(ContentQueue.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
     
-    total = base_query.count()
+    articles = query.order_by(desc(ContentQueue.created_at)).all()
     
-    stats = {
-        "total": db.query(ContentQueue).count(),
-        "pending": db.query(ContentQueue).filter(ContentQueue.status == 'pending_approval').count(),
-        "approved": db.query(ContentQueue).filter(ContentQueue.status == 'approved').count(),
-        "posted": db.query(ContentQueue).filter(ContentQueue.status == 'posted').count(),
-        "rejected": db.query(ContentQueue).filter(ContentQueue.status == 'rejected').count()
-    }
+    output = io.StringIO()
+    writer = csv.writer(output)
     
-    articles = base_query.order_by(desc(ContentQueue.created_at)).offset(offset).limit(limit).all()
+    writer.writerow(['ID', 'Title', 'Source', 'Status', 'Category', 'Platforms', 'Created', 'Posted', 'URL'])
     
-    result = []
     for article in articles:
-        has_image = bool(article.image_data or article.local_image_path or article.image_url)
-        result.append(AdminArticleResponse(
-            id=article.id,
-            title=article.translated_title or article.source_title,
-            source=article.source,
-            source_url=article.source_url,
-            status=article.status,
-            category=article.category,
-            platforms=article.platforms,
-            has_image=has_image,
-            created_at=article.created_at,
-            posted_at=article.posted_at
-        ))
+        writer.writerow([
+            article.id,
+            article.translated_title or article.source_title or '',
+            article.source or '',
+            article.status or '',
+            article.category or '',
+            ','.join(article.platforms) if article.platforms else '',
+            article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else '',
+            article.posted_at.strftime('%Y-%m-%d %H:%M') if article.posted_at else '',
+            article.source_url or ''
+        ])
     
-    return AdminArticlesListResponse(
-        articles=result,
-        total=total,
-        limit=limit,
-        offset=offset,
-        stats=stats
+    output.seek(0)
+    
+    filename = f"articles_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
-
-
-@router.get("/{article_id}", response_model=ArticleDetailResponse)
-async def get_article_detail(
-    article_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get full article details with approval history"""
-    
-    article = db.query(ContentQueue).options(
-        defer(ContentQueue.image_data)
-    ).filter(ContentQueue.id == article_id).first()
-    
-    if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
-    
-    logs = db.query(ApprovalLog).filter(ApprovalLog.content_id == article_id).order_by(desc(ApprovalLog.timestamp)).all()
-    
-    approval_logs = [
-        {
-            "id": log.id,
-            "action": log.action,
-            "moderator": log.moderator,
-            "timestamp": log.timestamp.isoformat() if log.timestamp else None,
-            "details": log.details
-        }
-        for log in logs
-    ]
-    
-    has_image = bool(article.image_data or article.local_image_path or article.image_url)
-    
-    return ArticleDetailResponse(
-        id=article.id,
-        title=article.translated_title or article.source_title,
-        content=article.translated_text or article.original_text,
-        source=article.source,
-        source_url=article.source_url,
-        status=article.status,
-        category=article.category,
-        platforms=article.platforms,
-        has_image=has_image,
-        image_url=article.image_url,
-        created_at=article.created_at,
-        posted_at=article.posted_at,
-        reviewed_at=article.reviewed_at,
-        reviewed_by=article.reviewed_by,
-        approval_logs=approval_logs
-    )
-
-
-@router.delete("/{article_id}", response_model=DeleteResponse)
-async def delete_article(
-    article_id: int,
-    db: Session = Depends(get_db)
-):
-    """Delete a single article and all related records"""
-    
-    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
-    
-    if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
-    
-    title = article.translated_title or article.source_title or "Untitled"
-    
-    try:
-        deleted_logs = db.query(ApprovalLog).filter(ApprovalLog.content_id == article_id).delete()
-        
-        db.delete(article)
-        db.commit()
-        
-        logger.info(f"Deleted article {article_id}: {title}")
-        
-        return DeleteResponse(
-            success=True,
-            message=f"Successfully deleted article: {title}",
-            deleted_article_id=article_id,
-            deleted_logs_count=deleted_logs
-        )
-        
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error deleting article {article_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete article: {str(e)}")
 
 
 @router.post("/bulk-delete", response_model=BulkDeleteResponse)
@@ -332,20 +270,102 @@ async def delete_articles_by_date_range(
         raise HTTPException(status_code=500, detail=f"Failed to delete articles: {str(e)}")
 
 
-@router.get("/export/csv")
-async def export_articles_csv(
+@router.get("/{article_id}", response_model=ArticleDetailResponse)
+async def get_article_detail(
+    article_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get full article details with approval history"""
+    
+    article = db.query(ContentQueue).options(
+        defer(ContentQueue.image_data)
+    ).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    logs = db.query(ApprovalLog).filter(ApprovalLog.content_id == article_id).order_by(desc(ApprovalLog.timestamp)).all()
+    
+    approval_logs = [
+        {
+            "id": log.id,
+            "action": log.action,
+            "moderator": log.moderator,
+            "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+            "details": log.details
+        }
+        for log in logs
+    ]
+    
+    has_image = bool(article.image_data or article.local_image_path or article.image_url)
+    
+    return ArticleDetailResponse(
+        id=article.id,
+        title=article.translated_title or article.source_title,
+        content=article.translated_text or article.original_text,
+        source=article.source,
+        source_url=article.source_url,
+        status=article.status,
+        category=article.category,
+        platforms=article.platforms,
+        has_image=has_image,
+        image_url=article.image_url,
+        created_at=article.created_at,
+        posted_at=article.posted_at,
+        reviewed_at=article.reviewed_at,
+        reviewed_by=article.reviewed_by,
+        approval_logs=approval_logs
+    )
+
+
+@router.delete("/{article_id}", response_model=DeleteResponse)
+async def delete_article(
+    article_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete a single article and all related records"""
+    
+    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    title = article.translated_title or article.source_title or "Untitled"
+    
+    try:
+        deleted_logs = db.query(ApprovalLog).filter(ApprovalLog.content_id == article_id).delete()
+        
+        db.delete(article)
+        db.commit()
+        
+        logger.info(f"Deleted article {article_id}: {title}")
+        
+        return DeleteResponse(
+            success=True,
+            message=f"Successfully deleted article: {title}",
+            deleted_article_id=article_id,
+            deleted_logs_count=deleted_logs
+        )
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting article {article_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete article: {str(e)}")
+
+
+@router.get("", response_model=AdminArticlesListResponse)
+async def get_admin_articles(
+    limit: int = Query(default=20, le=100, ge=1),
+    offset: int = Query(default=0, ge=0),
     search: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
     db: Session = Depends(get_db)
 ):
-    """Export articles as CSV"""
-    import csv
-    import io
-    from fastapi.responses import StreamingResponse
+    """Get articles with filtering for admin dashboard"""
     
-    query = db.query(ContentQueue).options(
+    base_query = db.query(ContentQueue).options(
         defer(ContentQueue.image_data),
         defer(ContentQueue.original_text),
         defer(ContentQueue.translated_text)
@@ -353,7 +373,7 @@ async def export_articles_csv(
     
     if search:
         search_term = f"%{search}%"
-        query = query.filter(
+        base_query = base_query.filter(
             or_(
                 ContentQueue.source_title.ilike(search_term),
                 ContentQueue.translated_title.ilike(search_term)
@@ -361,41 +381,61 @@ async def export_articles_csv(
         )
     
     if status:
-        query = query.filter(ContentQueue.status == status)
+        base_query = base_query.filter(ContentQueue.status == status)
     
     if date_from:
-        query = query.filter(ContentQueue.created_at >= datetime.combine(date_from, datetime.min.time()))
+        base_query = base_query.filter(ContentQueue.created_at >= datetime.combine(date_from, datetime.min.time()))
     
     if date_to:
         from datetime import timedelta
-        query = query.filter(ContentQueue.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
+        base_query = base_query.filter(ContentQueue.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
     
-    articles = query.order_by(desc(ContentQueue.created_at)).all()
+    total = base_query.count()
     
-    output = io.StringIO()
-    writer = csv.writer(output)
+    total_all = db.query(func.count(ContentQueue.id)).scalar() or 0
     
-    writer.writerow(['ID', 'Title', 'Source', 'Status', 'Category', 'Platforms', 'Created', 'Posted', 'URL'])
+    status_counts = db.query(
+        ContentQueue.status,
+        func.count(ContentQueue.id)
+    ).group_by(ContentQueue.status).all()
     
+    by_status = {status: count for status, count in status_counts if status}
+    
+    category_counts = db.query(
+        ContentQueue.category,
+        func.count(ContentQueue.id)
+    ).group_by(ContentQueue.category).all()
+    
+    by_category = {cat or 'uncategorized': count for cat, count in category_counts}
+    
+    stats = {
+        "total": total_all,
+        "by_status": by_status,
+        "by_category": by_category
+    }
+    
+    articles = base_query.order_by(desc(ContentQueue.created_at)).offset(offset).limit(limit).all()
+    
+    result = []
     for article in articles:
-        writer.writerow([
-            article.id,
-            article.translated_title or article.source_title or '',
-            article.source or '',
-            article.status or '',
-            article.category or '',
-            ','.join(article.platforms) if article.platforms else '',
-            article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else '',
-            article.posted_at.strftime('%Y-%m-%d %H:%M') if article.posted_at else '',
-            article.source_url or ''
-        ])
+        has_image = bool(article.image_data or article.local_image_path or article.image_url)
+        result.append(AdminArticleResponse(
+            id=article.id,
+            title=article.translated_title or article.source_title,
+            source=article.source,
+            source_url=article.source_url,
+            status=article.status,
+            category=article.category,
+            platforms=article.platforms,
+            has_image=has_image,
+            created_at=article.created_at,
+            posted_at=article.posted_at
+        ))
     
-    output.seek(0)
-    
-    filename = f"articles_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    return AdminArticlesListResponse(
+        articles=result,
+        total=total,
+        limit=limit,
+        offset=offset,
+        stats=stats
     )
