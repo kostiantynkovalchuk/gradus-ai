@@ -86,6 +86,16 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
     - Auto-categorizes articles on Telegram approval
     - API supports filtering: `/api/articles?category=news|reviews|trends`
 - **AI Services:** Endpoints for Claude AI chat and English-to-Ukrainian translation.
+- **AI Avatar System (Maya & Alex Gradus):**
+    - **Maya**: Marketing & trends expert with feminine personality, enforces grammatical gender rules
+    - **Alex Gradus**: Premium Bar Operations Consultant & Profitability Expert:
+      - Focus: Bar P&L optimization (40%), Product selection (30%), Operations (20%), Mixology (10%)
+      - Business-first mindset: Every recommendation ties to ROI/margin
+      - Anti-hallucination protocol: Admits uncertainty, never fabricates data
+      - AI disclosure: Subtle approach - presents as HoReCa consultant, confirms AI only when asked
+      - Keywords trigger: profitability, margin, pricing, training, ROI, HoReCa, trade agent
+    - Avatar detection based on name prefix or topic keywords
+    - Source: `backend/services/avatar_personalities.py`
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Торговий Дім АВ Video Feature:** Maya sends vertical 9:16 video presentation when users ask about Торговий Дім АВ (Trading House AV):
