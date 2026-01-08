@@ -87,6 +87,7 @@ class ContentScheduler:
                                 language=article.language,
                                 needs_translation=article.needs_translation,
                                 platforms=['linkedin'],
+                                category='news',
                                 extra_metadata={
                                     'title': article.title,
                                     'published_date': article.published_at,
@@ -170,6 +171,7 @@ class ContentScheduler:
                                 language=article.language,
                                 needs_translation=article.needs_translation,
                                 platforms=['facebook'],
+                                category='news',
                                 extra_metadata={
                                     'title': article.title,
                                     'published_date': article.published_at,

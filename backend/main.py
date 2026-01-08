@@ -632,6 +632,7 @@ async def create_content(
             language=request.language,
             needs_translation=request.needs_translation,
             platforms=request.platforms,
+            category='news',
             extra_metadata={
                 'title': request.title,
                 'created_via': 'api',
