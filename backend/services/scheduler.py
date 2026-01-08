@@ -509,6 +509,7 @@ class ContentScheduler:
                     'url': article.source_url or '',
                     'source': article.source or 'The Spirits Business',
                     'author': article.extra_metadata.get('author', '') if article.extra_metadata else '',
+                    'article_id': article.id,  # For public image URL fallback
                     'image_url': article.image_url,
                     'local_image_path': article.local_image_path,
                     'image_data': article.image_data  # Binary from database (Render-persistent)

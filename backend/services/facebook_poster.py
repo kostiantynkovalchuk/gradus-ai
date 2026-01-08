@@ -6,6 +6,10 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+def get_backend_url() -> str:
+    """Get the public backend URL for image serving"""
+    return os.getenv('APP_URL') or os.getenv('BACKEND_URL') or 'https://gradus-ai.onrender.com'
+
 class FacebookPoster:
     def __init__(self):
         self.page_access_token = os.getenv('FACEBOOK_ACCESS_TOKEN') or os.getenv('FACEBOOK_PAGE_ACCESS_TOKEN')
@@ -44,12 +48,13 @@ class FacebookPoster:
         Post to Facebook Page with image
         
         Priority order for image source:
-        1. image_data (binary from database - most reliable for Render)
-        2. local_image_path (for local development)
-        3. image_url (likely expired - last resort)
+        1. image_data (binary from database - upload directly)
+        2. database_image_url (public /api/images/serve endpoint - Facebook fetches from our server)
+        3. local_image_path (for local development)
+        4. image_url (DALL-E URL - likely expired, last resort)
         
         Args:
-            article_data: Dict with all article info including image_data, image_url, or local_image_path
+            article_data: Dict with all article info including image_data, image_url, article_id, or local_image_path
             
         Returns:
             Dict with post_id and post_url, or None if failed
@@ -60,28 +65,37 @@ class FacebookPoster:
         
         message = self.format_post_text(article_data)
         image_data = article_data.get('image_data')  # Binary data from database
+        article_id = article_data.get('article_id')  # For public image URL
         local_image_path = article_data.get('local_image_path')
-        image_url = article_data.get('image_url')
+        image_url = article_data.get('image_url')  # DALL-E URL (usually expired)
         
-        # Priority 1: Use image_data from database (most reliable for Render)
+        # Priority 1: Use image_data from database (direct upload)
         if image_data:
-            logger.info(f"✅ Using image from database ({len(image_data)} bytes)")
+            logger.info(f"✅ [Priority 1] Using image from database ({len(image_data)} bytes)")
             result = self._post_with_image_data(message, image_data)
             if result:
                 return result
-            logger.warning("⚠️  Database image posting failed, trying local file...")
+            logger.warning("⚠️  Database image upload failed, trying public URL...")
         
-        # Priority 2: Try local image file
+        # Priority 2: Use public database image URL (Facebook fetches from our server)
+        if article_id:
+            backend_url = get_backend_url()
+            public_image_url = f"{backend_url}/api/images/serve/{article_id}"
+            logger.info(f"✅ [Priority 2] Using public image URL: {public_image_url}")
+            result = self._post_with_image_url(message, public_image_url)
+            if result:
+                return result
+            logger.warning("⚠️  Public image URL failed, trying local file...")
+        
+        # Priority 3: Try local image file (for local development)
         found_path = None
         if local_image_path:
-            # Try absolute path first
             if os.path.exists(local_image_path):
                 found_path = local_image_path
-                logger.info(f"✅ Using local image (absolute): {local_image_path}")
-            # Try relative to current working directory
+                logger.info(f"✅ [Priority 3] Using local image (absolute): {local_image_path}")
             elif os.path.exists(os.path.join(os.getcwd(), local_image_path)):
                 found_path = os.path.join(os.getcwd(), local_image_path)
-                logger.info(f"✅ Using local image (relative): {found_path}")
+                logger.info(f"✅ [Priority 3] Using local image (relative): {found_path}")
             else:
                 logger.warning(f"⚠️  Local image path not found: {local_image_path}")
         
@@ -89,18 +103,18 @@ class FacebookPoster:
             result = self._post_with_local_image(message, found_path)
             if result:
                 return result
-            logger.warning("⚠️  Local image posting failed, trying URL...")
+            logger.warning("⚠️  Local image posting failed, trying DALL-E URL...")
         
-        # Priority 3: Try image URL (usually expired but worth a try)
+        # Priority 4: Try original image URL (DALL-E - usually expired but worth a try)
         if image_url:
-            logger.warning("⚠️  Trying image URL (may be expired)")
+            logger.warning("⚠️  [Priority 4] Trying DALL-E URL (may be expired)")
             result = self._post_with_image_url(message, image_url)
             if result:
                 return result
-            logger.warning("⚠️  Image URL failed (likely expired), posting text-only as fallback...")
+            logger.warning("⚠️  DALL-E URL failed (likely expired), posting text-only as fallback...")
             return self.post_text_only(message)
         else:
-            logger.warning("No image provided, posting text only")
+            logger.warning("No image source available, posting text only")
             return self.post_text_only(message)
     
     def _post_with_image_data(self, message: str, image_data: bytes) -> Optional[Dict]:
