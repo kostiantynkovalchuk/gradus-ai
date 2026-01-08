@@ -1,8 +1,8 @@
 """
-Best Brands Video Feature for Maya Telegram Bot
+Торговий Дім АВ (Trading House AV) Video Feature for Maya Telegram Bot
 
-Sends a vertical (9:16) video presentation when users ask about Best Brands company.
-Supports Ukrainian, Russian, and English with code-switching (e.g., "розкажи про best brands").
+Sends a vertical (9:16) video presentation when users ask about Торговий Дім АВ company.
+Supports Ukrainian, Russian, and English with code-switching (e.g., "розкажи про торговий дім ав").
 """
 
 import os
@@ -18,7 +18,7 @@ TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 BEST_BRANDS_VIDEO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "bestbrands-presentation.mp4")
 MEDIA_KEY = "bestbrands_presentation"
 
-BESTBRANDS_TEXT_FALLBACK = """🏢 Best Brands — найбільший дистриб'ютор алкогольних брендів в Україні
+BESTBRANDS_TEXT_FALLBACK = """🏢 Торговий Дім АВ — найбільший дистриб'ютор алкогольних брендів в Україні
 
 📊 Ключові факти:
 - Покриваємо понад 40 000 торгових точок по всій країні
@@ -56,14 +56,14 @@ def fuzzy_match(str1: str, str2: str, threshold: float = 0.85) -> bool:
 
 def detect_bestbrands_trigger(message_text: str) -> bool:
     """
-    Detects if user is asking about Best Brands company.
-    Supports code-switching (e.g., "розкажи про best brands").
-    Includes fuzzy matching for typos (e.g., "best brends", "bast brands").
+    Detects if user is asking about Торговий Дім АВ (Trading House AV) company.
+    Supports code-switching (e.g., "розкажи про торговий дім ав").
+    Includes fuzzy matching for typos.
     
     Returns True if message contains:
     - Any question phrase (UA/RU/EN) + company name variation
     - OR identity questions ("хто ви", "who are you")
-    - OR fuzzy match to "best brands" / "бест брендс"
+    - OR fuzzy match to "торговий дім ав" / "тдав"
     
     Case-insensitive matching.
     """
@@ -104,11 +104,13 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     ]
     
     company_names = [
-        r'best\s*brands?',
-        r'бест\s*брендс?',
-        r'bestbrands?',
+        r'торгов\w*\s*д[іi]м\s*ав',
+        r'тдав',
+        r'тд\s*ав',
+        r'trading\s*house\s*av',
         r'avtd',
         r'автд',
+        r'ав\s*тд',
     ]
     
     company_only_patterns = [
@@ -120,7 +122,7 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     
     for pattern in company_only_patterns:
         if re.search(pattern, message_lower):
-            logger.debug(f"✅ Best Brands trigger matched: company-only pattern")
+            logger.debug(f"✅ ТДАВ trigger matched: company-only pattern")
             return True
     
     all_question_patterns = question_patterns_ua + question_patterns_ru + question_patterns_en
@@ -129,34 +131,42 @@ def detect_bestbrands_trigger(message_text: str) -> bool:
     has_company_name = any(re.search(p, message_lower) for p in company_names)
     
     if has_question and has_company_name:
-        logger.debug(f"✅ Best Brands trigger matched: question + company name")
+        logger.debug(f"✅ ТДАВ trigger matched: question + company name")
         return True
     
     simple_about_patterns = [
-        r'^про\s+best\s*brands?',
-        r'^про\s+бест\s*брендс?',
-        r'^about\s+best\s*brands?',
-        r'^best\s*brands?\s*\??$',
-        r'^бест\s*брендс?\s*\??$',
+        r'^про\s+торгов\w*\s*д[іi]м\s*ав',
+        r'^про\s+тдав',
+        r'^про\s+тд\s*ав',
+        r'^about\s+trading\s*house\s*av',
+        r'^торгов\w*\s*д[іi]м\s*ав\s*\??$',
+        r'^тдав\s*\??$',
     ]
     
     for pattern in simple_about_patterns:
         if re.search(pattern, message_lower):
-            logger.debug(f"✅ Best Brands trigger matched: simple pattern")
+            logger.debug(f"✅ ТДАВ trigger matched: simple pattern")
             return True
     
     words = message_lower.split()
     for i in range(len(words) - 1):
         two_word_phrase = f"{words[i]} {words[i+1]}"
         
-        if fuzzy_match(two_word_phrase, "best brands", threshold=0.85):
-            logger.debug(f"✅ Best Brands trigger matched: fuzzy 'best brands' ({two_word_phrase})")
+        if fuzzy_match(two_word_phrase, "торговий дім", threshold=0.85):
+            logger.debug(f"✅ ТДАВ trigger matched: fuzzy 'торговий дім' ({two_word_phrase})")
             return True
-        if fuzzy_match(two_word_phrase, "бест брендс", threshold=0.85):
-            logger.debug(f"✅ Best Brands trigger matched: fuzzy 'бест брендс' ({two_word_phrase})")
+        if fuzzy_match(two_word_phrase, "trading house", threshold=0.85):
+            logger.debug(f"✅ ТДАВ trigger matched: fuzzy 'trading house' ({two_word_phrase})")
             return True
     
-    logger.debug(f"❌ No Best Brands trigger in: {message_text[:50]}...")
+    if len(words) >= 3:
+        for i in range(len(words) - 2):
+            three_word_phrase = f"{words[i]} {words[i+1]} {words[i+2]}"
+            if fuzzy_match(three_word_phrase, "торговий дім ав", threshold=0.85):
+                logger.debug(f"✅ ТДАВ trigger matched: fuzzy 'торговий дім ав' ({three_word_phrase})")
+                return True
+    
+    logger.debug(f"❌ No ТДАВ trigger in: {message_text[:50]}...")
     return False
 
 
@@ -202,7 +212,7 @@ def store_file_id(file_id: str) -> bool:
                     media_type='video',
                     media_key=MEDIA_KEY,
                     file_id=file_id,
-                    description='Best Brands presentation video for Maya bot'
+                    description='Торговий Дім АВ presentation video for Maya bot'
                 )
                 db.add(new_media)
             
@@ -329,7 +339,7 @@ async def handle_bestbrands_request(chat_id: int) -> bool:
     Main handler that tries video first, falls back to text.
     Returns True if handled successfully.
     """
-    logger.info(f"🎬 Best Brands request from chat {chat_id}")
+    logger.info(f"🎬 ТДАВ video request from chat {chat_id}")
     
     stored_file_id = get_stored_file_id()
     

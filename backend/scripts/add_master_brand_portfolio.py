@@ -1,5 +1,5 @@
 """
-Create a master brand portfolio document for Best Brands
+Create a master brand portfolio document for Торговий Дім АВ (Trading House AV)
 This ensures Maya ALWAYS sees the complete brand list in search results
 """
 
@@ -19,9 +19,9 @@ def add_master_list():
     index = pc.Index(PINECONE_INDEX_NAME)
     
     master_content = """
-BEST BRANDS - COMPLETE BRAND PORTFOLIO
+ТОРГОВИЙ ДІМ АВ (TRADING HOUSE AV) - COMPLETE BRAND PORTFOLIO
 
-This is the authoritative, complete list of all brands distributed by Best Brands (formerly AVTD), Ukraine's largest alcohol distributor with 40,000+ retail points across the country.
+This is the authoritative, complete list of all brands distributed by Торговий Дім АВ (Trading House AV), Ukraine's largest alcohol distributor with 40,000+ retail points across the country.
 
 === VODKA BRANDS (4 brands) ===
 
@@ -130,7 +130,7 @@ This is the authoritative, complete list of all brands distributed by Best Brand
 
 === DISTRIBUTION & MARKET COVERAGE ===
 
-Best Brands (formerly known as AVTD - Торговий дім "АВ") is Ukraine's largest alcohol distributor:
+Торговий Дім АВ (Trading House AV) is Ukraine's largest alcohol distributor:
 - 40,000+ retail points across Ukraine
 - Comprehensive market coverage in HoReCa sector (hotels, restaurants, cafes)
 - Premium and super-premium segment focus
@@ -162,11 +162,11 @@ VILLA is the flagship wine brand with most extensive collections (4 distinct col
         "values": embedding,
         "metadata": {
             "text": master_content,
-            "brand": "Best Brands",
+            "brand": "Торговий Дім АВ",
             "source": "https://avtd.com",
             "source_type": "master_document",
             "category": "portfolio_overview",
-            "company": "Best Brands",
+            "company": "Торговий Дім АВ",
             "content_type": "MASTER",
             "is_master_list": True,
             "priority": "highest",

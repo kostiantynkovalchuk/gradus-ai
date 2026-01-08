@@ -117,35 +117,30 @@ def ingest_scraped_content_to_pinecone(content: str, product_sections: list, met
         print(f"   ⚠️ No vectors to upload")
 
 WEBSITES = [
-    {"url": "https://avtd.com/", "name": "Best Brands Main", "brand": "Best Brands", "type": "distributor"},
+    {"url": "https://avtd.com/", "name": "Торговий Дім АВ Main", "brand": "Торговий Дім АВ", "type": "distributor"},
     {"url": "https://www.dovbush.com.ua/", "name": "DOVBUSH", "brand": "DOVBUSH", "type": "cognac"},
     {"url": "https://greendayvodka.com/uk/", "name": "Green Day", "brand": "GREENDAY", "type": "vodka"},
     {"url": "https://villaua.com/", "name": "Villa", "brand": "VILLA", "type": "wine"},
     {"url": "https://helsinki.ua/", "name": "Helsinki", "brand": "HELSINKI", "type": "vodka"},
     {"url": "https://ukrainka.ua/", "name": "UKRAINKA", "brand": "UKRAINKA", "type": "vodka"},
     {"url": "https://wineviaggio.com/", "name": "Wineviaggio", "brand": "WINEVIAGGIO", "type": "wine"},
-    {"url": "https://marlinvodka.com/indexUK.html", "name": "Marlin", "brand": "MARLIN", "type": "vodka"},
-    {"url": "https://kristivalley.com/", "name": "Kristi Valley", "brand": "KRISTI VALLEY", "type": "wine"},
-    {"url": "https://adjari.com.ua/index1.html", "name": "Adjari", "brand": "ADJARI", "type": "cognac"},
-    {"url": "https://didilari.com/", "name": "Didi Lari", "brand": "DIDI LARI", "type": "wine"}
 ]
 
 def enrich_content_with_rebrand(content: str, brand: str) -> str:
     """
-    Replace AVTD mentions with Best Brands.
-    Websites still say AVTD, but Maya should use Best Brands!
+    Normalize company name variations to Торговий Дім АВ.
+    Websites may use old names, but Maya should use the new brand name!
     """
     
     replacements = {
-        "AVTD": "Best Brands",
-        "АВТД": "Best Brands",
-        "АВ ТД": "Best Brands",
-        "ТД АВ": "Best Brands",
-        "Торговий Дім АВ": "Best Brands",
-        "ТД «АВ»": "Best Brands",
-        "TD AV": "Best Brands",
-        "АВ Group": "Best Brands",
-        "BestBrands": "Best Brands",
+        "Best Brands": "Торговий Дім АВ",
+        "BestBrands": "Торговий Дім АВ",
+        "AVTD": "Торговий Дім АВ",
+        "АВТД": "Торговий Дім АВ",
+        "АВ ТД": "Торговий Дім АВ",
+        "ТД «АВ»": "Торговий Дім АВ",
+        "TD AV": "Торговий Дім АВ",
+        "АВ Group": "Торговий Дім АВ",
     }
     
     enriched = content
@@ -159,7 +154,7 @@ def enrich_content_with_rebrand(content: str, brand: str) -> str:
     
     enrichment = f"""
 
-[COMPANY CONTEXT: {brand} is distributed by Best Brands, Ukraine's largest alcohol distributor with 40,000+ retail points. Best Brands (formerly AVTD) represents premium brands across vodka, cognac, and wine categories.]
+[COMPANY CONTEXT: {brand} is distributed by Торговий Дім АВ (Trading House AV), Ukraine's largest alcohol distributor with 40,000+ retail points. Торговий Дім АВ represents premium brands across vodka, cognac, and wine categories.]
 """
     
     return enriched + enrichment
@@ -201,7 +196,7 @@ async def scrape_single_website(website_info):
         enriched_content = enrich_content_with_rebrand(content, website_info['brand'])
         
         print(f"✅ Scraped {website_info['name']}: {len(content)} chars")
-        print(f"   📝 Enriched with Best Brands context")
+        print(f"   📝 Enriched with ТДАВ context")
         print(f"   🎯 Product sections found: {len(product_sections)}")
         
         return {
@@ -212,7 +207,7 @@ async def scrape_single_website(website_info):
                 "source_type": "company_website",
                 "brand": website_info['brand'],
                 "category": website_info['type'],
-                "company": "Best Brands",
+                "company": "Торговий Дім АВ",
                 "enriched": True,
                 "has_products": len(product_sections) > 0,
                 "product_section_count": len(product_sections),
@@ -276,7 +271,7 @@ def ingest_to_rag(scraped_data):
 async def main():
     """Main batch processing"""
     print("=" * 60)
-    print("🏭 BATCH WEBSITE INGESTION - BEST BRANDS REBRAND")
+    print("🏭 BATCH WEBSITE INGESTION - ТДАВ REBRAND")
     print("=" * 60)
     
     scraped_data = await batch_scrape_websites()
@@ -290,7 +285,7 @@ async def main():
     print("\n" + "=" * 60)
     print("✅ BATCH INGESTION COMPLETE!")
     print(f"📊 Processed {len(scraped_data)}/{len(WEBSITES)} websites")
-    print("🔄 All AVTD mentions replaced with Best Brands")
+    print("🔄 All legacy mentions replaced with Торговий Дім АВ")
     print("=" * 60)
 
 if __name__ == "__main__":

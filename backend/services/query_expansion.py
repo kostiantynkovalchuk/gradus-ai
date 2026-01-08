@@ -1,5 +1,5 @@
 """
-Query expansion service to improve RAG retrieval for Best Brands products.
+Query expansion service to improve RAG retrieval for Торговий Дім АВ products.
 Expands brand names with category keywords to match stored documents.
 """
 

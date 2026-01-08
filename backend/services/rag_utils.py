@@ -63,13 +63,13 @@ def extract_brands_from_content(content: str, company_name: str) -> List[Dict]:
         for brand in brands:
             if brand.lower() in content_lower:
                 if category == 'vodka':
-                    context = f"{brand} is a premium vodka brand distributed by {company_name}, one of Ukraine's largest alcohol distributors with 40,000+ retail points. {brand} vodka is part of Best Brands's diverse spirits portfolio."
+                    context = f"{brand} is a premium vodka brand distributed by {company_name}, one of Ukraine's largest alcohol distributors with 40,000+ retail points. {brand} vodka is part of Торговий Дім АВ's diverse spirits portfolio."
                 elif category == 'cognac':
-                    context = f"{brand} is a premium cognac brand distributed by {company_name}. {brand} cognac represents Best Brands's commitment to quality spirits in the Ukrainian market."
+                    context = f"{brand} is a premium cognac brand distributed by {company_name}. {brand} cognac represents Торговий Дім АВ's commitment to quality spirits in the Ukrainian market."
                 elif category == 'wine':
-                    context = f"{brand} is a wine brand in the portfolio of {company_name}. {brand} wine is distributed through Best Brands's extensive network of 40,000+ retail locations across Ukraine."
+                    context = f"{brand} is a wine brand in the portfolio of {company_name}. {brand} wine is distributed through Торговий Дім АВ's extensive network of 40,000+ retail locations across Ukraine."
                 elif category == 'soju':
-                    context = f"{brand} is a Korean-style soju distributed by {company_name}. {brand} soju represents Best Brands's expansion into Asian spirit categories."
+                    context = f"{brand} is a Korean-style soju distributed by {company_name}. {brand} soju represents Торговий Дім АВ's expansion into Asian spirit categories."
                 else:
                     context = f"{brand} is a brand distributed by {company_name}."
                 
@@ -123,7 +123,7 @@ Additional Information:
 {brand_info['context']}
 
 About {company_name}:
-{company_name} (Best Brands) is Ukraine's leading alcohol distributor with direct deliveries to over 40,000 retail locations nationwide. The company specializes in premium spirits, wines, and innovative beverage brands.
+{company_name} is Ukraine's leading alcohol distributor with direct deliveries to over 40,000 retail locations nationwide. The company specializes in premium spirits, wines, and innovative beverage brands.
 
 Brand: {brand_info['name']}
 Category: {brand_info['category'].title()}
