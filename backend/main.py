@@ -500,11 +500,17 @@ async def approve_content(
             return {
                 "status": "success",
                 "message": "Content approved and posted to Facebook",
-                "content": content,
+                "article_id": content_id,
+                "title": content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else ''),
                 "fb_post_url": fb_result['post_url']
             }
         else:
-            return {"message": "Content approved successfully", "content": content}
+            return {
+                "status": "success",
+                "message": "Content approved successfully",
+                "article_id": content_id,
+                "title": content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else '')
+            }
         
     except HTTPException:
         raise
@@ -543,7 +549,12 @@ async def reject_content(
         
         logger.info(f"Content {content_id} rejected by {request.moderator}")
         
-        return {"message": "Content rejected successfully", "content": content}
+        return {
+            "status": "success",
+            "message": "Content rejected successfully",
+            "article_id": content_id,
+            "title": content.translated_title or (content.extra_metadata.get('title', '') if content.extra_metadata else '')
+        }
         
     except HTTPException:
         raise
