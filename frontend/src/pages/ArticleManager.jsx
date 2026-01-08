@@ -463,21 +463,23 @@ function ArticleManager() {
       )}
 
       {showDeleteModal && articleToDelete && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="glass-card max-w-md w-full p-6">
-            <div className="flex items-center gap-3 mb-4 text-red-400">
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-4">
+          <div className="bg-white shadow-2xl border-2 border-gray-200 rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4 text-red-600">
               <AlertTriangle size={24} />
-              <h2 className="text-xl font-bold">Delete Article?</h2>
+              <h2 className="text-xl font-bold text-gray-900">Delete Article?</h2>
             </div>
             
             <div className="mb-4">
-              <p className="text-white/70 mb-2">You are about to delete:</p>
-              <p className="text-white font-medium">{articleToDelete.title || 'Untitled'}</p>
-              <p className="text-white/50 text-sm">ID: {articleToDelete.id}</p>
+              <p className="text-gray-600 mb-2">You are about to delete:</p>
+              <p className="text-gray-900 font-medium">{articleToDelete.title || 'Untitled'}</p>
+              <p className="text-gray-500 text-sm">ID: {articleToDelete.id}</p>
             </div>
             
-            <p className="text-white/70 mb-4">
-              Type <span className="text-red-400 font-mono">DELETE</span> to confirm:
+            <p className="text-red-600 font-bold mb-4">⚠️ This action cannot be undone!</p>
+            
+            <p className="text-gray-600 mb-4">
+              Type <span className="text-red-600 font-mono font-bold">DELETE</span> to confirm:
             </p>
             
             <input
@@ -485,20 +487,20 @@ function ArticleManager() {
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
               placeholder="Type DELETE"
-              className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white mb-4 focus:border-red-500 focus:outline-none"
+              className="w-full px-4 py-2 bg-gray-100 border-2 border-gray-300 rounded-lg text-gray-900 mb-4 focus:border-red-500 focus:outline-none"
             />
             
             <div className="flex gap-3">
               <button 
                 onClick={handleDeleteConfirm}
                 disabled={deleteConfirmText !== 'DELETE'}
-                className="btn-danger flex-1 disabled:opacity-50"
+                className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white text-lg font-bold rounded-lg transition-colors shadow-lg flex-1"
               >
-                Delete
+                🗑️ Delete Article
               </button>
               <button 
                 onClick={() => { setShowDeleteModal(false); setArticleToDelete(null); }}
-                className="btn-secondary flex-1"
+                className="px-6 py-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors flex-1"
               >
                 Cancel
               </button>
@@ -508,19 +510,19 @@ function ArticleManager() {
       )}
 
       {showBulkDeleteModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="glass-card max-w-md w-full p-6">
-            <div className="flex items-center gap-3 mb-4 text-red-400">
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-4">
+          <div className="bg-white shadow-2xl border-2 border-gray-200 rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4 text-red-600">
               <AlertTriangle size={24} />
-              <h2 className="text-xl font-bold">Delete {selectedIds.size} Articles?</h2>
+              <h2 className="text-xl font-bold text-gray-900">Delete {selectedIds.size} Articles?</h2>
             </div>
             
-            <p className="text-white/70 mb-4">
-              This action cannot be undone. All selected articles and their related data will be permanently deleted.
+            <p className="text-red-600 font-bold mb-4">
+              ⚠️ This action cannot be undone! All selected articles and their related data will be permanently deleted.
             </p>
             
-            <p className="text-white/70 mb-4">
-              Type <span className="text-red-400 font-mono">DELETE</span> to confirm:
+            <p className="text-gray-600 mb-4">
+              Type <span className="text-red-600 font-mono font-bold">DELETE</span> to confirm:
             </p>
             
             <input
@@ -528,20 +530,20 @@ function ArticleManager() {
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
               placeholder="Type DELETE"
-              className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white mb-4 focus:border-red-500 focus:outline-none"
+              className="w-full px-4 py-2 bg-gray-100 border-2 border-gray-300 rounded-lg text-gray-900 mb-4 focus:border-red-500 focus:outline-none"
             />
             
             <div className="flex gap-3">
               <button 
                 onClick={handleBulkDelete}
                 disabled={deleteConfirmText !== 'DELETE'}
-                className="btn-danger flex-1 disabled:opacity-50"
+                className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white text-lg font-bold rounded-lg transition-colors shadow-lg flex-1"
               >
-                Delete All
+                🗑️ Delete All
               </button>
               <button 
                 onClick={() => { setShowBulkDeleteModal(false); setDeleteConfirmText(''); }}
-                className="btn-secondary flex-1"
+                className="px-6 py-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors flex-1"
               >
                 Cancel
               </button>
