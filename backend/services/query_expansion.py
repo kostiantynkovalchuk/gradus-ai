@@ -28,21 +28,47 @@ def expand_brand_query(user_message: str) -> str:
     message_lower = user_message.lower().strip()
     
     brand_expansions = {
-        'greenday': 'greenday vodka горілка водка premium',
-        'грінді': 'greenday vodka горілка водка premium',
-        'green day': 'greenday vodka горілка vodka premium',
-        'грін дей': 'greenday vodka горілка водка premium',
+        # Vodka brands
+        'greenday': 'greenday vodka горілка водка premium Торговий Дім АВ',
+        'грінді': 'greenday vodka горілка водка premium Торговий Дім АВ',
+        'green day': 'greenday vodka горілка vodka premium Торговий Дім АВ',
+        'грін дей': 'greenday vodka горілка водка premium Торговий Дім АВ',
+        'helsinki': 'helsinki vodka горілка водка premium scandinavian Торговий Дім АВ',
+        'хельсінкі': 'helsinki vodka горілка водка premium scandinavian Торговий Дім АВ',
+        'ukrainka': 'ukrainka vodka горілка водка traditional ukrainian Торговий Дім АВ',
+        'українка': 'ukrainka vodka горілка водка traditional ukrainian Торговий Дім АВ',
         
-        'довбуш': 'dovbush spirits горілка настоянка liqueur traditional',
-        'dovbush': 'dovbush spirits горілка настоянка liqueur traditional',
+        # Cognac brands
+        'довбуш': 'dovbush cognac коньяк spirits Торговий Дім АВ',
+        'dovbush': 'dovbush cognac коньяк spirits Торговий Дім АВ',
+        'adjari': 'adjari cognac wine коньяк вино georgian Торговий Дім АВ',
+        'аджарі': 'adjari cognac wine коньяк вино georgian Торговий Дім АВ',
         
-        'funju': 'funju cocktails коктейлі ready-to-drink RTD',
-        'фунжу': 'funju cocktails коктейлі ready-to-drink RTD',
-        'фунджу': 'funju cocktails коктейлі ready-to-drink RTD',
+        # Soju brand
+        'funju': 'funju soju соджу korean Торговий Дім АВ',
+        'фунжу': 'funju soju соджу korean Торговий Дім АВ',
+        'фунджу': 'funju soju соджу korean Торговий Дім АВ',
         
-        'villa': 'villa wine вино villa.ua',
-        'вілла': 'villa wine вино villa.ua',
-        'villa.ua': 'villa wine вино',
+        # Wine brands
+        'villa': 'villa wine вино villa.ua ukrainian Торговий Дім АВ',
+        'вілла': 'villa wine вино villa.ua ukrainian Торговий Дім АВ',
+        'villa.ua': 'villa wine вино Торговий Дім АВ',
+        'kristi valley': 'kristi valley wine вино french Торговий Дім АВ',
+        'крісті': 'kristi valley wine вино french Торговий Дім АВ',
+        'didi lari': 'didi lari wine вино georgian Торговий Дім АВ',
+        'діді ларі': 'didi lari wine вино georgian Торговий Дім АВ',
+        'wineviaggio': 'wineviaggio wine вино italian Торговий Дім АВ',
+        
+        # Company name recognition
+        'торговий дім ав': 'Торговий Дім АВ ТДАВ бренди портфоліо vodka wine cognac soju',
+        'тдав': 'Торговий Дім АВ ТДАВ бренди портфоліо vodka wine cognac soju',
+        'td av': 'Торговий Дім АВ ТДАВ бренди портфоліо vodka wine cognac soju',
+        'trading house av': 'Торговий Дім АВ ТДАВ бренди портфоліо vodka wine cognac soju',
+        
+        # Product queries
+        'які бренди': 'Торговий Дім АВ портфоліо бренди GREENDAY HELSINKI UKRAINKA VILLA FUNJU DOVBUSH ADJARI',
+        'яка продукція': 'Торговий Дім АВ портфоліо бренди продукція асортимент vodka wine cognac soju',
+        'асортимент': 'Торговий Дім АВ портфоліо бренди продукція асортимент',
     }
     
     category_keywords = [

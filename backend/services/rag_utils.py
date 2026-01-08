@@ -50,7 +50,7 @@ def extract_company_name_from_url(url: str) -> str:
 def extract_brands_from_content(content: str, company_name: str) -> List[Dict]:
     """Extract brand names and create rich contextual descriptions."""
     brand_patterns = {
-        'vodka': ['GREENDAY', 'HELSINKI', 'MARLIN', 'UKRAINKA'],
+        'vodka': ['GREENDAY', 'HELSINKI', 'UKRAINKA'],  # MARLIN removed (discontinued)
         'cognac': ['ADJARI', 'DOVBUSH'],
         'wine': ['VILLA', 'KRISTI VALLEY', 'DIDI LARI', 'WINEVIAGGIO', 'ADJARI'],
         'soju': ['FUNJU']
@@ -89,8 +89,9 @@ def enrich_company_content(content: str, company_name: str, url: str) -> List[st
         'dovbush': ('DOVBUSH', 'cognac', 'DOVBUSH is a premium Ukrainian cognac brand known for quality and tradition. The brand represents authentic Ukrainian craftsmanship in cognac production.'),
         'greenday': ('GREENDAY', 'vodka', 'GREENDAY is a premium vodka brand with modern positioning and eco-conscious values.'),
         'helsinki': ('HELSINKI', 'vodka', 'HELSINKI is a premium vodka brand inspired by Nordic purity and quality.'),
-        'marlin': ('MARLIN', 'vodka', 'MARLIN is a premium vodka brand known for smooth taste and quality.'),
+        'ukrainka': ('UKRAINKA', 'vodka', 'UKRAINKA is an authentic Ukrainian vodka brand with strong national identity.'),
         'adjari': ('ADJARI', 'cognac', 'ADJARI is a premium Georgian-style cognac brand with rich heritage.'),
+        'funju': ('FUNJU', 'soju', 'FUNJU is a Korean-style soju brand, representing Торговий Дім АВ expansion into Asian spirits.'),
     }
     
     url_lower = url.lower()

@@ -23,7 +23,7 @@ def add_master_list():
 
 This is the authoritative, complete list of all brands distributed by Торговий Дім АВ (Trading House AV), Ukraine's largest alcohol distributor with 40,000+ retail points across the country.
 
-=== VODKA BRANDS (4 brands) ===
+=== VODKA BRANDS (3 brands) ===
 
 1. GREENDAY - Premium Ukrainian vodka with 10 products
    CLASSIC LINE (6 products):
@@ -55,15 +55,9 @@ This is the authoritative, complete list of all brands distributed by Торго
    • Classic vodka segment
    Website: ukrainka.ua
 
-4. MARLIN - Classic vodka brand
-   • Standard market positioning
-   • Reliable quality
-   • Traditional approach
-   Website: marlinvodka.com
-
 === WINE BRANDS (5 brands) ===
 
-5. VILLA UA - Ukrainian wines with 4 collections
+4. VILLA UA - Ukrainian wines with 4 collections
    • Classic collection - Chardonnay, Pinot Grigio, Pinot Noir Merlot, Gewürztraminer Blanc, Muscat Dry, etc.
    • Author's collection - Premium author's blends and varietals
    • ART collection - Premium artistic segment wines
@@ -139,15 +133,26 @@ This is the authoritative, complete list of all brands distributed by Торго
 
 Company positioning: Strong distribution partner committed to mutual beneficial relationships with every client, innovative brand development, and continuous professional growth.
 
+=== SOJU BRANDS (1 brand) ===
+
+10. FUNJU - Korean-style soju
+    • First Ukrainian soju brand
+    • Korean-inspired, produced in Ukraine
+    • Light, refreshing taste
+    • Appeal to younger consumers
+    Website: funju.ua
+
 === BRAND CATEGORIES SUMMARY ===
-Total: 10 brands across 3 categories
-- Vodka: 4 brands (GREENDAY with 10 SKUs, HELSINKI, UKRAINKA, MARLIN)
+Total: 10 brands across 4 categories
+- Vodka: 3 brands (GREENDAY with 10 SKUs, HELSINKI, UKRAINKA)
 - Wine: 5 brands (VILLA with 4 collections, KRISTI VALLEY with 5 wines, DIDI LARI, WINEVIAGGIO, ADJARI with 6 wines)
 - Cognac: 2 brands (DOVBUSH, ADJARI with 6 cognacs)
+- Soju: 1 brand (FUNJU)
 
 ADJARI is unique as both cognac and wine brand (12 total products).
 GREENDAY is the flagship vodka brand with most extensive lineup (10 products).
 VILLA is the flagship wine brand with most extensive collections (4 distinct collections).
+FUNJU represents expansion into Asian spirits category.
 """
     
     print("📝 Creating MASTER BRAND PORTFOLIO document...\n")
@@ -181,10 +186,11 @@ VILLA is the flagship wine brand with most extensive collections (4 distinct col
     print(f"   Vector ID: {vector_id}")
     print(f"   Content: {len(master_content)} chars")
     print(f"\n📊 COVERAGE:")
-    print(f"   • 10 brands total")
-    print(f"   • 4 vodka brands (GREENDAY 10 SKUs, HELSINKI, UKRAINKA, MARLIN)")
+    print(f"   • 10 brands total (4 categories)")
+    print(f"   • 3 vodka brands (GREENDAY 10 SKUs, HELSINKI, UKRAINKA)")
     print(f"   • 5 wine brands (VILLA 4 collections, KRISTI VALLEY, DIDI LARI, WINEVIAGGIO, ADJARI 6 wines)")
     print(f"   • 2 cognac brands (DOVBUSH, ADJARI 6 cognacs)")
+    print(f"   • 1 soju brand (FUNJU)")
     print(f"   • 40,000+ retail distribution points")
     print(f"\n🎯 This document will appear in TOP results for brand queries!")
     print(f"   Maya will ALWAYS see the complete brand list!")
