@@ -1,0 +1,91 @@
+Replit Agent Prompt
+Clean and rebuild Pinecone with ONLY Торговій Дім АВ brand data.
+
+CONTEXT:
+Pinecone has mixed data - some vectors say "Best Brands", others say "Торговій Дім АВ". This creates inconsistent responses. We need a complete cleanup and rebuild.
+
+TASK:
+
+1. **DELETE ALL existing brand vectors from Pinecone:**
+   - Delete ALL vectors in the 'gradus-ai' index
+   - Or at minimum, delete all vectors with metadata containing "Best Brands", "BestBrands", "AVTD"
+
+Use Pinecone delete:
+```python
+from pinecone import Pinecone
+import os
+
+pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+index = pc.Index('gradus-ai')
+
+# Delete all vectors (nuclear option)
+index.delete(delete_all=True)
+
+# OR delete by metadata filter
+index.delete(filter={"company": {"$in": ["Best Brands", "BestBrands", "AVTD"]}})
+```
+
+2. **Create fresh brand knowledge documents:**
+
+Use ONLY "Торговій Дім АВ" (NOT "Торговый Дом АВ", NOT "Best Brands").
+
+For each of 10 brands, create document with this EXACT template:
+Brand: [BRAND_NAME]
+Company: Торговій Дім АВ
+Category: [vodka/wine/cognac/soju]
+Products: [detailed product list]
+Distribution: 40,000+ retail points across Ukraine
+Distributor: Торговій Дім АВ
+
+**Brands to document:**
+
+VODKA:
+- GREENDAY - 10 SKUs including Classic, Air, Original Life, Ultra Soft, Crystal, Discovery, Evolution, Organic, plus flavored line (Lemon, Hot Spices, Green Tea)
+- HELSINKI - premium vodka
+- UKRAINKA - 4 variants: Традиційна 28%, Традиційна 40%, Strong (with honey), Хріновуха (with horseradish)
+
+WINE:
+- VILLA - 4 wine collections
+- KRISTI VALLEY - 5 wines
+- DIDI LARI - Georgian wines
+- WINEVIAGGIO - Italian wines
+- ADJARI - 6 Georgian wines
+
+COGNAC:
+- DOVBUSH - Ukrainian cognac
+- ADJARI - 6 Georgian cognacs (3, 4 КВАРТЕЛИ, 5, 7 МУДРИЙ АДЖАРЕЛІЯ)
+
+SOJU:
+- FUNJU - Ukrainian soju
+
+3. **Add company overview:**
+Company: Торговій Дім АВ
+Profile: Ukraine's largest alcohol distributor
+Reach: 40,000+ retail points, ~300 employees
+Portfolio: 10 brands across vodka (3), wine (5), cognac (2), soju (1)
+
+4. **Ingest with consistent metadata:**
+Every vector MUST have:
+```python
+metadata = {
+    "company": "Торговій Дім АВ",
+    "brand": "[BRAND_NAME]",
+    "category": "[category]",
+    "source": "master_portfolio"
+}
+```
+
+5. **Verify consistency:**
+After ingestion, query Pinecone and check:
+- NO vectors mention "Best Brands"
+- NO vectors mention "AVTD"
+- ALL vectors say "Торговій Дім АВ"
+
+6. **Test query:**
+Query: "Яка компанія дистрибутує GREENDAY?"
+Expected RAG result: Should ONLY mention "Торговій Дім АВ"
+
+Show:
+- Number of old vectors deleted
+- Number of new vectors created
+- Sample query result confirming consistency
