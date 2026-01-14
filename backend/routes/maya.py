@@ -5,7 +5,7 @@ import os
 
 from routes.chat_endpoints import chat_with_avatars, ChatRequest as ChatEndpointRequest
 
-router = APIRouter(prefix="/api/maya", tags=["maya"])
+router = APIRouter(prefix="/api/maya", tags=["alex"])
 
 rate_limit_storage = {}
 
@@ -42,10 +42,10 @@ def increment_usage(session_id: str):
     rate_limit_storage[key]["count"] += 1
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_with_maya(request: ChatRequest):
+async def chat_with_alex(request: ChatRequest):
     """
-    Maya AI chat endpoint with RAG
-    Uses the same chat endpoint as Telegram Maya
+    Alex AI chat endpoint with RAG - Website chat uses Alex persona
+    Alex is the Premium Bar Operations Consultant - more trusted in HoReCa business
     """
     try:
         remaining = check_rate_limit(request.session_id)
@@ -58,7 +58,7 @@ async def chat_with_maya(request: ChatRequest):
         
         chat_request = ChatEndpointRequest(
             message=request.message,
-            avatar="maya",
+            avatar="alex",
             conversation_history=[]
         )
         
@@ -76,5 +76,5 @@ async def chat_with_maya(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Maya chat error: {e}")
+        print(f"Alex chat error: {e}")
         raise HTTPException(status_code=500, detail="Вибачте, сталася помилка. Спробуйте ще раз.")

@@ -1,0 +1,402 @@
+🔄 CRITICAL UPDATE: Switch Website Chat to Alex + Fix Brand Hallucinations
+
+## ISSUE SUMMARY
+1. **Avatar Change**: Website chat needs to switch from Maya to Alex (male figure more trusted in HoReCa business)
+2. **CRITICAL: Brand Hallucination**: Agent is claiming AVTD distributes Hennessy, Glenfiddich, Moët & Chandon, Belvedere, Grey Goose - THESE ARE FALSE
+3. **Correct Brand Portfolio**: Need to update RAG with actual AVTD brands from master presentation
+
+## PART 1: SWITCH TO ALEX PERSONA
+
+### 1.1 Update Main Configuration
+
+Find where the website chat avatar is configured (likely in frontend or backend config):
+```python
+# Change from:
+DEFAULT_AVATAR = "maya"
+
+# To:
+DEFAULT_AVATAR = "alex"
+```
+
+### 1.2 Update System Prompts
+
+Search for any gender-specific language in prompts:
+- "Рада розповісти" → "Радий розповісти" (female → male)
+- "спеціалізуюсь" stays the same (gender-neutral in context)
+- Update any other female-gendered endings to male
+
+### 1.3 Update Avatar Image/Icon
+
+If there's a visual avatar on the website:
+- Replace Maya image with Alex image (use the professional avatars we discussed earlier)
+- Update any UI references to "Maya Gradus" → "Alex Gradus"
+
+## PART 2: CRITICAL - FIX BRAND HALLUCINATIONS
+
+### 2.1 REMOVE FALSE BRAND INFORMATION
+
+The agent is currently claiming AVTD distributes brands IT DOES NOT REPRESENT:
+
+**FALSE BRANDS TO REMOVE FROM RAG:**
+- ❌ Hennessy (not distributed by AVTD)
+- ❌ Glenfiddich (not distributed by AVTD)
+- ❌ Moët & Chandon (not distributed by AVTD)
+- ❌ Belvedere (not distributed by AVTD)
+- ❌ Grey Goose (not distributed by AVTD)
+- ❌ Molson Coors (not distributed by AVTD)
+
+**Action required:**
+1. Search RAG/vector database for these brand names
+2. Delete ALL vectors containing false brand associations with AVTD
+3. Clear any cached responses mentioning these brands
+```python
+# Pseudo-code for RAG cleanup
+brands_to_remove = [
+    "Hennessy", "Glenfiddich", "Moët", "Chandon", 
+    "Belvedere", "Grey Goose", "Molson Coors"
+]
+
+# Search and delete vectors mentioning these brands in AVTD context
+for brand in brands_to_remove:
+    vectors = search_rag(f"AVTD {brand}")
+    if vectors:
+        delete_vectors(vectors)
+        logger.warning(f"Removed false brand association: {brand}")
+```
+
+### 2.2 ADD CORRECT BRAND PORTFOLIO
+
+**ACTUAL AVTD BRAND PORTFOLIO** (from master presentation):
+
+Create a new RAG document with this VERIFIED information:
+```markdown
+# Торговий Дім АВ - Офіційний Портфель Брендів
+
+## Горілка (Vodka)
+
+### GREENDAY
+- Флагманський бренд компанії
+- 10 різних продуктів у лінійці
+- Український виробник
+- Категорія: Преміум горілка
+
+### HELSINKI
+- Скандинавський преміум стиль
+- Позиціонування: Преміум сегмент
+- Характер: Чистий, м'який смак
+
+### UKRAINKA
+- Автентично український бренд
+- Патріотичне позиціонування
+- Традиційна якість
+
+## Коньяк (Cognac/Brandy)
+
+### DOVBUSH
+- Український коньяк
+- Назва на честь легендарного Олекси Довбуша
+- Преміум якість
+
+### ADJARI
+- Грузинський стиль
+- Кавказька традиція виробництва
+
+### KLINKOV
+- Додатковий коньячний бренд у портфелі
+
+### ЖАН-ЖАК
+- Французький стиль
+- Преміум позиціонування
+
+## Вино (Wine)
+
+### VILLA UA
+- Українські вина
+- Локальне виробництво
+
+### KRISTI VALLEY
+- Французькі вина
+- Імпорт якісних позицій
+
+### DIDI LARI
+- Грузинські вина
+- Автентичні сорти винограду
+- Традиційні методи виробництва
+
+### WINEVIAGGIO
+- Італійські вина
+- Різноманітні регіони Італії
+
+### Кошерні вина
+- Спеціалізована лінійка
+- Сертифіковане виробництво
+
+## Соджу (Soju)
+
+### FUNJU
+- Перший український соджу
+- Автентична корейська рецептура
+- Інновація на українському ринку
+- 16-20% алкоголю
+
+---
+
+**Важливо**: Торговий Дім АВ є дистриб'ютором ЛИШЕ цих брендів. 
+Компанія НЕ представляє міжнародні бренди типу Hennessy, Glenfiddich, 
+Grey Goose, Belvedere тощо.
+
+**Позиціонування**: Український дистриб'ютор з власними брендами та 
+партнерствами з європейськими виробниками вина.
+
+**Ринок**: HoReCa (готелі, ресторани, кафе, бари) по всій Україні.
+```
+
+### 2.3 Update RAG Knowledge Base
+```python
+# Add this verified content to RAG
+verified_brands_content = """
+[Full content from above markdown]
+"""
+
+# Ingest into RAG with high priority
+add_to_rag(
+    content=verified_brands_content,
+    source="AVTD Master Brand Presentation",
+    priority="high",
+    verified=True
+)
+```
+
+## PART 3: UPDATE ALEX'S RESPONSE STYLE
+
+### 3.1 New Response Template for Brand Questions
+
+When asked "Кращі постачальники преміум алкоголю?", Alex should respond:
+```markdown
+**NEW RESPONSE TEMPLATE:**
+
+Радий розповісти про преміум сегмент в Україні!
+
+Якщо шукаєте **українські преміум бренди**, рекомендую звернути увагу на 
+**Торговий Дім АВ** — один з провідних дистриб'юторів з власним портфелем:
+
+🥃 **Горілка преміум-класу:**
+* GREENDAY — флагманський бренд з 10 продуктами
+* HELSINKI — скандинавський стиль
+* UKRAINKA — автентично український
+
+🍷 **Коньяк:**
+* DOVBUSH — український коньяк преміум-якості
+* ADJARI — грузинська традиція
+* KLINKOV, ЖАН-ЖАК
+
+🍇 **Вина:**
+* VILLA UA (українські), KRISTI VALLEY (французькі)
+* DIDI LARI (грузинські), WINEVIAGGIO (італійські)
+* Кошерні вина
+
+🍶 **Інновація:**
+* FUNJU — перший український соджу за автентичною корейською рецептурою
+
+**Переваги співпраці з Торговим Домом АВ:**
+* 25 років на ринку
+* 800+ співробітників
+* 40,000+ точок продажу по Україні
+* Професійна логістика
+* Підтримка HoReCa-закладів
+
+Хочете дізнатись більше про конкретні бренди або умови співпраці?
+```
+
+### 3.2 Add Gender-Appropriate Language
+
+Update all prompts with male-gendered language:
+```python
+# Gender corrections
+MALE_PHRASES = {
+    "Рада розповісти": "Радий розповісти",
+    "Рада допомогти": "Радий допомогти",
+    "готова відповісти": "готовий відповісти",
+    "впевнена": "впевнений",
+    "задоволена": "задоволений"
+}
+
+# Apply to all system prompts
+for prompt in system_prompts:
+    for female, male in MALE_PHRASES.items():
+        prompt = prompt.replace(female, male)
+```
+
+## PART 4: TESTING & VERIFICATION
+
+### 4.1 Test RAG Vector Database
+
+Add this test script:
+```python
+# test_rag_brands.py
+
+import os
+from services.rag_service import RAGService
+
+def test_brand_knowledge():
+    """Test that RAG has correct brand information"""
+    
+    rag = RAGService()
+    
+    # Test 1: Query for AVTD brands (should find correct info)
+    correct_brands = ["GREENDAY", "HELSINKI", "DOVBUSH", "FUNJU", "VILLA UA"]
+    
+    for brand in correct_brands:
+        results = rag.search(f"Торговий Дім АВ {brand}")
+        print(f"\n✅ Testing CORRECT brand: {brand}")
+        print(f"   Found {len(results)} results")
+        if results:
+            print(f"   Top result: {results[0]['content'][:100]}...")
+        else:
+            print(f"   ⚠️  WARNING: No results for {brand}!")
+    
+    # Test 2: Query for FALSE brands (should NOT find AVTD association)
+    false_brands = ["Hennessy", "Glenfiddich", "Grey Goose", "Belvedere"]
+    
+    for brand in false_brands:
+        results = rag.search(f"Торговий Дім АВ {brand}")
+        print(f"\n❌ Testing FALSE brand: {brand}")
+        if results:
+            print(f"   🚨 ERROR: Found {len(results)} results (should be 0!)")
+            print(f"   Content: {results[0]['content'][:100]}...")
+        else:
+            print(f"   ✅ Correct: No association found")
+    
+    # Test 3: General AVTD query
+    general_results = rag.search("Торговий Дім АВ портфель брендів")
+    print(f"\n📊 General AVTD query:")
+    print(f"   Found {len(general_results)} results")
+    if general_results:
+        print(f"   Content: {general_results[0]['content'][:200]}...")
+
+if __name__ == "__main__":
+    test_brand_knowledge()
+```
+
+### 4.2 Test Chat Responses
+```python
+# test_alex_responses.py
+
+def test_alex_personality():
+    """Test that Alex responds with correct gender and info"""
+    
+    test_queries = [
+        "Кращі постачальники преміум алкоголю?",
+        "Які бренди ви дистриб'ютуєте?",
+        "Чи представляєте Hennessy?",
+        "Розкажіть про GREENDAY",
+        "Що таке FUNJU?"
+    ]
+    
+    for query in test_queries:
+        print(f"\n🧪 Testing: {query}")
+        response = chat_with_alex(query)
+        
+        # Check gender
+        if "Рада" in response or "готова" in response:
+            print("   ❌ ERROR: Female gender detected!")
+        else:
+            print("   ✅ Gender: Correct")
+        
+        # Check for false brands
+        false_brands = ["Hennessy", "Glenfiddich", "Grey Goose"]
+        if any(brand in response for brand in false_brands):
+            print("   ❌ ERROR: False brand mentioned!")
+        else:
+            print("   ✅ Brands: Clean")
+        
+        print(f"   Response preview: {response[:150]}...")
+
+test_alex_personality()
+```
+
+### 4.3 Check Vector Database Contents
+```python
+# inspect_vectors.py
+
+from pinecone import Pinecone
+
+def inspect_rag_vectors():
+    """Inspect what's actually in the vector database"""
+    
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index = pc.Index("gradus-ai")
+    
+    # Get stats
+    stats = index.describe_index_stats()
+    print(f"Total vectors: {stats['total_vector_count']}")
+    
+    # Query for specific brands
+    test_queries = [
+        "AVTD GREENDAY vodka",
+        "AVTD Hennessy cognac",  # Should not exist
+        "AVTD FUNJU soju",
+        "Торговий Дім АВ бренди"
+    ]
+    
+    for query in test_queries:
+        print(f"\n🔍 Querying: {query}")
+        results = index.query(
+            query=query,
+            top_k=3,
+            include_metadata=True
+        )
+        
+        if results['matches']:
+            print(f"   Found {len(results['matches'])} matches")
+            for match in results['matches']:
+                print(f"   Score: {match['score']}")
+                print(f"   Metadata: {match.get('metadata', {})}")
+        else:
+            print("   No matches found")
+
+inspect_rag_vectors()
+```
+
+## PART 5: DEPLOYMENT CHECKLIST
+
+After implementing all changes:
+
+- [ ] Update avatar configuration (Maya → Alex)
+- [ ] Update gender in all system prompts
+- [ ] Clean RAG of false brand information
+- [ ] Add verified AVTD brand portfolio to RAG
+- [ ] Update response templates
+- [ ] Run test_rag_brands.py - verify correct brands present
+- [ ] Run test_alex_responses.py - verify gender and content
+- [ ] Run inspect_vectors.py - verify vector database state
+- [ ] Test on website: Ask "Кращі постачальники?"
+- [ ] Verify response mentions ONLY actual AVTD brands
+- [ ] Verify male-gendered language ("Радий розповісти")
+- [ ] Deploy to production
+
+## CRITICAL SUCCESS CRITERIA
+
+**Before Fix:**
+- ❌ Avatar: Maya (female)
+- ❌ Brands: Hennessy, Glenfiddich, Grey Goose (FALSE)
+- ❌ Language: "Рада розповісти" (female)
+
+**After Fix:**
+- ✅ Avatar: Alex (male)
+- ✅ Brands: GREENDAY, HELSINKI, DOVBUSH, FUNJU (CORRECT)
+- ✅ Language: "Радий розповісти" (male)
+- ✅ RAG: Only verified AVTD information
+
+## URGENT NOTES
+
+🚨 **This is a critical fix** - providing FALSE brand information damages credibility with HoReCa clients who know the market.
+
+Priority order:
+1. **IMMEDIATE**: Remove false brand information from RAG
+2. **IMMEDIATE**: Add correct brand portfolio
+3. **HIGH**: Update to Alex avatar
+4. **HIGH**: Fix gender in responses
+5. **VERIFICATION**: Run all tests before deploying
+
+Please implement these changes, run all tests, show me the results, and confirm RAG vectors are correct before deploying to production.
