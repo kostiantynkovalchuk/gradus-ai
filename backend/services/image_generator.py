@@ -64,6 +64,14 @@ CRITICAL COMPOSITION GUIDELINES (AI cannot generate readable text):
 - Show bottles from behind, at angles, or with dramatic lighting that hides text
 - Great alternatives: bar interiors, cocktail preparation, ingredient still life, industry settings
 
+HUMAN FIGURE GUIDELINES (AI struggles with faces, hands, proportions):
+- Minimize or eliminate human figures entirely
+- If humans must appear: show only hands performing actions, or use silhouettes/back-turned figures
+- Keep people distant and out of focus as environmental context only
+- NEVER show close-up faces, detailed hand positions, or full body portraits
+- Prefer: architectural shots, product focus, detail photography, empty elegant spaces
+- Product-focused imagery is more relevant for beverage industry professionals
+
 ABSOLUTE RULE: NO TEXT OR WORDS in the image
 - No letters, numbers, labels, captions, or signage
 - Use purely visual storytelling without any text elements

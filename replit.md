@@ -62,6 +62,9 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
     - **Smart Composition Guidelines:** Avoids AI's weakness with text on bottles/labels
     - Uses: soft focus, bokeh, backlighting, silhouettes, distant shots, atmospheric mood
     - Avoids: close-up labels, readable text, brand names on bottles
+    - **Human Figure Avoidance:** Eliminates AI struggles with faces/hands/proportions
+    - Prefers: empty elegant spaces, architectural shots, product focus, detail photography
+    - If humans needed: silhouettes, back-turned figures, distant/blurred context only
     - Result: Professional images without embarrassing AI-generated gibberish text
 - **Permanent Image Storage:** DALL-E generated images are stored as binary data (BYTEA) in PostgreSQL database for Render persistence. Priority: Database → Local file → URL.
 - **Scheduled Posting:** Approved content is automatically posted at optimal engagement times:
