@@ -59,6 +59,10 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - API monitoring (8:00 AM)
 - **Telegram Quick Approval:** Allows one-click content approval/rejection directly from Telegram notifications, including image previews.
 - **Image Generation:** Utilizes Claude AI to craft DALL-E 3 prompts for 1024x1024, text-free, professional social media images.
+    - **Smart Composition Guidelines:** Avoids AI's weakness with text on bottles/labels
+    - Uses: soft focus, bokeh, backlighting, silhouettes, distant shots, atmospheric mood
+    - Avoids: close-up labels, readable text, brand names on bottles
+    - Result: Professional images without embarrassing AI-generated gibberish text
 - **Permanent Image Storage:** DALL-E generated images are stored as binary data (BYTEA) in PostgreSQL database for Render persistence. Priority: Database → Local file → URL.
 - **Scheduled Posting:** Approved content is automatically posted at optimal engagement times:
     - **Facebook:** Daily at 18:00.

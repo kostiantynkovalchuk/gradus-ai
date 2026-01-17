@@ -56,10 +56,17 @@ Requirements for the image prompt:
 - Color scheme: premium (blues, golds, silvers, or warm earth tones)
 - Style: photorealistic or professional infographic
 
-CRITICAL: NO TEXT OR WORDS should appear in the image
-- Do not include any letters, numbers, labels, or captions
-- Use purely visual elements (charts, bottles, ingredients, settings)
-- Let the imagery speak for itself without text overlays
+CRITICAL COMPOSITION GUIDELINES (AI cannot generate readable text):
+- If bottles appear: use "soft focus", "backlit", "bokeh effect", "silhouetted", or "distant shot"
+- NEVER use: "close-up of label", "text on bottle", "readable brand name", "label details"
+- Prefer: atmospheric scenes, artistic lighting that naturally obscures labels
+- Focus on: mood, setting, professional context rather than product details
+- Show bottles from behind, at angles, or with dramatic lighting that hides text
+- Great alternatives: bar interiors, cocktail preparation, ingredient still life, industry settings
+
+ABSOLUTE RULE: NO TEXT OR WORDS in the image
+- No letters, numbers, labels, captions, or signage
+- Use purely visual storytelling without any text elements
 
 Create a detailed DALL-E prompt (2-3 sentences) that will generate an appropriate text-free image.
 Return ONLY the prompt text, nothing else."""
