@@ -193,6 +193,8 @@ app.include_router(maya_router)
 app.include_router(articles_router)
 app.include_router(admin_articles_router)
 app.include_router(chat_router)
+from routes.hr_routes import hr_router
+app.include_router(hr_router)
 
 class ChatRequest(BaseModel):
     message: str

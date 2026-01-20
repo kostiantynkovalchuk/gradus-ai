@@ -1,0 +1,433 @@
+"""
+HR RAG Service for Knowledge Retrieval
+- Semantic search in Pinecone
+- Preset answer matching
+- Hybrid search combining keyword and semantic
+- AI-generated answers with Claude
+"""
+
+import re
+import os
+import logging
+from typing import List, Optional, Dict, Tuple
+from dataclasses import dataclass
+from openai import OpenAI
+from anthropic import Anthropic
+from fuzzywuzzy import fuzz
+
+logger = logging.getLogger(__name__)
+
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.7"))
+
+
+@dataclass
+class SearchResult:
+    """Single search result"""
+    content_id: str
+    title: str
+    text: str
+    score: float
+    category: Optional[str] = None
+    metadata: Optional[Dict] = None
+
+
+@dataclass
+class AnswerResponse:
+    """AI-generated answer with sources"""
+    text: str
+    sources: List[SearchResult]
+    from_preset: bool = False
+    confidence: float = 0.0
+
+
+class HRRagService:
+    """RAG service for HR knowledge base retrieval"""
+    
+    HR_NAMESPACE = "hr_docs"
+    
+    def __init__(self, pinecone_index=None, db_session=None):
+        self.pinecone_index = pinecone_index
+        self.db_session = db_session
+        self._presets_cache = None
+    
+    def _get_embedding(self, text: str) -> List[float]:
+        """Generate embedding for query"""
+        try:
+            text = text[:8000]
+            response = openai_client.embeddings.create(
+                model=EMBEDDING_MODEL,
+                input=text
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            logger.error(f"Embedding error: {e}")
+            raise
+    
+    async def semantic_search(
+        self,
+        query: str,
+        top_k: int = None,
+        filter_category: str = None
+    ) -> List[SearchResult]:
+        """
+        Semantic search in Pinecone HR namespace
+        """
+        if not self.pinecone_index:
+            logger.warning("Pinecone index not available")
+            return []
+        
+        top_k = top_k or RAG_TOP_K
+        
+        try:
+            query_embedding = self._get_embedding(query)
+            
+            filter_dict = {}
+            if filter_category:
+                filter_dict['category'] = filter_category
+            
+            results = self.pinecone_index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                namespace=self.HR_NAMESPACE,
+                include_metadata=True,
+                filter=filter_dict if filter_dict else None
+            )
+            
+            search_results = []
+            for match in results.get('matches', []):
+                metadata = match.get('metadata', {})
+                search_results.append(SearchResult(
+                    content_id=metadata.get('content_id', ''),
+                    title=metadata.get('title', ''),
+                    text=metadata.get('text', ''),
+                    score=match.get('score', 0.0),
+                    category=metadata.get('category'),
+                    metadata=metadata
+                ))
+            
+            search_results = [r for r in search_results if r.score >= RAG_SIMILARITY_THRESHOLD]
+            
+            logger.info(f"Semantic search for '{query[:50]}...' returned {len(search_results)} results")
+            return search_results
+            
+        except Exception as e:
+            logger.error(f"Semantic search error: {e}")
+            return []
+    
+    async def check_preset_answer(self, query: str) -> Optional[AnswerResponse]:
+        """
+        Check if query matches any preset answers
+        Uses: exact match, fuzzy match, keyword detection
+        """
+        if self._presets_cache is None:
+            await self._load_presets()
+        
+        if not self._presets_cache:
+            return None
+        
+        query_lower = query.lower().strip()
+        
+        for preset in self._presets_cache:
+            pattern = preset['pattern']
+            
+            if re.search(pattern, query_lower):
+                await self._increment_preset_usage(preset['id'])
+                return AnswerResponse(
+                    text=preset['answer'],
+                    sources=[],
+                    from_preset=True,
+                    confidence=1.0
+                )
+        
+        for preset in self._presets_cache:
+            keywords = preset['pattern'].split('|')
+            for keyword in keywords:
+                ratio = fuzz.partial_ratio(keyword.strip(), query_lower)
+                if ratio >= 85:
+                    await self._increment_preset_usage(preset['id'])
+                    return AnswerResponse(
+                        text=preset['answer'],
+                        sources=[],
+                        from_preset=True,
+                        confidence=ratio / 100.0
+                    )
+        
+        return None
+    
+    async def _load_presets(self):
+        """Load preset answers from database"""
+        if not self.db_session:
+            self._presets_cache = []
+            return
+        
+        try:
+            from models.hr_models import HRPresetAnswer
+            
+            presets = self.db_session.query(HRPresetAnswer).filter(
+                HRPresetAnswer.is_active == True
+            ).order_by(HRPresetAnswer.priority.desc()).all()
+            
+            self._presets_cache = [
+                {
+                    'id': p.id,
+                    'pattern': p.question_pattern,
+                    'answer': p.answer_text,
+                    'content_ids': p.content_ids or []
+                }
+                for p in presets
+            ]
+            
+            logger.info(f"Loaded {len(self._presets_cache)} preset answers")
+        except Exception as e:
+            logger.error(f"Failed to load presets: {e}")
+            self._presets_cache = []
+    
+    async def _increment_preset_usage(self, preset_id: int):
+        """Increment usage count for a preset"""
+        if not self.db_session:
+            return
+        
+        try:
+            from models.hr_models import HRPresetAnswer
+            
+            preset = self.db_session.query(HRPresetAnswer).filter(
+                HRPresetAnswer.id == preset_id
+            ).first()
+            
+            if preset:
+                preset.usage_count = (preset.usage_count or 0) + 1
+                self.db_session.commit()
+        except Exception as e:
+            logger.warning(f"Failed to increment preset usage: {e}")
+    
+    async def get_answer_with_context(
+        self,
+        query: str,
+        user_context: dict = None
+    ) -> AnswerResponse:
+        """
+        Get AI-generated answer with RAG context
+        1. Check presets first (fast path)
+        2. Semantic search for context
+        3. Generate answer with Claude
+        """
+        preset_answer = await self.check_preset_answer(query)
+        if preset_answer:
+            logger.info(f"Returning preset answer for: {query[:50]}...")
+            return preset_answer
+        
+        search_results = await self.semantic_search(query, top_k=5)
+        
+        if not search_results:
+            return AnswerResponse(
+                text="Вибачте, я не знайшов відповідної інформації в базі знань. Спробуйте переформулювати питання або зверніться до HR-відділу.",
+                sources=[],
+                from_preset=False,
+                confidence=0.0
+            )
+        
+        context_parts = []
+        for i, result in enumerate(search_results[:3], 1):
+            context_parts.append(f"[Джерело {i}: {result.title}]\n{result.text}")
+        
+        context = "\n\n---\n\n".join(context_parts)
+        
+        system_prompt = """Ти — Maya, дружній HR-асистент компанії АВТД. 
+Відповідай українською мовою, коротко та по суті.
+Використовуй надану інформацію з бази знань для відповіді.
+Якщо інформації недостатньо, чесно скажи про це.
+Не вигадуй інформацію, якої немає в контексті."""
+        
+        user_prompt = f"""Контекст з бази знань HR:
+{context}
+
+Питання користувача: {query}
+
+Дай коротку, корисну відповідь на основі наданого контексту."""
+        
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=500,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}]
+            )
+            
+            answer_text = response.content[0].text
+            
+            avg_score = sum(r.score for r in search_results[:3]) / min(3, len(search_results))
+            
+            return AnswerResponse(
+                text=answer_text,
+                sources=search_results[:3],
+                from_preset=False,
+                confidence=avg_score
+            )
+            
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            best_result = search_results[0]
+            return AnswerResponse(
+                text=f"На основі бази знань:\n\n{best_result.text[:500]}...",
+                sources=[best_result],
+                from_preset=False,
+                confidence=best_result.score
+            )
+    
+    async def hybrid_search(
+        self,
+        query: str,
+        keyword_weight: float = 0.3,
+        semantic_weight: float = 0.7
+    ) -> List[SearchResult]:
+        """
+        Combine keyword search (PostgreSQL) with semantic search (Pinecone)
+        """
+        semantic_results = await self.semantic_search(query, top_k=10)
+        
+        keyword_results = await self._keyword_search(query)
+        
+        combined = {}
+        
+        for result in semantic_results:
+            combined[result.content_id] = {
+                'result': result,
+                'score': result.score * semantic_weight
+            }
+        
+        for result in keyword_results:
+            if result.content_id in combined:
+                combined[result.content_id]['score'] += result.score * keyword_weight
+            else:
+                combined[result.content_id] = {
+                    'result': result,
+                    'score': result.score * keyword_weight
+                }
+        
+        sorted_results = sorted(
+            combined.values(),
+            key=lambda x: x['score'],
+            reverse=True
+        )
+        
+        return [item['result'] for item in sorted_results[:RAG_TOP_K]]
+    
+    async def _keyword_search(self, query: str) -> List[SearchResult]:
+        """PostgreSQL keyword search in HR content"""
+        if not self.db_session:
+            return []
+        
+        try:
+            from models.hr_models import HRContent
+            from sqlalchemy import or_, func
+            
+            query_lower = query.lower()
+            keywords = query_lower.split()
+            
+            filters = []
+            for kw in keywords:
+                filters.append(func.lower(HRContent.title).contains(kw))
+                filters.append(func.lower(HRContent.content).contains(kw))
+                filters.append(HRContent.keywords.any(kw))
+            
+            results = self.db_session.query(HRContent).filter(
+                or_(*filters)
+            ).limit(10).all()
+            
+            search_results = []
+            for r in results:
+                match_count = sum(1 for kw in keywords if kw in r.title.lower() or kw in r.content.lower())
+                score = min(1.0, match_count / len(keywords)) if keywords else 0.0
+                
+                search_results.append(SearchResult(
+                    content_id=r.content_id,
+                    title=r.title,
+                    text=r.content[:500],
+                    score=score,
+                    category=r.category
+                ))
+            
+            return sorted(search_results, key=lambda x: x.score, reverse=True)
+            
+        except Exception as e:
+            logger.error(f"Keyword search error: {e}")
+            return []
+    
+    async def get_content_by_id(self, content_id: str) -> Optional[Dict]:
+        """Retrieve specific content by ID"""
+        if not self.db_session:
+            return None
+        
+        try:
+            from models.hr_models import HRContent
+            
+            content = self.db_session.query(HRContent).filter(
+                HRContent.content_id == content_id
+            ).first()
+            
+            if content:
+                return {
+                    'content_id': content.content_id,
+                    'title': content.title,
+                    'content': content.content,
+                    'content_type': content.content_type,
+                    'category': content.category,
+                    'subcategory': content.subcategory,
+                    'keywords': content.keywords,
+                    'video_url': content.video_url,
+                    'attachments': content.attachments
+                }
+            return None
+            
+        except Exception as e:
+            logger.error(f"Get content error: {e}")
+            return None
+    
+    async def get_menu_structure(self, menu_id: str = 'main') -> List[Dict]:
+        """Get menu structure for navigation"""
+        if not self.db_session:
+            return []
+        
+        try:
+            from models.hr_models import HRMenuStructure
+            
+            if menu_id == 'main':
+                menus = self.db_session.query(HRMenuStructure).filter(
+                    HRMenuStructure.parent_id == None,
+                    HRMenuStructure.is_active == True
+                ).order_by(HRMenuStructure.order_index).all()
+            else:
+                menus = self.db_session.query(HRMenuStructure).filter(
+                    HRMenuStructure.parent_id == menu_id,
+                    HRMenuStructure.is_active == True
+                ).order_by(HRMenuStructure.order_index).all()
+            
+            return [
+                {
+                    'menu_id': m.menu_id,
+                    'title': m.title,
+                    'emoji': m.emoji,
+                    'button_type': m.button_type,
+                    'content_id': m.content_id
+                }
+                for m in menus
+            ]
+            
+        except Exception as e:
+            logger.error(f"Get menu error: {e}")
+            return []
+    
+    def reload_presets(self):
+        """Force reload of preset answers cache"""
+        self._presets_cache = None
+        logger.info("Preset cache cleared, will reload on next request")
+
+
+def get_hr_rag_service(pinecone_index=None, db_session=None) -> HRRagService:
+    """Factory function to create HR RAG service instance"""
+    return HRRagService(pinecone_index=pinecone_index, db_session=db_session)

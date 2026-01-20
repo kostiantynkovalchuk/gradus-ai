@@ -1,0 +1,602 @@
+# TASK: Build RAG System for Maya HR Bot
+
+## OBJECTIVE
+Create a comprehensive RAG (Retrieval-Augmented Generation) system for Maya HR chatbot to store, embed, and retrieve AVTD company HR knowledge base. The system should integrate seamlessly with the existing Maya bot infrastructure.
+
+## CURRENT TECH STACK
+- **Backend**: FastAPI (Python)
+- **Database**: PostgreSQL (Neon)
+- **Vector DB**: Pinecone (already configured)
+- **LLM**: Claude API (Haiku for internal, Sonnet for client-facing)
+- **Embeddings**: OpenAI text-embedding-3-small
+- **Deployment**: Render.com
+
+## PROJECT STRUCTURE
+
+### 1. DATABASE SCHEMA
+
+Create PostgreSQL tables for HR knowledge base:
+```sql
+-- Table: hr_content
+CREATE TABLE hr_content (
+    id SERIAL PRIMARY KEY,
+    content_id VARCHAR(100) UNIQUE NOT NULL,  -- e.g., 'q1_documents', 'section_1_video'
+    content_type VARCHAR(50) NOT NULL,         -- 'text', 'video', 'table', 'appendix'
+    title VARCHAR(500) NOT NULL,
+    content TEXT NOT NULL,                     -- Full text content
+    category VARCHAR(100),                     -- 'onboarding', 'salary', 'tech_support', etc.
+    subcategory VARCHAR(100),
+    keywords TEXT[],                           -- Array of search keywords
+    metadata JSONB,                            -- Additional structured data
+    video_url VARCHAR(500),                    -- If content_type = 'video'
+    attachments JSONB,                         -- References to appendices
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Table: hr_menu_structure
+CREATE TABLE hr_menu_structure (
+    id SERIAL PRIMARY KEY,
+    menu_id VARCHAR(100) UNIQUE NOT NULL,     -- e.g., 'main_menu', 'onboarding'
+    parent_id VARCHAR(100),                    -- Reference to parent menu
+    title VARCHAR(200) NOT NULL,
+    emoji VARCHAR(10),
+    order_index INTEGER,
+    button_type VARCHAR(50),                   -- 'submenu', 'content', 'action'
+    content_id VARCHAR(100),                   -- FK to hr_content.content_id
+    metadata JSONB,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Table: hr_embeddings
+CREATE TABLE hr_embeddings (
+    id SERIAL PRIMARY KEY,
+    content_id VARCHAR(100) REFERENCES hr_content(content_id),
+    chunk_index INTEGER,                       -- For split content
+    chunk_text TEXT NOT NULL,
+    embedding_vector TEXT,                     -- JSON string of vector (backup)
+    pinecone_id VARCHAR(200) UNIQUE,          -- ID in Pinecone
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Table: hr_preset_answers (for quick responses)
+CREATE TABLE hr_preset_answers (
+    id SERIAL PRIMARY KEY,
+    question_pattern VARCHAR(500) NOT NULL,   -- Regex or keyword pattern
+    answer_text TEXT NOT NULL,
+    content_ids TEXT[],                       -- References to related content
+    priority INTEGER DEFAULT 0,               -- Higher = checked first
+    is_active BOOLEAN DEFAULT TRUE,
+    usage_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for performance
+CREATE INDEX idx_hr_content_category ON hr_content(category);
+CREATE INDEX idx_hr_content_type ON hr_content(content_type);
+CREATE INDEX idx_hr_content_keywords ON hr_content USING GIN(keywords);
+CREATE INDEX idx_hr_menu_parent ON hr_menu_structure(parent_id);
+CREATE INDEX idx_hr_embeddings_content ON hr_embeddings(content_id);
+CREATE INDEX idx_preset_active ON hr_preset_answers(is_active, priority DESC);
+```
+
+### 2. CONTENT PROCESSING PIPELINE
+
+Create a content processor that:
+
+**File**: `app/services/hr_content_processor.py`
+```python
+"""
+HR Content Processor
+- Parses Google Doc content
+- Structures data according to schema
+- Creates text chunks for embedding
+- Generates embeddings via OpenAI
+- Stores embeddings in Pinecone
+- Populates PostgreSQL tables
+"""
+
+Key functions needed:
+1. parse_google_doc(doc_text: str) -> List[ContentItem]
+2. chunk_content(content: str, max_tokens: int = 500) -> List[str]
+3. generate_embeddings(chunks: List[str]) -> List[List[float]]
+4. store_in_pinecone(embeddings, metadata) -> List[str]
+5. store_in_postgres(content_items: List[ContentItem]) -> bool
+```
+
+**Requirements**:
+- Use `tiktoken` for accurate token counting
+- Chunk size: 400-600 tokens (optimal for embeddings)
+- Overlap: 50 tokens between chunks
+- Preserve context in chunks (don't split mid-sentence)
+- Add metadata to each chunk: category, section, title
+
+### 3. EMBEDDING CONFIGURATION
+
+**Pinecone Index Setup**:
+```python
+# Index name: 'maya-hr-knowledge'
+# Dimension: 1536 (OpenAI text-embedding-3-small)
+# Metric: cosine
+# Namespace: 'hr_docs'
+
+# Metadata stored per vector:
+{
+    "content_id": "q1_documents",
+    "chunk_index": 0,
+    "category": "onboarding",
+    "subcategory": "documents",
+    "title": "Документи для працевлаштування",
+    "content_type": "text",
+    "keywords": ["документи", "працевлаштування", "паспорт", "інн"]
+}
+```
+
+### 4. RAG RETRIEVAL SERVICE
+
+**File**: `app/services/hr_rag_service.py`
+```python
+"""
+RAG Service for HR Knowledge Retrieval
+"""
+
+class HRRagService:
+    def __init__(self):
+        self.pinecone_client = # existing client
+        self.openai_client = # existing client
+        
+    async def semantic_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_category: str = None
+    ) -> List[SearchResult]:
+        """
+        1. Generate query embedding
+        2. Search Pinecone with filters
+        3. Retrieve full content from PostgreSQL
+        4. Return ranked results
+        """
+        pass
+    
+    async def get_answer_with_context(
+        self,
+        query: str,
+        user_context: dict = None
+    ) -> AnswerResponse:
+        """
+        1. Check preset answers first (fast path)
+        2. If no preset match, do semantic search
+        3. Retrieve top 3-5 relevant chunks
+        4. Build context for Claude
+        5. Generate answer using Claude API
+        6. Return answer + source references
+        """
+        pass
+    
+    async def hybrid_search(
+        self,
+        query: str,
+        keyword_weight: float = 0.3,
+        semantic_weight: float = 0.7
+    ) -> List[SearchResult]:
+        """
+        Combine keyword search (PostgreSQL) with semantic search (Pinecone)
+        """
+        pass
+```
+
+### 5. DATA UPLOAD SCRIPT
+
+**File**: `scripts/upload_hr_data.py`
+```python
+"""
+Script to parse and upload HR knowledge base
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.append(str(Path(__file__).parent.parent))
+
+from app.services.hr_content_processor import HRContentProcessor
+from app.database import get_db
+
+async def main():
+    """
+    1. Read the Google Doc content (provided as text file)
+    2. Parse into structured content items
+    3. Generate embeddings
+    4. Upload to Pinecone
+    5. Store in PostgreSQL
+    6. Generate preset answers for common questions
+    7. Print upload summary
+    """
+    
+    processor = HRContentProcessor()
+    
+    # Read content
+    doc_path = "data/hr_knowledge_base.txt"
+    with open(doc_path, 'r', encoding='utf-8') as f:
+        doc_text = f.read()
+    
+    # Process
+    print("Parsing content...")
+    content_items = processor.parse_google_doc(doc_text)
+    print(f"Found {len(content_items)} content items")
+    
+    print("Generating embeddings...")
+    await processor.process_and_embed(content_items)
+    
+    print("Uploading to Pinecone...")
+    await processor.upload_to_pinecone(content_items)
+    
+    print("Storing in PostgreSQL...")
+    await processor.store_in_database(content_items)
+    
+    print("Creating preset answers...")
+    await processor.generate_presets()
+    
+    print("\n✅ Upload complete!")
+    print(f"   - Content items: {len(content_items)}")
+    print(f"   - Total chunks: {processor.total_chunks}")
+    print(f"   - Preset answers: {processor.total_presets}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 6. TELEGRAM BOT INTEGRATION
+
+**Update**: `app/bot/handlers.py`
+```python
+from app.services.hr_rag_service import HRRagService
+
+hr_rag = HRRagService()
+
+@router.message(Command("start"))
+async def start_handler(message: Message):
+    """
+    1. Ask for name and phone
+    2. Verify employee in database
+    3. Send welcome video (Section 1)
+    4. Show main menu
+    """
+    pass
+
+@router.callback_query(F.data.startswith("menu:"))
+async def menu_handler(callback: CallbackQuery):
+    """
+    Handle menu navigation
+    - Parse callback data
+    - Retrieve menu structure from DB
+    - Show submenu or content
+    """
+    pass
+
+@router.callback_query(F.data.startswith("content:"))
+async def content_handler(callback: CallbackQuery):
+    """
+    Show specific content
+    - Retrieve from hr_content table
+    - Format based on content_type
+    - Add related links
+    - Show navigation buttons
+    """
+    pass
+
+@router.message(F.text & ~F.command())
+async def question_handler(message: Message):
+    """
+    Handle free-form questions
+    1. Check preset answers first
+    2. If no match, use RAG search
+    3. Generate answer with Claude
+    4. Show sources
+    5. Offer related topics
+    """
+    
+    # Quick check for presets
+    preset = await check_preset_answer(message.text)
+    if preset:
+        await message.answer(preset.answer)
+        return
+    
+    # RAG-based answer
+    answer = await hr_rag.get_answer_with_context(
+        query=message.text,
+        user_context={"user_id": message.from_user.id}
+    )
+    
+    await message.answer(
+        answer.text,
+        reply_markup=create_source_keyboard(answer.sources)
+    )
+```
+
+### 7. MENU KEYBOARD BUILDER
+
+**File**: `app/bot/keyboards.py`
+```python
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from app.database import get_db
+
+async def build_menu_keyboard(menu_id: str) -> InlineKeyboardMarkup:
+    """
+    Dynamically build keyboard from hr_menu_structure table
+    - Retrieve menu items
+    - Sort by order_index
+    - Create buttons with emoji
+    - Add navigation buttons
+    """
+    pass
+
+def create_main_menu() -> InlineKeyboardMarkup:
+    """
+    Main menu with 6 primary buttons + search/ask
+    """
+    buttons = [
+        [
+            InlineKeyboardButton(text="📖 Про компанію", callback_data="menu:about"),
+            InlineKeyboardButton(text="🚀 Новачкам", callback_data="menu:onboarding")
+        ],
+        [
+            InlineKeyboardButton(text="💼 Робочі питання", callback_data="menu:work"),
+            InlineKeyboardButton(text="💰 Зарплата", callback_data="menu:salary")
+        ],
+        [
+            InlineKeyboardButton(text="🔧 Тех. підтримка", callback_data="menu:tech"),
+            InlineKeyboardButton(text="📞 Контакти", callback_data="menu:contacts")
+        ],
+        [
+            InlineKeyboardButton(text="🔍 Пошук", switch_inline_query_current_chat=""),
+            InlineKeyboardButton(text="❓ Запитати", callback_data="action:ask")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+```
+
+### 8. CONTENT PARSER SPECIFICATION
+
+Parse the Google Doc into this structure:
+```python
+# Section Detection Patterns:
+PATTERNS = {
+    'main_section': r'^#+\s*(.+)$',           # # Раздел 1
+    'video_section': r'видео',                 # Indicates video content
+    'question': r'^\d+\.\s*(.+)$',            # 1. Question text
+    'appendix': r'^#\s*Приложение\s*№(\d+)',  # # Приложение №12
+    'table_start': r'^\|',                     # Markdown table
+}
+
+# Content Types:
+CONTENT_TYPES = {
+    'section_1': {
+        'id': 'section_1_general',
+        'type': 'video',
+        'category': 'about',
+        'title': 'Загальна інформація про компанію',
+        'video_url': None,  # To be provided later
+        'fallback_text': '...'
+    },
+    'q1': {
+        'id': 'q1_documents',
+        'type': 'text',
+        'category': 'onboarding',
+        'subcategory': 'documents',
+        'title': 'Документи для працевлаштування',
+        'keywords': ['документи', 'працевлаштування', 'паспорт', ...],
+        'content': '...'
+    }
+}
+```
+
+### 9. PRESET ANSWERS GENERATION
+
+Generate preset answers for top 20 most common questions:
+```python
+PRESET_TEMPLATES = [
+    {
+        'patterns': ['зарплата', 'виплата', 'коли платять'],
+        'answer': 'Заробітна плата виплачується 2 рази на місяць:\n'
+                 '• 20-22 числа — аванс\n'
+                 '• 5-7 числа — зарплата за відпрацьований місяць',
+        'content_ids': ['q13_salary_dates']
+    },
+    {
+        'patterns': ['відпустка', 'скільки днів', 'відпочинок'],
+        'answer': 'У вас є 18 робочих днів (24 календарних) оплачуваної відпустки.\n'
+                 'Нараховується 1,5 дня за кожен місяць роботи.\n'
+                 'Оформити можна після 6 місяців роботи.',
+        'content_ids': ['q8_vacation_rules', 'q9_vacation_days']
+    },
+    # ... generate for all common questions
+]
+```
+
+### 10. API ENDPOINTS
+
+**File**: `app/api/hr_routes.py`
+```python
+from fastapi import APIRouter, Depends
+from app.services.hr_rag_service import HRRagService
+
+router = APIRouter(prefix="/api/hr", tags=["HR Knowledge"])
+
+@router.post("/search")
+async def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    category: str = None
+):
+    """Semantic search in HR knowledge base"""
+    pass
+
+@router.post("/answer")
+async def get_answer(
+    query: str,
+    user_id: int = None
+):
+    """Get AI-generated answer with sources"""
+    pass
+
+@router.get("/content/{content_id}")
+async def get_content(content_id: str):
+    """Retrieve specific content by ID"""
+    pass
+
+@router.get("/menu/{menu_id}")
+async def get_menu(menu_id: str):
+    """Get menu structure"""
+    pass
+
+@router.post("/feedback")
+async def submit_feedback(
+    content_id: str,
+    rating: int,
+    comment: str = None
+):
+    """Track content helpfulness"""
+    pass
+```
+
+### 11. ENVIRONMENT VARIABLES
+
+Add to `.env`:
+```bash
+# Pinecone
+PINECONE_API_KEY=your_key
+PINECONE_ENVIRONMENT=your_env
+PINECONE_INDEX_NAME=maya-hr-knowledge
+
+# OpenAI (for embeddings)
+OPENAI_API_KEY=your_key
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSION=1536
+
+# RAG Settings
+RAG_TOP_K=5
+RAG_CHUNK_SIZE=500
+RAG_CHUNK_OVERLAP=50
+RAG_SIMILARITY_THRESHOLD=0.7
+```
+
+### 12. TESTING & VALIDATION
+
+Create test script: `tests/test_hr_rag.py`
+```python
+"""
+Test cases:
+1. Content upload integrity
+2. Embedding generation accuracy
+3. Search relevance
+4. Answer quality
+5. Preset answer matching
+6. Menu navigation
+7. Performance benchmarks
+"""
+
+async def test_semantic_search():
+    """Test: Query about salary should return q13"""
+    results = await hr_rag.semantic_search("коли виплачують зарплату")
+    assert results[0].content_id == "q13_salary_dates"
+    assert results[0].score > 0.8
+
+async def test_preset_match():
+    """Test: Common questions hit presets"""
+    answer = await check_preset("скільки днів відпустки")
+    assert answer is not None
+    assert "18 робочих" in answer.text
+```
+
+## IMPLEMENTATION STEPS
+
+### Phase 1: Database Setup (Priority 1)
+1. Create PostgreSQL tables
+2. Add indexes
+3. Test connection
+
+### Phase 2: Content Processing (Priority 1)
+1. Build content parser
+2. Implement chunking logic
+3. Test with sample data
+
+### Phase 3: Embedding Pipeline (Priority 2)
+1. OpenAI embedding integration
+2. Pinecone upload
+3. PostgreSQL sync
+
+### Phase 4: RAG Service (Priority 2)
+1. Semantic search implementation
+2. Preset answer system
+3. Hybrid search
+
+### Phase 5: Bot Integration (Priority 3)
+1. Menu system
+2. Content delivery
+3. Question answering
+
+### Phase 6: Testing & Optimization (Priority 3)
+1. Load testing
+2. Search quality evaluation
+3. Response time optimization
+
+## SUCCESS CRITERIA
+
+✅ All 26 questions + 5 appendices uploaded and searchable
+✅ Semantic search returns relevant results with >0.75 similarity
+✅ Preset answers cover 70%+ of common queries
+✅ Response time <2 seconds for search
+✅ Response time <10 seconds for AI-generated answers
+✅ Menu navigation works correctly
+✅ Video content properly referenced
+✅ Tables display correctly
+
+## DELIVERABLES
+
+1. ✅ Database schema created and populated
+2. ✅ Content processing pipeline
+3. ✅ RAG service implementation
+4. ✅ Telegram bot handlers updated
+5. ✅ API endpoints functional
+6. ✅ Upload script ready
+7. ✅ Test suite passing
+8. ✅ Documentation updated
+
+## NOTES
+
+- Start with database schema first
+- Use existing Pinecone and OpenAI clients
+- Maintain code quality standards
+- Add logging for all operations
+- Handle errors gracefully
+- Optimize for Ukrainian language
+- Keep responses conversational, not robotic
+- Always cite sources when using RAG
+
+## FILES TO CREATE
+```
+app/
+├── services/
+│   ├── hr_content_processor.py ✨ NEW
+│   └── hr_rag_service.py ✨ NEW
+├── bot/
+│   ├── handlers.py (update)
+│   └── keyboards.py ✨ NEW
+├── api/
+│   └── hr_routes.py ✨ NEW
+├── models/
+│   └── hr_models.py ✨ NEW
+scripts/
+└── upload_hr_data.py ✨ NEW
+tests/
+└── test_hr_rag.py ✨ NEW
+data/
+└── hr_knowledge_base.txt ✨ NEW (paste Google Doc content here)
+migrations/
+└── 003_hr_knowledge_schema.sql ✨ NEW
+```
+
+Ready to implement! Start with Phase 1.
