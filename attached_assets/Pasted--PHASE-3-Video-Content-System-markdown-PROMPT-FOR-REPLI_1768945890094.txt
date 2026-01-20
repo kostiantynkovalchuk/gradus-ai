@@ -1,0 +1,476 @@
+🎯 PHASE 3: Video Content System
+markdown# PROMPT FOR REPLIT AGENT:
+
+## TASK: Implement Video Content Delivery for HR Bot
+
+### Current State
+- 3 video sections defined (company overview, values, history)
+- Video URLs are currently NULL in database
+- Need video hosting + Telegram integration
+
+### Requirements
+
+1. **Choose Video Hosting Strategy**
+
+**Option A: Telegram File Storage (Recommended for MVP)**
+- Upload videos directly to Telegram
+- Get file_id for each video
+- Store file_id in database
+- No external hosting costs
+
+**Option B: YouTube Unlisted**
+- Upload to company YouTube channel
+- Set visibility to "Unlisted"
+- Store YouTube URLs
+- Better for large files (>20MB)
+
+**Option C: Cloudflare Stream**
+- Professional video hosting
+- Built-in analytics
+- Pay per minute watched
+- Best for production
+
+**We'll implement Option A for now (quick, free, sufficient for 800 users)**
+
+2. **Video Upload Script**
+
+File: `scripts/upload_hr_videos.py`
+```python
+"""
+Upload HR videos to Telegram and update database
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+from aiogram import Bot
+from app.config import settings
+from app.database import get_db
+from sqlalchemy import text
+
+# Video file paths (place videos in data/videos/)
+VIDEOS = {
+    'section_1_general': {
+        'file_path': 'data/videos/company_overview.mp4',
+        'title': 'Загальна інформація про компанію',
+        'description': 'Презентація компанії ТД АВ'
+    },
+    'section_2_values': {
+        'file_path': 'data/videos/company_values.mp4',
+        'title': 'Цінності компанії',
+        'description': '5 ключових цінностей ТД АВ'
+    },
+    'section_3_history': {
+        'file_path': 'data/videos/company_history.mp4',
+        'title': 'Історія компанії',
+        'description': '25+ років на ринку України'
+    }
+}
+
+async def upload_videos():
+    """Upload videos to Telegram and store file_ids"""
+    
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    
+    # Use a test channel for storage
+    # Create a private channel, add bot as admin, get channel ID
+    STORAGE_CHANNEL_ID = settings.VIDEO_STORAGE_CHANNEL_ID  # e.g., -1001234567890
+    
+    video_data = {}
+    
+    for content_id, video_info in VIDEOS.items():
+        file_path = Path(video_info['file_path'])
+        
+        if not file_path.exists():
+            print(f"⚠️  Skipping {content_id}: file not found at {file_path}")
+            continue
+        
+        print(f"📤 Uploading {video_info['title']}...")
+        
+        try:
+            # Upload video to channel
+            with open(file_path, 'rb') as video_file:
+                message = await bot.send_video(
+                    chat_id=STORAGE_CHANNEL_ID,
+                    video=video_file,
+                    caption=f"{video_info['title']}\n\n{video_info['description']}",
+                    supports_streaming=True
+                )
+            
+            # Store file_id
+            file_id = message.video.file_id
+            video_data[content_id] = file_id
+            
+            print(f"   ✅ Uploaded: {file_id[:20]}...")
+            
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+            continue
+    
+    # Update database
+    print("\n💾 Updating database...")
+    
+    async with get_db() as db:
+        for content_id, file_id in video_data.items():
+            await db.execute(text("""
+                UPDATE hr_content 
+                SET 
+                    video_url = :file_id,
+                    metadata = jsonb_set(
+                        COALESCE(metadata, '{}'),
+                        '{telegram_file_id}',
+                        :file_id_json
+                    )
+                WHERE content_id = :content_id
+            """), {
+                'content_id': content_id,
+                'file_id': file_id,
+                'file_id_json': f'"{file_id}"'
+            })
+        
+        await db.commit()
+    
+    print(f"✅ Updated {len(video_data)} videos in database")
+    
+    await bot.session.close()
+    
+    return video_data
+
+async def verify_videos():
+    """Verify videos are accessible"""
+    
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT content_id, title, video_url 
+            FROM hr_content 
+            WHERE content_type = 'video' AND video_url IS NOT NULL
+        """))
+        
+        videos = result.fetchall()
+    
+    print("\n🎬 Verifying videos...")
+    
+    for video in videos:
+        content_id, title, file_id = video
+        
+        try:
+            # Try to get file info
+            file_info = await bot.get_file(file_id)
+            file_size_mb = file_info.file_size / (1024 * 1024)
+            
+            print(f"✅ {title}")
+            print(f"   File ID: {file_id[:20]}...")
+            print(f"   Size: {file_size_mb:.1f} MB")
+            
+        except Exception as e:
+            print(f"❌ {title}: {e}")
+    
+    await bot.session.close()
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--verify', action='store_true', help='Verify existing videos')
+    args = parser.parse_args()
+    
+    if args.verify:
+        asyncio.run(verify_videos())
+    else:
+        asyncio.run(upload_videos())
+```
+
+3. **Update Bot Handler for Video Content**
+
+File: `app/bot/handlers.py` (update content_handler)
+```python
+@router.callback_query(F.data.startswith("content:"))
+async def content_handler(callback: CallbackQuery):
+    """Show specific content - enhanced for video support"""
+    await callback.answer()
+    
+    content_id = callback.data.split(":")[1]
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings.API_BASE_URL}/api/hr/content/{content_id}"
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                title = data.get('title', '')
+                content_type = data.get('content_type', 'text')
+                content = data.get('content', '')
+                video_url = data.get('video_url')  # This is file_id for Telegram
+                
+                # VIDEO CONTENT
+                if content_type == 'video' and video_url:
+                    # Delete menu message
+                    try:
+                        await callback.message.delete()
+                    except:
+                        pass
+                    
+                    # Send video using file_id
+                    await callback.message.answer_video(
+                        video=video_url,  # Telegram file_id
+                        caption=f"🎬 **{title}**\n\n"
+                                f"Тривалість: ~3-5 хвилин\n"
+                                f"Якщо відео не завантажується, напишіть 'текст {content_id}' "
+                                f"для текстової версії.",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text="📄 Текстова версія",
+                                callback_data=f"text:{content_id}"
+                            )],
+                            [InlineKeyboardButton(
+                                text="🏠 Головне меню",
+                                callback_data="menu:main"
+                            )]
+                        ])
+                    )
+                
+                # TABLE CONTENT
+                elif content_type == 'table':
+                    table_data = data.get('metadata', {}).get('table_data', {})
+                    formatted_table = format_table_for_telegram(table_data)
+                    
+                    await callback.message.edit_text(
+                        f"**{title}**\n\n{formatted_table}",
+                        parse_mode="Markdown",
+                        reply_markup=create_main_menu_keyboard()
+                    )
+                
+                # TEXT CONTENT
+                else:
+                    if len(content) > 3800:
+                        chunks = split_long_message(content, 3800)
+                        
+                        # Delete menu message
+                        try:
+                            await callback.message.delete()
+                        except:
+                            pass
+                        
+                        # Send title
+                        await callback.message.answer(
+                            f"📄 **{title}**",
+                            parse_mode="Markdown"
+                        )
+                        
+                        # Send chunks
+                        for chunk in chunks:
+                            await callback.message.answer(
+                                chunk,
+                                parse_mode="Markdown"
+                            )
+                        
+                        # Navigation at end
+                        await callback.message.answer(
+                            "─────────",
+                            reply_markup=create_main_menu_keyboard()
+                        )
+                    else:
+                        await callback.message.edit_text(
+                            f"**{title}**\n\n{content}",
+                            parse_mode="Markdown",
+                            reply_markup=create_main_menu_keyboard()
+                        )
+            
+            else:
+                await callback.message.edit_text(
+                    "❌ Контент не знайдено.",
+                    reply_markup=create_main_menu_keyboard()
+                )
+    
+    except Exception as e:
+        logger.error(f"Content error: {e}")
+        await callback.message.answer(
+            "❌ Помилка завантаження контенту.",
+            reply_markup=create_main_menu_keyboard()
+        )
+
+# Add handler for text fallback
+@router.callback_query(F.data.startswith("text:"))
+async def text_fallback_handler(callback: CallbackQuery):
+    """Show text version of video content"""
+    await callback.answer()
+    
+    content_id = callback.data.split(":")[1]
+    
+    # Fetch and display text content
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{settings.API_BASE_URL}/api/hr/content/{content_id}"
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            content = data.get('content', '')
+            title = data.get('title', '')
+            
+            await callback.message.answer(
+                f"📄 **{title}** (текстова версія)\n\n{content}",
+                parse_mode="Markdown",
+                reply_markup=create_main_menu_keyboard()
+            )
+```
+
+4. **Update Config for Video Storage**
+
+File: `app/config.py`
+```python
+class Settings(BaseSettings):
+    # ... existing ...
+    
+    # Video storage
+    VIDEO_STORAGE_CHANNEL_ID: int = None  # Private channel for video storage
+    VIDEO_MAX_SIZE_MB: int = 50  # Telegram limit
+```
+
+5. **Create Video Storage Channel**
+
+**Manual setup steps:**
+```
+1. Create private Telegram channel:
+   - Open Telegram → New Channel
+   - Name: "Maya HR Videos Storage"
+   - Type: Private
+   - Description: "Storage for HR bot videos"
+
+2. Add bot as administrator:
+   - Channel Settings → Administrators
+   - Add Bot → @your_maya_bot
+   - Give permissions: Post Messages
+
+3. Get channel ID:
+   - Forward any message from channel to @userinfobot
+   - Copy channel ID (e.g., -1001234567890)
+   - Add to .env: VIDEO_STORAGE_CHANNEL_ID=-1001234567890
+
+4. Prepare videos:
+   - Create folder: data/videos/
+   - Place 3 videos:
+     * company_overview.mp4 (Section 1)
+     * company_values.mp4 (Section 2)
+     * company_history.mp4 (Section 3)
+   - Recommended: 3-5 minutes each, < 50MB
+```
+
+6. **Video Transcoding (Optional)**
+
+If videos are too large, use ffmpeg to compress:
+```bash
+# Install ffmpeg
+apt-get install ffmpeg  # Ubuntu
+brew install ffmpeg     # macOS
+
+# Compress video (maintain quality, reduce size)
+ffmpeg -i input.mp4 \
+  -c:v libx264 \
+  -crf 23 \
+  -preset medium \
+  -c:a aac \
+  -b:a 128k \
+  output.mp4
+
+# Target: < 20MB per video for fast loading
+```
+
+### Implementation Steps
+```bash
+# 1. Set up video storage channel (manual)
+# Follow steps above to create channel and get ID
+
+# 2. Add to .env
+echo "VIDEO_STORAGE_CHANNEL_ID=-1001234567890" >> .env
+
+# 3. Prepare videos
+mkdir -p data/videos
+# Place your 3 videos here
+
+# 4. Upload videos
+python scripts/upload_hr_videos.py
+
+# 5. Verify
+python scripts/upload_hr_videos.py --verify
+
+# 6. Test in bot
+# /start → 📖 Про компанію → 🎬 Загальна інформація
+# Should play video
+```
+
+### Testing Checklist
+
+**Test Video Playback:**
+```
+1. Click "📖 Про компанію"
+2. Click "🎬 Загальна інформація"
+3. Video should load and play inline
+4. Caption shows title
+5. "📄 Текстова версія" button available
+```
+
+**Test Text Fallback:**
+```
+1. Click "📄 Текстова версія" button
+2. Should show text content
+3. Main menu button at bottom
+```
+
+**Test Error Handling:**
+```
+1. Request video with invalid file_id
+2. Should show error + main menu
+3. No bot crash
+```
+
+### Acceptance Criteria
+- ✅ 3 videos uploaded to Telegram channel
+- ✅ Database updated with file_ids
+- ✅ Videos play inline in bot
+- ✅ Text fallback available
+- ✅ Verify script confirms all videos accessible
+- ✅ Video size < 20MB each (or compressed)
+- ✅ Load time < 5 seconds on mobile
+- ✅ Graceful error handling
+
+### Files to Create/Modify
+- `scripts/upload_hr_videos.py` (new)
+- `app/bot/handlers.py` (update content_handler)
+- `app/config.py` (add video settings)
+- `data/videos/` (create folder, add videos)
+
+### Notes
+- Videos remain private (only accessible via bot)
+- File_ids never expire if bot stays active
+- Can migrate to YouTube/Cloudflare later if needed
+- Consider adding video analytics (views, completion rate)
+
+### Alternative: YouTube Integration
+
+If you prefer YouTube (better for very large files):
+```python
+# Update video_url to YouTube URL instead of file_id
+video_url = "https://youtube.com/watch?v=..."
+
+# In bot handler:
+await callback.message.answer(
+    f"🎬 **{title}**\n\n"
+    f"Подивитися відео: {video_url}",
+    parse_mode="Markdown",
+    reply_markup=create_main_menu_keyboard()
+)
+```
+
+Choose based on your needs:
+- Telegram: Best for < 20MB, instant playback, private
+- YouTube: Best for > 20MB, professional, analytics

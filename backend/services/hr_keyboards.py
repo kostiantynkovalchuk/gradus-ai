@@ -86,7 +86,9 @@ def create_category_keyboard(category: str) -> Dict:
             ('🔙 Назад', 'hr_menu:main')
         ],
         'about': [
-            ('🏢 Про ТД АВ', 'hr_content:section_about'),
+            ('🎬 Загальна інформація', 'hr_content:video_overview'),
+            ('🎬 Цінності компанії', 'hr_content:video_values'),
+            ('🎬 Історія компанії', 'hr_content:video_history'),
             ('📊 Структура компанії', 'hr_content:section_structure'),
             ('🔙 Назад', 'hr_menu:main')
         ],

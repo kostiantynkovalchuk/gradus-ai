@@ -223,6 +223,57 @@ async def send_typing_action(chat_id: int):
         logger.warning(f"⚠️ Error sending typing action: {e}")
 
 
+async def delete_telegram_message(chat_id: int, message_id: int):
+    """Delete a Telegram message"""
+    if not TELEGRAM_MAYA_BOT_TOKEN or not message_id:
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/deleteMessage"
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(url, json={"chat_id": chat_id, "message_id": message_id})
+        return True
+    except Exception as e:
+        logger.warning(f"Could not delete message: {e}")
+        return False
+
+
+async def send_telegram_video(chat_id: int, video_file_id: str, caption: str = None, reply_markup: dict = None):
+    """Send a video to a Telegram chat (no loop)"""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.warning("TELEGRAM_MAYA_BOT_TOKEN not set")
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo"
+    
+    payload = {
+        "chat_id": chat_id,
+        "video": video_file_id,
+        "supports_streaming": True
+    }
+    
+    if caption:
+        payload["caption"] = caption[:1024]
+        payload["parse_mode"] = "Markdown"
+    
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                logger.info(f"Video sent to {chat_id}")
+                return True
+            else:
+                logger.error(f"Failed to send video: {response.text}")
+                return False
+    except Exception as e:
+        logger.error(f"Error sending video: {e}")
+        return False
+
+
 async def send_telegram_message(chat_id: int, text: str):
     """Send message via Maya bot"""
     if not TELEGRAM_MAYA_BOT_TOKEN:
@@ -362,6 +413,10 @@ async def handle_hr_callback(callback_query: dict):
             content_id = callback_data.split(':')[1]
             await fetch_and_send_hr_content(chat_id, message_id, content_id)
         
+        elif callback_data.startswith('hr_text:'):
+            content_id = callback_data.split(':')[1]
+            await fetch_and_send_hr_content(chat_id, None, content_id, text_only=True)
+        
         elif callback_data.startswith('hr_feedback:'):
             feedback_type = callback_data.split(':')[1]
             if feedback_type == 'not_helpful':
@@ -385,7 +440,7 @@ async def handle_hr_callback(callback_query: dict):
         return {"ok": False, "error": str(e)}
 
 
-async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str):
+async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str, text_only: bool = False):
     """Fetch content from HR API and send to user"""
     try:
         async with httpx.AsyncClient() as client:
@@ -398,6 +453,34 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                 data = response.json()
                 title = data.get('title', 'Інформація')
                 content = data.get('content', 'Контент недоступний')
+                content_type = data.get('content_type', 'text')
+                video_url = data.get('video_url')
+                
+                if content_type == 'video' and video_url and not text_only:
+                    if message_id:
+                        await delete_telegram_message(chat_id, message_id)
+                    
+                    video_keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "📄 Текстова версія", "callback_data": f"hr_text:{content_id}"}],
+                            [{"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}]
+                        ]
+                    }
+                    
+                    success = await send_telegram_video(
+                        chat_id,
+                        video_url,
+                        f"🎬 *{title}*",
+                        video_keyboard
+                    )
+                    
+                    if not success:
+                        await send_telegram_message_with_keyboard(
+                            chat_id,
+                            f"⚠️ Відео тимчасово недоступне.\n\n*{title}*\n\n{content}",
+                            create_back_keyboard()
+                        )
+                    return
                 
                 chunks = split_long_message(f"*{title}*\n\n{content}")
                 
