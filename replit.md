@@ -113,6 +113,18 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
     - Reload endpoint: `POST /api/maya/reload-presets`
     - Data file: `backend/data/preset_answers.json`
     - Service: `backend/services/preset_service.py`
+- **HR Bot RAG System:** Employee onboarding and support knowledge base with semantic search:
+    - **Architecture:** PostgreSQL for content storage, Pinecone for vector search (namespace: hr_docs)
+    - **Content Processing:** Markdown parser extracts Q&A, sections, and appendices with auto-categorization
+    - **Categories:** onboarding, salary, vacation, sick_leave, schedule, tech_support, contacts, bonuses
+    - **Search Methods:** 
+      - Preset answers with fuzzy matching (85%+ threshold) - instant responses
+      - Semantic search via OpenAI embeddings + Pinecone
+      - Hybrid search combining keyword + semantic
+    - **API Endpoints:** `/api/hr/stats`, `/search`, `/answer`, `/content/{id}`, `/hybrid-search`, `/reload-presets`, `/feedback`
+    - **Database Tables:** hr_content, hr_embeddings, hr_menu_structure, hr_preset_answers
+    - **Data File:** `backend/data/hr_knowledge_base.txt`
+    - **Services:** `backend/services/hr_content_processor.py`, `backend/services/hr_rag_service.py`
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Торговий Дім АВ Video Feature:** Maya sends vertical 9:16 video presentation when users ask about Торговий Дім АВ (Trading House AV):
