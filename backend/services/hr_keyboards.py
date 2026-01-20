@@ -29,12 +29,14 @@ def create_main_menu_keyboard() -> Dict:
     return {"inline_keyboard": buttons}
 
 
-def create_feedback_keyboard(sources: List[Dict] = None) -> Dict:
-    """Keyboard with feedback and navigation"""
+def create_feedback_keyboard(sources: List[Dict] = None, log_id: int = None) -> Dict:
+    """Keyboard with feedback and navigation, includes log_id for tracking"""
+    log_suffix = f":{log_id}" if log_id else ""
+    
     buttons = [
         [
-            {"text": "👍 Корисно", "callback_data": "hr_feedback:helpful"},
-            {"text": "👎 Не допомогло", "callback_data": "hr_feedback:not_helpful"}
+            {"text": "👍 Корисно", "callback_data": f"hr_feedback:helpful{log_suffix}"},
+            {"text": "👎 Не допомогло", "callback_data": f"hr_feedback:not_helpful{log_suffix}"}
         ]
     ]
     

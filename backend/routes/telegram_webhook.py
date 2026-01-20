@@ -418,8 +418,40 @@ async def handle_hr_callback(callback_query: dict):
             await fetch_and_send_hr_content(chat_id, None, content_id, text_only=True)
         
         elif callback_data.startswith('hr_feedback:'):
-            feedback_type = callback_data.split(':')[1]
-            if feedback_type == 'not_helpful':
+            parts = callback_data.split(':')
+            feedback_info = parts[1] if len(parts) > 1 else ''
+            
+            if ':' in feedback_info or len(parts) > 2:
+                if len(parts) > 2:
+                    feedback_type = parts[1]
+                    log_id = int(parts[2]) if parts[2].isdigit() else None
+                else:
+                    feedback_type = feedback_info
+                    log_id = None
+            else:
+                feedback_type = feedback_info
+                log_id = None
+            
+            user_id = callback_query.get('from', {}).get('id', 0)
+            
+            if log_id:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        await client.post(
+                            f"{API_BASE_URL}/api/hr/log-feedback",
+                            json={
+                                "log_id": log_id,
+                                "user_id": user_id,
+                                "feedback_type": feedback_type
+                            },
+                            timeout=5.0
+                        )
+                except:
+                    pass
+            
+            if feedback_type == 'helpful':
+                await answer_callback(callback_id, "Дякуємо за відгук! 🙏")
+            elif feedback_type == 'not_helpful':
                 await send_telegram_message_with_keyboard(
                     chat_id,
                     "Вибачте, що не змогла допомогти.\n\n"
@@ -525,9 +557,12 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
             )
 
 
+import time
+
 async def handle_hr_question(chat_id: int, user_id: int, query: str):
-    """Process HR question via RAG system"""
+    """Process HR question via RAG system with logging"""
     await send_typing_action(chat_id)
+    start_time = time.time()
     
     try:
         async with httpx.AsyncClient() as client:
@@ -536,6 +571,8 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str):
                 json={"query": query, "user_id": user_id},
                 timeout=15.0
             )
+            
+            response_time_ms = int((time.time() - start_time) * 1000)
             
             if response.status_code != 200:
                 await send_telegram_message_with_keyboard(
@@ -549,10 +586,38 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str):
             answer_text = data.get('text', data.get('answer', ''))
             sources = data.get('sources', [])
             is_preset = data.get('from_preset', False)
+            confidence = data.get('confidence', 0.0)
+            
+            log_id = None
+            rag_used = not is_preset and len(sources) > 0
+            
+            try:
+                log_response = await client.post(
+                    f"{API_BASE_URL}/api/hr/log-query",
+                    json={
+                        "user_id": user_id,
+                        "query": query,
+                        "preset_matched": is_preset,
+                        "rag_used": rag_used,
+                        "content_ids": [s.get('content_id') for s in sources] if sources else [],
+                        "response_time_ms": response_time_ms
+                    },
+                    timeout=5.0
+                )
+                if log_response.status_code == 200:
+                    log_data = log_response.json()
+                    log_id = log_data.get('log_id')
+                
+                if response_time_ms > 3000:
+                    logger.warning(f"Slow HR query ({response_time_ms}ms): {query[:50]}")
+            except:
+                pass
+            
+            feedback_keyboard = create_feedback_keyboard(sources, log_id=log_id)
             
             if is_preset:
                 await send_telegram_message_with_keyboard(
-                    chat_id, answer_text, create_main_menu_keyboard()
+                    chat_id, answer_text, feedback_keyboard
                 )
             else:
                 full_response = answer_text
@@ -562,22 +627,8 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str):
                         full_response += f"{idx}. {source.get('title', 'Документ')}\n"
                 
                 await send_telegram_message_with_keyboard(
-                    chat_id, full_response, create_feedback_keyboard(sources)
+                    chat_id, full_response, feedback_keyboard
                 )
-            
-            try:
-                await client.post(
-                    f"{API_BASE_URL}/api/hr/log-query",
-                    json={
-                        "user_id": user_id,
-                        "query": query,
-                        "preset_matched": is_preset,
-                        "content_ids": [s.get('content_id') for s in sources] if sources else []
-                    },
-                    timeout=5.0
-                )
-            except:
-                pass
                 
     except httpx.TimeoutException:
         await send_telegram_message_with_keyboard(

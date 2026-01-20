@@ -54,9 +54,13 @@ class FeedbackRequest(BaseModel):
 
 class LogQueryRequest(BaseModel):
     user_id: Optional[int] = None
+    user_name: Optional[str] = None
     query: str
     preset_matched: bool = False
+    rag_used: bool = False
+    preset_id: Optional[int] = None
     content_ids: Optional[List[str]] = None
+    response_time_ms: Optional[int] = None
 
 
 class SearchResultModel(BaseModel):
@@ -292,12 +296,87 @@ async def log_query(request: LogQueryRequest):
     Log HR query for analytics (async, non-blocking)
     """
     try:
-        logger.info(
-            f"HR Query: user={request.user_id}, "
-            f"preset={request.preset_matched}, "
-            f"query='{request.query[:50]}...'"
+        db_session = next(get_db())
+        service = HRRagService(pinecone_index=hr_pinecone_index, db_session=db_session)
+        
+        log_id = await service.log_query(
+            user_id=request.user_id or 0,
+            user_name=request.user_name,
+            query=request.query,
+            preset_matched=request.preset_matched,
+            rag_used=request.rag_used,
+            preset_id=request.preset_id,
+            content_ids=request.content_ids or [],
+            response_time_ms=request.response_time_ms or 0
         )
-        return {"status": "logged"}
+        
+        logger.info(
+            f"HR Query logged: user={request.user_id}, "
+            f"preset={request.preset_matched}, rag={request.rag_used}, "
+            f"time={request.response_time_ms}ms, log_id={log_id}"
+        )
+        return {"status": "logged", "log_id": log_id}
     except Exception as e:
         logger.warning(f"Log query error: {e}")
         return {"status": "error"}
+
+
+class FeedbackLogRequest(BaseModel):
+    log_id: int
+    user_id: int
+    feedback_type: str
+    comment: Optional[str] = None
+
+
+@hr_router.post("/log-feedback")
+async def log_feedback(request: FeedbackLogRequest):
+    """
+    Log user feedback for a query
+    """
+    try:
+        db_session = next(get_db())
+        service = HRRagService(pinecone_index=hr_pinecone_index, db_session=db_session)
+        
+        success = await service.log_feedback(
+            log_id=request.log_id,
+            user_id=request.user_id,
+            feedback_type=request.feedback_type,
+            comment=request.comment
+        )
+        
+        return {"status": "success" if success else "failed"}
+    except Exception as e:
+        logger.error(f"Log feedback error: {e}")
+        return {"status": "error"}
+
+
+@hr_router.get("/analytics")
+async def get_analytics(days: int = Query(default=7, ge=1, le=90)):
+    """
+    Get HR bot analytics for the last N days
+    """
+    try:
+        db_session = next(get_db())
+        service = HRRagService(pinecone_index=hr_pinecone_index, db_session=db_session)
+        
+        stats = await service.get_analytics_stats(days=days)
+        return stats
+    except Exception as e:
+        logger.error(f"Analytics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@hr_router.get("/unanswered")
+async def get_unanswered_queries(limit: int = Query(default=20, ge=1, le=100)):
+    """
+    Get queries that weren't answered by presets (candidates for new presets)
+    """
+    try:
+        db_session = next(get_db())
+        service = HRRagService(pinecone_index=hr_pinecone_index, db_session=db_session)
+        
+        queries = await service.get_unanswered_queries(limit=limit)
+        return {"unanswered_queries": queries}
+    except Exception as e:
+        logger.error(f"Unanswered queries error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

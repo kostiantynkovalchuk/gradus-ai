@@ -426,6 +426,171 @@ class HRRagService:
         """Force reload of preset answers cache"""
         self._presets_cache = None
         logger.info("Preset cache cleared, will reload on next request")
+    
+    async def log_query(
+        self,
+        user_id: int,
+        query: str,
+        preset_matched: bool = False,
+        rag_used: bool = False,
+        content_ids: List[str] = None,
+        response_time_ms: int = 0,
+        user_name: str = None,
+        preset_id: int = None
+    ) -> Optional[int]:
+        """Log query to database for analytics"""
+        if not self.db_session:
+            return None
+        
+        try:
+            from sqlalchemy import text
+            
+            query_normalized = query.lower().strip()
+            content_ids_str = content_ids or []
+            
+            result = self.db_session.execute(text("""
+                INSERT INTO hr_query_log (
+                    user_id, user_name, query, query_normalized,
+                    preset_matched, preset_id, rag_used,
+                    content_ids, response_time_ms
+                )
+                VALUES (
+                    :user_id, :user_name, :query, :query_normalized,
+                    :preset_matched, :preset_id, :rag_used,
+                    :content_ids, :response_time_ms
+                )
+                RETURNING id
+            """), {
+                'user_id': user_id,
+                'user_name': user_name,
+                'query': query,
+                'query_normalized': query_normalized,
+                'preset_matched': preset_matched,
+                'preset_id': preset_id,
+                'rag_used': rag_used,
+                'content_ids': content_ids_str,
+                'response_time_ms': response_time_ms
+            })
+            
+            log_id = result.scalar()
+            self.db_session.commit()
+            
+            logger.debug(f"Logged HR query: {query[:30]}... (log_id={log_id})")
+            return log_id
+            
+        except Exception as e:
+            logger.error(f"Failed to log query: {e}")
+            return None
+    
+    async def log_feedback(
+        self,
+        log_id: int,
+        user_id: int,
+        feedback_type: str,
+        comment: str = None
+    ) -> bool:
+        """Log user feedback for a query"""
+        if not self.db_session or not log_id:
+            return False
+        
+        try:
+            from sqlalchemy import text
+            
+            self.db_session.execute(text("""
+                INSERT INTO hr_feedback (query_log_id, user_id, feedback_type, comment)
+                VALUES (:log_id, :user_id, :feedback_type, :comment)
+            """), {
+                'log_id': log_id,
+                'user_id': user_id,
+                'feedback_type': feedback_type,
+                'comment': comment
+            })
+            
+            satisfied = feedback_type == 'helpful'
+            self.db_session.execute(text("""
+                UPDATE hr_query_log SET satisfied = :satisfied WHERE id = :log_id
+            """), {'log_id': log_id, 'satisfied': satisfied})
+            
+            self.db_session.commit()
+            
+            logger.info(f"Logged feedback: {feedback_type} for log_id={log_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to log feedback: {e}")
+            return False
+    
+    async def get_analytics_stats(self, days: int = 7) -> Dict:
+        """Get HR bot analytics for the last N days"""
+        if not self.db_session:
+            return {}
+        
+        try:
+            from sqlalchemy import text
+            
+            result = self.db_session.execute(text("""
+                SELECT 
+                    COUNT(*) as total_queries,
+                    COUNT(*) FILTER (WHERE preset_matched = TRUE) as preset_hits,
+                    COUNT(*) FILTER (WHERE rag_used = TRUE) as rag_queries,
+                    COUNT(DISTINCT user_id) as unique_users,
+                    COALESCE(AVG(response_time_ms)::INTEGER, 0) as avg_response_time_ms,
+                    (COUNT(*) FILTER (WHERE satisfied = TRUE)::DECIMAL / 
+                     NULLIF(COUNT(*) FILTER (WHERE satisfied IS NOT NULL), 0) * 100)::DECIMAL(5,2) as satisfaction_rate
+                FROM hr_query_log
+                WHERE created_at >= NOW() - make_interval(days => :days)
+            """), {'days': days})
+            
+            row = result.fetchone()
+            
+            if row:
+                return {
+                    'total_queries': row[0] or 0,
+                    'preset_hits': row[1] or 0,
+                    'rag_queries': row[2] or 0,
+                    'unique_users': row[3] or 0,
+                    'avg_response_time_ms': row[4] or 0,
+                    'satisfaction_rate': float(row[5]) if row[5] else None,
+                    'preset_hit_rate': round((row[1] or 0) / max(row[0] or 1, 1) * 100, 1)
+                }
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Failed to get analytics: {e}")
+            return {}
+    
+    async def get_unanswered_queries(self, limit: int = 20) -> List[Dict]:
+        """Get queries that weren't answered by presets (candidates for new presets)"""
+        if not self.db_session:
+            return []
+        
+        try:
+            from sqlalchemy import text
+            
+            result = self.db_session.execute(text("""
+                SELECT 
+                    query_normalized,
+                    COUNT(*) as count,
+                    MAX(created_at) as last_asked
+                FROM hr_query_log
+                WHERE preset_matched = FALSE
+                GROUP BY query_normalized
+                ORDER BY count DESC, last_asked DESC
+                LIMIT :limit
+            """), {'limit': limit})
+            
+            return [
+                {
+                    'query': row[0],
+                    'count': row[1],
+                    'last_asked': row[2].isoformat() if row[2] else None
+                }
+                for row in result.fetchall()
+            ]
+            
+        except Exception as e:
+            logger.error(f"Failed to get unanswered queries: {e}")
+            return []
 
 
 def get_hr_rag_service(pinecone_index=None, db_session=None) -> HRRagService:
