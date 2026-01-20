@@ -130,9 +130,28 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - Video content delivery with text fallback (videos not looped)
       - 3 video sections: company overview, values, history (video_url updated when uploaded)
     - **API Endpoints:** `/api/hr/stats`, `/search`, `/answer`, `/content/{id}`, `/hybrid-search`, `/reload-presets`, `/feedback`, `/log-query`
-    - **Database Tables:** hr_content, hr_embeddings, hr_menu_structure, hr_preset_answers
+    - **Database Tables:** hr_content, hr_embeddings, hr_menu_structure, hr_preset_answers, hr_query_log
     - **Data File:** `backend/data/hr_knowledge_base.txt`
     - **Services:** `backend/services/hr_content_processor.py`, `backend/services/hr_rag_service.py`, `backend/services/hr_keyboards.py`
+- **HR Admin Dashboard:** Analytics dashboard for monitoring HR bot performance:
+    - **URL:** https://gradus-ai.onrender.com/hr (HTTP Basic Auth: admin / Maya_2026)
+    - **Features:**
+      - Overview stats: Total queries, preset coverage %, satisfaction rate, unique users
+      - Top queries: Most popular questions with frequency and satisfaction data
+      - Satisfaction analysis: Tabs for helpful vs not-helpful answers
+      - Preset candidates: Queries that should become quick answers (priority badges)
+      - Recent activity: Last 50 queries with user, type, response time, rating
+      - Period selector: Today, 7/30/90 days
+    - **API Endpoints (protected):**
+      - `GET /hr/api/overview?days=7` - Summary statistics
+      - `GET /hr/api/top-queries?days=7` - Popular queries
+      - `GET /hr/api/satisfaction-breakdown?days=7` - Feedback analysis
+      - `GET /hr/api/preset-candidates?days=30` - Recommended presets
+      - `GET /hr/api/recent-queries?limit=50` - Recent activity
+      - `GET /hr/api/system-info` - System status
+    - **Mobile-responsive:** 3 breakpoints (1024px, 768px, 480px) with touch-friendly controls
+    - **Routes:** `backend/routes/hr_admin.py`
+    - **Template:** `backend/templates/hr_admin.html`
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Торговий Дім АВ Video Feature:** Maya sends vertical 9:16 video presentation when users ask about Торговий Дім АВ (Trading House AV):
