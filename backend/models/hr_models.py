@@ -59,6 +59,7 @@ class HRPresetAnswer(Base):
     question_pattern = Column(String(500), nullable=False)
     answer_text = Column(Text, nullable=False)
     content_ids = Column(ARRAY(String))
+    category = Column(String(50))
     priority = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     usage_count = Column(Integer, default=0)

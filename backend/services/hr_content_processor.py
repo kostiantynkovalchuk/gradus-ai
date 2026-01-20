@@ -53,8 +53,8 @@ class HRContentProcessor:
     
     SECTION_PATTERNS = {
         'main_section': r'^#{1,2}\s*(.+)$',
-        'question': r'^(\d+)\.\s*(.+)$',
-        'appendix': r'^#\s*Приложение\s*№?(\d+)',
+        'question': r'^(\d+)\.\s*(.+\?)\s*$',
+        'appendix': r'^#\s*Приложение\s*№?([\d\.]+)',
         'video_marker': r'видео|відео|video',
         'table_start': r'^\|',
     }
