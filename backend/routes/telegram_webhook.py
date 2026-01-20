@@ -26,6 +26,26 @@ router = APIRouter()
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 API_BASE_URL = os.getenv("APP_URL", "http://localhost:8000")
 
+HR_KEYWORDS = [
+    'зарплата', 'зп', 'виплата', 'аванс', 'нарахування',
+    'відпустка', 'лікарняний', 'хворіє', 'захворів',
+    'віддалена', 'удаленка', 'remote', 'з дому',
+    'бліц', 'сед', 'урс', 'доступ',
+    'канцтовари', 'меблі', 'обладнання',
+    'командировка', 'відрядження',
+    'конфлікт', 'звільнення', 'звільнитись',
+    'контакти hr', 'кадри', 'документи для прийому',
+    'працевлаштування', 'новачок', 'перший день',
+    'кпк', 'планшет', 'мобільна торгівля',
+    'графік роботи', 'робочий день',
+    'технічна підтримка', '3636'
+]
+
+def is_hr_question(text: str) -> bool:
+    """Check if text is HR-related question"""
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in HR_KEYWORDS)
+
 
 @router.post("/webhook")
 async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db)):
@@ -139,6 +159,12 @@ async def process_telegram_message(message: dict):
                 logger.info(f"✅ ТДАВ video/text sent to {chat_id}")
                 return
             logger.warning(f"ТДАВ handler failed, falling back to AI")
+        
+        if is_hr_question(text):
+            logger.info(f"📋 HR question detected from {chat_id}: {text[:50]}...")
+            user_id = message.get("from", {}).get("id", 0)
+            await handle_hr_question(chat_id, user_id, text)
+            return
         
         logger.info(f"📨 Telegram message from {chat_id}: {text[:50]}...")
         
