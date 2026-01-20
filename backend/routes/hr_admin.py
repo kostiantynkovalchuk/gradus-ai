@@ -12,7 +12,7 @@ import secrets
 import logging
 from typing import Optional
 
-from database import get_db
+from models import get_db
 
 router = APIRouter(prefix="/hr", tags=["HR Admin"])
 security = HTTPBasic()
