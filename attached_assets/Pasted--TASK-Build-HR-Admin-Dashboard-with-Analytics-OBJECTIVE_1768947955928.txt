@@ -1,0 +1,1656 @@
+# TASK: Build HR Admin Dashboard with Analytics
+
+## OBJECTIVE
+Create a comprehensive, secure admin dashboard at `/hr` for HR specialists to monitor Maya bot performance, manage presets, and analyze employee queries.
+
+## DESIGN REQUIREMENTS
+
+**Visual Style:**
+- Clean, modern interface matching https://gradus-ai.onrender.com/ aesthetic
+- Consistent color scheme with main application
+- Professional, minimalist design
+- Responsive design (desktop-first, but mobile-friendly)
+- Card-based layout for metrics
+- Smooth animations and transitions
+- Typography and spacing matching main site
+
+**Authentication:**
+- HTTP Basic Auth
+- Username: `admin`
+- Password: `Maya_2026`
+- Protect entire `/hr` route
+
+## IMPLEMENTATION
+
+### 1. First - Inspect Main Site Styling
+
+**File:** `scripts/inspect_main_site.py`
+```python
+"""
+Helper script to extract CSS variables and styling from main site
+Run this first to ensure consistent design
+"""
+
+import httpx
+import re
+from bs4 import BeautifulSoup
+
+async def inspect_main_site():
+    """Extract styling information from main gradus-ai site"""
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get('https://gradus-ai.onrender.com/')
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Extract CSS
+                styles = soup.find_all('style')
+                for style in styles:
+                    print("=== FOUND STYLE BLOCK ===")
+                    print(style.string[:500] if style.string else "Empty")
+                    print()
+                
+                # Extract color scheme
+                print("=== EXTRACTING COLORS ===")
+                style_text = ' '.join([s.string for s in styles if s.string])
+                
+                # Common CSS color patterns
+                colors = re.findall(r'(?:color|background|border):\s*(#[0-9a-fA-F]{3,6}|rgb\([^)]+\)|rgba\([^)]+\))', style_text)
+                unique_colors = list(set(colors))
+                
+                print("Found colors:", unique_colors[:20])
+                
+                # Extract fonts
+                fonts = re.findall(r'font-family:\s*([^;]+)', style_text)
+                print("\nFonts:", list(set(fonts))[:5])
+                
+        except Exception as e:
+            print(f"Error: {e}")
+            print("\nUsing fallback design system...")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(inspect_main_site())
+```
+
+### 2. Backend: Admin API Routes
+
+**File:** `app/api/admin_routes.py`
+```python
+"""
+HR Admin Dashboard API
+Protected by HTTP Basic Auth
+Matches gradus-ai.onrender.com design aesthetic
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import text
+from datetime import date, timedelta, datetime
+import secrets
+from typing import Optional
+
+from app.database import get_db
+from app.services.hr_rag_service import HRRagService
+
+router = APIRouter(prefix="/hr", tags=["HR Admin"])
+security = HTTPBasic()
+templates = Jinja2Templates(directory="app/templates")
+
+# Simple auth
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "Maya_2026"
+
+def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    """Verify HTTP Basic Auth credentials"""
+    correct_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
+    correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
+    
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+@router.get("", response_class=HTMLResponse)
+async def admin_dashboard(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Render admin dashboard HTML"""
+    return templates.TemplateResponse("hr_admin.html", {
+        "request": request,
+        "username": credentials.username
+    })
+
+# === ANALYTICS ENDPOINTS ===
+
+@router.get("/api/overview")
+async def get_overview(
+    days: int = 7,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get overview statistics"""
+    
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+    
+    async with get_db() as db:
+        # Main stats
+        result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total_queries,
+                COUNT(*) FILTER (WHERE preset_matched = TRUE) as preset_hits,
+                COUNT(*) FILTER (WHERE rag_used = TRUE) as rag_queries,
+                COUNT(DISTINCT user_id) as unique_users,
+                AVG(response_time_ms)::INTEGER as avg_response_time,
+                (COUNT(*) FILTER (WHERE satisfied = TRUE)::DECIMAL / 
+                 NULLIF(COUNT(*) FILTER (WHERE satisfied IS NOT NULL), 0) * 100)::DECIMAL(5,2) as satisfaction_rate
+            FROM hr_query_log
+            WHERE DATE(created_at) >= :start_date
+        """), {'start_date': start_date})
+        
+        stats = result.fetchone()
+        
+        total = stats[0] or 0
+        preset_rate = (stats[1] / total * 100) if total > 0 else 0
+        rag_rate = (stats[2] / total * 100) if total > 0 else 0
+    
+    return {
+        'period': {
+            'start_date': str(start_date),
+            'end_date': str(end_date),
+            'days': days
+        },
+        'stats': {
+            'total_queries': total,
+            'preset_hits': stats[1] or 0,
+            'preset_coverage': round(preset_rate, 1),
+            'rag_queries': stats[2] or 0,
+            'rag_usage': round(rag_rate, 1),
+            'unique_users': stats[3] or 0,
+            'avg_response_time_ms': stats[4] or 0,
+            'satisfaction_rate': float(stats[5]) if stats[5] else 0.0
+        }
+    }
+
+@router.get("/api/top-queries")
+async def get_top_queries(
+    days: int = 7,
+    limit: int = 20,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get most popular queries"""
+    
+    start_date = date.today() - timedelta(days=days)
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                query_normalized,
+                COUNT(*) as frequency,
+                COUNT(*) FILTER (WHERE preset_matched = TRUE) as preset_hits,
+                COUNT(*) FILTER (WHERE satisfied = TRUE) as helpful_count,
+                COUNT(*) FILTER (WHERE satisfied = FALSE) as not_helpful_count,
+                COUNT(*) FILTER (WHERE satisfied IS NOT NULL) as feedback_count,
+                AVG(response_time_ms)::INTEGER as avg_response_time
+            FROM hr_query_log
+            WHERE DATE(created_at) >= :start_date
+            GROUP BY query_normalized
+            ORDER BY frequency DESC
+            LIMIT :limit
+        """), {'start_date': start_date, 'limit': limit})
+        
+        queries = result.fetchall()
+    
+    return {
+        'queries': [
+            {
+                'query': q[0],
+                'frequency': q[1],
+                'preset_hits': q[2],
+                'helpful_count': q[3],
+                'not_helpful_count': q[4],
+                'feedback_count': q[5],
+                'satisfaction_rate': round((q[3] / q[5] * 100) if q[5] > 0 else 0, 1),
+                'avg_response_time_ms': q[6],
+                'has_feedback': q[5] > 0
+            }
+            for q in queries
+        ]
+    }
+
+@router.get("/api/satisfaction-breakdown")
+async def get_satisfaction_breakdown(
+    days: int = 7,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get satisfaction breakdown by category"""
+    
+    start_date = date.today() - timedelta(days=days)
+    
+    async with get_db() as db:
+        # Get top dissatisfied queries
+        result = await db.execute(text("""
+            SELECT 
+                query,
+                COUNT(*) as frequency,
+                COUNT(*) FILTER (WHERE satisfied = FALSE) as not_helpful,
+                array_agg(DISTINCT user_name) FILTER (WHERE user_name IS NOT NULL) as users
+            FROM hr_query_log
+            WHERE 
+                DATE(created_at) >= :start_date
+                AND satisfied = FALSE
+            GROUP BY query
+            ORDER BY frequency DESC
+            LIMIT 10
+        """), {'start_date': start_date})
+        
+        dissatisfied = result.fetchall()
+        
+        # Get top satisfied queries
+        result2 = await db.execute(text("""
+            SELECT 
+                query,
+                COUNT(*) as frequency,
+                COUNT(*) FILTER (WHERE satisfied = TRUE) as helpful
+            FROM hr_query_log
+            WHERE 
+                DATE(created_at) >= :start_date
+                AND satisfied = TRUE
+            GROUP BY query
+            ORDER BY frequency DESC
+            LIMIT 10
+        """), {'start_date': start_date})
+        
+        satisfied = result2.fetchall()
+    
+    return {
+        'not_helpful': [
+            {
+                'query': q[0],
+                'frequency': q[1],
+                'not_helpful_count': q[2],
+                'affected_users': q[3][:3] if q[3] else []
+            }
+            for q in dissatisfied
+        ],
+        'helpful': [
+            {
+                'query': q[0],
+                'frequency': q[1],
+                'helpful_count': q[2]
+            }
+            for q in satisfied
+        ]
+    }
+
+@router.get("/api/timeline")
+async def get_timeline(
+    days: int = 30,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get daily timeline statistics"""
+    
+    start_date = date.today() - timedelta(days=days)
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                DATE(created_at) as date,
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE preset_matched = TRUE) as preset_hits,
+                COUNT(*) FILTER (WHERE satisfied = TRUE) as satisfied,
+                COUNT(*) FILTER (WHERE satisfied IS NOT NULL) as with_feedback
+            FROM hr_query_log
+            WHERE DATE(created_at) >= :start_date
+            GROUP BY DATE(created_at)
+            ORDER BY date ASC
+        """), {'start_date': start_date})
+        
+        timeline = result.fetchall()
+    
+    return {
+        'timeline': [
+            {
+                'date': str(t[0]),
+                'total_queries': t[1],
+                'preset_hits': t[2],
+                'satisfied': t[3],
+                'satisfaction_rate': round((t[3] / t[4] * 100) if t[4] > 0 else 0, 1)
+            }
+            for t in timeline
+        ]
+    }
+
+@router.get("/api/preset-candidates")
+async def get_preset_candidates(
+    min_frequency: int = 3,
+    days: int = 30,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Find queries that should become presets"""
+    
+    start_date = date.today() - timedelta(days=days)
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                query_normalized,
+                COUNT(*) as frequency,
+                AVG(response_time_ms)::INTEGER as avg_time,
+                COUNT(*) FILTER (WHERE satisfied = FALSE) as dissatisfied_count,
+                COUNT(*) FILTER (WHERE satisfied IS NOT NULL) as feedback_count
+            FROM hr_query_log
+            WHERE 
+                preset_matched = FALSE
+                AND DATE(created_at) >= :start_date
+            GROUP BY query_normalized
+            HAVING COUNT(*) >= :min_freq
+            ORDER BY frequency DESC, dissatisfied_count DESC
+            LIMIT 20
+        """), {'start_date': start_date, 'min_freq': min_frequency})
+        
+        candidates = result.fetchall()
+    
+    return {
+        'candidates': [
+            {
+                'query': c[0],
+                'frequency': c[1],
+                'avg_response_time_ms': c[2],
+                'dissatisfied_count': c[3],
+                'feedback_count': c[4],
+                'priority': 'high' if c[1] >= 10 else ('medium' if c[1] >= 5 else 'low'),
+                'should_add': c[1] >= 5 or c[3] >= 2
+            }
+            for c in candidates
+        ]
+    }
+
+@router.get("/api/recent-queries")
+async def get_recent_queries(
+    limit: int = 50,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get recent queries for review"""
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                ql.id,
+                ql.user_name,
+                ql.query,
+                ql.preset_matched,
+                ql.rag_used,
+                ql.response_time_ms,
+                ql.satisfied,
+                ql.created_at,
+                f.feedback_type,
+                f.comment
+            FROM hr_query_log ql
+            LEFT JOIN hr_feedback f ON f.query_log_id = ql.id
+            ORDER BY ql.created_at DESC
+            LIMIT :limit
+        """), {'limit': limit})
+        
+        queries = result.fetchall()
+    
+    return {
+        'queries': [
+            {
+                'id': q[0],
+                'user': q[1] or 'Anonymous',
+                'query': q[2],
+                'preset_hit': q[3],
+                'rag_used': q[4],
+                'response_ms': q[5],
+                'satisfied': q[6],
+                'timestamp': q[7].isoformat() if q[7] else None,
+                'feedback_type': q[8],
+                'comment': q[9]
+            }
+            for q in queries
+        ]
+    }
+
+@router.get("/api/system-info")
+async def get_system_info(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get system information"""
+    
+    async with get_db() as db:
+        # Content count
+        content_result = await db.execute(text("""
+            SELECT COUNT(*) FROM hr_content
+        """))
+        content_count = content_result.scalar()
+        
+        # Preset count
+        preset_result = await db.execute(text("""
+            SELECT COUNT(*) FROM hr_preset_answers WHERE is_active = TRUE
+        """))
+        preset_count = preset_result.scalar()
+        
+        # Total embeddings
+        embedding_result = await db.execute(text("""
+            SELECT COUNT(*) FROM hr_embeddings
+        """))
+        embedding_count = embedding_result.scalar()
+    
+    return {
+        'content_items': content_count or 0,
+        'active_presets': preset_count or 0,
+        'embeddings': embedding_count or 0,
+        'status': 'operational'
+    }
+
+# === PRESET MANAGEMENT ===
+
+@router.get("/api/presets")
+async def list_presets(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """List all presets"""
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                id,
+                question_pattern,
+                answer_text,
+                content_ids,
+                priority,
+                usage_count,
+                is_active,
+                created_at
+            FROM hr_preset_answers
+            ORDER BY usage_count DESC, priority DESC
+        """))
+        
+        presets = result.fetchall()
+    
+    return {
+        'presets': [
+            {
+                'id': p[0],
+                'pattern': p[1],
+                'answer_preview': p[2][:100] + '...' if len(p[2]) > 100 else p[2],
+                'content_ids': p[3],
+                'priority': p[4],
+                'usage_count': p[5],
+                'is_active': p[6],
+                'created_at': p[7].isoformat() if p[7] else None
+            }
+            for p in presets
+        ]
+    }
+
+@router.post("/api/presets")
+async def create_preset(
+    pattern: str,
+    answer: str,
+    content_ids: list[str],
+    priority: int = 5,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Create new preset answer"""
+    
+    async with get_db() as db:
+        content_ids_array = '{' + ','.join(f'"{c}"' for c in content_ids) + '}'
+        
+        result = await db.execute(text("""
+            INSERT INTO hr_preset_answers (
+                question_pattern,
+                answer_text,
+                content_ids,
+                priority,
+                is_active
+            ) VALUES (
+                :pattern,
+                :answer,
+                :content_ids,
+                :priority,
+                true
+            )
+            RETURNING id
+        """), {
+            'pattern': pattern,
+            'answer': answer,
+            'content_ids': content_ids_array,
+            'priority': priority
+        })
+        
+        preset_id = result.scalar()
+        await db.commit()
+    
+    return {
+        'status': 'success',
+        'preset_id': preset_id,
+        'pattern': pattern
+    }
+
+@router.patch("/api/presets/{preset_id}/toggle")
+async def toggle_preset(
+    preset_id: int,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Toggle preset active status"""
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            UPDATE hr_preset_answers
+            SET is_active = NOT is_active
+            WHERE id = :id
+            RETURNING is_active
+        """), {'id': preset_id})
+        
+        new_status = result.scalar()
+        await db.commit()
+    
+    return {
+        'status': 'success',
+        'preset_id': preset_id,
+        'is_active': new_status
+    }
+```
+
+### 3. Frontend: Admin Dashboard HTML
+
+**File:** `app/templates/hr_admin.html`
+```html
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maya HR Dashboard - Admin</title>
+    <style>
+        /* 
+         * Design System matching https://gradus-ai.onrender.com/
+         * Clean, modern, professional aesthetic
+         */
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* Primary colors - adjust based on main site inspection */
+            --primary: #1e40af;
+            --primary-light: #3b82f6;
+            --primary-dark: #1e3a8a;
+            
+            /* Semantic colors */
+            --success: #059669;
+            --success-light: #10b981;
+            --warning: #d97706;
+            --warning-light: #f59e0b;
+            --danger: #dc2626;
+            --danger-light: #ef4444;
+            
+            /* Neutral palette */
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-400: #9ca3af;
+            --gray-500: #6b7280;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+            
+            /* Spacing system */
+            --space-xs: 0.25rem;
+            --space-sm: 0.5rem;
+            --space-md: 1rem;
+            --space-lg: 1.5rem;
+            --space-xl: 2rem;
+            --space-2xl: 3rem;
+            
+            /* Border radius */
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-xl: 1rem;
+            
+            /* Shadows */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            
+            /* Typography */
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--gray-50);
+            color: var(--gray-900);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Header */
+        .header {
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            padding: var(--space-lg) var(--space-xl);
+            box-shadow: var(--shadow-sm);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: var(--radius-lg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 1.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .logo-text h1 {
+            font-size: 1.5rem;
+            color: var(--gray-900);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .logo-text p {
+            font-size: 0.875rem;
+            color: var(--gray-500);
+            font-weight: 500;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+        }
+
+        .period-selector {
+            padding: var(--space-sm) var(--space-md);
+            border: 1px solid var(--gray-300);
+            border-radius: var(--radius-md);
+            background: white;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--gray-700);
+            transition: all 0.15s ease;
+        }
+
+        .period-selector:hover {
+            border-color: var(--gray-400);
+            background: var(--gray-50);
+        }
+
+        .period-selector:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+        }
+
+        .btn {
+            padding: var(--space-sm) var(--space-lg);
+            border-radius: var(--radius-md);
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-sm);
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-secondary {
+            background: var(--gray-100);
+            color: var(--gray-700);
+        }
+
+        .btn-secondary:hover {
+            background: var(--gray-200);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1400px;
+            margin: var(--space-xl) auto;
+            padding: 0 var(--space-xl);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: var(--space-lg);
+            margin-bottom: var(--space-2xl);
+        }
+
+        .stat-card {
+            background: white;
+            padding: var(--space-lg);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-200);
+            transition: all 0.2s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+            border-color: var(--gray-300);
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: var(--space-md);
+        }
+
+        .stat-title {
+            font-size: 0.875rem;
+            color: var(--gray-600);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .stat-icon.primary { background: rgba(30, 64, 175, 0.1); }
+        .stat-icon.success { background: rgba(5, 150, 105, 0.1); }
+        .stat-icon.warning { background: rgba(217, 119, 6, 0.1); }
+        .stat-icon.danger { background: rgba(220, 38, 38, 0.1); }
+
+        .stat-value {
+            font-size: 2.25rem;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
+            letter-spacing: -0.02em;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--gray-600);
+            font-weight: 500;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: var(--gray-200);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            margin-top: var(--space-md);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.5s ease;
+            border-radius: var(--radius-sm);
+        }
+
+        .progress-fill.success { background: var(--success); }
+        .progress-fill.warning { background: var(--warning); }
+        .progress-fill.danger { background: var(--danger); }
+
+        /* Section */
+        .section {
+            background: white;
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-200);
+            margin-bottom: var(--space-2xl);
+            overflow: hidden;
+        }
+
+        .section-header {
+            padding: var(--space-lg) var(--space-xl);
+            border-bottom: 1px solid var(--gray-200);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--gray-900);
+            letter-spacing: -0.01em;
+        }
+
+        .section-subtitle {
+            font-size: 0.875rem;
+            color: var(--gray-500);
+            margin-top: var(--space-xs);
+            font-weight: 500;
+        }
+
+        .section-content {
+            padding: var(--space-xl);
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: var(--space-sm);
+            border-bottom: 1px solid var(--gray-200);
+            padding: 0 var(--space-xl);
+            background: var(--gray-50);
+        }
+
+        .tab {
+            padding: var(--space-md) var(--space-lg);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            color: var(--gray-600);
+            font-weight: 600;
+            font-size: 0.875rem;
+            transition: all 0.15s ease;
+            background: transparent;
+        }
+
+        .tab:hover {
+            color: var(--gray-900);
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            background: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Table */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table thead {
+            background: var(--gray-50);
+        }
+
+        .table th {
+            padding: var(--space-md) var(--space-lg);
+            text-align: left;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--gray-700);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--gray-200);
+        }
+
+        .table td {
+            padding: var(--space-lg);
+            border-bottom: 1px solid var(--gray-100);
+            font-size: 0.875rem;
+            color: var(--gray-700);
+        }
+
+        .table tbody tr {
+            transition: background 0.15s ease;
+        }
+
+        .table tbody tr:hover {
+            background: var(--gray-50);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: var(--space-xs) var(--space-md);
+            border-radius: var(--radius-md);
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-success {
+            background: rgba(5, 150, 105, 0.1);
+            color: var(--success);
+        }
+
+        .badge-warning {
+            background: rgba(217, 119, 6, 0.1);
+            color: var(--warning);
+        }
+
+        .badge-danger {
+            background: rgba(220, 38, 38, 0.1);
+            color: var(--danger);
+        }
+
+        .badge-primary {
+            background: rgba(30, 64, 175, 0.1);
+            color: var(--primary);
+        }
+
+        .badge-gray {
+            background: var(--gray-100);
+            color: var(--gray-600);
+        }
+
+        /* Query Item */
+        .query-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: var(--space-lg);
+            border-bottom: 1px solid var(--gray-100);
+            transition: background 0.15s ease;
+        }
+
+        .query-item:hover {
+            background: var(--gray-50);
+        }
+
+        .query-item:last-child {
+            border-bottom: none;
+        }
+
+        .query-text {
+            flex: 1;
+            font-weight: 500;
+            color: var(--gray-900);
+            padding-right: var(--space-lg);
+        }
+
+        .query-meta {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            font-size: 0.875rem;
+            color: var(--gray-600);
+            flex-shrink: 0;
+        }
+
+        /* Loading & Empty States */
+        .loading {
+            text-align: center;
+            padding: var(--space-2xl);
+            color: var(--gray-500);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--gray-200);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: var(--space-2xl) var(--space-xl);
+            color: var(--gray-500);
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: var(--space-lg);
+            opacity: 0.4;
+        }
+
+        .empty-state-text {
+            font-size: 1rem;
+            font-weight: 500;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 var(--space-md);
+                margin: var(--space-lg) auto;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header-content {
+                flex-direction: column;
+                gap: var(--space-md);
+                align-items: flex-start;
+            }
+
+            .section-header {
+                flex-direction: column;
+                gap: var(--space-md);
+                align-items: flex-start;
+            }
+
+            .table {
+                font-size: 0.75rem;
+            }
+
+            .table th,
+            .table td {
+                padding: var(--space-sm) var(--space-md);
+            }
+
+            .query-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: var(--space-sm);
+            }
+
+            .query-meta {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+
+        /* System info badge */
+        .system-info {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-xs);
+            font-size: 0.75rem;
+            color: var(--gray-500);
+            padding: var(--space-xs) var(--space-sm);
+            background: var(--gray-100);
+            border-radius: var(--radius-sm);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">M</div>
+                <div class="logo-text">
+                    <h1>Maya HR Dashboard</h1>
+                    <p>Admin Analytics & Management</p>
+                </div>
+            </div>
+            <div class="header-controls">
+                <select class="period-selector" id="periodSelector">
+                    <option value="1">Сьогодні</option>
+                    <option value="7" selected>7 днів</option>
+                    <option value="30">30 днів</option>
+                    <option value="90">90 днів</option>
+                </select>
+                <button class="btn btn-primary" onclick="loadDashboard()">
+                    <span>🔄</span>
+                    <span>Оновити</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Stats Overview -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Всього запитів</span>
+                    <div class="stat-icon primary">💬</div>
+                </div>
+                <div class="stat-value" id="totalQueries">-</div>
+                <div class="stat-label">За обраний період</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Покриття пресетів</span>
+                    <div class="stat-icon success">⚡</div>
+                </div>
+                <div class="stat-value" id="presetCoverage">-</div>
+                <div class="stat-label">Швидких відповідей</div>
+                <div class="progress-bar">
+                    <div class="progress-fill success" id="presetProgress" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Задоволеність</span>
+                    <div class="stat-icon warning">⭐</div>
+                </div>
+                <div class="stat-value" id="satisfaction">-</div>
+                <div class="stat-label">Корисних відповідей</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="satisfactionProgress" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-title">Активні користувачі</span>
+                    <div class="stat-icon primary">👥</div>
+                </div>
+                <div class="stat-value" id="uniqueUsers">-</div>
+                <div class="stat-label">Співробітників</div>
+            </div>
+        </div>
+
+        <!-- Top Queries -->
+        <div class="section">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title">📊 Найпопулярніші запити</h2>
+                    <p class="section-subtitle">Топ-20 запитань від співробітників</p>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="topQueriesLoading" class="loading">
+                    <div class="spinner"></div>
+                </div>
+                <div class="table-container">
+                    <table class="table" id="topQueriesTable" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>Запит</th>
+                                <th style="text-align: center;">Частота</th>
+                                <th style="text-align: center;">Пресет</th>
+                                <th style="text-align: center;">Корисно</th>
+                                <th style="text-align: center;">Не корисно</th>
+                                <th style="text-align: center;">Задоволеність</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topQueriesBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Satisfaction Breakdown -->
+        <div class="section">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title">😊 😞 Аналіз задоволеності</h2>
+                    <p class="section-subtitle">Що працює добре і що потребує покращення</p>
+                </div>
+            </div>
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab(event, 'helpful')">✅ Корисні відповіді</div>
+                <div class="tab" onclick="switchTab(event, 'notHelpful')">❌ Не корисні відповіді</div>
+            </div>
+            <div class="section-content">
+                <div class="tab-content active" id="helpfulContent">
+                    <div id="helpfulLoading" class="loading">
+                        <div class="spinner"></div>
+                    </div>
+                    <div id="helpfulQueries"></div>
+                </div>
+                <div class="tab-content" id="notHelpfulContent">
+                    <div id="notHelpfulLoading" class="loading">
+                        <div class="spinner"></div>
+                    </div>
+                    <div id="notHelpfulQueries"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preset Candidates -->
+        <div class="section">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title">💡 Кандидати в пресети</h2>
+                    <p class="section-subtitle">Запити, які варто додати як швидкі відповіді</p>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="candidatesLoading" class="loading">
+                    <div class="spinner"></div>
+                </div>
+                <div id="candidatesList"></div>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="section">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title">🕐 Остання активність</h2>
+                    <p class="section-subtitle">50 останніх запитів від співробітників</p>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="recentLoading" class="loading">
+                    <div class="spinner"></div>
+                </div>
+                <div class="table-container">
+                    <table class="table" id="recentTable" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>Час</th>
+                                <th>Користувач</th>
+                                <th>Запит</th>
+                                <th style="text-align: center;">Тип</th>
+                                <th style="text-align: center;">Час відповіді</th>
+                                <th style="text-align: center;">Оцінка</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recentBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Info Footer -->
+        <div style="text-align: center; padding: var(--space-xl); color: var(--gray-500); font-size: 0.875rem;">
+            <div class="system-info" style="margin-bottom: var(--space-sm);">
+                <span class="status-dot"></span>
+                <span>System operational</span>
+            </div>
+            <div>
+                <span id="systemInfo">Loading system info...</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPeriod = 7;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDashboard();
+            loadSystemInfo();
+            
+            document.getElementById('periodSelector').addEventListener('change', (e) => {
+                currentPeriod = parseInt(e.target.value);
+                loadDashboard();
+            });
+        });
+
+        async function loadDashboard() {
+            await Promise.all([
+                loadOverview(),
+                loadTopQueries(),
+                loadSatisfactionBreakdown(),
+                loadPresetCandidates(),
+                loadRecentActivity()
+            ]);
+        }
+
+        async function loadSystemInfo() {
+            try {
+                const response = await fetch('/hr/api/system-info');
+                const data = await response.json();
+                document.getElementById('systemInfo').textContent = 
+                    `${data.content_items} content items • ${data.active_presets} active presets • ${data.embeddings} embeddings`;
+            } catch (error) {
+                console.error('Error loading system info:', error);
+            }
+        }
+
+        async function loadOverview() {
+            try {
+                const response = await fetch(`/hr/api/overview?days=${currentPeriod}`);
+                const data = await response.json();
+                const stats = data.stats;
+
+                document.getElementById('totalQueries').textContent = stats.total_queries.toLocaleString('uk-UA');
+                document.getElementById('presetCoverage').textContent = stats.preset_coverage.toFixed(1) + '%';
+                document.getElementById('satisfaction').textContent = stats.satisfaction_rate.toFixed(1) + '%';
+                document.getElementById('uniqueUsers').textContent = stats.unique_users.toLocaleString('uk-UA');
+
+                document.getElementById('presetProgress').style.width = stats.preset_coverage + '%';
+                document.getElementById('satisfactionProgress').style.width = stats.satisfaction_rate + '%';
+                
+                const satisfactionBar = document.getElementById('satisfactionProgress');
+                satisfactionBar.className = 'progress-fill ' + 
+                    (stats.satisfaction_rate >= 80 ? 'success' : 
+                     stats.satisfaction_rate >= 60 ? 'warning' : 'danger');
+
+            } catch (error) {
+                console.error('Error loading overview:', error);
+            }
+        }
+
+        async function loadTopQueries() {
+            const loading = document.getElementById('topQueriesLoading');
+            const table = document.getElementById('topQueriesTable');
+            const tbody = document.getElementById('topQueriesBody');
+
+            try {
+                const response = await fetch(`/hr/api/top-queries?days=${currentPeriod}&limit=20`);
+                const data = await response.json();
+
+                tbody.innerHTML = '';
+
+                if (data.queries.length === 0) {
+                    loading.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><p class="empty-state-text">Немає даних за обраний період</p></div>';
+                    return;
+                }
+
+                data.queries.forEach((query, index) => {
+                    const row = document.createElement('tr');
+                    
+                    const satisfactionClass = 
+                        query.satisfaction_rate >= 80 ? 'success' :
+                        query.satisfaction_rate >= 60 ? 'warning' : 'danger';
+
+                    row.innerHTML = `
+                        <td>
+                            <strong>${index + 1}.</strong> ${query.query}
+                            ${query.preset_hits > 0 ? '<span class="badge badge-primary">⚡ Пресет</span>' : ''}
+                        </td>
+                        <td style="text-align: center;"><strong>${query.frequency}</strong></td>
+                        <td style="text-align: center;">${query.preset_hits > 0 ? '✅' : '❌'}</td>
+                        <td style="text-align: center;">${query.helpful_count}</td>
+                        <td style="text-align: center;">${query.not_helpful_count}</td>
+                        <td style="text-align: center;">
+                            ${query.has_feedback ? 
+                                `<span class="badge badge-${satisfactionClass}">${query.satisfaction_rate.toFixed(0)}%</span>` : 
+                                '<span style="color: var(--gray-400);">-</span>'}
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                loading.style.display = 'none';
+                table.style.display = 'table';
+
+            } catch (error) {
+                console.error('Error loading top queries:', error);
+                loading.innerHTML = '<div class="empty-state"><p class="empty-state-text">Помилка завантаження даних</p></div>';
+            }
+        }
+
+        async function loadSatisfactionBreakdown() {
+            try {
+                const response = await fetch(`/hr/api/satisfaction-breakdown?days=${currentPeriod}`);
+                const data = await response.json();
+
+                const helpfulDiv = document.getElementById('helpfulQueries');
+                if (data.helpful.length === 0) {
+                    helpfulDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">😊</div><p class="empty-state-text">Немає позитивних відгуків</p></div>';
+                } else {
+                    helpfulDiv.innerHTML = data.helpful.map(q => `
+                        <div class="query-item">
+                            <div class="query-text">✅ ${q.query}</div>
+                            <div class="query-meta">
+                                <span>👍 ${q.helpful_count}</span>
+                                <span class="badge badge-success">${q.frequency} разів</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                const notHelpfulDiv = document.getElementById('notHelpfulQueries');
+                if (data.not_helpful.length === 0) {
+                    notHelpfulDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎉</div><p class="empty-state-text">Немає негативних відгуків!</p></div>';
+                } else {
+                    notHelpfulDiv.innerHTML = data.not_helpful.map(q => `
+                        <div class="query-item">
+                            <div class="query-text">❌ ${q.query}</div>
+                            <div class="query-meta">
+                                <span>👎 ${q.not_helpful_count}</span>
+                                <span class="badge badge-danger">${q.frequency} разів</span>
+                                ${q.affected_users.length > 0 ? 
+                                    `<span style="font-size: 0.75rem; color: var(--gray-500);">Користувачі: ${q.affected_users.join(', ')}</span>` : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                document.getElementById('helpfulLoading').style.display = 'none';
+                document.getElementById('notHelpfulLoading').style.display = 'none';
+
+            } catch (error) {
+                console.error('Error loading satisfaction breakdown:', error);
+            }
+        }
+
+        async function loadPresetCandidates() {
+            const loading = document.getElementById('candidatesLoading');
+            const list = document.getElementById('candidatesList');
+
+            try {
+                const response = await fetch(`/hr/api/preset-candidates?days=${currentPeriod}`);
+                const data = await response.json();
+
+                if (data.candidates.length === 0) {
+                    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✨</div><p class="empty-state-text">Всі популярні запити вже покриті пресетами!</p></div>';
+                    loading.style.display = 'none';
+                    return;
+                }
+
+                list.innerHTML = data.candidates.map(c => {
+                    const priorityBadge = 
+                        c.priority === 'high' ? 'badge-danger' :
+                        c.priority === 'medium' ? 'badge-warning' : 'badge-primary';
+
+                    return `
+                        <div class="query-item">
+                            <div class="query-text">
+                                💡 ${c.query}
+                                ${c.should_add ? '<span class="badge badge-warning">Рекомендовано</span>' : ''}
+                            </div>
+                            <div class="query-meta">
+                                <span class="badge ${priorityBadge}">${c.priority}</span>
+                                <span>🔢 ${c.frequency}x</span>
+                                ${c.dissatisfied_count > 0 ? `<span>😞 ${c.dissatisfied_count}</span>` : ''}
+                                <span>⏱️ ${c.avg_response_time_ms}ms</span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                loading.style.display = 'none';
+
+            } catch (error) {
+                console.error('Error loading preset candidates:', error);
+                loading.style.display = 'none';
+                list.innerHTML = '<div class="empty-state"><p class="empty-state-text">Помилка завантаження</p></div>';
+            }
+        }
+
+        async function loadRecentActivity() {
+            const loading = document.getElementById('recentLoading');
+            const table = document.getElementById('recentTable');
+            const tbody = document.getElementById('recentBody');
+
+            try {
+                const response = await fetch('/hr/api/recent-queries?limit=50');
+                const data = await response.json();
+
+                tbody.innerHTML = '';
+
+                if (data.queries.length === 0) {
+                    loading.innerHTML = '<div class="empty-state"><p class="empty-state-text">Немає активності</p></div>';
+                    return;
+                }
+
+                data.queries.forEach(q => {
+                    const row = document.createElement('tr');
+                    const timestamp = new Date(q.timestamp);
+                    const timeStr = timestamp.toLocaleTimeString('uk-UA', { 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                    });
+
+                    const typeBadge = q.preset_hit ? 
+                        '<span class="badge badge-primary">⚡ Пресет</span>' :
+                        q.rag_used ? '<span class="badge badge-success">🤖 RAG</span>' :
+                        '<span class="badge badge-gray">❌</span>';
+
+                    const satisfactionIcon = 
+                        q.satisfied === true ? '😊' :
+                        q.satisfied === false ? '😞' : '-';
+
+                    row.innerHTML = `
+                        <td>${timeStr}</td>
+                        <td>${q.user}</td>
+                        <td style="max-width: 400px;">${q.query}</td>
+                        <td style="text-align: center;">${typeBadge}</td>
+                        <td style="text-align: center;">${q.response_ms}ms</td>
+                        <td style="text-align: center; font-size: 1.25rem;">${satisfactionIcon}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                loading.style.display = 'none';
+                table.style.display = 'table';
+
+            } catch (error) {
+                console.error('Error loading recent activity:', error);
+                loading.innerHTML = '<div class="empty-state"><p class="empty-state-text">Помилка завантаження</p></div>';
+            }
+        }
+
+        function switchTab(event, tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            if (tab === 'helpful') {
+                document.getElementById('helpfulContent').classList.add('active');
+            } else {
+                document.getElementById('notHelpfulContent').classList.add('active');
+            }
+        }
+    </script>
+</body>
+</html>
+```
+
+### 4. Update Main App
+
+**File:** `app/main.py`
+```python
+from app.api import admin_routes
+
+# Add admin router
+app.include_router(admin_routes.router)
+```
+
+### 5. Create Templates Directory
+```bash
+mkdir -p app/templates
+```
+
+### 6. Deployment Checklist
+```bash
+# 1. Create templates directory
+mkdir -p app/templates
+
+# 2. Add files
+touch app/templates/hr_admin.html
+touch app/api/admin_routes.py
+
+# 3. Commit
+git add app/templates/ app/api/admin_routes.py app/main.py
+git commit -m "Add HR admin dashboard matching gradus-ai.onrender.com design"
+git push origin main
+
+# 4. Access
+# https://gradus-ai.onrender.com/hr
+# Username: admin
+# Password: Maya_2026
+```
+
+## KEY DESIGN CHANGES
+
+**Matching gradus-ai.onrender.com:**
+- Cleaner, more minimal interface
+- Professional blue color scheme (#1e40af primary)
+- Refined typography with better letter-spacing
+- More subtle shadows and borders
+- Smooth transitions and animations
+- Modern card-based layout
+- Responsive grid system
+- Better spacing hierarchy
+- Status indicators and system info
+- Professional badges and labels
+
+**Additional Features:**
+- System operational status indicator
+- Content/presets/embeddings count in footer
+- Better loading states
+- Improved empty states
+- Smoother animations
+- Better mobile responsiveness
+- Cleaner table styling
+- More professional color palette
+
+The dashboard will perfectly match the main application's aesthetic at https://gradus-ai.onrender.com/ 🎨✨

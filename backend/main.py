@@ -195,6 +195,8 @@ app.include_router(admin_articles_router)
 app.include_router(chat_router)
 from routes.hr_routes import hr_router
 app.include_router(hr_router)
+from routes.hr_admin import router as hr_admin_router
+app.include_router(hr_admin_router)
 
 class ChatRequest(BaseModel):
     message: str
