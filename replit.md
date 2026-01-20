@@ -121,10 +121,16 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - Preset answers with fuzzy matching (85%+ threshold) - instant responses
       - Semantic search via OpenAI embeddings + Pinecone
       - Hybrid search combining keyword + semantic
-    - **API Endpoints:** `/api/hr/stats`, `/search`, `/answer`, `/content/{id}`, `/hybrid-search`, `/reload-presets`, `/feedback`
+    - **Telegram Integration:**
+      - `/hr` command opens interactive 6-category menu (about, onboarding, work, salary, tech, contacts)
+      - Inline keyboard navigation with category submenus and back buttons
+      - HR keyword detection (30+ keywords) routes questions to HR RAG, bypassing Maya
+      - Feedback keyboard (helpful/not helpful) for answer quality tracking
+      - Long message handling with smart splitting for 4096 char Telegram limit
+    - **API Endpoints:** `/api/hr/stats`, `/search`, `/answer`, `/content/{id}`, `/hybrid-search`, `/reload-presets`, `/feedback`, `/log-query`
     - **Database Tables:** hr_content, hr_embeddings, hr_menu_structure, hr_preset_answers
     - **Data File:** `backend/data/hr_knowledge_base.txt`
-    - **Services:** `backend/services/hr_content_processor.py`, `backend/services/hr_rag_service.py`
+    - **Services:** `backend/services/hr_content_processor.py`, `backend/services/hr_rag_service.py`, `backend/services/hr_keyboards.py`
 - **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching and duplicate detection. Includes Playwright headless browser support for JavaScript-rendered sites.
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Торговий Дім АВ Video Feature:** Maya sends vertical 9:16 video presentation when users ask about Торговий Дім АВ (Trading House AV):
