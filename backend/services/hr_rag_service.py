@@ -591,6 +591,46 @@ class HRRagService:
         except Exception as e:
             logger.error(f"Failed to get unanswered queries: {e}")
             return []
+    
+    async def get_common_questions(self, days: int = 30, limit: int = 20) -> List[Dict]:
+        """Get most commonly asked questions overall (regardless of preset match)"""
+        if not self.db_session:
+            return []
+        
+        try:
+            from sqlalchemy import text
+            
+            result = self.db_session.execute(text("""
+                SELECT 
+                    query_normalized,
+                    COUNT(*) as count,
+                    COUNT(*) FILTER (WHERE preset_matched = TRUE) as preset_hits,
+                    COUNT(*) FILTER (WHERE satisfied = TRUE) as satisfied_count,
+                    COUNT(*) FILTER (WHERE satisfied IS NOT NULL) as feedback_count,
+                    COALESCE(AVG(response_time_ms)::INTEGER, 0) as avg_response_time,
+                    MAX(created_at) as last_asked
+                FROM hr_query_log
+                WHERE created_at >= NOW() - make_interval(days => :days)
+                GROUP BY query_normalized
+                ORDER BY count DESC, last_asked DESC
+                LIMIT :limit
+            """), {'days': days, 'limit': limit})
+            
+            return [
+                {
+                    'query': row[0],
+                    'count': row[1],
+                    'preset_hits': row[2],
+                    'satisfaction_rate': round(row[3] / row[4] * 100, 1) if row[4] > 0 else None,
+                    'avg_response_time_ms': row[5],
+                    'last_asked': row[6].isoformat() if row[6] else None
+                }
+                for row in result.fetchall()
+            ]
+            
+        except Exception as e:
+            logger.error(f"Failed to get common questions: {e}")
+            return []
 
 
 def get_hr_rag_service(pinecone_index=None, db_session=None) -> HRRagService:

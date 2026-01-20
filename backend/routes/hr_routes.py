@@ -380,3 +380,22 @@ async def get_unanswered_queries(limit: int = Query(default=20, ge=1, le=100)):
     except Exception as e:
         logger.error(f"Unanswered queries error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@hr_router.get("/common-questions")
+async def get_common_questions(
+    days: int = Query(default=30, ge=1, le=90),
+    limit: int = Query(default=20, ge=1, le=100)
+):
+    """
+    Get most commonly asked questions overall (regardless of preset match)
+    """
+    try:
+        db_session = next(get_db())
+        service = HRRagService(pinecone_index=hr_pinecone_index, db_session=db_session)
+        
+        questions = await service.get_common_questions(days=days, limit=limit)
+        return {"common_questions": questions, "days": days}
+    except Exception as e:
+        logger.error(f"Common questions error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
