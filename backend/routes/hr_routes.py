@@ -52,6 +52,13 @@ class FeedbackRequest(BaseModel):
     comment: Optional[str] = None
 
 
+class LogQueryRequest(BaseModel):
+    user_id: Optional[int] = None
+    query: str
+    preset_matched: bool = False
+    content_ids: Optional[List[str]] = None
+
+
 class SearchResultModel(BaseModel):
     content_id: str
     title: str
@@ -277,3 +284,20 @@ async def get_stats():
     except Exception as e:
         logger.error(f"Stats error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@hr_router.post("/log-query")
+async def log_query(request: LogQueryRequest):
+    """
+    Log HR query for analytics (async, non-blocking)
+    """
+    try:
+        logger.info(
+            f"HR Query: user={request.user_id}, "
+            f"preset={request.preset_matched}, "
+            f"query='{request.query[:50]}...'"
+        )
+        return {"status": "logged"}
+    except Exception as e:
+        logger.warning(f"Log query error: {e}")
+        return {"status": "error"}

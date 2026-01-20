@@ -1,8 +1,9 @@
 """
 Unified Telegram Webhook Handler
-Handles BOTH:
+Handles:
 1. Approval callbacks (approve/reject buttons)
 2. Maya bot chat messages
+3. HR Bot RAG queries and menu navigation
 """
 
 from fastapi import APIRouter, Request, Depends
@@ -10,13 +11,20 @@ from sqlalchemy.orm import Session
 import os
 import httpx
 import logging
+import json
 from models import get_db
 from services.telegram_webhook import telegram_webhook_handler
+from services.hr_keyboards import (
+    create_main_menu_keyboard, create_category_keyboard,
+    create_feedback_keyboard, create_back_keyboard,
+    MENU_TITLES, split_long_message
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
+API_BASE_URL = os.getenv("APP_URL", "http://localhost:8000")
 
 
 @router.post("/webhook")
@@ -38,13 +46,17 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             callback_data = data['callback_query'].get('data', '')
             logger.info(f"🔘 Callback query: {callback_data}")
             
-            result = telegram_webhook_handler.handle_callback_query(
-                data['callback_query'],
-                db
-            )
-            
-            logger.info(f"✓ Callback processed: {result.get('status')}")
-            return result
+            if callback_data.startswith('hr_'):
+                result = await handle_hr_callback(data['callback_query'])
+                logger.info(f"✓ HR callback processed")
+                return result
+            else:
+                result = telegram_webhook_handler.handle_callback_query(
+                    data['callback_query'],
+                    db
+                )
+                logger.info(f"✓ Callback processed: {result.get('status')}")
+                return result
         
         elif "message" in data:
             message = data["message"]
@@ -83,6 +95,7 @@ async def process_telegram_message(message: dict):
                     "🍸 Бренди горілки, коньяку, вина\n"
                     "🍹 Коктейлі та рецепти\n"
                     "📊 Тренди та маркетинг\n\n"
+                    "👥 /hr - HR-довідник для співробітників\n\n"
                     "Я завжди рада допомогти!"
                 )
             elif text == "/help":
@@ -94,8 +107,26 @@ async def process_telegram_message(message: dict):
                     "• DOVBUSH коньяк\n"
                     "• Коктейлі та їх приготування\n"
                     "• Маркетингові тренди\n\n"
+                    "*Команди:*\n"
+                    "/hr - HR-довідник для співробітників\n"
+                    "/contacts - Контакти спеціалістів\n\n"
                     "Просто напишіть питання!"
                 )
+            elif text == "/hr":
+                user_name = message.get("from", {}).get("first_name", "")
+                await send_telegram_message_with_keyboard(
+                    chat_id,
+                    f"👋 *Вітаю, {user_name}!*\n\n"
+                    "Я Maya — HR асистент ТД АВ. Допоможу вам з:\n\n"
+                    "• Питаннями про зарплату та відпустки\n"
+                    "• Технічною підтримкою\n"
+                    "• Інформацією для новачків\n"
+                    "• Контактами спеціалістів\n\n"
+                    "Оберіть розділ або напишіть своє питання 👇",
+                    create_main_menu_keyboard()
+                )
+            elif text == "/contacts":
+                await fetch_and_send_hr_content(chat_id, None, 'section_appendix_22.')
             return
         
         from services.bestbrands_video import detect_bestbrands_trigger, handle_bestbrands_request
@@ -200,3 +231,255 @@ async def send_telegram_message(chat_id: int, text: str):
                 
         except Exception as e:
             logger.error(f"Error sending message: {e}")
+
+
+async def send_telegram_message_with_keyboard(chat_id: int, text: str, keyboard: dict = None):
+    """Send message with inline keyboard"""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.error("TELEGRAM_MAYA_BOT_TOKEN not set")
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage"
+    
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    
+    if keyboard:
+        payload["reply_markup"] = keyboard
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=10.0)
+            if response.status_code == 200:
+                return True
+            logger.error(f"Telegram API error: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        return False
+
+
+async def edit_telegram_message(chat_id: int, message_id: int, text: str, keyboard: dict = None):
+    """Edit existing message"""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/editMessageText"
+    
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    
+    if keyboard:
+        payload["reply_markup"] = keyboard
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=10.0)
+            return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Error editing message: {e}")
+        return False
+
+
+async def answer_callback(callback_id: str, text: str = ""):
+    """Answer callback query"""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        return
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/answerCallbackQuery"
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json={
+                "callback_query_id": callback_id,
+                "text": text
+            }, timeout=5.0)
+    except Exception as e:
+        logger.warning(f"Error answering callback: {e}")
+
+
+async def handle_hr_callback(callback_query: dict):
+    """Handle HR bot callbacks"""
+    callback_id = callback_query.get('id')
+    callback_data = callback_query.get('data', '')
+    message = callback_query.get('message', {})
+    chat_id = message.get('chat', {}).get('id')
+    message_id = message.get('message_id')
+    
+    await answer_callback(callback_id)
+    
+    try:
+        if callback_data.startswith('hr_menu:'):
+            menu_id = callback_data.split(':')[1]
+            
+            if menu_id == 'main':
+                await edit_telegram_message(
+                    chat_id, message_id,
+                    "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
+                    create_main_menu_keyboard()
+                )
+            elif menu_id in MENU_TITLES:
+                await edit_telegram_message(
+                    chat_id, message_id,
+                    f"{MENU_TITLES[menu_id]}\n\nОберіть підрозділ:",
+                    create_category_keyboard(menu_id)
+                )
+        
+        elif callback_data.startswith('hr_content:'):
+            content_id = callback_data.split(':')[1]
+            await fetch_and_send_hr_content(chat_id, message_id, content_id)
+        
+        elif callback_data.startswith('hr_feedback:'):
+            feedback_type = callback_data.split(':')[1]
+            if feedback_type == 'not_helpful':
+                await send_telegram_message_with_keyboard(
+                    chat_id,
+                    "Вибачте, що не змогла допомогти.\n\n"
+                    "Ви можете:\n"
+                    "• Переформулювати питання\n"
+                    "• Звернутися до HR департаменту\n"
+                    "• Подивитися контакти спеціалістів",
+                    create_main_menu_keyboard()
+                )
+        
+        elif callback_data == 'hr_ask':
+            await send_telegram_message(chat_id, "Напишіть своє питання, і я постараюся допомогти! 💬")
+        
+        return {"ok": True}
+    
+    except Exception as e:
+        logger.error(f"HR callback error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str):
+    """Fetch content from HR API and send to user"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{API_BASE_URL}/api/hr/content/{content_id}",
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                title = data.get('title', 'Інформація')
+                content = data.get('content', 'Контент недоступний')
+                
+                chunks = split_long_message(f"*{title}*\n\n{content}")
+                
+                for idx, chunk in enumerate(chunks):
+                    if idx == 0 and message_id:
+                        await edit_telegram_message(
+                            chat_id, message_id, chunk,
+                            create_back_keyboard() if len(chunks) == 1 else None
+                        )
+                    else:
+                        await send_telegram_message_with_keyboard(
+                            chat_id, chunk,
+                            create_back_keyboard() if idx == len(chunks) - 1 else None
+                        )
+            else:
+                if message_id:
+                    await edit_telegram_message(
+                        chat_id, message_id,
+                        "❌ Контент не знайдено. Спробуйте інший розділ.",
+                        create_main_menu_keyboard()
+                    )
+                else:
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        "❌ Контент не знайдено. Спробуйте інший розділ.",
+                        create_main_menu_keyboard()
+                    )
+    
+    except Exception as e:
+        logger.error(f"Error fetching HR content: {e}")
+        if message_id:
+            await edit_telegram_message(
+                chat_id, message_id,
+                "❌ Помилка завантаження. Спробуйте пізніше.",
+                create_main_menu_keyboard()
+            )
+        else:
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                "❌ Помилка завантаження. Спробуйте пізніше.",
+                create_main_menu_keyboard()
+            )
+
+
+async def handle_hr_question(chat_id: int, user_id: int, query: str):
+    """Process HR question via RAG system"""
+    await send_typing_action(chat_id)
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{API_BASE_URL}/api/hr/answer",
+                json={"query": query, "user_id": user_id},
+                timeout=15.0
+            )
+            
+            if response.status_code != 200:
+                await send_telegram_message_with_keyboard(
+                    chat_id,
+                    "❌ Вибачте, виникла помилка. Спробуйте ще раз або зверніться до HR.",
+                    create_main_menu_keyboard()
+                )
+                return
+            
+            data = response.json()
+            answer_text = data.get('text', data.get('answer', ''))
+            sources = data.get('sources', [])
+            is_preset = data.get('from_preset', False)
+            
+            if is_preset:
+                await send_telegram_message_with_keyboard(
+                    chat_id, answer_text, create_main_menu_keyboard()
+                )
+            else:
+                full_response = answer_text
+                if sources:
+                    full_response += "\n\n📚 *Джерела:*\n"
+                    for idx, source in enumerate(sources[:3], 1):
+                        full_response += f"{idx}. {source.get('title', 'Документ')}\n"
+                
+                await send_telegram_message_with_keyboard(
+                    chat_id, full_response, create_feedback_keyboard(sources)
+                )
+            
+            try:
+                await client.post(
+                    f"{API_BASE_URL}/api/hr/log-query",
+                    json={
+                        "user_id": user_id,
+                        "query": query,
+                        "preset_matched": is_preset,
+                        "content_ids": [s.get('content_id') for s in sources] if sources else []
+                    },
+                    timeout=5.0
+                )
+            except:
+                pass
+                
+    except httpx.TimeoutException:
+        await send_telegram_message_with_keyboard(
+            chat_id,
+            "⏱️ Запит обробляється довго. Спробуйте переформулювати або зверніться до HR.",
+            create_main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"HR question error: {e}")
+        await send_telegram_message_with_keyboard(
+            chat_id,
+            "❌ Не вдалося обробити запит. Зверніться до HR департаменту.",
+            create_main_menu_keyboard()
+        )
