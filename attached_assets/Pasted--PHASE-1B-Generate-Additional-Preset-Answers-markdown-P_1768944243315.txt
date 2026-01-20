@@ -1,0 +1,695 @@
+🎯 PHASE 1B: Generate Additional Preset Answers
+markdown# PROMPT FOR REPLIT AGENT:
+
+## TASK: Expand Preset Answers to 20+ for 70%+ Query Coverage
+
+### Current State
+- 6 preset answers currently loaded
+- Target: 20+ presets for 70-80% coverage of employee queries
+- Pattern matching uses fuzzy matching (85% threshold)
+
+### Requirements
+
+1. **Create Preset Generator Script**
+
+File: `scripts/generate_presets.py`
+```python
+"""
+Generate comprehensive preset answers for common HR questions
+Based on analysis of 800 employee queries
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+from app.database import get_db
+from sqlalchemy import text
+
+# Top 20 most common employee questions
+PRESET_ANSWERS = [
+    # Salary & Payments (highest volume)
+    {
+        'patterns': [
+            'зарплата', 'виплата', 'коли платять', 'коли зарплата',
+            'строки виплати', 'salary', 'payment'
+        ],
+        'answer': '''💰 **Строки виплати зарплати:**
+
+- **20-22 числа** — аванс на наступний місяць
+- **5-7 числа** — зарплата за відпрацьований місяць
+
+Виплати здійснюються своєчасно, згідно з законодавством України.''',
+        'content_ids': ['q13_salary_dates'],
+        'category': 'salary',
+        'priority': 10
+    },
+    
+    # Vacation queries
+    {
+        'patterns': [
+            'відпустка', 'скільки днів відпустки', 'відпочинок',
+            'оформити відпустку', 'vacation days'
+        ],
+        'answer': '''🏖️ **Відпустка:**
+
+- У вас є **18 робочих днів** (24 календарних) оплачуваної відпустки на рік
+- Нараховується **1,5 дня** за кожен відпрацьований місяць
+- Можна взяти після **6 місяців** роботи в компанії
+
+**Як оформити:** Запустіть СЗ в СЕД Бліц (шаблон №69)''',
+        'content_ids': ['q8_vacation_rules', 'q9_vacation_days'],
+        'category': 'vacation',
+        'priority': 10
+    },
+    
+    {
+        'patterns': [
+            'скільки відпустки маю', 'залишок відпустки', 'мої дні відпустки',
+            'перевірити відпустку'
+        ],
+        'answer': '''📊 **Перевірити залишок відпустки:**
+
+1. Відкрийте СЕД Бліц
+2. Створіть нову СЗ за шаблоном №69 (Відпустка)
+3. Система автоматично покаже ваш залишок днів
+
+💡 Залишок відображається БЕЗ врахування днів, які ви вказуєте в поточній СЗ.''',
+        'content_ids': ['q9_vacation_days'],
+        'category': 'vacation',
+        'priority': 8
+    },
+    
+    # Sick leave
+    {
+        'patterns': [
+            'лікарняний', 'захворів', 'як оформити лікарняний',
+            'больничный', 'sick leave'
+        ],
+        'answer': '''🏥 **Оформлення лікарняного:**
+
+**Під час хвороби:**
+1. Зверніться до свого сімейного лікаря
+2. Повідомте керівника та відповідального за табель
+
+**Після виходу:**
+1. Запустіть СЗ в СЕД Бліц (шаблон №69)
+2. Бухгалтерія автоматично побачить ваш лікарняний в електронній системі
+
+💰 Лікарняні оплачуються на 100%''',
+        'content_ids': ['q10_sick_leave'],
+        'category': 'sick_leave',
+        'priority': 9
+    },
+    
+    # Remote work
+    {
+        'patterns': [
+            'віддалена робота', 'удаленка', 'remote work',
+            'працювати з дому', 'home office'
+        ],
+        'answer': '''🏠 **Віддалена робота:**
+
+- У вас є **5 днів** віддаленої роботи на рік
+- Оформлення: СЗ в СЕД Бліц (шаблон №69.3)
+
+❗ Якщо потрібно більше 5 днів — заявка йде на погодження Генеральному менеджеру (потрібні вагомі аргументи).''',
+        'content_ids': ['q11_remote_work'],
+        'category': 'remote_work',
+        'priority': 7
+    },
+    
+    # Remote desktop setup
+    {
+        'patterns': [
+            'налаштувати віддаленку', 'урс не працює', 'remote desktop',
+            'віддалений робочий стол', 'не можу підключитись'
+        ],
+        'answer': '''💻 **Налаштування віддаленого робочого столу (УРС):**
+
+**Інструкція:** http://docs.google.com/document/d/1DSgEljpUkojs7M0LwsLV4UTOiwWOp7io/edit
+
+**Завантажити Forti:** http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
+
+**Проблеми з УРС:**
+- Корпоративна техніка: зателефонуйте 3636 або +380676235555
+- Особиста техніка: https://tdav.atlassian.net/servicedesk''',
+        'content_ids': ['q18_remote_setup', 'q19_remote_issues'],
+        'category': 'tech_support',
+        'priority': 9
+    },
+    
+    # SED Blitz access
+    {
+        'patterns': [
+            'доступ сед бліц', 'sed blitz', 'не працює бліц',
+            'як зайти в бліц', 'блиц не открывается'
+        ],
+        'answer': '''📄 **Доступ до СЕД Бліц:**
+
+**Отримати доступ:**
+1. Подайте заявку: https://tdav.atlassian.net/servicedesk
+2. Оберіть розділ "Питання пов'язані з СЕД Бліц / Додавання користувача"
+3. Вкажіть ПІБ та № службової записки на прийом
+
+**Логін/пароль:** Не потрібні, вхід через корпоративний обліковий запис
+
+**Проблеми:** Створіть заявку в тому ж порталі (розділ "Інші питання")''',
+        'content_ids': ['q6_sed_access', 'q16_sed_issues'],
+        'category': 'tech_support',
+        'priority': 8
+    },
+    
+    # Account creation
+    {
+        'patterns': [
+            'корпоративний обліковий запис', 'створити уз', 'логін пароль',
+            'corporate account', 'не можу зайти'
+        ],
+        'answer': '''🔐 **Створення корпоративного облікового запису (УЗ):**
+
+**Для нових співробітників:**
+Звертайтесь до:
+- Офіс-менеджера (філіали)
+- Територіального менеджера (відділ продажів)
+- Регіонального HR (центральний офіс)
+- Системного адміністратора (завод)
+
+**Термін:** УЗ створюється за 2 робочі дні до виходу на роботу
+
+**Що отримаєте:** Доступ до УРС, пошти, СЕД Бліц, спільних папок''',
+        'content_ids': ['q2_account_creation'],
+        'category': 'onboarding',
+        'priority': 6
+    },
+    
+    # Office supplies
+    {
+        'patterns': [
+            'канцтовари', 'замовити канцтовари', 'office supplies',
+            'ручка', 'папір', 'зошит'
+        ],
+        'answer': '''📝 **Замовлення канцтоварів:**
+
+- Замовлення формуються **щомісяця ~10 числа**
+- Відповідальний: офіс-менеджер філіалу / територіальний менеджер
+- Заявка відправляється секретарю бізнесу
+- **Термін доставки:** 2-3 тижні
+
+💡 Плануйте потреби заздалегідь!''',
+        'content_ids': ['q5_office_supplies'],
+        'category': 'supplies',
+        'priority': 5
+    },
+    
+    # Business trip
+    {
+        'patterns': [
+            'командировка', 'відрядження', 'business trip',
+            'оформити командировку'
+        ],
+        'answer': '''✈️ **Оформлення відрядження:**
+
+1. Запустіть СЗ в СЕД Бліц (шаблон №20 "График командировок")
+2. Вам знадобиться:
+   • Ранг вашої посади (Додаток №12)
+   • Норми командировочних витрат (Додаток №12.1)
+
+💡 СЗ подається **завчасно**, до планової поїздки.''',
+        'content_ids': ['q12_business_trip'],
+        'category': 'business_trip',
+        'priority': 6
+    },
+    
+    # PC/equipment issues
+    {
+        'patterns': [
+            'не працює комп\'ютер', 'зламався пк', 'pc broken',
+            'не включається ноутбук', 'проблема з технікою'
+        ],
+        'answer': '''💻 **Проблеми з ПК / ноутбуком:**
+
+**Подати заявку:**
+- Телефон: 3636 (внутрішній) або +380676235555
+- Email: support@const.dp.ua
+
+❗ **Важливо:** ІТ-департамент працює лише з корпоративною технікою. Для особистих пристроїв підтримка не надається.''',
+        'content_ids': ['q17_pc_issues'],
+        'category': 'tech_support',
+        'priority': 7
+    },
+    
+    # Mobile device issues
+    {
+        'patterns': [
+            'кпк не працює', 'планшет зламався', 'мобільна торгівля',
+            'не завантажується мт', 'tablet broken'
+        ],
+        'answer': '''📱 **Проблеми з КПК / планшетом:**
+
+**Проблема з пристроєм:** Звертайтесь до аналітика / територіального менеджера / супервайзера
+
+**Проблема з Мобільною Торгівлею:**
+- Помилки завантаження/вивантаження
+- Некоректні дані
+→ Також звертайтесь до аналітика/ТМ, вони знають куди передати''',
+        'content_ids': ['q15_mobile_device'],
+        'category': 'tech_support',
+        'priority': 6
+    },
+    
+    # Salary questions
+    {
+        'patterns': [
+            'питання по зарплаті', 'чому така зарплата', 'нарахування',
+            'до кого звертатись зарплата', 'salary question'
+        ],
+        'answer': '''💵 **Питання про нарахування зарплати:**
+
+**Звертайтесь до:**
+- **Фінансовий менеджер філіалу** (відділ продажів)
+- **Економіст підрозділу** (інші департаменти)
+
+Вони нададуть детальну інформацію про ваші нарахування.''',
+        'content_ids': ['q14_salary_questions'],
+        'category': 'salary',
+        'priority': 7
+    },
+    
+    # Contacts
+    {
+        'patterns': [
+            'контакти', 'до кого звертатись', 'хто відповідає',
+            'contacts', 'відповідальна особа'
+        ],
+        'answer': '''📞 **Контакти відповідальних спеціалістів:**
+
+**За напрямками:**
+- Логістика: Пєгусов Євген
+- Склад: Кузнєцов Дмитро  
+- Фінанси (продажі): Григоренко Алла
+- ІТ підтримка: Пода Віталій
+- Маркетинг: Чебаненко Анастасія
+- Юридичний відділ: Мєльніков Андрій
+- HR (кадри): Герасимова Катерина
+- Навчання: Корінной Олександр
+- Безпека: Глухой Олег
+
+📋 Повний список контактів в Додатку №22''',
+        'content_ids': ['appendix_22'],
+        'category': 'contacts',
+        'priority': 8
+    },
+    
+    # Conflict resolution
+    {
+        'patterns': [
+            'конфлікт на роботі', 'сварка з колегою', 'conflict',
+            'не можу працювати з', 'проблема в команді'
+        ],
+        'answer': '''🤝 **Вирішення робочих конфліктів:**
+
+**Алгоритм:**
+1. **Зупиніться** — відокремте емоції від фактів
+2. **Поговоріть напряму** — один-на-один, спокійно
+3. **Фокус на задачі**, а не на особистості
+4. **Шукайте рішення**, а не винного
+5. **Зафіксуйте домовленості** — хто, що, до коли
+
+**Якщо не вдалося:** Підключіть керівника або HR як нейтральну сторону
+
+💡 Замовчування конфлікту майже завжди гірше, ніж спокійна розмова.''',
+        'content_ids': ['q20_conflict'],
+        'category': 'hr',
+        'priority': 5
+    },
+    
+    # Documents for employment
+    {
+        'patterns': [
+            'документи для працевлаштування', 'що потрібно для роботи',
+            'documents for hire', 'прийом на роботу'
+        ],
+        'answer': '''📋 **Документи для прийому на роботу:**
+
+**Обов'язково:**
+- 1 фото 3×4
+- Паспорт або ID-карта (оригінал)
+- ІПН (оригінал)
+- Виписка про прописку (якщо ID-карта)
+- Диплом про вищу освіту
+- Свідоцтво про народження дітей (до 14 років)
+- Довідка з ПФУ про соц.страхування
+
+**Як отримати довідку з ПФУ:** Інструкція в повній відповіді''',
+        'content_ids': ['q1_documents'],
+        'category': 'onboarding',
+        'priority': 7
+    },
+    
+    # Resignation
+    {
+        'patterns': [
+            'звільнення', 'хочу звільнитись', 'як звільнитись',
+            'resignation', 'quit job'
+        ],
+        'answer': '''📤 **Процес звільнення:**
+
+**Перед рішенням:**
+Дайте собі час подумати. Складні періоди — це нормально і часто точка росту.
+
+**Якщо рішення прийняте:**
+1. Поговоріть з керівником про ситуацію
+2. Обговоріть можливі зміни (задачі, роль, формат)
+3. Якщо залишаєтесь при рішенні — звертайтесь до офіс-менеджера
+
+💬 Головне — приймати рішення без поспіху, на холодну голову.''',
+        'content_ids': ['q26_resignation'],
+        'category': 'hr',
+        'priority': 4
+    },
+    
+    # Company structure
+    {
+        'patterns': [
+            'структура компанії', 'департаменти', 'керівництво',
+            'company structure', 'хто керівник'
+        ],
+        'answer': '''🏢 **Структура компанії:**
+
+**Департаменти:**
+- Департамент виробництва
+- Департамент продажів
+- Департамент маркетингу
+- Департамент фінансів, обліку та аналітики
+- Департамент персоналу
+- Відділ експорту
+- Департамент безпеки
+
+**Керівництво:**
+- Виконавчий директор: Василенко В.В.
+- Директор з продажів: Гоц І.С.
+- Директор фінансів: Горбенко А.П.
+- Директор з персоналу: в.о. Решетілова Н.А.
+- Експорт: Шаповалов Є.О.
+- Безпека: Глухой О.Г.''',
+        'content_ids': ['section_4_structure'],
+        'category': 'about',
+        'priority': 3
+    },
+    
+    # Company info
+    {
+        'patterns': [
+            'про компанію', 'скільки працівників', 'about company',
+            'історія компанії', 'коли заснована'
+        ],
+        'answer': '''🏢 **ТД АВ — коротко:**
+
+- **800+ співробітників**
+- **25+ років** на ринку (з 1999 року)
+- **37 млн бутылок** щорічно
+- **40 000+ торгових точок** по Україні
+- Виробнича потужність: **6 млн бутылок/місяць**
+
+**Мета:** №1 на алкогольному ринку України
+
+🎬 Детальніше дивіться у вітальному відео!''',
+        'content_ids': ['section_1_general'],
+        'category': 'about',
+        'priority': 3
+    }
+]
+
+async def generate_and_upload_presets():
+    """Generate and upload all preset answers"""
+    
+    async with get_db() as db:
+        # Clear existing presets (optional - remove if want to keep old ones)
+        # await db.execute(text("DELETE FROM hr_preset_answers"))
+        
+        for idx, preset in enumerate(PRESET_ANSWERS, 1):
+            # Convert patterns to PostgreSQL array
+            patterns_array = '{' + ','.join(f'"{p}"' for p in preset['patterns']) + '}'
+            content_ids_array = '{' + ','.join(f'"{c}"' for c in preset['content_ids']) + '}'
+            
+            query = text("""
+                INSERT INTO hr_preset_answers 
+                (question_pattern, answer_text, content_ids, priority, category, is_active)
+                VALUES 
+                (:pattern, :answer, :content_ids, :priority, :category, true)
+                ON CONFLICT DO NOTHING
+            """)
+            
+            # Use first pattern as main pattern
+            await db.execute(query, {
+                'pattern': preset['patterns'][0],
+                'answer': preset['answer'],
+                'content_ids': content_ids_array,
+                'priority': preset.get('priority', 5),
+                'category': preset.get('category', 'general')
+            })
+            
+            print(f"✅ Added preset #{idx}: {preset['patterns'][0][:50]}...")
+        
+        await db.commit()
+    
+    print(f"\n🎉 Successfully added {len(PRESET_ANSWERS)} preset answers!")
+    print("\n📊 Categories:")
+    categories = {}
+    for p in PRESET_ANSWERS:
+        cat = p.get('category', 'general')
+        categories[cat] = categories.get(cat, 0) + 1
+    
+    for cat, count in sorted(categories.items()):
+        print(f"   {cat}: {count}")
+
+if __name__ == "__main__":
+    asyncio.run(generate_and_upload_presets())
+```
+
+2. **Update Pattern Matching Logic**
+
+File: `app/services/hr_rag_service.py`
+
+Enhance the preset matcher to handle multiple patterns per preset:
+```python
+async def check_preset_answer(self, query: str) -> Optional[Dict]:
+    """
+    Check if query matches any preset answer
+    Now supports multiple patterns per preset
+    """
+    query_lower = query.lower().strip()
+    
+    async with get_db() as db:
+        # Get all active presets ordered by priority
+        result = await db.execute(text("""
+            SELECT 
+                id, 
+                question_pattern, 
+                answer_text, 
+                content_ids,
+                priority
+            FROM hr_preset_answers 
+            WHERE is_active = true 
+            ORDER BY priority DESC, id
+        """))
+        
+        presets = result.fetchall()
+    
+    # Check each preset's patterns
+    for preset in presets:
+        pattern = preset[1].lower()
+        
+        # Exact match
+        if pattern in query_lower or query_lower in pattern:
+            await self._increment_preset_usage(preset[0])
+            return {
+                'answer': preset[2],
+                'content_ids': preset[3],
+                'source': 'preset',
+                'match_type': 'exact'
+            }
+        
+        # Fuzzy match (85% threshold)
+        similarity = fuzz.ratio(query_lower, pattern)
+        if similarity >= 85:
+            await self._increment_preset_usage(preset[0])
+            return {
+                'answer': preset[2],
+                'content_ids': preset[3],
+                'source': 'preset',
+                'match_type': 'fuzzy',
+                'similarity': similarity
+            }
+    
+    return None
+
+async def _increment_preset_usage(self, preset_id: int):
+    """Track preset usage for analytics"""
+    async with get_db() as db:
+        await db.execute(text("""
+            UPDATE hr_preset_answers 
+            SET usage_count = usage_count + 1 
+            WHERE id = :id
+        """), {'id': preset_id})
+        await db.commit()
+```
+
+3. **Add Category-Based Filtering**
+
+Update the database schema to support categories:
+```sql
+-- Already exists in schema, just make sure it's there
+ALTER TABLE hr_preset_answers 
+ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+
+CREATE INDEX IF NOT EXISTS idx_preset_category 
+ON hr_preset_answers(category);
+```
+
+4. **Create Preset Management API**
+
+File: `app/api/hr_routes.py`
+
+Add endpoints for managing presets:
+```python
+@router.get("/presets")
+async def get_all_presets(
+    category: str = None,
+    active_only: bool = True
+):
+    """Get all preset answers, optionally filtered by category"""
+    
+    query = """
+        SELECT 
+            id,
+            question_pattern,
+            answer_text,
+            content_ids,
+            category,
+            priority,
+            usage_count,
+            is_active
+        FROM hr_preset_answers
+        WHERE 1=1
+    """
+    
+    params = {}
+    
+    if active_only:
+        query += " AND is_active = true"
+    
+    if category:
+        query += " AND category = :category"
+        params['category'] = category
+    
+    query += " ORDER BY priority DESC, usage_count DESC"
+    
+    async with get_db() as db:
+        result = await db.execute(text(query), params)
+        presets = result.fetchall()
+    
+    return {
+        'count': len(presets),
+        'presets': [
+            {
+                'id': p[0],
+                'pattern': p[1],
+                'answer': p[2],
+                'content_ids': p[3],
+                'category': p[4],
+                'priority': p[5],
+                'usage_count': p[6],
+                'is_active': p[7]
+            }
+            for p in presets
+        ]
+    }
+
+@router.get("/presets/top-used")
+async def get_top_used_presets(limit: int = 10):
+    """Get most frequently used presets"""
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                question_pattern,
+                answer_text,
+                category,
+                usage_count
+            FROM hr_preset_answers
+            WHERE is_active = true
+            ORDER BY usage_count DESC
+            LIMIT :limit
+        """), {'limit': limit})
+        
+        presets = result.fetchall()
+    
+    return {
+        'top_presets': [
+            {
+                'pattern': p[0],
+                'answer_preview': p[1][:100] + '...',
+                'category': p[2],
+                'usage_count': p[3]
+            }
+            for p in presets
+        ]
+    }
+```
+
+### Run Commands
+```bash
+# Generate and upload presets
+python scripts/generate_presets.py
+
+# Verify via API
+curl http://localhost:8000/api/hr/presets | jq '.count'
+# Should show 20+
+
+# Test preset matching
+curl -X POST http://localhost:8000/api/hr/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "коли виплачують зарплату"}'
+
+# Check top used presets (after some usage)
+curl http://localhost:8000/api/hr/presets/top-used
+```
+
+### Acceptance Criteria
+- ✅ 20+ preset answers loaded
+- ✅ Covers top employee query categories (salary, vacation, tech, onboarding)
+- ✅ Multiple search patterns per preset
+- ✅ Category-based organization
+- ✅ Priority-based matching
+- ✅ Usage tracking functional
+- ✅ API endpoints working
+- ✅ Fuzzy matching at 85% threshold
+
+### Testing
+Test various query phrasings:
+```bash
+# Should all match salary preset
+"коли платять зарплату"
+"строки виплати"
+"when is salary"
+
+# Should match vacation preset  
+"скільки днів відпустки"
+"відпочинок"
+"vacation days"
+```
+
+### Files to Create/Modify
+- `scripts/generate_presets.py` (new)
+- `app/services/hr_rag_service.py` (update)
+- `app/api/hr_routes.py` (add endpoints)
+
+### Notes
+- Presets should be conversational and emoji-friendly
+- Include action buttons where applicable
+- Always reference source content_ids
+- Monitor usage to improve popular presets

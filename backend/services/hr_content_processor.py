@@ -62,16 +62,39 @@ class HRContentProcessor:
     CATEGORY_MAPPING = {
         'документи': 'onboarding',
         'працевлаштування': 'onboarding',
+        'прийом': 'onboarding',
         'зарплата': 'salary',
         'виплата': 'salary',
+        'аванс': 'salary',
+        'нарахування': 'salary',
         'відпустка': 'vacation',
+        'відпочинок': 'vacation',
         'лікарняний': 'sick_leave',
+        'захворів': 'sick_leave',
+        'хвороба': 'sick_leave',
         'графік': 'schedule',
+        'робочий час': 'schedule',
         'техніка': 'tech_support',
         'обладнання': 'tech_support',
+        'ноутбук': 'tech_support',
+        'комп\'ютер': 'tech_support',
+        'урс': 'tech_support',
+        'віддалений': 'remote_work',
+        'удаленка': 'remote_work',
         'контакт': 'contacts',
+        'телефон': 'contacts',
         'компанія': 'about',
+        'структура': 'about',
         'бонус': 'bonuses',
+        'премія': 'bonuses',
+        'командировка': 'business_trip',
+        'відрядження': 'business_trip',
+        'канцтовари': 'supplies',
+        'меблі': 'supplies',
+        'конфлікт': 'hr',
+        'звільнення': 'hr',
+        'юридич': 'legal',
+        'договір': 'legal',
     }
     
     def __init__(self):
@@ -213,14 +236,44 @@ class HRContentProcessor:
             'відпустка', 'лікарняний', 'графік', 'робочий',
             'техніка', 'ноутбук', 'пошта', 'slack', 'vpn',
             'контакт', 'hr', 'бухгалтерія', 'керівник',
-            'навчання', 'адаптація', 'випробувальний'
+            'навчання', 'адаптація', 'випробувальний',
+            'сед', 'бліц', 'урс', 'віддалений', 'командировка',
+            'відрядження', 'канцтовари', 'конфлікт', 'звільнення',
+            'клієнт', 'crm', 'ліміт', 'бронювання', 'меблі',
+            'обладнання', 'кпк', 'планшет', 'мобільна торгівля'
         ]
         
         for kw in hr_keywords:
             if kw in text_lower:
                 keywords.append(kw)
         
-        return list(set(keywords))[:10]
+        return list(set(keywords))[:15]
+    
+    def _parse_table(self, table_text: str) -> dict:
+        """Parse markdown tables into structured format"""
+        lines = [l for l in table_text.strip().split('\n') if l.strip()]
+        if len(lines) < 2:
+            return {'headers': [], 'rows': [], 'row_count': 0, 'column_count': 0}
+        
+        header = [cell.strip() for cell in lines[0].split('|') if cell.strip()]
+        rows = []
+        
+        for line in lines[2:]:
+            if '|' in line and '---' not in line:
+                cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+                if cells:
+                    rows.append(cells)
+        
+        return {
+            'headers': header,
+            'rows': rows,
+            'row_count': len(rows),
+            'column_count': len(header)
+        }
+    
+    def _detect_table_in_content(self, content: str) -> bool:
+        """Check if content contains a markdown table"""
+        return '|' in content and '---' in content
     
     def chunk_content(self, content: str, max_chars: int = 2000) -> List[str]:
         """Split content into overlapping chunks"""

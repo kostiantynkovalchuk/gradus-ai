@@ -1,0 +1,218 @@
+🎯 PHASE 1A: Parse & Upload Remaining Content
+Context
+The HR knowledge base currently has 18/26 content items loaded. We need to add the remaining 8 questions + all appendices for complete coverage.
+Task
+Update the content processor to handle ALL sections from the Google Doc and ensure 100% upload completion.
+markdown# PROMPT FOR REPLIT AGENT:
+
+## TASK: Complete HR Knowledge Base Upload
+
+### Current State
+- File: `data/hr_knowledge_base.txt` contains partial content (18 items)
+- Missing: Questions 19-26, detailed appendices, legal section
+- Parser: `app/services/hr_content_processor.py` working but needs enhancement
+
+### Requirements
+
+1. **Update data/hr_knowledge_base.txt**
+   - Add missing questions 19-26:
+     * Q19: Що робити якщо не працює УРС? (Remote desktop issues)
+     * Q20: Як урегулювати конфлікт на роботі? (Conflict resolution)
+     * Q21: Як замовити основні фонди? (Order furniture/equipment)
+     * Q22: Відповідальні спеціалісти ЦО (Responsible specialists)
+     * Q23: Як подати заявку на бронювання? (Reservation request)
+     * Q24: Як завести нового клієнта? (New client in system)
+     * Q25: Як переглянути ліміти клієнтів? (Review client limits)
+     * Q26: Як правильно запустити процес звільнення? (Resignation process)
+
+   - Add appendices as separate sections:
+     * Appendix 12: Position ranks table (from Google Doc)
+     * Appendix 12.1: Business trip expense norms
+     * Appendix 21: Furniture ordering workflow diagram
+     * Appendix 21.1: Equipment ordering workflow
+     * Appendix 22: Contact list table (already have this)
+
+2. **Enhance Content Parser**
+
+File: `app/services/hr_content_processor.py`
+
+Add better table detection and formatting:
+```python
+def _parse_table(self, table_text: str) -> dict:
+    """
+    Parse markdown tables into structured format
+    Handles both simple and complex tables
+    """
+    lines = table_text.strip().split('\n')
+    
+    # Skip separator line (|---|---|)
+    header = [cell.strip() for cell in lines[0].split('|') if cell.strip()]
+    rows = []
+    
+    for line in lines[2:]:  # Skip header and separator
+        if '|' in line:
+            cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+            if cells:
+                rows.append(cells)
+    
+    return {
+        'headers': header,
+        'rows': rows,
+        'row_count': len(rows),
+        'column_count': len(header)
+    }
+
+def _extract_appendix(self, content: str, appendix_num: str) -> ContentItem:
+    """
+    Extract appendix content (tables, workflows, etc.)
+    """
+    # Detect if it's a table
+    if '|' in content and '---' in content:
+        table_data = self._parse_table(content)
+        
+        return ContentItem(
+            content_id=f'appendix_{appendix_num}',
+            content_type='table',
+            category='reference',
+            title=f'Додаток №{appendix_num}',
+            content=content,
+            metadata={'table_data': table_data}
+        )
+    else:
+        # Text appendix
+        return ContentItem(
+            content_id=f'appendix_{appendix_num}',
+            content_type='text',
+            category='reference',
+            title=f'Додаток №{appendix_num}',
+            content=content
+        )
+```
+
+3. **Add Legal Section Parsing**
+
+The Google Doc has "Юридические вопросы" section - add parser for it:
+```python
+def _parse_legal_section(self, content: str) -> List[ContentItem]:
+    """
+    Parse legal questions section
+    Includes contract types and common legal inquiries
+    """
+    items = []
+    
+    # Split by contract type headers
+    sections = re.split(r'##\s+(.+)', content)
+    
+    for i in range(1, len(sections), 2):
+        title = sections[i].strip()
+        body = sections[i+1].strip() if i+1 < len(sections) else ""
+        
+        items.append(ContentItem(
+            content_id=f'legal_{slugify(title)}',
+            content_type='text',
+            category='legal',
+            subcategory='contracts',
+            title=title,
+            content=body,
+            keywords=self._extract_keywords(title + " " + body)
+        ))
+    
+    return items
+```
+
+4. **Update Upload Script**
+
+File: `scripts/upload_hr_data.py`
+
+Add progress tracking and validation:
+```python
+async def main():
+    processor = HRContentProcessor()
+    
+    # Read content
+    doc_path = "data/hr_knowledge_base.txt"
+    with open(doc_path, 'r', encoding='utf-8') as f:
+        doc_text = f.read()
+    
+    print("📖 Parsing content...")
+    content_items = processor.parse_google_doc(doc_text)
+    
+    # Validation
+    expected_questions = 26
+    expected_appendices = 5
+    
+    questions = [c for c in content_items if c.content_id.startswith('q')]
+    appendices = [c for c in content_items if c.content_id.startswith('appendix_')]
+    
+    print(f"\n✅ Parsed {len(content_items)} items:")
+    print(f"   📝 Questions: {len(questions)}/{expected_questions}")
+    print(f"   📎 Appendices: {len(appendices)}/{expected_appendices}")
+    print(f"   📚 Other sections: {len(content_items) - len(questions) - len(appendices)}")
+    
+    if len(questions) < expected_questions:
+        print(f"\n⚠️  WARNING: Only {len(questions)}/{expected_questions} questions found")
+        missing = set(range(1, expected_questions + 1)) - set(
+            int(q.content_id[1:].split('_')[0]) for q in questions if q.content_id[1:].split('_')[0].isdigit()
+        )
+        print(f"   Missing questions: {sorted(missing)}")
+    
+    # Continue with embedding and upload...
+    print("\n🔄 Generating embeddings...")
+    await processor.process_and_embed(content_items)
+    
+    print("☁️  Uploading to Pinecone...")
+    await processor.upload_to_pinecone(content_items)
+    
+    print("💾 Storing in PostgreSQL...")
+    await processor.store_in_database(content_items)
+    
+    # Stats
+    print("\n" + "="*50)
+    print("✨ UPLOAD COMPLETE!")
+    print("="*50)
+    print(f"Total content items: {len(content_items)}")
+    print(f"Total chunks created: {processor.total_chunks}")
+    print(f"Average chunks per item: {processor.total_chunks / len(content_items):.1f}")
+    print(f"Pinecone vectors uploaded: {processor.total_chunks}")
+    print("="*50)
+```
+
+5. **Run Upload and Verify**
+```bash
+# Execute upload
+python scripts/upload_hr_data.py
+
+# Verify via API
+curl http://localhost:8000/api/hr/stats
+```
+
+### Acceptance Criteria
+- ✅ 26 questions loaded (q1 through q26)
+- ✅ 5 appendices loaded (appendix_12, 12_1, 21, 21_1, 22)
+- ✅ Legal section parsed and loaded
+- ✅ All tables properly structured in metadata
+- ✅ No duplicate content_ids
+- ✅ GET /api/hr/stats shows 35+ content items
+- ✅ All embeddings uploaded to Pinecone
+- ✅ Upload script shows validation summary
+
+### Testing
+Test search for newly added content:
+```bash
+curl -X POST http://localhost:8000/api/hr/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "як урегулювати конфлікт", "top_k": 3}'
+
+# Should return Q20 about conflict resolution
+```
+
+### Files to Modify
+- `data/hr_knowledge_base.txt` (add content)
+- `app/services/hr_content_processor.py` (enhance parser)
+- `scripts/upload_hr_data.py` (add validation)
+
+### Notes
+- Preserve existing 18 items, just add new ones
+- Use Ukrainian language for all content
+- Maintain consistent formatting
+- Test incrementally (parse → embed → upload)
