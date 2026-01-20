@@ -127,6 +127,8 @@ The system employs a FastAPI backend and a React frontend to manage a sophistica
       - HR keyword detection (30+ keywords) routes questions to HR RAG, bypassing Maya
       - Feedback keyboard (helpful/not helpful) for answer quality tracking
       - Long message handling with smart splitting for 4096 char Telegram limit
+      - Video content delivery with text fallback (videos not looped)
+      - 3 video sections: company overview, values, history (video_url updated when uploaded)
     - **API Endpoints:** `/api/hr/stats`, `/search`, `/answer`, `/content/{id}`, `/hybrid-search`, `/reload-presets`, `/feedback`, `/log-query`
     - **Database Tables:** hr_content, hr_embeddings, hr_menu_structure, hr_preset_answers
     - **Data File:** `backend/data/hr_knowledge_base.txt`
