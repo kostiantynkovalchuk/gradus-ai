@@ -301,9 +301,9 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         if video_source.startswith('http'):
             base_dir = pathlib.Path(__file__).parent.parent / "static" / "videos"
             
-            # Try webm first (smaller), then mp4
+            # Use mp4 (Telegram doesn't support webm playback)
             local_path = None
-            for ext in ['webm', 'mp4']:
+            for ext in ['mp4']:
                 candidate = base_dir / f"{base_name}.{ext}"
                 if candidate.exists():
                     local_path = candidate
