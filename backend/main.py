@@ -1552,6 +1552,12 @@ if backend_assets.exists():
     app.mount("/attached_assets", StaticFiles(directory=backend_assets), name="backend_assets")
     logger.info(f"Backend assets mounted at /attached_assets")
 
+# Mount static videos for HR bot
+static_videos = Path(__file__).parent / "static" / "videos"
+if static_videos.exists():
+    app.mount("/static/videos", StaticFiles(directory=static_videos), name="static_videos")
+    logger.info(f"Static videos mounted at /static/videos")
+
 # Always define SPA routes - they check path at request time
 @app.get("/")
 @app.head("/")  # Support HEAD requests for health checks
