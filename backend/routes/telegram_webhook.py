@@ -366,8 +366,8 @@ async def send_telegram_message_with_keyboard(chat_id: int, text: str, keyboard:
 
 
 async def send_legal_document(chat_id: int, doc_id: str):
-    """Send legal document file to user"""
-    from urllib.parse import quote
+    """Send legal document file to user by uploading directly"""
+    import pathlib
     
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.error("TELEGRAM_MAYA_BOT_TOKEN not set")
@@ -378,23 +378,33 @@ async def send_legal_document(chat_id: int, doc_id: str):
         await send_telegram_message(chat_id, "❌ Документ не знайдено")
         return False
     
-    file_path = contract['file']
+    file_rel_path = contract['file']
     doc_name = contract['name']
-    base_url = os.getenv("APP_URL", "https://gradus-ai.onrender.com")
-    encoded_path = quote(file_path, safe='/')
-    file_url = f"{base_url}/static/legal_contracts/{encoded_path}"
+    
+    # Build absolute path to the file
+    base_dir = pathlib.Path(__file__).parent.parent / "static" / "legal_contracts"
+    full_path = base_dir / file_rel_path
+    
+    if not full_path.exists():
+        logger.error(f"Legal document file not found: {full_path}")
+        await send_telegram_message(chat_id, "❌ Файл документа не знайдено")
+        return False
     
     url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendDocument"
     
-    payload = {
-        "chat_id": chat_id,
-        "document": file_url,
-        "caption": f"📄 {doc_name}"
-    }
-    
     try:
+        # Read file and upload directly to Telegram
+        with open(full_path, 'rb') as f:
+            file_content = f.read()
+        
+        # Get filename from path
+        filename = full_path.name
+        
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
+            files = {'document': (filename, file_content)}
+            data = {'chat_id': str(chat_id), 'caption': f"📄 {doc_name}"}
+            response = await client.post(url, files=files, data=data, timeout=60.0)
+            
             if response.status_code == 200:
                 logger.info(f"Sent legal document {doc_id} to chat {chat_id}")
                 return True
@@ -404,6 +414,7 @@ async def send_legal_document(chat_id: int, doc_id: str):
                 return False
     except Exception as e:
         logger.error(f"Error sending document: {e}")
+        await send_telegram_message(chat_id, f"❌ Помилка відправки документа. Спробуйте пізніше.")
         return False
 
 

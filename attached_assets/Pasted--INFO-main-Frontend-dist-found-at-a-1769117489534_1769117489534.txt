@@ -1,0 +1,53 @@
+==> ///////////////////////////////////////////////////////////
+INFO:main:Frontend dist found at: /app/frontend/dist
+INFO:     10.17.175.5:52538 - "GET / HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:main:Shutting down scheduler...
+INFO:apscheduler.scheduler:Scheduler has been shut down
+INFO:services.scheduler:Scheduler stopped
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1]
+ERROR:sqlalchemy.pool.impl.QueuePool:Exception during reset or similar
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 985, in _finalize_fairy
+    fairy._reset(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 1433, in _reset
+    pool._dialect.do_rollback(self)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 712, in do_rollback
+    dbapi_connection.rollback()
+psycopg2.OperationalError: SSL connection has been closed unexpectedly
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:main
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.20.141.194:43222 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:legal
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:     10.19.191.197:40078 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:legal_tdav
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.17.80.68:47058 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:legal_tdav_marketing
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.22.248.196:46168 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_doc:tdav_002_marketing
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:     10.17.175.5:33440 - "GET /static/legal_contracts/td_av/002_%D0%94%D0%BE%D0%B3%D0%BE%D0%B2%D1%96%D1%80_%D0%BC%D0%B0%D1%80%D0%BA%D0%B5%D1%82%D0%B8%D0%BD%D0%B3%D1%83_%D0%A2%D0%94_%D0%90%D0%92_2026.doc HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendDocument "HTTP/1.1 400 Bad Request"
+ERROR:routes.telegram_webhook:Telegram API error sending document: {"ok":false,"error_code":400,"description":"Bad Request: failed to get HTTP URL content"}
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ Message sent to chat 441389791
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.20.167.67:34174 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
