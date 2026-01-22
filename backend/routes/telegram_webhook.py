@@ -575,6 +575,7 @@ async def handle_hr_callback(callback_query: dict):
     message = callback_query.get('message', {})
     chat_id = message.get('chat', {}).get('id')
     message_id = message.get('message_id')
+    is_video_message = 'video' in message
     
     await answer_callback(callback_id)
     
@@ -583,17 +584,33 @@ async def handle_hr_callback(callback_query: dict):
             menu_id = callback_data.split(':')[1]
             
             if menu_id == 'main':
-                await edit_telegram_message(
-                    chat_id, message_id,
-                    "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
-                    create_main_menu_keyboard()
-                )
+                if is_video_message:
+                    await delete_telegram_message(chat_id, message_id)
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
+                        create_main_menu_keyboard()
+                    )
+                else:
+                    await edit_telegram_message(
+                        chat_id, message_id,
+                        "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
+                        create_main_menu_keyboard()
+                    )
             elif menu_id in MENU_TITLES:
-                await edit_telegram_message(
-                    chat_id, message_id,
-                    f"{MENU_TITLES[menu_id]}\n\nОберіть підрозділ:",
-                    create_category_keyboard(menu_id)
-                )
+                if is_video_message:
+                    await delete_telegram_message(chat_id, message_id)
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        f"{MENU_TITLES[menu_id]}\n\nОберіть підрозділ:",
+                        create_category_keyboard(menu_id)
+                    )
+                else:
+                    await edit_telegram_message(
+                        chat_id, message_id,
+                        f"{MENU_TITLES[menu_id]}\n\nОберіть підрозділ:",
+                        create_category_keyboard(menu_id)
+                    )
         
         elif callback_data.startswith('hr_doc:'):
             doc_id = callback_data.split(':')[1]
