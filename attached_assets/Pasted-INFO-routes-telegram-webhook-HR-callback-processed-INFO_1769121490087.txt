@@ -1,0 +1,50 @@
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.22.216.130:54676 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:main
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.22.216.130:54676 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:main
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 400 Bad Request"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.18.94.4:37274 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:about
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.20.40.3:57322 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:video_overview
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:     10.19.149.65:49322 - "GET /api/hr/content/video_overview HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: GET https://gradus-ai.onrender.com/api/hr/content/video_overview "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/deleteMessage "HTTP/1.1 200 OK"
+ERROR:routes.telegram_webhook:Error fetching HR content: No module named 'database'
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 400 Bad Request"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.21.157.122:40312 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'message']
+INFO:routes.telegram_webhook:💬 Message from user: /hr
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:     10.22.243.130:34730 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:about
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.17.177.68:50960 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:video_overview
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:     10.18.147.195:50096 - "GET /api/hr/content/video_overview HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: GET https://gradus-ai.onrender.com/api/hr/content/video_overview "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/deleteMessage "HTTP/1.1 200 OK"
+ERROR:routes.telegram_webhook:Error fetching HR content: No module named 'database'
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 400 Bad Request"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.20.40.3:54122 - "POST /api/telegram/webhook HTTP/1.1" 200 OK

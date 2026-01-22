@@ -282,7 +282,7 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         base_name = video_filename.rsplit('.', 1)[0]  # Remove extension
         
         # Check for cached file_id in database
-        from database import get_db
+        from models import get_db
         from models.content import MediaFile
         try:
             with next(get_db()) as db:
