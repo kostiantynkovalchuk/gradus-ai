@@ -265,17 +265,93 @@ async def delete_telegram_message(chat_id: int, message_id: int):
         return False
 
 
-async def send_telegram_video(chat_id: int, video_file_id: str, caption: str = None, reply_markup: dict = None):
-    """Send a video to a Telegram chat (no loop)"""
+async def send_telegram_video(chat_id: int, video_source: str, caption: str = None, reply_markup: dict = None):
+    """Send a video to a Telegram chat - handles both file_id and local paths"""
+    import pathlib
+    
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.warning("TELEGRAM_MAYA_BOT_TOKEN not set")
         return False
     
     url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo"
     
+    # Check if source is a URL - extract filename to find local file
+    if video_source.startswith('http'):
+        # Extract video filename from URL (e.g., video_overview.mp4)
+        video_filename = video_source.split('/')[-1]
+        
+        # Check for cached file_id in database
+        from database import get_db
+        from models.content import MediaFile
+        try:
+            with next(get_db()) as db:
+                cached = db.query(MediaFile).filter(
+                    MediaFile.file_type == 'video',
+                    MediaFile.original_filename == video_filename
+                ).first()
+                if cached and cached.telegram_file_id:
+                    video_source = cached.telegram_file_id
+                    logger.info(f"Using cached file_id for {video_filename}")
+        except Exception as e:
+            logger.warning(f"Could not check cache: {e}")
+        
+        # If still URL, try to upload local file directly
+        if video_source.startswith('http'):
+            base_dir = pathlib.Path(__file__).parent.parent / "static" / "videos"
+            local_path = base_dir / video_filename
+            
+            if local_path.exists():
+                try:
+                    with open(local_path, 'rb') as f:
+                        file_content = f.read()
+                    
+                    data = {
+                        'chat_id': str(chat_id),
+                        'supports_streaming': 'true'
+                    }
+                    if caption:
+                        data['caption'] = caption[:1024]
+                        data['parse_mode'] = 'Markdown'
+                    if reply_markup:
+                        data['reply_markup'] = json.dumps(reply_markup)
+                    
+                    async with httpx.AsyncClient(timeout=120.0) as client:
+                        files = {'video': (video_filename, file_content, 'video/mp4')}
+                        response = await client.post(url, files=files, data=data)
+                        
+                        if response.status_code == 200:
+                            result = response.json()
+                            # Cache the file_id for future use
+                            if result.get('ok') and result.get('result', {}).get('video', {}).get('file_id'):
+                                file_id = result['result']['video']['file_id']
+                                try:
+                                    with next(get_db()) as db:
+                                        media = MediaFile(
+                                            file_type='video',
+                                            original_filename=video_filename,
+                                            telegram_file_id=file_id
+                                        )
+                                        db.add(media)
+                                        db.commit()
+                                        logger.info(f"Cached file_id for {video_filename}")
+                                except Exception as e:
+                                    logger.warning(f"Could not cache file_id: {e}")
+                            logger.info(f"Video uploaded and sent to {chat_id}")
+                            return True
+                        else:
+                            logger.error(f"Failed to upload video: {response.text}")
+                            return False
+                except Exception as e:
+                    logger.error(f"Error uploading video: {e}")
+                    return False
+            else:
+                logger.error(f"Local video file not found: {local_path}")
+                return False
+    
+    # Send using file_id (cached or provided)
     payload = {
         "chat_id": chat_id,
-        "video": video_file_id,
+        "video": video_source,
         "supports_streaming": True
     }
     
