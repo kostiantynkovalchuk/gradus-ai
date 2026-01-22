@@ -283,7 +283,14 @@ MENU_TITLES = {
     'work': '💼 Робочі питання',
     'salary': '💰 Зарплата та виплати',
     'tech': '🔧 Технічна підтримка',
-    'contacts': '📞 Контакти спеціалістів'
+    'contacts': '📞 Контакти спеціалістів',
+    'legal': '📄 Юридичні документи',
+    'legal_bb': '🏢 Бест Брендс - Договори',
+    'legal_bb_marketing': '📝 Маркетинг',
+    'legal_bb_logistics': '🚚 Логістика',
+    'legal_bb_distribution': '📦 Дистрибюція',
+    'legal_bb_supply': '📥 Поставки/Закупівлі',
+    'legal_bb_additional': '📋 Додаткові угоди'
 }
 
 

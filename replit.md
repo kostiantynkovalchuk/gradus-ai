@@ -45,6 +45,7 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **Notifications:** Telegram notifications for content status, approval, and rejection.
 - **Торговий Дім АВ Video Feature:** Sends vertical 9:16 video presentations in multiple languages when users query "Торговий Дім АВ", with file_id caching for efficiency.
 - **Query Expansion for RAG:** Automatically expands brand name queries with relevant category keywords for improved retrieval in RAG systems (e.g., "greenday" → "greenday vodka горілка").
+- **Legal Contracts Library:** Interactive menu in HR Bot providing access to 16+ legal contract templates for Бест Брендс (ББ) company, organized by category (Marketing, Logistics, Distribution, Supply/Procurement, Additional Agreements). Documents served via `/static/legal_contracts/` endpoint and delivered directly to users via Telegram sendDocument API.
 - **Database Schema:** `ContentQueue`, `ApprovalLog`, and `MediaFile` tables manage content, audit trails, and Telegram file_id caching respectively.
 
 ## External Dependencies
