@@ -367,6 +367,8 @@ async def send_telegram_message_with_keyboard(chat_id: int, text: str, keyboard:
 
 async def send_legal_document(chat_id: int, doc_id: str):
     """Send legal document file to user"""
+    from urllib.parse import quote
+    
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.error("TELEGRAM_MAYA_BOT_TOKEN not set")
         return False
@@ -379,7 +381,8 @@ async def send_legal_document(chat_id: int, doc_id: str):
     file_path = contract['file']
     doc_name = contract['name']
     base_url = os.getenv("APP_URL", "https://gradus-ai.onrender.com")
-    file_url = f"{base_url}/static/legal_contracts/{file_path}"
+    encoded_path = quote(file_path, safe='/')
+    file_url = f"{base_url}/static/legal_contracts/{encoded_path}"
     
     url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendDocument"
     
