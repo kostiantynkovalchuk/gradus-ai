@@ -1558,6 +1558,12 @@ if static_videos.exists():
     app.mount("/static/videos", StaticFiles(directory=static_videos), name="static_videos")
     logger.info(f"Static videos mounted at /static/videos")
 
+# Mount legal contracts for HR bot
+static_legal = Path(__file__).parent / "static" / "legal_contracts"
+if static_legal.exists():
+    app.mount("/static/legal_contracts", StaticFiles(directory=static_legal), name="static_legal")
+    logger.info(f"Legal contracts mounted at /static/legal_contracts")
+
 # Always define SPA routes - they check path at request time
 @app.get("/")
 @app.head("/")  # Support HEAD requests for health checks

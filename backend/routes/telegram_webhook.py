@@ -18,7 +18,7 @@ from services.hr_keyboards import (
     create_main_menu_keyboard, create_category_keyboard,
     create_feedback_keyboard, create_back_keyboard,
     create_content_navigation_keyboard,
-    MENU_TITLES, split_long_message
+    MENU_TITLES, split_long_message, LEGAL_CONTRACTS, CATEGORY_NAMES
 )
 
 logger = logging.getLogger(__name__)
@@ -365,6 +365,45 @@ async def send_telegram_message_with_keyboard(chat_id: int, text: str, keyboard:
         return False
 
 
+async def send_legal_document(chat_id: int, doc_id: str):
+    """Send legal document file to user"""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.error("TELEGRAM_MAYA_BOT_TOKEN not set")
+        return False
+    
+    contract = LEGAL_CONTRACTS.get(doc_id)
+    if not contract:
+        await send_telegram_message(chat_id, "❌ Документ не знайдено")
+        return False
+    
+    file_path = contract['file']
+    doc_name = contract['name']
+    base_url = os.getenv("APP_URL", "https://gradus-ai.onrender.com")
+    file_url = f"{base_url}/static/legal_contracts/{file_path}"
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendDocument"
+    
+    payload = {
+        "chat_id": chat_id,
+        "document": file_url,
+        "caption": f"📄 {doc_name}"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=30.0)
+            if response.status_code == 200:
+                logger.info(f"Sent legal document {doc_id} to chat {chat_id}")
+                return True
+            else:
+                logger.error(f"Telegram API error sending document: {response.text}")
+                await send_telegram_message(chat_id, f"❌ Помилка відправки документа. Спробуйте пізніше.")
+                return False
+    except Exception as e:
+        logger.error(f"Error sending document: {e}")
+        return False
+
+
 async def edit_telegram_message(chat_id: int, message_id: int, text: str, keyboard: dict = None):
     """Edit existing message"""
     if not TELEGRAM_MAYA_BOT_TOKEN:
@@ -434,6 +473,10 @@ async def handle_hr_callback(callback_query: dict):
                     f"{MENU_TITLES[menu_id]}\n\nОберіть підрозділ:",
                     create_category_keyboard(menu_id)
                 )
+        
+        elif callback_data.startswith('hr_doc:'):
+            doc_id = callback_data.split(':')[1]
+            await send_legal_document(chat_id, doc_id)
         
         elif callback_data.startswith('hr_content:'):
             content_id = callback_data.split(':')[1]
