@@ -1,0 +1,362 @@
+# TASK: Fix Missing "Структура компанії" Content in Maya HR Bot
+
+## PROBLEM
+
+The "Структура компанії" (Company Structure) button in Maya HR bot shows error:
+**"❌ Контент не знайдено. Спробуйте інший розділ."**
+
+**Root Cause:**
+- Button exists with `callback_data="content:section_4_structure"`
+- But content is missing from `backend/data/hr_knowledge_base.txt`
+- Database has no record for `content_id='section_4_structure'`
+
+## SOLUTION
+
+Add the missing content to the knowledge base file and upload to database.
+
+---
+
+## STEP 1: Add Content to Knowledge Base File
+
+**File:** `backend/data/hr_knowledge_base.txt`
+
+**Action:** Append this content to the file:
+```markdown
+## Раздел 4: Структура компании
+
+Структура компании состоит из нескольких департаментов:
+
+Департамент производства   
+Департамент продаж  
+Департамент маркетинга  
+Департамент финансов, учета и аналитики  
+Департамент персонала  
+Отдел экспорта  
+Департамент безопасности
+
+Руководители компании:  
+Исполнительный директор - Владислав Валериевич Василенко  
+Директор по продажам - Иван Сергеевич Гоц  
+Директор департамента финансов, учета и аналитики - Алла Петровна Горбенко    
+Директор департамента персонала - вакансия, временное исполнение обязанностей Наталья Александровна Решетилова  
+Руководитель отдела экспорта - Евгений Александрович Шаповалов  
+Директор по безопасности - Олег Григорьевич Глухой
+```
+
+**Implementation:**
+```bash
+# Append to end of file
+cat >> backend/data/hr_knowledge_base.txt << 'EOF'
+
+## Раздел 4: Структура компании
+
+Структура компании состоит из нескольких департаментов:
+
+Департамент производства   
+Департамент продаж  
+Департамент маркетинга  
+Департамент финансов, учета и аналитики  
+Департамент персонала  
+Отдел экспорта  
+Департамент безопасности
+
+Руководители компании:  
+Исполнительный директор - Владислав Валериевич Василенко  
+Директор по продажам - Иван Сергеевич Гоц  
+Директор департамента финансов, учета и аналитики - Алла Петровна Горбенко    
+Директор департамента персонала - вакансия, временное исполнение обязанностей Наталья Александровна Решетилова  
+Руководитель отдела экспорта - Евгений Александрович Шаповалов  
+Директор по безопасности - Олег Григорьевич Глухой
+
+EOF
+```
+
+---
+
+## STEP 2: Verify Content Was Added
+```bash
+# Check if content exists in file
+grep -A 15 "Структура компании" backend/data/hr_knowledge_base.txt
+
+# Should output the full section
+```
+
+**Expected Output:**
+```
+## Раздел 4: Структура компании
+
+Структура компании состоит из нескольких департаментов:
+...
+```
+
+---
+
+## STEP 3: Upload Content to Database
+
+**File:** `backend/scripts/upload_hr_data.py`
+
+Run the upload script to process the new content and populate the database:
+```bash
+cd backend
+python scripts/upload_hr_data.py
+```
+
+**Expected Output:**
+```
+📖 Parsing content...
+Found 42 content items  ← Should increase from 41 to 42
+
+✅ Parsed 42 items:
+   📝 Questions: 26/26
+   📎 Appendices: 5/5
+   📚 Other sections: 11  ← Should include new structure section
+
+🔄 Generating embeddings...
+☁️  Uploading to Pinecone...
+💾 Storing in PostgreSQL...
+
+✨ UPLOAD COMPLETE!
+Total content items: 42
+Total chunks: 39
+```
+
+---
+
+## STEP 4: Verify Database Insert
+
+Check that the content was inserted into the database:
+```python
+# Quick verification script
+import asyncio
+from backend.database import get_db
+from sqlalchemy import text
+
+async def verify_structure_content():
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT content_id, title, content_type, category
+            FROM hr_content
+            WHERE content_id = 'section_4_structure'
+        """))
+        
+        row = result.fetchone()
+        if row:
+            print("✅ Content found in database:")
+            print(f"   ID: {row[0]}")
+            print(f"   Title: {row[1]}")
+            print(f"   Type: {row[2]}")
+            print(f"   Category: {row[3]}")
+        else:
+            print("❌ Content NOT found in database")
+
+asyncio.run(verify_structure_content())
+```
+
+**Expected Output:**
+```
+✅ Content found in database:
+   ID: section_4_structure
+   Title: Структура компанії
+   Type: text
+   Category: about
+```
+
+---
+
+## STEP 5: Test Semantic Search
+
+Verify the content is searchable:
+```python
+import asyncio
+from backend.services.hr_rag_service import HRRagService
+
+async def test_structure_search():
+    rag_service = HRRagService()
+    
+    # Test search
+    results = await rag_service.semantic_search(
+        query="структура компанії департаменти",
+        top_k=3
+    )
+    
+    print(f"✅ Found {len(results)} results")
+    for i, result in enumerate(results, 1):
+        print(f"\n{i}. {result['title']}")
+        print(f"   Score: {result['score']:.3f}")
+        print(f"   Content ID: {result['content_id']}")
+
+asyncio.run(test_structure_search())
+```
+
+**Expected Output:**
+```
+✅ Found 3 results
+
+1. Структура компанії
+   Score: 0.892
+   Content ID: section_4_structure
+```
+
+---
+
+## STEP 6: Commit Changes
+```bash
+# Stage the modified file
+git add backend/data/hr_knowledge_base.txt
+
+# Commit with descriptive message
+git commit -m "fix: Add missing Company Structure content (section_4_structure)
+
+- Add 7 departments: Production, Sales, Marketing, Finance, HR, Export, Security
+- Add 6 company leaders with full names and titles
+- Fixes 'Content not found' error on Структура компанії button
+- Content items increased: 41 → 42
+- Searchable via keywords: структура, департаменти, керівники
+
+Test: /hr → Про компанію → Структура компанії"
+
+# Push to trigger deployment
+git push origin main
+```
+
+---
+
+## ACCEPTANCE CRITERIA
+
+✅ **File Changes:**
+- [ ] `backend/data/hr_knowledge_base.txt` contains Company Structure section
+- [ ] Section includes 7 departments listed
+- [ ] Section includes 6 company leaders with names and titles
+- [ ] Content properly formatted in Markdown
+
+✅ **Database:**
+- [ ] `hr_content` table has record with `content_id='section_4_structure'`
+- [ ] Record has `category='about'` and `content_type='text'`
+- [ ] Content stored correctly in database
+
+✅ **Embeddings:**
+- [ ] Content chunks uploaded to Pinecone (namespace: hr_docs)
+- [ ] Semantic search returns company structure content for relevant queries
+- [ ] Total content items increased from 41 to 42
+
+✅ **Functionality:**
+- [ ] Telegram bot button "🏗️ Структура компанії" no longer shows error
+- [ ] Content displays with departments and leaders
+- [ ] Back button navigation works: [⬅️ Про компанію] [🏠 Головне меню]
+- [ ] Queries like "хто виконавчий директор" return correct answer
+
+---
+
+## TESTING COMMANDS
+
+After deployment, test in production:
+
+### Test 1: Button Navigation
+```
+1. Telegram: /hr
+2. Click: 📖 Про компанію
+3. Click: 🏗️ Структура компанії
+4. Expected: Shows content (not error)
+5. Verify: Back button present
+```
+
+### Test 2: Semantic Queries
+```
+Test these queries in bot:
+- "структура компанії"
+- "які департаменти в компанії"
+- "хто виконавчий директор"
+- "директор з продажів"
+
+Expected: Returns relevant information from new content
+```
+
+### Test 3: API Endpoint
+```bash
+# Test via API
+curl -X POST https://gradus-ai.onrender.com/api/hr/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "структура компанії", "top_k": 3}'
+
+# Should return section_4_structure in results
+```
+
+---
+
+## ROLLBACK PLAN
+
+If issues occur:
+```bash
+# Revert the commit
+git revert HEAD
+git push origin main
+
+# Or remove just the content
+# Edit backend/data/hr_knowledge_base.txt and remove the section
+# Then re-run upload script
+```
+
+---
+
+## EXPECTED OUTCOMES
+
+**Before Fix:**
+- ❌ Button shows: "Контент не знайдено"
+- ❌ 41 content items
+- ❌ Incomplete company information
+
+**After Fix:**
+- ✅ Button shows full company structure
+- ✅ 42 content items
+- ✅ Complete org chart with 7 departments and 6 leaders
+- ✅ Searchable via multiple keywords
+- ✅ Natural language queries work ("хто директор продажів?")
+
+---
+
+## SUCCESS METRICS
+
+Track these after deployment:
+
+- Queries about company structure: Should increase (currently failing)
+- Preset coverage: May improve if structure queries are common
+- User satisfaction: Should see more 👍 on structure-related answers
+- Navigation: Users can browse all "About Company" content without errors
+
+---
+
+## IMPLEMENTATION NOTES
+
+1. **Content Language:** Original is Russian, but bot translates to Ukrainian for display
+2. **Content ID:** Must be exactly `section_4_structure` to match button callback
+3. **Category:** Must be `about` to appear in correct menu
+4. **Embeddings:** Automatic via upload script (uses OpenAI text-embedding-3-small)
+5. **No Breaking Changes:** This is purely additive - no risk to existing functionality
+
+---
+
+**Priority:** 🔴 HIGH (Button currently broken for users)  
+**Estimated Time:** 5-10 minutes  
+**Complexity:** Low (simple content addition)  
+**Risk:** Very Low (additive only, no code changes)
+
+---
+
+## EXECUTION CHECKLIST
+
+Execute these steps in order:
+
+1. ⬜ Add content to `hr_knowledge_base.txt`
+2. ⬜ Verify content with grep command
+3. ⬜ Run upload script
+4. ⬜ Verify database insert
+5. ⬜ Test semantic search (optional)
+6. ⬜ Commit changes
+7. ⬜ Push to GitHub
+8. ⬜ Wait for Render deployment (~3-5 min)
+9. ⬜ Test in Telegram bot
+10. ⬜ Verify back button works
+
+---
+
+**Start with Step 1 and proceed sequentially. Report any errors immediately.**

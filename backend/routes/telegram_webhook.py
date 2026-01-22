@@ -47,6 +47,7 @@ CONTENT_CATEGORY_MAP = {
     'video_values': 'about',
     'video_history': 'about',
     'section_structure': 'about',
+    'section_4_structure': 'about',
     'section_appendix_22.': 'contacts',
     'q1': 'onboarding',
     'q2': 'onboarding',
