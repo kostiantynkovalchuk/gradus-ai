@@ -91,7 +91,7 @@ def create_category_keyboard(category: str) -> Dict:
             ('🎬 Загальна інформація', 'hr_content:video_overview'),
             ('🎬 Цінності компанії', 'hr_content:video_values'),
             ('🎬 Історія компанії', 'hr_content:video_history'),
-            ('📊 Структура компанії', 'hr_content:section_structure'),
+            ('📊 Структура компанії', 'hr_content:section_4_structure'),
             ('🔙 Назад', 'hr_menu:main')
         ],
         'contacts': [
