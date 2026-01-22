@@ -368,6 +368,7 @@ async def send_telegram_message_with_keyboard(chat_id: int, text: str, keyboard:
 async def send_legal_document(chat_id: int, doc_id: str):
     """Send legal document file to user by uploading directly"""
     import pathlib
+    import unicodedata
     
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.error("TELEGRAM_MAYA_BOT_TOKEN not set")
@@ -384,6 +385,23 @@ async def send_legal_document(chat_id: int, doc_id: str):
     # Build absolute path to the file
     base_dir = pathlib.Path(__file__).parent.parent / "static" / "legal_contracts"
     full_path = base_dir / file_rel_path
+    
+    # Handle Unicode normalization differences (NFD vs NFC)
+    if not full_path.exists():
+        # Try to find file with different Unicode normalization
+        parent_dir = full_path.parent
+        target_filename = full_path.name
+        target_nfc = unicodedata.normalize('NFC', target_filename)
+        target_nfd = unicodedata.normalize('NFD', target_filename)
+        
+        if parent_dir.exists():
+            for existing_file in parent_dir.iterdir():
+                existing_nfc = unicodedata.normalize('NFC', existing_file.name)
+                existing_nfd = unicodedata.normalize('NFD', existing_file.name)
+                if existing_nfc == target_nfc or existing_nfd == target_nfd:
+                    full_path = existing_file
+                    logger.info(f"Found file with Unicode normalization match: {full_path.name}")
+                    break
     
     if not full_path.exists():
         logger.error(f"Legal document file not found: {full_path}")
