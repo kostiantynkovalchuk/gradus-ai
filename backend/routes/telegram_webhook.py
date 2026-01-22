@@ -17,6 +17,7 @@ from services.telegram_webhook import telegram_webhook_handler
 from services.hr_keyboards import (
     create_main_menu_keyboard, create_category_keyboard,
     create_feedback_keyboard, create_back_keyboard,
+    create_content_navigation_keyboard,
     MENU_TITLES, split_long_message
 )
 
@@ -40,6 +41,30 @@ HR_KEYWORDS = [
     'графік роботи', 'робочий день',
     'технічна підтримка', '3636'
 ]
+
+CONTENT_CATEGORY_MAP = {
+    'video_overview': 'about',
+    'video_values': 'about',
+    'video_history': 'about',
+    'section_structure': 'about',
+    'section_appendix_22.': 'contacts',
+    'q1': 'onboarding',
+    'q2': 'onboarding',
+    'q3': 'onboarding',
+    'q4': 'salary',
+    'q5': 'salary',
+    'q6': 'work',
+    'q8': 'tech',
+    'q10': 'work',
+    'q11': 'work',
+    'q12': 'work',
+    'q15': 'tech',
+    'q17': 'tech',
+    'q18': 'tech',
+    'q19': 'tech',
+    'q20': 'work',
+    'q26': 'work',
+}
 
 def is_hr_question(text: str) -> bool:
     """Check if text is HR-related question"""
@@ -411,11 +436,13 @@ async def handle_hr_callback(callback_query: dict):
         
         elif callback_data.startswith('hr_content:'):
             content_id = callback_data.split(':')[1]
-            await fetch_and_send_hr_content(chat_id, message_id, content_id)
+            parent_category = CONTENT_CATEGORY_MAP.get(content_id)
+            await fetch_and_send_hr_content(chat_id, message_id, content_id, parent_category=parent_category)
         
         elif callback_data.startswith('hr_text:'):
             content_id = callback_data.split(':')[1]
-            await fetch_and_send_hr_content(chat_id, None, content_id, text_only=True)
+            parent_category = CONTENT_CATEGORY_MAP.get(content_id)
+            await fetch_and_send_hr_content(chat_id, None, content_id, text_only=True, parent_category=parent_category)
         
         elif callback_data.startswith('hr_feedback:'):
             parts = callback_data.split(':')
@@ -472,8 +499,10 @@ async def handle_hr_callback(callback_query: dict):
         return {"ok": False, "error": str(e)}
 
 
-async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str, text_only: bool = False):
-    """Fetch content from HR API and send to user"""
+async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str, text_only: bool = False, parent_category: str = None):
+    """Fetch content from HR API and send to user with proper back navigation"""
+    nav_keyboard = create_content_navigation_keyboard(parent_category)
+    
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -492,25 +521,22 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                     if message_id:
                         await delete_telegram_message(chat_id, message_id)
                     
-                    video_keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "📄 Текстова версія", "callback_data": f"hr_text:{content_id}"}],
-                            [{"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}]
-                        ]
-                    }
+                    video_nav = nav_keyboard.copy()
+                    text_button = [{"text": "📄 Текстова версія", "callback_data": f"hr_text:{content_id}"}]
+                    video_nav["inline_keyboard"] = [text_button] + video_nav["inline_keyboard"]
                     
                     success = await send_telegram_video(
                         chat_id,
                         video_url,
                         f"🎬 *{title}*",
-                        video_keyboard
+                        video_nav
                     )
                     
                     if not success:
                         await send_telegram_message_with_keyboard(
                             chat_id,
                             f"⚠️ Відео тимчасово недоступне.\n\n*{title}*\n\n{content}",
-                            create_back_keyboard()
+                            nav_keyboard
                         )
                     return
                 
@@ -520,12 +546,12 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                     if idx == 0 and message_id:
                         await edit_telegram_message(
                             chat_id, message_id, chunk,
-                            create_back_keyboard() if len(chunks) == 1 else None
+                            nav_keyboard if len(chunks) == 1 else None
                         )
                     else:
                         await send_telegram_message_with_keyboard(
                             chat_id, chunk,
-                            create_back_keyboard() if idx == len(chunks) - 1 else None
+                            nav_keyboard if idx == len(chunks) - 1 else None
                         )
             else:
                 if message_id:

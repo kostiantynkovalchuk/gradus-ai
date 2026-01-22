@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 
 
 def create_main_menu_keyboard() -> Dict:
-    """Main HR menu with 6 primary categories"""
+    """Main HR menu with 6 primary categories and distinct Ask Question button"""
     buttons = [
         [
             {"text": "📖 Про компанію", "callback_data": "hr_menu:about"},
@@ -22,7 +22,7 @@ def create_main_menu_keyboard() -> Dict:
             {"text": "📞 Контакти", "callback_data": "hr_menu:contacts"}
         ],
         [
-            {"text": "❓ Задати питання", "callback_data": "hr_ask"}
+            {"text": "💬 Задати своє питання", "callback_data": "hr_ask"}
         ]
     ]
     
@@ -113,6 +113,47 @@ def create_back_keyboard() -> Dict:
             [{"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}]
         ]
     }
+
+
+CATEGORY_NAMES = {
+    'about': 'Про компанію',
+    'onboarding': 'Новачкам',
+    'work': 'Робочі питання',
+    'salary': 'Зарплата',
+    'tech': 'Тех. підтримка',
+    'contacts': 'Контакти'
+}
+
+
+def create_content_navigation_keyboard(parent_category: str = None) -> Dict:
+    """
+    Creates navigation buttons for content screens with Back + Main Menu
+    
+    Args:
+        parent_category: Category to go back to (e.g., 'about', 'onboarding')
+    
+    Returns:
+        Keyboard dict with Back and Main Menu buttons
+    """
+    row = []
+    
+    if parent_category and parent_category in CATEGORY_NAMES:
+        row.append({
+            "text": f"⬅️ {CATEGORY_NAMES[parent_category]}", 
+            "callback_data": f"hr_menu:{parent_category}"
+        })
+    elif parent_category:
+        row.append({
+            "text": "⬅️ Назад", 
+            "callback_data": f"hr_menu:{parent_category}"
+        })
+    
+    row.append({
+        "text": "🏠 Головне меню", 
+        "callback_data": "hr_menu:main"
+    })
+    
+    return {"inline_keyboard": [row]}
 
 
 MENU_TITLES = {
