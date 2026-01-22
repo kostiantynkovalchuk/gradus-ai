@@ -286,14 +286,14 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         from models.content import MediaFile
         try:
             with next(get_db()) as db:
-                # Try to find cached file for any format (webm, mp4)
+                # Try to find cached file by media_key
                 cached = db.query(MediaFile).filter(
-                    MediaFile.file_type == 'video',
-                    MediaFile.original_filename.like(f"{base_name}.%")
+                    MediaFile.media_type == 'video',
+                    MediaFile.media_key == base_name
                 ).first()
-                if cached and cached.telegram_file_id:
-                    video_source = cached.telegram_file_id
-                    logger.info(f"Using cached file_id for {cached.original_filename}")
+                if cached and cached.file_id:
+                    video_source = cached.file_id
+                    logger.info(f"Using cached file_id for {cached.media_key}")
         except Exception as e:
             logger.warning(f"Could not check cache: {e}")
         
@@ -335,17 +335,18 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
                             result = response.json()
                             # Cache the file_id for future use
                             if result.get('ok') and result.get('result', {}).get('video', {}).get('file_id'):
-                                file_id = result['result']['video']['file_id']
+                                new_file_id = result['result']['video']['file_id']
                                 try:
                                     with next(get_db()) as db:
                                         media = MediaFile(
-                                            file_type='video',
-                                            original_filename=video_filename,
-                                            telegram_file_id=file_id
+                                            media_type='video',
+                                            media_key=base_name,
+                                            file_id=new_file_id,
+                                            description=video_filename
                                         )
                                         db.add(media)
                                         db.commit()
-                                        logger.info(f"Cached file_id for {video_filename}")
+                                        logger.info(f"Cached file_id for {base_name}")
                                 except Exception as e:
                                     logger.warning(f"Could not cache file_id: {e}")
                             logger.info(f"Video uploaded and sent to {chat_id}")
