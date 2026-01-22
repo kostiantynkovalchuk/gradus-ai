@@ -279,28 +279,39 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
     if video_source.startswith('http'):
         # Extract video filename from URL (e.g., video_overview.mp4)
         video_filename = video_source.split('/')[-1]
+        base_name = video_filename.rsplit('.', 1)[0]  # Remove extension
         
         # Check for cached file_id in database
         from database import get_db
         from models.content import MediaFile
         try:
             with next(get_db()) as db:
+                # Try to find cached file for any format (webm, mp4)
                 cached = db.query(MediaFile).filter(
                     MediaFile.file_type == 'video',
-                    MediaFile.original_filename == video_filename
+                    MediaFile.original_filename.like(f"{base_name}.%")
                 ).first()
                 if cached and cached.telegram_file_id:
                     video_source = cached.telegram_file_id
-                    logger.info(f"Using cached file_id for {video_filename}")
+                    logger.info(f"Using cached file_id for {cached.original_filename}")
         except Exception as e:
             logger.warning(f"Could not check cache: {e}")
         
         # If still URL, try to upload local file directly
         if video_source.startswith('http'):
             base_dir = pathlib.Path(__file__).parent.parent / "static" / "videos"
-            local_path = base_dir / video_filename
             
-            if local_path.exists():
+            # Try webm first (smaller), then mp4
+            local_path = None
+            for ext in ['webm', 'mp4']:
+                candidate = base_dir / f"{base_name}.{ext}"
+                if candidate.exists():
+                    local_path = candidate
+                    video_filename = f"{base_name}.{ext}"
+                    logger.info(f"Found video file: {video_filename}")
+                    break
+            
+            if local_path and local_path.exists():
                 try:
                     with open(local_path, 'rb') as f:
                         file_content = f.read()
@@ -316,7 +327,8 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
                         data['reply_markup'] = json.dumps(reply_markup)
                     
                     async with httpx.AsyncClient(timeout=120.0) as client:
-                        files = {'video': (video_filename, file_content, 'video/mp4')}
+                        content_type = 'video/webm' if video_filename.endswith('.webm') else 'video/mp4'
+                        files = {'video': (video_filename, file_content, content_type)}
                         response = await client.post(url, files=files, data=data)
                         
                         if response.status_code == 200:

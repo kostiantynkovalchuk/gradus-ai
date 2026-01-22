@@ -1,0 +1,38 @@
+ERROR:sqlalchemy.pool.impl.QueuePool:Exception during reset or similar
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 985, in _finalize_fairy
+    fairy._reset(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 1433, in _reset
+    pool._dialect.do_rollback(self)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 712, in do_rollback
+    dbapi_connection.rollback()
+psycopg2.OperationalError: SSL connection has been closed unexpectedly
+ERROR:sqlalchemy.pool.impl.QueuePool:Exception during reset or similar
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 985, in _finalize_fairy
+    fairy._reset(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 1433, in _reset
+    pool._dialect.do_rollback(self)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 712, in do_rollback
+    dbapi_connection.rollback()
+psycopg2.OperationalError: SSL connection has been closed unexpectedly
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:about
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.21.157.122:57246 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:video_overview
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:     10.16.195.69:42242 - "GET /api/hr/content/video_overview HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: GET https://gradus-ai.onrender.com/api/hr/content/video_overview "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/deleteMessage "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendVideo "HTTP/1.1 400 Bad Request"
+ERROR:routes.telegram_webhook:Failed to send video: {"ok":false,"error_code":400,"description":"Bad Request: wrong type of the web page content"}
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.20.40.3:51610 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+==> Detected service running on port 5000
+==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
+INFO:     10.21.18.66:39512 - "GET /api/articles HTTP/1.1" 200 OK
