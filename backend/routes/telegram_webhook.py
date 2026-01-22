@@ -373,7 +373,7 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         payload["parse_mode"] = "Markdown"
     
     if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
+        payload["reply_markup"] = reply_markup  # Don't stringify - httpx does it when using json=
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
