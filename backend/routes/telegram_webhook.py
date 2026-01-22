@@ -285,11 +285,13 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         from models import get_db
         from models.content import MediaFile
         try:
+            # Version suffix to invalidate old cache entries with wrong dimensions
+            cache_key = f"{base_name}_v2"
             with next(get_db()) as db:
                 # Try to find cached file by media_key
                 cached = db.query(MediaFile).filter(
                     MediaFile.media_type == 'video',
-                    MediaFile.media_key == base_name
+                    MediaFile.media_key == cache_key
                 ).first()
                 if cached and cached.file_id:
                     video_source = cached.file_id
@@ -318,7 +320,9 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
                     
                     data = {
                         'chat_id': str(chat_id),
-                        'supports_streaming': 'true'
+                        'supports_streaming': 'true',
+                        'width': '1080',
+                        'height': '1920'
                     }
                     if caption:
                         data['caption'] = caption[:1024]
@@ -340,7 +344,7 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
                                     with next(get_db()) as db:
                                         media = MediaFile(
                                             media_type='video',
-                                            media_key=base_name,
+                                            media_key=cache_key,
                                             file_id=new_file_id,
                                             description=video_filename
                                         )
