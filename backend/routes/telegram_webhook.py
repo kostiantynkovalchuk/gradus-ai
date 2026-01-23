@@ -285,8 +285,8 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         from models import get_db
         from models.content import MediaFile
         try:
-            # Version suffix to invalidate old cache entries with wrong dimensions
-            cache_key = f"{base_name}_v2"
+            # Version suffix to invalidate old cache entries - increment when video changes
+            cache_key = f"{base_name}_v3"
             with next(get_db()) as db:
                 # Try to find cached file by media_key
                 cached = db.query(MediaFile).filter(
