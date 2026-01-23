@@ -371,6 +371,11 @@ class HRRagService:
             ).first()
             
             if content:
+                video_url = content.video_url
+                if content.content_type == 'video' and not video_url and content.content_id.startswith('video_'):
+                    base_url = os.getenv('BASE_URL', 'https://gradus-ai.onrender.com')
+                    video_url = f"{base_url}/static/videos/{content.content_id}.mp4"
+                
                 return {
                     'content_id': content.content_id,
                     'title': content.title,
@@ -379,7 +384,7 @@ class HRRagService:
                     'category': content.category,
                     'subcategory': content.subcategory,
                     'keywords': content.keywords,
-                    'video_url': content.video_url,
+                    'video_url': video_url,
                     'attachments': content.attachments
                 }
             return None
