@@ -275,33 +275,37 @@ class ContentScheduler:
             
             db = self._get_db_session()
             try:
-                # Get articles ready for images:
-                # 1. Already translated (status='pending_approval')
-                # 2. Ukrainian articles that don't need translation (needs_translation=False)
-                # Filter out articles that already have images OR already had notifications sent
-                articles_without_images = db.query(ContentQueue).filter(
-                    or_(
-                        # Translated articles ready for images
-                        (ContentQueue.status == 'pending_approval'),
-                        # Ukrainian articles ready for images (skip translation)
-                        (ContentQueue.status == 'draft') & (ContentQueue.needs_translation == False)
-                    ),
-                    ContentQueue.image_url == None,
-                    # Exclude articles that already had notification sent
-                    or_(
-                        ContentQueue.notification_sent == None,
-                        ContentQueue.notification_sent == False
-                    )
-                ).limit(10).all()
-                
-                if not articles_without_images:
-                    logger.info("[SCHEDULER] No articles need images")
-                    return
-                
                 generated_count = 0
                 notifications_sent = 0
                 
-                for article in articles_without_images:
+                # Process articles ONE AT A TIME with row locking to prevent duplicates
+                for _ in range(10):  # Max 10 articles per run
+                    # Get ONE article with FOR UPDATE SKIP LOCKED to prevent race conditions
+                    article = db.query(ContentQueue).filter(
+                        or_(
+                            # Translated articles ready for images
+                            (ContentQueue.status == 'pending_approval'),
+                            # Ukrainian articles ready for images (skip translation)
+                            (ContentQueue.status == 'draft') & (ContentQueue.needs_translation == False)
+                        ),
+                        ContentQueue.image_url == None,
+                        # Exclude articles that already had notification sent
+                        or_(
+                            ContentQueue.notification_sent == None,
+                            ContentQueue.notification_sent == False
+                        )
+                    ).with_for_update(skip_locked=True).first()
+                    
+                    if not article:
+                        break  # No more articles to process
+                    
+                    article_id = article.id
+                    logger.info(f"[SCHEDULER] Processing article {article_id} for image generation")
+                    
+                    # IMMEDIATELY mark as being processed to prevent duplicates
+                    article.notification_sent = True  # Lock it first
+                    db.commit()
+                    
                     try:
                         article_data = {
                             'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
@@ -314,20 +318,18 @@ class ContentScheduler:
                             article.image_url = result['image_url']
                             article.image_prompt = result['prompt']
                             article.local_image_path = result.get('local_path', '')
-                            article.image_data = result.get('image_data')  # Store binary in DB for Render persistence
+                            article.image_data = result.get('image_data')
                             
                             # Mark Ukrainian articles as pending_approval after image generation
                             if not article.needs_translation and article.status == 'draft':
                                 article.status = 'pending_approval'
-                                # Use original text as "translated" text for Ukrainian sources
                                 if not article.translated_title:
                                     article.translated_title = article.extra_metadata.get('title', '') if article.extra_metadata else ''
                                 if not article.translated_text:
                                     article.translated_text = article.original_text
                             
                             generated_count += 1
-                            
-                            logger.info(f"[SCHEDULER] Generated image for article {article.id}")
+                            logger.info(f"[SCHEDULER] Generated 1 image for article {article_id}")
                             
                             notification_data = {
                                 'id': article.id,
@@ -342,22 +344,30 @@ class ContentScheduler:
                             try:
                                 notification_service.send_approval_notification(notification_data)
                                 notifications_sent += 1
-                                # Mark notification as sent to prevent duplicates
-                                article.notification_sent = True
                                 if not article.extra_metadata:
                                     article.extra_metadata = {}
                                 article.extra_metadata['notification_sent_at'] = datetime.utcnow().isoformat()
-                                db.commit()  # Commit immediately to prevent race conditions
-                                logger.info(f"✅ [SCHEDULER] Notification with image sent for article {article.id}")
+                                db.commit()
+                                logger.info(f"✅ [SCHEDULER] Sent 1 notification for article {article_id}")
                             except Exception as notif_error:
-                                logger.error(f"[SCHEDULER] Failed to send notification for article {article.id}: {notif_error}")
+                                logger.error(f"[SCHEDULER] Failed to send notification for article {article_id}: {notif_error}")
+                                db.commit()  # Keep the image even if notification fails
+                        else:
+                            # Image generation failed, reset notification_sent so it can retry
+                            article.notification_sent = False
+                            db.commit()
+                            logger.error(f"[SCHEDULER] Image generation returned no URL for article {article_id}")
                             
                     except Exception as e:
-                        logger.error(f"[SCHEDULER] Error generating image for article {article.id}: {e}")
-                        db.rollback()
+                        logger.error(f"[SCHEDULER] Error generating image for article {article_id}: {e}")
+                        # Reset notification_sent on error so it can retry
+                        try:
+                            article.notification_sent = False
+                            db.commit()
+                        except:
+                            db.rollback()
                         continue
                 
-                db.commit()
                 logger.info(f"✅ [SCHEDULER] Generated {generated_count} images, sent {notifications_sent} notifications")
             finally:
                 db.close()

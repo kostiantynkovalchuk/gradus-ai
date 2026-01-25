@@ -1,0 +1,229 @@
+# Replit Agent: Fix Duplicate Article Sending in Telegram Approval Workflow
+
+## Problem Description
+The scheduler is sending duplicate articles to Telegram for approval. Specifically:
+- Article ID 317: sent twice with 2 different images
+- Article ID 318: sent twice with 2 different images  
+- Article ID 316: sent twice with 2 different images
+
+**Expected Behavior**: Each article should generate ONE image and be sent ONCE to Telegram for approval.
+**Actual Behavior**: Each article is being sent twice, with 2 different images generated.
+
+## Investigation Tasks
+
+### 1. Analyze Current Workflow
+- Locate the scheduler service that sends articles for Telegram approval
+- Identify the Telegram sending logic (likely in telegram_service.py or similar)
+- **Find the DALL-E image generation call - CHECK if n=1 or n=2**
+- Check if image generation is being called multiple times per article
+- Check if there's any deduplication logic currently in place
+
+### 2. Identify Root Cause
+Investigate these potential causes:
+- **Image generation called multiple times**: Is the image generation function being called twice per article?
+- **Scheduler running multiple times**: Is the scheduler triggering the same article multiple times?
+- **No deduplication logic**: Is there a missing check to prevent re-processing the same article?
+- **Database state not updated**: Is the article status failing to update after first processing?
+- **Queue duplicates**: Are there duplicate jobs in the queue for the same article?
+- **Image generation loop error**: Is there a loop generating multiple images when it should generate only one?
+
+### 3. Review Key Code Sections
+Focus on these areas:
+```python
+# WRONG PATTERNS - Look for these:
+
+# Pattern 1: Multiple image generations
+for i in range(2):  # Or any loop
+    image = generate_image(article)
+    send_to_telegram(article, image)
+
+# Pattern 2: No status check
+async def process_article(article_id):
+    image = generate_image(article_id)  # No check if already processed
+    await send_to_telegram(article_id, image)
+
+# Pattern 3: Scheduler runs without filtering
+articles = Article.query.where(status='ready').all()  # Gets same articles repeatedly
+for article in articles:
+    process_article(article.id)
+```
+
+**Expected correct pattern**:
+```python
+async def process_article_for_approval(article_id):
+    article = await get_article(article_id)
+    
+    # Check if already processed
+    if article.telegram_approval_sent:
+        return
+    
+    # Generate ONE image only
+    image = await generate_single_image(article)
+    
+    # Send ONCE
+    await send_to_telegram(article, image)
+    
+    # Mark as processed
+    article.telegram_approval_sent = True
+    await article.save()
+```
+
+## Fix Requirements
+
+### Must Implement:
+1. **Generate ONE Image Only**: Each article should generate exactly one image using DALL-E
+2. **Single Send per Article**: Each article should be sent to Telegram exactly once
+3. **Deduplication Check**: Before processing, verify the article hasn't already been sent for approval
+4. **Status Tracking**: Update article status immediately after successful send to prevent re-processing
+5. **Transaction Safety**: Use database transactions to prevent race conditions
+
+### Recommended Implementation:
+
+```python
+async def process_article_for_approval(article_id: int):
+    """Generate one image and send article to Telegram for approval - ONCE"""
+    
+    # 1. Check if already processed
+    article = await get_article(article_id)
+    if article.telegram_approval_sent:
+        logger.info(f"Article {article_id} already processed and sent")
+        return
+    
+    # 2. Generate ONLY ONE image
+    logger.info(f"Generating single image for article {article_id}")
+    image_url = await generate_single_dalle_image(
+        prompt=article.image_prompt,
+        article_id=article_id
+    )
+    
+    # 3. Mark as processed BEFORE sending (prevents duplicates)
+    async with database.transaction():
+        article.telegram_approval_sent = True
+        article.telegram_sent_at = datetime.now()
+        article.image_url = image_url
+        await article.save()
+        
+        # 4. Send once with the single image
+        await telegram_service.send_for_approval(
+            article=article,
+            image_url=image_url
+        )
+    
+    logger.info(f"Article {article_id} sent for approval with 1 image")
+
+async def generate_single_dalle_image(prompt: str, article_id: int) -> str:
+    """Generate exactly ONE image using DALL-E"""
+    try:
+        response = await openai.Image.create(
+            prompt=prompt,
+            n=1,  # CRITICAL: Generate only 1 image
+            size="1024x1024"
+        )
+        image_url = response['data'][0]['url']
+        logger.info(f"Generated 1 image for article {article_id}")
+        return image_url
+    except Exception as e:
+        logger.error(f"Image generation failed for article {article_id}: {e}")
+        raise
+```
+
+### Database Schema Enhancement:
+Add these fields to articles table if missing:
+```sql
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS telegram_approval_sent BOOLEAN DEFAULT FALSE;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS telegram_sent_at TIMESTAMP;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS telegram_message_ids TEXT[];  -- Store all message IDs
+```
+
+### Scheduler Fix:
+Ensure scheduler doesn't process the same article multiple times:
+```python
+# In scheduler service
+@scheduler.scheduled_job('cron', hour=10)  # Or whatever your schedule is
+async def schedule_approval_workflow():
+    """Process articles ready for approval - each article ONCE only"""
+    
+    # Get articles that haven't been processed yet
+    articles = await Article.query.where(
+        Article.status == 'ready_for_approval',
+        Article.telegram_approval_sent == False  # Critical filter
+    ).gino.all()
+    
+    logger.info(f"Found {len(articles)} articles ready for approval")
+    
+    for article in articles:
+        # Process one at a time with proper error handling
+        try:
+            await process_article_for_approval(article.id)
+        except Exception as e:
+            logger.error(f"Failed to process article {article.id}: {e}")
+            # Don't mark as sent if it failed - will retry next run
+```
+
+**Additional Check**: Verify scheduler isn't running multiple instances:
+```python
+# Add a lock mechanism if needed
+import asyncio
+
+_scheduler_lock = asyncio.Lock()
+
+@scheduler.scheduled_job('cron', hour=10)
+async def schedule_approval_workflow():
+    async with _scheduler_lock:  # Prevents concurrent runs
+        # ... process articles
+```
+
+## Testing Requirements
+
+After implementing fixes:
+
+1. **Test Single Article Flow**:
+   - Create test article with ID 999
+   - Verify it generates exactly 1 image (not 2)
+   - Verify it's sent to Telegram exactly once
+   - Verify DALL-E is called with n=1 parameter
+
+2. **Test Deduplication**:
+   - Try to process the same article again
+   - Verify it's blocked with appropriate log message
+   - Verify no second image is generated
+
+3. **Test Scheduler**:
+   - Run scheduler multiple times in short succession
+   - Verify no duplicate processing occurs
+   - Verify each article processed only once
+
+4. **Check Database State**:
+   - Verify `telegram_approval_sent` flag is set correctly
+   - Verify `telegram_sent_at` timestamp is recorded
+   - Verify only one `image_url` is stored per article
+
+5. **Check Logs**:
+   - Verify logs show "Generating single image" (not multiple)
+   - Verify logs show "sent for approval with 1 image"
+   - No duplicate processing messages for same article ID
+
+## Deliverables
+
+1. **Fixed Code**: Complete working implementation with:
+   - Single image generation per article (DALL-E n=1)
+   - Deduplication logic to prevent re-processing
+   - Proper status tracking
+2. **Migration Script**: Database schema updates if needed
+3. **Test Results**: Confirmation that each article generates 1 image and sends once
+4. **Logs**: Comprehensive logging showing single processing per article
+
+## Success Criteria
+- ✅ Each article generates exactly ONE image (DALL-E n=1)
+- ✅ Each article sent to Telegram exactly once
+- ✅ Deduplication prevents re-processing
+- ✅ Proper error handling and logging
+- ✅ Database state correctly tracked
+- ✅ No race conditions or duplicate scheduler runs
+- ✅ Articles 317, 318, 316 won't duplicate anymore
+
+## Notes
+- Prioritize data integrity over speed
+- Use database transactions for critical state changes
+- Log every send attempt for debugging
+- Consider adding a manual re-send function for failed sends (but with proper checks)
