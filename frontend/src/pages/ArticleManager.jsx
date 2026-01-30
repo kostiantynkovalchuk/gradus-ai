@@ -458,19 +458,18 @@ function ArticleManager() {
                     />
                     {selectedArticle.image_credit && (
                       <p className="text-white/50 text-xs mt-2">
-                        📸 {selectedArticle.image_photographer ? (
-                          <a 
-                            href={selectedArticle.image_credit_url} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-blue-400 hover:underline"
-                          >
-                            {selectedArticle.image_photographer}
-                          </a>
-                        ) : selectedArticle.image_credit}
+                        📸 Photo by{' '}
+                        <a 
+                          href={selectedArticle.image_credit_url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:underline"
+                        >
+                          {selectedArticle.image_photographer || 'Unknown'}
+                        </a>
                         {' on '}
                         <a 
-                          href="https://unsplash.com" 
+                          href="https://unsplash.com?utm_source=gradus_media&utm_medium=referral" 
                           target="_blank" 
                           rel="noopener noreferrer"
                           className="text-blue-400 hover:underline"

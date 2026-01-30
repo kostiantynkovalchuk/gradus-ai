@@ -280,11 +280,35 @@ class UnsplashService:
             'photographer_url': photographer_url
         }
     
+    def get_used_image_ids_from_db(self) -> set:
+        """
+        Query database for previously used Unsplash image IDs to prevent duplicates.
+        """
+        try:
+            from database import SessionLocal
+            from models.content import ContentQueue
+            
+            db = SessionLocal()
+            try:
+                used_ids = db.query(ContentQueue.unsplash_image_id).filter(
+                    ContentQueue.unsplash_image_id != None
+                ).all()
+                return {row[0] for row in used_ids if row[0]}
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not query DB for used image IDs: {e}")
+            return set()
+    
     def select_image_for_article(self, title: str, content: str) -> Optional[Dict]:
         """
         Complete pipeline: extract keywords, build queries, fetch images, select best one.
         Returns image data with attribution or None if no suitable image found.
         """
+        db_used_ids = self.get_used_image_ids_from_db()
+        self.used_image_ids = self.used_image_ids.union(db_used_ids)
+        logger.info(f"Excluding {len(self.used_image_ids)} previously used images")
+        
         context = self.extract_image_keywords(title, content)
         queries = self.build_search_queries(context)
         

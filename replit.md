@@ -1,7 +1,7 @@
 # Gradus Media AI Agent
 
 ## Overview
-This project is an intelligent content management system for Gradus Media, automating social media content creation, translation, image generation, and publishing. It integrates Claude AI for content and translation, and DALL-E 3 for image generation. Key features include a React dashboard for human-in-the-loop content review, a PostgreSQL database, and integrations with Facebook, LinkedIn, and Telegram. The system aims to ensure high-quality content delivery across social platforms through efficient workflow automation and human oversight, focusing on business vision, market potential, and project ambitions to deliver high-quality, automated content.
+This project is an intelligent content management system for Gradus Media, automating social media content creation, translation, image sourcing, and publishing. It integrates Claude AI for content and translation, and Unsplash for authentic photography. Key features include a React dashboard for human-in-the-loop content review, a PostgreSQL database, and integrations with Facebook, LinkedIn, and Telegram. The system aims to ensure high-quality content delivery across social platforms through efficient workflow automation and human oversight, focusing on business vision, market potential, and project ambitions to deliver high-quality, automated content.
 
 ## User Preferences
 - Language: Ukrainian for content output
@@ -24,7 +24,7 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **Multi-Source Scraping Architecture:** Modular scraper system with `ScraperManager` coordinating 7 active sources (5 English, 2 Ukrainian). English sources require translation, Ukrainian do not. Playwright is used for JavaScript-rendered sites.
 - **Automated Content Pipeline:** 24/7 automation via APScheduler, with platform-optimized scheduling for scraping (LinkedIn: Mon/Wed/Fri; Facebook: Daily), AI translation (3x/day for English sources), and image generation (3x/day for both languages). Includes startup catch-up for missed scrapes and daily cleanup of rejected content.
 - **Telegram Quick Approval:** Enables one-click content approval/rejection directly from Telegram with image previews.
-- **Image Generation:** Claude AI generates DALL-E 3 prompts for 1024x1024, text-free, professional social media images, adhering to smart composition guidelines to avoid common AI pitfalls (e.g., text on bottles, human figures). Images are stored as binary data in PostgreSQL.
+- **Image Integration (Unsplash):** Articles use authentic photography from Unsplash API with smart keyword extraction (geography, spirits types, business terms, premium indicators). Includes proper attribution ("Photo by {name} on Unsplash") per API Terms Section 9, persistent duplicate prevention via database tracking of `unsplash_image_id`, and manual "Fetch Image" button in Article Manager.
 - **Scheduled Posting:** Approved content is automatically posted at optimal engagement times (Facebook: Daily 18:00; LinkedIn: Mon/Wed/Fri 09:00).
 - **Duplicate Post Prevention:** Implements database row locking, intermediate posting states, and idempotency checks to prevent duplicate posts in multi-container environments.
 - **LinkedIn Integration:** Supports organization page posting with robust asset upload and graceful degradation.
@@ -49,8 +49,8 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **Database Schema:** `ContentQueue`, `ApprovalLog`, and `MediaFile` tables manage content, audit trails, and Telegram file_id caching respectively.
 
 ## External Dependencies
-- **Claude AI (Anthropic):** Content generation, DALL-E prompt creation, English-to-Ukrainian translation.
-- **DALL-E 3 (OpenAI):** AI-powered image generation.
+- **Claude AI (Anthropic):** Content generation, English-to-Ukrainian translation.
+- **Unsplash API:** Authentic stock photography for article images with proper attribution.
 - **PostgreSQL:** Primary database.
 - **Telegram Bot API:** Notifications, quick approval, webhook callbacks.
 - **Facebook Graph API:** Authentication and scheduled posting to Facebook Pages.
