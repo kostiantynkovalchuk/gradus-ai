@@ -1,0 +1,188 @@
+TASK: Replace DALL-E image generation with Unsplash API integration for GradusMedia article images
+
+CONTEXT:
+- Current system: Articles auto-generated, images created via DALL-E API
+- Problem: Facebook restricts AI-generated images, prefers authentic photography
+- Solution: Integrate Unsplash API for premium, authentic imagery
+- Tech stack: FastAPI backend, PostgreSQL (Neon), React frontend
+
+REQUIREMENTS:
+
+1. UNSPLASH API INTEGRATION
+   - Install requests library if not present
+   - Add UNSPLASH_ACCESS_KEY to environment variables
+   - Endpoint: https://api.unsplash.com/search/photos
+   - Rate limit: 50 requests/hour (Demo tier)
+   - Content filter: "high" (filters inappropriate content)
+
+2. KEYWORD EXTRACTION LOGIC
+   Create function to analyze article title + content and extract context:
+   
+   Business terms (trigger boardroom imagery):
+   - Ukrainian: "угода", "партнерство", "інвестиції", "злиття", "придбання", "контракт"
+   - English: "deal", "partnership", "investment", "acquisition", "merger"
+   
+   Geography (trigger location imagery):
+   - Countries: "україна", "франція", "італія", "іспанія", "шотландія", "ірландія", "японія", "мексика"
+   - English: "france", "italy", "spain", "scotland", "ireland", "japan", "mexico", "argentina"
+   
+   Spirits categories (trigger craft/production imagery):
+   - Ukrainian: "віскі", "коньяк", "горілка", "джин", "текіла", "вино", "сідр"
+   - English: "whisky", "cognac", "vodka", "gin", "tequila", "wine", "cider", "rum", "soju"
+   
+   Premium indicators (trigger luxury HoReCa imagery):
+   - "преміум", "luxury", "craft", "artisan", "exclusive", "boutique"
+
+3. SEARCH QUERY GENERATION
+   Priority cascade for search terms:
+   
+   Priority 1 - Business context:
+   - "luxury boardroom meeting"
+   - "business handshake premium"
+   - "executive office modern"
+   
+   Priority 2 - Geography (if mentioned):
+   - "{country} landscape architecture"
+   - "{country} premium location"
+   
+   Priority 3 - Craft/Production (if spirits mentioned):
+   - "whiskey barrel cellar craftsmanship"
+   - "artisan distillery copper stills"
+   - "oak barrel aging room"
+   - "vineyard premium winery"
+   
+   Priority 4 - Premium HoReCa (always as fallback):
+   - "luxury hotel bar interior"
+   - "premium restaurant ambiance"
+   - "exclusive cocktail lounge"
+   - "fine dining atmosphere"
+   - "craft cocktail artisan"
+
+4. IMAGE QUALITY FILTERS
+   - Minimum 500 likes OR photographer has "for_hire" status
+   - Orientation: landscape
+   - Return top 5 results for admin selection
+   - No duplicates (track by image ID)
+
+5. MANDATORY ATTRIBUTION (Unsplash API Terms Section 9)
+   For EVERY photo displayed:
+   - Store photographer name
+   - Store photographer Unsplash profile URL
+   - Display: "Photo by {photographer_name} on Unsplash" with clickable links
+   - Format: <a href="{photographer_url}">{photographer_name}</a> on <a href="https://unsplash.com">Unsplash</a>
+
+6. MANDATORY DOWNLOAD TRACKING (Unsplash API Terms Section 6)
+   When selecting an image for an article:
+   - Hit the download endpoint: image['links']['download_location']
+   - Header: Authorization: Client-ID {UNSPLASH_ACCESS_KEY}
+   - This compensates photographers - critical requirement
+
+7. DATABASE SCHEMA UPDATES
+   Add columns to articles table:
+   - image_credit VARCHAR(255) - stores "Photo by {name} on Unsplash"
+   - image_credit_url VARCHAR(500) - stores photographer profile URL
+   - image_photographer VARCHAR(255) - stores photographer name
+   - unsplash_image_id VARCHAR(100) - stores Unsplash photo ID
+
+8. BACKEND API ENDPOINT
+   Create POST /api/admin/articles/{article_id}/fetch-image
+   
+   Logic:
+   a) Get article by ID
+   b) Extract keywords from article.title + article.content
+   c) Generate search queries (priority cascade)
+   d) Call Unsplash API with each query until 5 quality images found
+   e) Auto-apply first image (best match)
+   f) Update article record with:
+      - image_url (use image['urls']['regular'] for hotlinking)
+      - image_credit
+      - image_credit_url
+      - image_photographer
+      - unsplash_image_id
+   g) Trigger download endpoint for attribution
+   h) Return success + all 5 options for future image picker feature
+   
+   Error handling:
+   - If no images found, return 404 with message
+   - If rate limit hit (429), return error with "try again in X minutes"
+   - Log all API calls for debugging
+
+9. FRONTEND DASHBOARD UPDATE
+   In admin article management interface:
+   
+   Replace "Regenerate Image" button with:
+   - Button text: "Fetch New Image"
+   - Icon: 🖼️ or <ImageIcon />
+   - onClick: calls /api/admin/articles/{id}/fetch-image
+   - Loading state: "Fetching Image..." with spinner
+   - Success: toast notification + refresh article list
+   - Error: show error message from API
+   
+   Display attribution on article card:
+   - Show photographer credit below image
+   - Format: "📸 Photo by {name}"
+   - Make clickable to photographer profile
+
+10. REPLACE DALL-E IN ARTICLE GENERATION
+    In article creation flow:
+    - Remove DALL-E API calls
+    - After article is saved to database, call fetch-image endpoint
+    - If fetch fails, article still publishes but without image
+    - Log warning if image fetch fails
+
+11. FRONTEND IMAGE DISPLAY
+    When rendering articles:
+    - Use direct Unsplash URL (hotlinking as per API terms)
+    - Do NOT download and re-upload images
+    - Always show attribution below image
+    - Make attribution links open in new tab
+
+12. ENVIRONMENT VARIABLES
+    Add to .env and Render.com:
+    UNSPLASH_ACCESS_KEY=<will be provided separately>
+
+CODE STRUCTURE:
+
+Create new file: backend/services/unsplash_service.py
+- extract_image_keywords(title: str, content: str) -> dict
+- build_search_queries(context: dict) -> list[str]
+- fetch_unsplash_images(queries: list[str], limit: int = 5) -> list[dict]
+- trigger_download(download_url: str) -> None
+- select_image_for_article(article_id: int) -> dict
+
+Update: backend/routes/admin.py
+- Add POST /articles/{id}/fetch-image endpoint
+
+Update: backend/models/article.py
+- Add new columns for image attribution
+
+Update: frontend/src/components/AdminArticles.tsx
+- Replace "Regenerate Image" button
+- Add attribution display
+
+TESTING CHECKLIST:
+□ Environment variable UNSPLASH_ACCESS_KEY is set
+□ Unsplash API returns results for test queries
+□ Attribution displays correctly with clickable links
+□ Download endpoint is triggered on image selection
+□ Database stores all attribution fields
+□ Admin button successfully fetches new images
+□ Rate limit handling works (test with rapid requests)
+□ Fallback queries work if primary queries fail
+□ Images hotlink correctly (direct Unsplash URLs)
+
+CRITICAL COMPLIANCE NOTES:
+- Attribution is MANDATORY per Unsplash API Terms Section 9
+- Download tracking is MANDATORY per Unsplash API Terms Section 6
+- Must use hotlinking (image['urls']['regular']) not download files
+- Failure to comply = API access revoked
+
+DELIVERABLES:
+1. New unsplash_service.py with all functions
+2. Updated admin.py with fetch-image endpoint
+3. Database migration for new columns
+4. Updated AdminArticles.tsx component
+5. Remove all DALL-E references from codebase
+6. Test successfully on at least 3 different article types
+
+Begin implementation. Prioritize attribution compliance and download tracking.
