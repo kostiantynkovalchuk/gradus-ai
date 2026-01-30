@@ -53,6 +53,9 @@ class ArticleDetailResponse(BaseModel):
     platforms: Optional[List[str]]
     has_image: bool
     image_url: Optional[str]
+    image_credit: Optional[str] = None
+    image_credit_url: Optional[str] = None
+    image_photographer: Optional[str] = None
     created_at: Optional[datetime]
     posted_at: Optional[datetime]
     reviewed_at: Optional[datetime]
@@ -382,6 +385,9 @@ async def get_article_detail(
         platforms=article.platforms,
         has_image=has_image,
         image_url=article.image_url,
+        image_credit=article.image_credit,
+        image_credit_url=article.image_credit_url,
+        image_photographer=article.image_photographer,
         created_at=article.created_at,
         posted_at=article.posted_at,
         reviewed_at=article.reviewed_at,

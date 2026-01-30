@@ -269,7 +269,7 @@ class ContentScheduler:
         
         try:
             # Import services inside function to avoid circular imports
-            from services.image_generator import image_generator
+            from services.unsplash_service import unsplash_service
             from services.notification_service import notification_service
             from sqlalchemy import or_
             
@@ -307,18 +307,20 @@ class ContentScheduler:
                     db.commit()
                     
                     try:
-                        article_data = {
-                            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
-                            'content': article.original_text or article.translated_text or ''
-                        }
+                        title = article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else '')
+                        content = article.translated_text or article.original_text or ''
                         
-                        result = image_generator.generate_article_image(article_data)
+                        result = unsplash_service.select_image_for_article(title, content)
                         
-                        if result.get('image_url'):
+                        if result and result.get('image_url'):
                             article.image_url = result['image_url']
-                            article.image_prompt = result['prompt']
-                            article.local_image_path = result.get('local_path', '')
-                            article.image_data = result.get('image_data')
+                            article.image_credit = result['image_credit']
+                            article.image_credit_url = result['image_credit_url']
+                            article.image_photographer = result['image_photographer']
+                            article.unsplash_image_id = result['unsplash_image_id']
+                            article.image_prompt = None
+                            article.local_image_path = None
+                            article.image_data = None
                             
                             # Mark Ukrainian articles as pending_approval after image generation
                             if not article.needs_translation and article.status == 'draft':
@@ -329,7 +331,7 @@ class ContentScheduler:
                                     article.translated_text = article.original_text
                             
                             generated_count += 1
-                            logger.info(f"[SCHEDULER] Generated 1 image for article {article_id}")
+                            logger.info(f"[SCHEDULER] Fetched Unsplash image for article {article_id}")
                             
                             notification_data = {
                                 'id': article.id,

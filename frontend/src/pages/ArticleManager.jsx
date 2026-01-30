@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, Trash2, Eye, Download, RefreshCw, AlertTriangle, CheckCircle, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, Trash2, Eye, Download, RefreshCw, AlertTriangle, CheckCircle, X, ChevronLeft, ChevronRight, ImageIcon, Loader2 } from 'lucide-react'
 import api from '../lib/api'
 
 function StatCard({ label, value, colorClass }) {
@@ -33,6 +33,7 @@ function ArticleManager() {
   const [articleToDelete, setArticleToDelete] = useState(null)
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
   const [toast, setToast] = useState(null)
+  const [fetchingImage, setFetchingImage] = useState(false)
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
@@ -117,6 +118,27 @@ function ArticleManager() {
     } catch (err) {
       showToast('Failed to delete articles', 'error')
     }
+  }
+
+  const handleFetchImage = async (articleId) => {
+    setFetchingImage(true)
+    try {
+      const response = await api.post(`/admin/articles/${articleId}/fetch-image`)
+      showToast('Image fetched successfully from Unsplash')
+      setSelectedArticle(prev => ({
+        ...prev,
+        image_url: response.data.image_url,
+        image_credit: response.data.image_credit,
+        image_credit_url: response.data.image_credit_url,
+        image_photographer: response.data.image_photographer,
+        has_image: true
+      }))
+      fetchArticles()
+    } catch (err) {
+      const message = err.response?.data?.detail || 'Failed to fetch image'
+      showToast(message, 'error')
+    }
+    setFetchingImage(false)
   }
 
   const handleExport = async () => {
@@ -424,6 +446,61 @@ function ArticleManager() {
                   </a>
                 </div>
               )}
+
+              <div>
+                <label className="text-white/50 text-sm">Image</label>
+                {selectedArticle.image_url ? (
+                  <div className="mt-2">
+                    <img 
+                      src={selectedArticle.image_url} 
+                      alt="Article" 
+                      className="w-full max-w-md rounded-lg"
+                    />
+                    {selectedArticle.image_credit && (
+                      <p className="text-white/50 text-xs mt-2">
+                        📸 {selectedArticle.image_photographer ? (
+                          <a 
+                            href={selectedArticle.image_credit_url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-400 hover:underline"
+                          >
+                            {selectedArticle.image_photographer}
+                          </a>
+                        ) : selectedArticle.image_credit}
+                        {' on '}
+                        <a 
+                          href="https://unsplash.com" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:underline"
+                        >
+                          Unsplash
+                        </a>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-white/40 text-sm">No image</p>
+                )}
+                <button
+                  onClick={() => handleFetchImage(selectedArticle.id)}
+                  disabled={fetchingImage}
+                  className="mt-3 btn-secondary flex items-center gap-2"
+                >
+                  {fetchingImage ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Fetching...
+                    </>
+                  ) : (
+                    <>
+                      <ImageIcon size={16} />
+                      Fetch New Image
+                    </>
+                  )}
+                </button>
+              </div>
               
               {selectedArticle.approval_logs?.length > 0 && (
                 <div>
