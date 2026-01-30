@@ -38,6 +38,12 @@ class ContentQueue(Base):
     # Article category for filtering
     category = Column(String(20), nullable=True, default=None)
     
+    # Unsplash image attribution (API compliance)
+    image_credit = Column(String(255), nullable=True)
+    image_credit_url = Column(String(500), nullable=True)
+    image_photographer = Column(String(255), nullable=True)
+    unsplash_image_id = Column(String(100), nullable=True)
+    
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted', 'posting_facebook', 'posting_linkedin')",

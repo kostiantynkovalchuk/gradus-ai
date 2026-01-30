@@ -87,6 +87,78 @@ class DateRangeDeleteRequest(BaseModel):
     status_filter: Optional[str] = None
 
 
+class FetchImageResponse(BaseModel):
+    success: bool
+    message: str
+    image_url: Optional[str] = None
+    image_credit: Optional[str] = None
+    image_credit_url: Optional[str] = None
+    image_photographer: Optional[str] = None
+    all_images: Optional[List[dict]] = None
+
+
+@router.post("/{article_id}/fetch-image", response_model=FetchImageResponse)
+async def fetch_image_for_article(
+    article_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch a new image from Unsplash for an article.
+    Auto-applies the best matching image and returns alternatives.
+    """
+    from services.unsplash_service import unsplash_service
+    
+    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    title = article.translated_title or article.source_title or ""
+    content = article.translated_text or article.original_text or ""
+    
+    if not title and not content:
+        raise HTTPException(status_code=400, detail="Article has no content for image search")
+    
+    try:
+        result = unsplash_service.select_image_for_article(title, content)
+        
+        if not result:
+            raise HTTPException(
+                status_code=404, 
+                detail="No suitable images found. Try again later or with different content."
+            )
+        
+        article.image_url = result['image_url']
+        article.image_credit = result['image_credit']
+        article.image_credit_url = result['image_credit_url']
+        article.image_photographer = result['image_photographer']
+        article.unsplash_image_id = result['unsplash_image_id']
+        article.image_data = None
+        article.local_image_path = None
+        article.image_prompt = None
+        
+        db.commit()
+        
+        logger.info(f"Fetched Unsplash image for article {article_id}: {result['unsplash_image_id']}")
+        
+        return FetchImageResponse(
+            success=True,
+            message=f"Image fetched successfully from Unsplash",
+            image_url=result['image_url'],
+            image_credit=result['image_credit'],
+            image_credit_url=result['image_credit_url'],
+            image_photographer=result['image_photographer'],
+            all_images=result.get('all_images', [])
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Unsplash image for article {article_id}: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
+
+
 @router.get("/stats")
 async def get_article_stats(db: Session = Depends(get_db)):
     """Get article statistics"""
