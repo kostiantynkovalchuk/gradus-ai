@@ -1,0 +1,135 @@
+TASK: Ensure all existing DALL-E images are replaced with Unsplash images
+
+CRITICAL ISSUE:
+Articles created before Unsplash migration may still have DALL-E images. These need to be replaced because:
+1. DALL-E images trigger Facebook restrictions
+2. DALL-E images lack proper Unsplash attribution
+3. Need consistent quality across all content
+
+INVESTIGATION NEEDED:
+
+1. CHECK CURRENT SCHEDULER LOGIC
+   File: backend/scheduler.py (image generation task)
+   
+   Questions:
+   - Does the image task skip articles that already have image_url?
+   - Or does it replace existing images?
+   - What's the logic: if article.image_url is None vs if article.image_url exists?
+   
+2. IDENTIFY DALL-E IMAGES IN DATABASE
+   Run query to find articles with images but no Unsplash attribution:
+```sql
+   SELECT id, title, image_url, image_photographer 
+   FROM articles 
+   WHERE image_url IS NOT NULL 
+   AND image_photographer IS NULL
+   LIMIT 10;
+```
+   
+   These are DALL-E images that need replacement.
+
+3. CHECK ARTICLE STATUSES
+   What statuses do these old DALL-E articles have?
+   - draft
+   - pending_approval
+   - approved
+   - published
+   
+   We need to replace images for ALL statuses except 'published' (already posted).
+
+REQUIRED FIXES:
+
+1. UPDATE SCHEDULER LOGIC
+   In backend/scheduler.py, image generation task:
+   
+   **Current logic (likely):**
+```python
+   if not article.image_url:
+       # Fetch Unsplash image
+```
+   
+   **Required logic:**
+```python
+   # Replace DALL-E images (no photographer = DALL-E)
+   if not article.image_url or not article.image_photographer:
+       # Fetch Unsplash image and replace
+```
+   
+   This ensures:
+   - New articles without images get Unsplash images ✓
+   - Old DALL-E articles (with image but no photographer) get replaced ✓
+   - Unsplash articles (with photographer) are skipped ✓
+
+2. ONE-TIME MIGRATION (OPTIONAL)
+   For faster cleanup, create a one-time script to replace all DALL-E images:
+```python
+   # backend/migrations/replace_dalle_images.py
+   
+   async def replace_all_dalle_images():
+       """Replace all DALL-E images with Unsplash images"""
+       
+       # Find all articles with images but no photographer (= DALL-E)
+       articles = await db.query(
+           "SELECT * FROM articles WHERE image_url IS NOT NULL AND image_photographer IS NULL"
+       )
+       
+       print(f"Found {len(articles)} DALL-E images to replace")
+       
+       for article in articles:
+           try:
+               # Fetch Unsplash image
+               context = extract_image_keywords(article.title, article.content)
+               queries = build_search_queries(context, article.title)
+               image_data = await fetch_unsplash_images(queries, limit=1)
+               
+               if image_data:
+                   # Update article with Unsplash image
+                   await db.update_article_image(
+                       article_id=article.id,
+                       image_url=image_data[0]['url'],
+                       image_credit=f"Photo by {image_data[0]['photographer']} on Unsplash",
+                       image_credit_url=image_data[0]['photographer_url'],
+                       image_photographer=image_data[0]['photographer'],
+                       unsplash_image_id=image_data[0]['id']
+                   )
+                   
+                   # Trigger download for attribution
+                   trigger_download(image_data[0]['download_url'])
+                   
+                   print(f"✓ Replaced image for article {article.id}: {article.title[:50]}")
+               else:
+                   print(f"✗ No Unsplash image found for article {article.id}")
+                   
+           except Exception as e:
+               print(f"✗ Error replacing image for article {article.id}: {e}")
+   
+   if __name__ == "__main__":
+       asyncio.run(replace_all_dalle_images())
+```
+
+DELIVERABLES:
+
+1. IMMEDIATE FIX:
+   - Update scheduler.py to replace DALL-E images (check for missing photographer)
+   - Deploy to production
+   - Next scheduled run (6:15am, 2:15pm, or 8:15pm) will start replacing images
+
+2. STATISTICS:
+   - Report how many DALL-E images exist in database
+   - Estimate time for all to be replaced via scheduler (3 runs/day)
+
+3. OPTIONAL MIGRATION SCRIPT:
+   - If >20 DALL-E images exist, create migration script
+   - Run once to replace all immediately
+   - Avoids waiting for scheduled runs
+
+TESTING:
+- Create test article with fake DALL-E image (image_url set, photographer NULL)
+- Run scheduler task
+- Verify image gets replaced with Unsplash image
+- Verify photographer field is now populated
+
+PRIORITY: HIGH
+Old DALL-E images will continue triggering Facebook restrictions until replaced.
+
+Begin investigation and implementation.

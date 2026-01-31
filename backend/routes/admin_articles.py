@@ -517,3 +517,86 @@ async def get_admin_articles(
         offset=offset,
         stats=stats
     )
+
+
+@router.post("/migrate-dalle-to-unsplash")
+async def migrate_dalle_to_unsplash(
+    limit: int = Query(10, ge=1, le=50, description="Max articles to process"),
+    db: Session = Depends(get_db)
+):
+    """
+    Replace DALL-E images with Unsplash images for articles without photographer attribution.
+    DALL-E images are identified by having image_url but no image_photographer.
+    """
+    try:
+        from services.unsplash_service import unsplash_service
+        
+        dalle_articles = db.query(ContentQueue).filter(
+            ContentQueue.image_url != None,
+            ContentQueue.image_photographer == None,
+            ContentQueue.status.notin_(['posted', 'rejected'])
+        ).limit(limit).all()
+        
+        total_dalle = db.query(ContentQueue).filter(
+            ContentQueue.image_url != None,
+            ContentQueue.image_photographer == None,
+            ContentQueue.status.notin_(['posted', 'rejected'])
+        ).count()
+        
+        replaced = 0
+        failed = 0
+        results = []
+        
+        for article in dalle_articles:
+            try:
+                title = article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else '')
+                content = article.translated_text or article.original_text or ''
+                
+                result = unsplash_service.select_image_for_article(title, content)
+                
+                if result and result.get('image_url'):
+                    article.image_url = result['image_url']
+                    article.image_credit = result['image_credit']
+                    article.image_credit_url = result['image_credit_url']
+                    article.image_photographer = result['image_photographer']
+                    article.unsplash_image_id = result['unsplash_image_id']
+                    article.image_prompt = None
+                    article.local_image_path = None
+                    article.image_data = None
+                    
+                    replaced += 1
+                    results.append({
+                        "id": article.id,
+                        "title": title[:50],
+                        "status": "replaced",
+                        "photographer": result['image_photographer']
+                    })
+                else:
+                    failed += 1
+                    results.append({
+                        "id": article.id,
+                        "title": title[:50],
+                        "status": "no_image_found"
+                    })
+            except Exception as e:
+                failed += 1
+                results.append({
+                    "id": article.id,
+                    "status": "error",
+                    "error": str(e)[:100]
+                })
+        
+        db.commit()
+        
+        return {
+            "status": "success",
+            "total_dalle_remaining": total_dalle - replaced,
+            "processed": len(dalle_articles),
+            "replaced": replaced,
+            "failed": failed,
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -286,13 +286,14 @@ class ContentScheduler:
                             # Translated articles ready for images
                             (ContentQueue.status == 'pending_approval'),
                             # Ukrainian articles ready for images (skip translation)
-                            (ContentQueue.status == 'draft') & (ContentQueue.needs_translation == False)
+                            (ContentQueue.status == 'draft') & (ContentQueue.needs_translation == False),
+                            # Approved articles with DALL-E images that need replacement
+                            (ContentQueue.status == 'approved') & (ContentQueue.image_url != None) & (ContentQueue.image_photographer == None)
                         ),
-                        ContentQueue.image_url == None,
-                        # Exclude articles that already had notification sent
+                        # Include: no image OR DALL-E image (has image_url but no photographer)
                         or_(
-                            ContentQueue.notification_sent == None,
-                            ContentQueue.notification_sent == False
+                            ContentQueue.image_url == None,
+                            (ContentQueue.image_url != None) & (ContentQueue.image_photographer == None)
                         )
                     ).with_for_update(skip_locked=True).first()
                     
@@ -333,27 +334,34 @@ class ContentScheduler:
                             generated_count += 1
                             logger.info(f"[SCHEDULER] Fetched Unsplash image for article {article_id}")
                             
-                            notification_data = {
-                                'id': article.id,
-                                'translated_title': article.translated_title,
-                                'translated_text': article.translated_text or article.original_text or '',
-                                'image_url': article.image_url,
-                                'local_image_path': article.local_image_path,
-                                'source': article.source or 'The Spirits Business',
-                                'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
-                            }
-                            
-                            try:
-                                notification_service.send_approval_notification(notification_data)
-                                notifications_sent += 1
-                                if not article.extra_metadata:
-                                    article.extra_metadata = {}
-                                article.extra_metadata['notification_sent_at'] = datetime.utcnow().isoformat()
+                            # Only send notifications for pending_approval articles, not for approved articles
+                            # getting DALL-E images replaced
+                            if article.status == 'pending_approval':
+                                notification_data = {
+                                    'id': article.id,
+                                    'translated_title': article.translated_title,
+                                    'translated_text': article.translated_text or article.original_text or '',
+                                    'image_url': article.image_url,
+                                    'local_image_path': article.local_image_path,
+                                    'source': article.source or 'The Spirits Business',
+                                    'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
+                                }
+                                
+                                try:
+                                    notification_service.send_approval_notification(notification_data)
+                                    notifications_sent += 1
+                                    if not article.extra_metadata:
+                                        article.extra_metadata = {}
+                                    article.extra_metadata['notification_sent_at'] = datetime.utcnow().isoformat()
+                                    db.commit()
+                                    logger.info(f"✅ [SCHEDULER] Sent 1 notification for article {article_id}")
+                                except Exception as notif_error:
+                                    logger.error(f"[SCHEDULER] Failed to send notification for article {article_id}: {notif_error}")
+                                    db.commit()  # Keep the image even if notification fails
+                            else:
+                                # DALL-E replacement for approved article - just save, no notification
                                 db.commit()
-                                logger.info(f"✅ [SCHEDULER] Sent 1 notification for article {article_id}")
-                            except Exception as notif_error:
-                                logger.error(f"[SCHEDULER] Failed to send notification for article {article_id}: {notif_error}")
-                                db.commit()  # Keep the image even if notification fails
+                                logger.info(f"✅ [SCHEDULER] Replaced DALL-E image with Unsplash for approved article {article_id}")
                         else:
                             # Image generation failed, reset notification_sent so it can retry
                             article.notification_sent = False
