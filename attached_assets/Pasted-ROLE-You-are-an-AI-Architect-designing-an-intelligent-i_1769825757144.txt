@@ -1,0 +1,168 @@
+ROLE: You are an AI Architect designing an intelligent image search system
+
+PROBLEM ANALYSIS:
+Current Unsplash integration has poor success rate (4-40%) because keyword extraction is too simplistic. It looks for predefined categories (business/geography/spirits) but misses the actual THEME of articles.
+
+FAILED EXAMPLES:
+1. "Креветка чорноморська і спогади про мир у новому меню"
+   - Current: Searches "restaurant interior" (generic)
+   - Should: Search "seafood platter Black Sea" (specific theme)
+   
+2. "Новий український бар у Лондоні подаватиме коктейлі"
+   - Current: Searches "luxury bar interior" (generic)
+   - Should: Search "Ukrainian restaurant London" or "cocktail bar opening"
+   
+3. "Білок продовжує залишатися однією з найшвидше зростаючих категорій"
+   - Current: Searches "business meeting" (wrong)
+   - Should: Search "protein powder fitness" (actual topic)
+   
+4. "США погрожують Франції 200% митом на вина"
+   - Current: Searches "boardroom meeting" (generic)
+   - Should: Search "wine bottles France" or "vineyard grapes"
+
+CURRENT FLAWED APPROACH:
+```python
+def extract_image_keywords(title: str, content: str) -> dict:
+    # Checks if predefined terms exist
+    if "угода" in text: return "boardroom"
+    if "франція" in text: return "France landscape"
+    # Too rigid, misses context
+```
+
+REQUIRED: SEMANTIC THEME ANALYSIS
+
+Design a system where Claude API analyzes each article and determines:
+
+1. ARTICLE CLASSIFICATION:
+   - Product launch → Search for product type imagery
+   - Market trend → Search for industry/lifestyle imagery  
+   - Policy/regulation → Search for relevant industry imagery
+   - Company news → Search for business/location imagery
+   - Event/opening → Search for venue/celebration imagery
+   - Statistics/report → Search for relevant subject matter
+
+2. VISUAL THEME EXTRACTION:
+   Instead of keyword matching, use Claude to read the article and answer:
+   - "What is the main subject of this article?"
+   - "What visual would best represent this story?"
+   - "What would a photojournalist photograph for this article?"
+
+3. MULTI-LEVEL SEARCH STRATEGY:
+   Generate 5-7 search queries in priority order:
+   - Level 1: Specific subject (product, location, event)
+   - Level 2: Industry context (distillery, vineyard, bar)
+   - Level 3: Emotional tone (celebration, concern, innovation)
+   - Level 4: Generic fallback (hospitality, business, lifestyle)
+
+PROPOSED ARCHITECTURE:
+```python
+# Step 1: Use Claude API to analyze article semantically
+async def analyze_article_theme(title: str, content: str) -> dict:
+    """
+    Sends article to Claude API with prompt:
+    'Analyze this beverage industry article and identify:
+    1. Main subject (product/person/place/trend/policy)
+    2. Visual theme (what should the photo show?)
+    3. Emotional tone (celebratory/serious/innovative/traditional)
+    4. Key entities (brands/locations/people mentioned)
+    
+    Return JSON with 5-7 Unsplash search queries in priority order.'
+    """
+    
+    prompt = f"""
+    You are a photo editor for a beverage industry publication. 
+    Analyze this article and suggest Unsplash search queries for finding the PERFECT header image.
+    
+    Article Title: {title}
+    Article Content: {content[:1000]}
+    
+    Provide 5-7 search queries in order of relevance:
+    1. Most specific (the exact subject)
+    2-3. Industry context (related imagery)
+    4-5. Emotional/tonal match
+    6-7. Generic fallback (always succeeds)
+    
+    Return ONLY a JSON array of strings (no explanation):
+    ["query1", "query2", "query3", ...]
+    
+    Guidelines:
+    - Avoid abstract concepts ("tariffs" → "wine bottles France")
+    - Prefer tangible subjects ("protein trend" → "protein powder gym")
+    - Include location if relevant ("London bar" → "London pub interior")
+    - Last 2 queries must be ultra-generic ("hospitality", "business meeting")
+    """
+    
+    response = await claude_api_call(prompt)
+    return json.loads(response)
+
+# Step 2: Use Claude-generated queries for Unsplash search
+async def smart_image_search(title: str, content: str) -> dict:
+    # Get intelligent queries from Claude
+    queries = await analyze_article_theme(title, content)
+    
+    # Search Unsplash with Claude's suggestions
+    for query in queries:
+        results = await unsplash_search(query)
+        if results:
+            return results[0]
+    
+    return None
+```
+
+COST ANALYSIS:
+- Claude API call per article: ~$0.001 (Haiku model)
+- Current DALL-E cost saved: $0.04 per image
+- Net savings: $0.039 per article
+- Benefit: 4% → 80%+ success rate
+
+IMPLEMENTATION QUESTIONS:
+
+1. MODEL SELECTION:
+   - Haiku (fast, cheap, good enough for this task?)
+   - Sonnet (better understanding, 3x cost)
+   - Which balances cost vs accuracy?
+
+2. PROMPT OPTIMIZATION:
+   - Should Claude receive full article or truncated (first 500 words)?
+   - Should we provide examples in the prompt (few-shot)?
+   - Should Claude return just queries or also reasoning?
+
+3. CACHING STRATEGY:
+   - Cache Claude responses for similar articles?
+   - Re-use queries for recurring themes (product launches, etc)?
+
+4. FALLBACK BEHAVIOR:
+   - If Claude API fails, fall back to current keyword system?
+   - If all Claude-suggested queries fail, what next?
+
+5. QUALITY VALIDATION:
+   - Should we use Claude again to validate image match?
+   - "Does this image match the article theme?" (extra API call)
+   - Or trust Unsplash ranking + Claude's query?
+
+EXPECTED OUTCOMES:
+
+Before (keyword matching):
+- "Креветка чорноморська" → no_image_found
+- Generic articles → 4% success
+
+After (semantic analysis):
+- "Креветка чорноморська" → "seafood platter elegant" → ✓
+- Generic articles → "relevant industry imagery" → 80%+ success
+
+DELIVERABLE:
+
+Provide architectural decision on:
+1. Should we implement Claude-as-query-generator?
+2. Which model (Haiku vs Sonnet)?
+3. Prompt template design
+4. Error handling strategy
+5. Cost-benefit justification
+
+This is a critical decision affecting:
+- Image relevance quality (user engagement)
+- API costs (Claude API + Unsplash)
+- System complexity (another API dependency)
+- Success rate (4% → 80%+)
+
+Please analyze and provide architectural recommendation.
