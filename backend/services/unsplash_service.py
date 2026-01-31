@@ -148,6 +148,7 @@ class UnsplashService:
             response = self.anthropic_client.messages.create(
                 model="claude-3-haiku-20240307",
                 max_tokens=200,
+                timeout=10.0,
                 messages=[{"role": "user", "content": prompt}]
             )
             
@@ -375,17 +376,41 @@ class UnsplashService:
     
     def select_image_for_article(self, title: str, content: str) -> Optional[Dict]:
         """
-        Complete pipeline: extract keywords, build queries, fetch images, select best one.
+        Complete pipeline: Use AI for semantic queries, fallback to keywords, fetch images.
         Returns image data with attribution or None if no suitable image found.
         """
         db_used_ids = self.get_used_image_ids_from_db()
         self.used_image_ids = self.used_image_ids.union(db_used_ids)
         logger.info(f"Excluding {len(self.used_image_ids)} previously used images")
         
+        ai_queries = self.generate_ai_queries(title, content)
+        
+        if ai_queries:
+            logger.info(f"Using AI-generated queries: {ai_queries[:3]}...")
+            images = self.fetch_unsplash_images(ai_queries, limit=5)
+            
+            if images:
+                selected = images[0]
+                self.trigger_download(selected['download_url'])
+                attribution = self.format_attribution(
+                    selected['photographer_name'],
+                    selected['photographer_url']
+                )
+                return {
+                    'image_url': selected['url'],
+                    'unsplash_image_id': selected['id'],
+                    'image_credit': attribution['credit_text'],
+                    'image_credit_url': selected['photographer_url'],
+                    'image_photographer': selected['photographer_name'],
+                    'all_images': images,
+                    'query_method': 'ai_semantic'
+                }
+            logger.warning("AI queries returned no images, falling back to keyword extraction")
+        
         context = self.extract_image_keywords(title, content)
         queries = self.build_search_queries(context)
         
-        logger.info(f"Searching Unsplash with queries: {queries[:3]}...")
+        logger.info(f"Using keyword-based queries: {queries[:3]}...")
         
         images = self.fetch_unsplash_images(queries, limit=5)
         
