@@ -1,14 +1,41 @@
 """
 Unsplash API Integration for Article Images
 Replaces DALL-E with authentic photography for social media compliance
+Uses Claude AI for semantic query generation to improve image relevance
 """
 import os
 import requests
 import logging
+import json
 from typing import Dict, List, Optional
 import re
+from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
+
+CLAUDE_QUERY_PROMPT = """You are a photo editor for a beverage/hospitality industry publication.
+Generate 5 Unsplash search queries for this Ukrainian article's header image.
+
+Title: {title}
+Content: {content}
+
+Rules:
+- Query 1-2: Specific tangible subject (product type, venue, location)
+- Query 3-4: Industry context (distillery, bar, vineyard, restaurant)
+- Query 5: Generic fallback that will always find images
+- Use English terms only for Unsplash search
+- Avoid abstract concepts - convert to tangible objects
+- If about policy/tariffs → search for the product affected (wine bottles, spirits)
+- If about trends → search for the product category (protein powder, cocktails)
+- If about openings/events → search for venue type (bar interior, restaurant)
+
+Examples:
+- "Wine tariffs France" → ["french wine bottles vineyard", "burgundy wine cellar", "france winery landscape", "wine glasses elegant", "hospitality bar"]
+- "Protein market growth" → ["protein shake fitness", "gym nutrition supplements", "healthy drinks", "sports nutrition", "food industry"]
+- "New cocktail bar London" → ["london cocktail bar interior", "mixologist crafting drinks", "upscale bar neon lights", "cocktails on bar counter", "nightlife hospitality"]
+
+Return ONLY a JSON array of 5 strings, no explanation:
+["query1", "query2", "query3", "query4", "query5"]"""
 
 UNSPLASH_API_URL = "https://api.unsplash.com"
 
@@ -96,6 +123,52 @@ class UnsplashService:
             "Authorization": f"Client-ID {self.access_key}"
         }
         self.used_image_ids = set()
+        self.anthropic_client = None
+        try:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if api_key:
+                self.anthropic_client = Anthropic(api_key=api_key)
+                logger.info("Claude AI initialized for semantic image query generation")
+        except Exception as e:
+            logger.warning(f"Could not initialize Anthropic client: {e}")
+    
+    def generate_ai_queries(self, title: str, content: str) -> Optional[List[str]]:
+        """
+        Use Claude Haiku to generate semantically relevant Unsplash search queries.
+        Returns list of 5 search queries or None if AI fails.
+        """
+        if not self.anthropic_client:
+            logger.warning("Anthropic client not available, falling back to keyword extraction")
+            return None
+        
+        try:
+            truncated_content = content[:800] if content else ""
+            prompt = CLAUDE_QUERY_PROMPT.format(title=title, content=truncated_content)
+            
+            response = self.anthropic_client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = response.content[0].text.strip()
+            
+            if response_text.startswith('['):
+                queries = json.loads(response_text)
+                if isinstance(queries, list) and len(queries) >= 3:
+                    queries.extend(["hospitality bar interior", "business meeting professional"])
+                    logger.info(f"AI generated queries: {queries[:5]}")
+                    return queries[:7]
+            
+            logger.warning(f"Invalid AI response format: {response_text[:100]}")
+            return None
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            return None
     
     def extract_image_keywords(self, title: str, content: str) -> Dict:
         """
