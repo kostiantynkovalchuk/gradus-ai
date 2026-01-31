@@ -531,11 +531,20 @@ async def migrate_dalle_to_unsplash(
     try:
         from services.unsplash_service import unsplash_service
         
+        from sqlalchemy import case
+        
+        status_priority = case(
+            (ContentQueue.status == 'approved', 1),
+            (ContentQueue.status == 'pending_approval', 2),
+            (ContentQueue.status == 'draft', 3),
+            else_=4
+        )
+        
         dalle_articles = db.query(ContentQueue).filter(
             ContentQueue.image_url != None,
             ContentQueue.image_photographer == None,
             ContentQueue.status.notin_(['posted', 'rejected'])
-        ).limit(limit).all()
+        ).order_by(status_priority, desc(ContentQueue.created_at)).limit(limit).all()
         
         total_dalle = db.query(ContentQueue).filter(
             ContentQueue.image_url != None,
