@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { CheckCircle, XCircle, Clock, Image, RefreshCw } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, Image } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import api from '../lib/api'
 
@@ -75,34 +75,37 @@ function ContentApproval() {
 
   const handleGenerateImage = async (contentId) => {
     try {
-      console.log('Generating image for content', contentId)
-      await api.post(`/images/generate/${contentId}`)
-      alert('Image generated successfully!')
+      console.log('Fetching image for content', contentId)
+      const response = await api.post(`/admin/articles/${contentId}/fetch-image`)
+      if (response.data.image_url) {
+        alert('Image fetched from Unsplash!')
+      }
       fetchData()
     } catch (error) {
-      console.error('Error generating image:', error)
-      alert('Failed to generate image. Check console for details.')
+      console.error('Error fetching image:', error)
+      const message = error.response?.data?.detail || 'Failed to fetch image'
+      alert(message)
     }
   }
 
-  const handleRegenerateImage = async (contentId) => {
+  const handleFetchNewImage = async (contentId) => {
     try {
-      console.log('Regenerating image for content', contentId)
-      const response = await api.post(`/images/regenerate/${contentId}`)
+      console.log('Fetching new image for content', contentId)
+      const response = await api.post(`/admin/articles/${contentId}/fetch-image`)
       
-      if (response.data.status === 'success') {
-        // Update image version to force browser cache refresh
+      if (response.data.image_url) {
         setImageVersions(prev => ({
           ...prev,
           [contentId]: Date.now()
         }))
-        alert('Image regenerated successfully!')
+        alert('New image fetched from Unsplash!')
       }
       
       fetchData()
     } catch (error) {
-      console.error('Error regenerating image:', error)
-      alert('Failed to regenerate image. Check console for details.')
+      console.error('Error fetching image:', error)
+      const message = error.response?.data?.detail || 'Failed to fetch image'
+      alert(message)
     }
   }
 
@@ -203,11 +206,11 @@ function ContentApproval() {
                       </p>
                     )}
                     <button
-                      onClick={() => handleRegenerateImage(content.id)}
+                      onClick={() => handleFetchNewImage(content.id)}
                       className="flex items-center space-x-2 text-sm bg-purple-500/20 text-purple-400 px-4 py-2 rounded-lg hover:bg-purple-500/30 border border-purple-500/30 transition-all"
                     >
-                      <RefreshCw size={14} />
-                      <span>Regenerate Image</span>
+                      <Image size={14} />
+                      <span>Fetch New Image</span>
                     </button>
                   </div>
                 </div>
@@ -218,7 +221,7 @@ function ContentApproval() {
                     className="flex items-center space-x-2 bg-gradient-to-r from-purple-500/80 to-pink-500/80 hover:from-purple-500 hover:to-pink-500 text-white px-5 py-2.5 rounded-xl border border-white/20 transition-all duration-300 hover:transform hover:-translate-y-0.5"
                   >
                     <Image size={18} />
-                    <span>Generate Image</span>
+                    <span>Fetch Image</span>
                   </button>
                 </div>
               )}
