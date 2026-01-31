@@ -13,29 +13,45 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_QUERY_PROMPT = """You are a photo editor for a beverage/hospitality industry publication.
-Generate 5 Unsplash search queries for this Ukrainian article's header image.
+CLAUDE_QUERY_PROMPT = """You are GradusMedia's AI photo editor. Analyze this article and find the PERFECT header image.
 
+GradusMedia is a premium beverage/hospitality publication with a sophisticated visual identity:
+- Dark, moody, cinematic aesthetic
+- Amber liquids, warm lighting, bokeh
+- Editorial quality (Monocle/Kinfolk style)
+- Brand-safe, context-congruent imagery
+
+===== ARTICLE =====
 Title: {title}
 Content: {content}
 
-Rules:
-- Query 1-2: Specific tangible subject (product type, venue, location)
-- Query 3-4: Industry context (distillery, bar, vineyard, restaurant)
-- Query 5: Generic fallback that will always find images
-- Use English terms only for Unsplash search
-- Avoid abstract concepts - convert to tangible objects
-- If about policy/tariffs → search for the product affected (wine bottles, spirits)
-- If about trends → search for the product category (protein powder, cocktails)
-- If about openings/events → search for venue type (bar interior, restaurant)
+===== STAGE 1: CONTENT ANALYSIS =====
+Identify:
+1. Subject type: place (bar/restaurant/supermarket), product, company news, trend/statistics, event, policy
+2. Brands mentioned (if any - we must avoid showing competitor products)
+3. Locations mentioned
+4. Tone: celebratory, analytical, serious, innovative
 
-Examples:
-- "Wine tariffs France" → ["french wine bottles vineyard", "burgundy wine cellar", "france winery landscape", "wine glasses elegant", "hospitality bar"]
-- "Protein market growth" → ["protein shake fitness", "gym nutrition supplements", "healthy drinks", "sports nutrition", "food industry"]
-- "New cocktail bar London" → ["london cocktail bar interior", "mixologist crafting drinks", "upscale bar neon lights", "cocktails on bar counter", "nightlife hospitality"]
+===== STAGE 2: VISUAL STRATEGY =====
+- IF brands mentioned → Use brand-neutral scenes (glasses, ambiance, production), AVOID visible bottle labels
+- IF about a place (supermarket/bar/restaurant) → Show that exact type of place, NOT generic boardroom
+- IF about trends/statistics → Show the actual subject matter (protein → protein shakes, NOT graphs)
+- IF about policy/tariffs → Show affected products/places (wine tariffs → vineyard, NOT politicians)
 
-Return ONLY a JSON array of 5 strings, no explanation:
-["query1", "query2", "query3", "query4", "query5"]"""
+===== STAGE 3: GRADUSMEDIA AESTHETIC =====
+Every query MUST include aesthetic keywords:
+- LIGHTING: "dark background" / "moody lighting" / "warm light" / "golden hour" / "bokeh"
+- QUALITY: "premium" / "luxury" / "elegant" / "sophisticated" / "cinematic"
+- AVOID: "bright" / "fluorescent" / "office" / "boardroom" / "corporate" / "generic"
+
+===== EXAMPLES =====
+"Supermarket article" → ["premium supermarket interior dark moody lighting", "grocery aisle warm atmospheric lighting elegant", ...]
+"Grey Goose launch" → ["vodka martini crystal glass dark bokeh elegant", "craft cocktail moody bar warm light", ...] (NO branded bottles!)
+"Wine tariffs France" → ["french wine bottles vineyard dark moody", "burgundy wine cellar atmospheric warm light", ...]
+"Protein market trend" → ["protein shake glass dark background moody premium", "wellness beverage elegant warm light", ...]
+
+Return ONLY a JSON object:
+{{"queries": ["query1 with aesthetic keywords", "query2", "query3", "query4", "query5", "luxury hospitality dark moody", "premium bar ambiance warm bokeh"]}}"""
 
 UNSPLASH_API_URL = "https://api.unsplash.com"
 
@@ -134,8 +150,9 @@ class UnsplashService:
     
     def generate_ai_queries(self, title: str, content: str) -> Optional[List[str]]:
         """
-        Use Claude Haiku to generate semantically relevant Unsplash search queries.
-        Returns list of 5 search queries or None if AI fails.
+        Use Claude Haiku to generate semantically relevant Unsplash search queries
+        with GradusMedia aesthetic (dark, moody, premium).
+        Returns list of 5-7 search queries or None if AI fails.
         """
         if not self.anthropic_client:
             logger.warning("Anthropic client not available, falling back to keyword extraction")
@@ -147,17 +164,24 @@ class UnsplashService:
             
             response = self.anthropic_client.messages.create(
                 model="claude-3-haiku-20240307",
-                max_tokens=200,
-                timeout=10.0,
+                max_tokens=500,
+                timeout=15.0,
                 messages=[{"role": "user", "content": prompt}]
             )
             
             response_text = response.content[0].text.strip()
             
-            if response_text.startswith('['):
+            if response_text.startswith('{'):
+                result = json.loads(response_text)
+                queries = result.get('queries', [])
+                if isinstance(queries, list) and len(queries) >= 3:
+                    queries.extend(["luxury hospitality dark moody bokeh", "premium bar ambiance warm cinematic"])
+                    logger.info(f"AI generated aesthetic queries: {queries[:5]}")
+                    return queries[:7]
+            elif response_text.startswith('['):
                 queries = json.loads(response_text)
                 if isinstance(queries, list) and len(queries) >= 3:
-                    queries.extend(["hospitality bar interior", "business meeting professional"])
+                    queries.extend(["luxury hospitality dark moody bokeh", "premium bar ambiance warm cinematic"])
                     logger.info(f"AI generated queries: {queries[:5]}")
                     return queries[:7]
             
@@ -170,6 +194,47 @@ class UnsplashService:
         except Exception as e:
             logger.error(f"Claude API error: {e}")
             return None
+    
+    def calculate_aesthetic_score(self, image: Dict) -> int:
+        """
+        Score image based on GradusMedia aesthetic criteria.
+        Higher score = better fit for premium, dark, moody visual identity.
+        """
+        desc_part = image.get('description', '') or ''
+        alt_part = image.get('alt_description', '') or ''
+        description = (desc_part + ' ' + alt_part).lower()
+        
+        score = 0
+        
+        if any(word in description for word in ['dark', 'moody', 'dramatic', 'noir', 'shadow']):
+            score += 3
+        if any(word in description for word in ['bokeh', 'blur', 'depth of field', 'shallow']):
+            score += 3
+        if any(word in description for word in ['warm', 'golden', 'amber', 'glow', 'candlelight']):
+            score += 2
+        if any(word in description for word in ['glass', 'crystal', 'tumbler', 'snifter']):
+            score += 2
+        if any(word in description for word in ['bar', 'restaurant', 'lounge', 'pub', 'distillery', 'cellar']):
+            score += 2
+        if any(word in description for word in ['luxury', 'premium', 'elegant', 'sophisticated', 'upscale']):
+            score += 1
+        if any(word in description for word in ['cinematic', 'atmospheric', 'editorial']):
+            score += 2
+        
+        if any(word in description for word in ['bright', 'fluorescent', 'daylight', 'sunny', 'white background']):
+            score -= 3
+        if any(word in description for word in ['office', 'boardroom', 'corporate', 'cubicle', 'meeting room']):
+            score -= 3
+        if any(word in description for word in ['generic', 'stock', 'template', 'cheap']):
+            score -= 2
+        
+        likes = image.get('likes', 0)
+        if likes > 2000:
+            score += 2
+        elif likes > 1000:
+            score += 1
+        
+        return score
     
     def extract_image_keywords(self, title: str, content: str) -> Dict:
         """
@@ -293,7 +358,7 @@ class UnsplashService:
                     user = photo.get('user', {})
                     for_hire = user.get('for_hire', False)
                     
-                    if likes >= 500 or for_hire:
+                    if likes >= 300 or for_hire:
                         image_data = {
                             'id': photo['id'],
                             'url': photo['urls']['regular'],
@@ -302,12 +367,16 @@ class UnsplashService:
                             'photographer_url': user.get('links', {}).get('html', 'https://unsplash.com'),
                             'photographer_username': user.get('username', ''),
                             'likes': likes,
-                            'description': photo.get('description') or photo.get('alt_description') or '',
+                            'description': photo.get('description') or '',
+                            'alt_description': photo.get('alt_description') or '',
                             'query_used': query
                         }
                         
-                        images.append(image_data)
-                        self.used_image_ids.add(photo['id'])
+                        image_data['aesthetic_score'] = self.calculate_aesthetic_score(image_data)
+                        
+                        if image_data['aesthetic_score'] >= -2:
+                            images.append(image_data)
+                            self.used_image_ids.add(photo['id'])
                         
                         if len(images) >= limit:
                             break
@@ -386,11 +455,14 @@ class UnsplashService:
         ai_queries = self.generate_ai_queries(title, content)
         
         if ai_queries:
-            logger.info(f"Using AI-generated queries: {ai_queries[:3]}...")
-            images = self.fetch_unsplash_images(ai_queries, limit=5)
+            logger.info(f"Using AI-generated aesthetic queries: {ai_queries[:3]}...")
+            images = self.fetch_unsplash_images(ai_queries, limit=10)
             
             if images:
+                images.sort(key=lambda x: (x.get('aesthetic_score', 0), x.get('likes', 0)), reverse=True)
                 selected = images[0]
+                logger.info(f"Selected image with aesthetic score: {selected.get('aesthetic_score', 0)}, likes: {selected.get('likes', 0)}")
+                
                 self.trigger_download(selected['download_url'])
                 attribution = self.format_attribution(
                     selected['photographer_name'],
@@ -402,8 +474,10 @@ class UnsplashService:
                     'image_credit': attribution['credit_text'],
                     'image_credit_url': selected['photographer_url'],
                     'image_photographer': selected['photographer_name'],
-                    'all_images': images,
-                    'query_method': 'ai_semantic'
+                    'aesthetic_score': selected.get('aesthetic_score', 0),
+                    'query_used': selected.get('query_used', ''),
+                    'all_images': images[:5],
+                    'query_method': 'ai_semantic_aesthetic'
                 }
             logger.warning("AI queries returned no images, falling back to keyword extraction")
         
@@ -412,12 +486,13 @@ class UnsplashService:
         
         logger.info(f"Using keyword-based queries: {queries[:3]}...")
         
-        images = self.fetch_unsplash_images(queries, limit=5)
+        images = self.fetch_unsplash_images(queries, limit=10)
         
         if not images:
             logger.warning("No suitable images found from Unsplash")
             return None
         
+        images.sort(key=lambda x: (x.get('aesthetic_score', 0), x.get('likes', 0)), reverse=True)
         selected = images[0]
         
         self.trigger_download(selected['download_url'])
@@ -433,7 +508,10 @@ class UnsplashService:
             'image_credit': attribution['credit_text'],
             'image_credit_url': selected['photographer_url'],
             'image_photographer': selected['photographer_name'],
-            'all_images': images
+            'aesthetic_score': selected.get('aesthetic_score', 0),
+            'query_used': selected.get('query_used', ''),
+            'all_images': images[:5],
+            'query_method': 'keyword_aesthetic'
         }
 
 
