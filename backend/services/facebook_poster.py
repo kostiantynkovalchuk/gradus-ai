@@ -22,15 +22,16 @@ class FacebookPoster:
         Format post text for Facebook with FULL Ukrainian content
         
         Args:
-            article_data: Dict with title, content, source, author
+            article_data: Dict with title, content, source, author, image_credit
             
         Returns:
-            Formatted post text
+            Formatted post text with Unsplash attribution if applicable
         """
         title = article_data.get('translated_title', '')
         content = article_data.get('translated_content', '')
         source = article_data.get('source', 'The Spirits Business')
         author = article_data.get('author', '')
+        image_credit = article_data.get('image_credit', '')
         
         post_text = f"""📰 {title}
 
@@ -40,6 +41,9 @@ class FacebookPoster:
         
         if author:
             post_text += f"\n✍️ {author}"
+        
+        if image_credit:
+            post_text += f"\n\n📷 {image_credit}"
         
         return post_text
     

@@ -524,7 +524,8 @@ class ContentScheduler:
                     'article_id': article.id,  # For public image URL fallback
                     'image_url': article.image_url,
                     'local_image_path': article.local_image_path,
-                    'image_data': article.image_data  # Binary from database (Render-persistent)
+                    'image_data': article.image_data,  # Binary from database (Render-persistent)
+                    'image_credit': article.image_credit or ''  # Unsplash attribution
                 }
                 
                 result = facebook_poster.post_with_image(post_data)
@@ -673,7 +674,8 @@ class ContentScheduler:
                     'source_url': article.source_url or '',
                     'image_url': article.image_url,
                     'local_image_path': article.local_image_path,
-                    'image_data': article.image_data  # Binary from database (Render-persistent)
+                    'image_data': article.image_data,  # Binary from database (Render-persistent)
+                    'image_credit': article.image_credit or ''  # Unsplash attribution
                 }
                 
                 result = linkedin_poster.post_to_linkedin(post_data)

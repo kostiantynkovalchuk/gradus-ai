@@ -23,15 +23,16 @@ class LinkedInPoster:
         Format post text for LinkedIn with Ukrainian content
         
         Args:
-            article_data: Dict with title, text, source, url
+            article_data: Dict with title, text, source, url, image_credit
             
         Returns:
-            Formatted post text
+            Formatted post text with Unsplash attribution if applicable
         """
         title = article_data.get('title', '')
         text = article_data.get('text', '')
         source = article_data.get('source', 'The Spirits Business')
         source_url = article_data.get('source_url', '')
+        image_credit = article_data.get('image_credit', '')
         
         post_text = f"""{title}
 
@@ -41,6 +42,9 @@ class LinkedInPoster:
         
         if source_url:
             post_text += f"\n🔗 {source_url}"
+        
+        if image_credit:
+            post_text += f"\n\n📷 {image_credit}"
         
         return post_text
     
