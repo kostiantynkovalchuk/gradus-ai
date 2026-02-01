@@ -200,6 +200,28 @@ function ContentApproval() {
                         e.target.src = content.image_url;
                       }}
                     />
+                    {content.image_photographer && (
+                      <p className="text-xs text-white/60 mb-2">
+                        📷 Photo by{' '}
+                        <a 
+                          href={content.image_credit_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-cyan-400 hover:underline"
+                        >
+                          {content.image_photographer}
+                        </a>
+                        {' '}on{' '}
+                        <a 
+                          href="https://unsplash.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-cyan-400 hover:underline"
+                        >
+                          Unsplash
+                        </a>
+                      </p>
+                    )}
                     {content.image_prompt && (
                       <p className="text-xs text-white/40 italic mb-3">
                         Prompt: {content.image_prompt}
