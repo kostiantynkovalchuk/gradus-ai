@@ -54,6 +54,16 @@ class TelegramWebhookHandler:
                 content_id = int(content_id_str)
                 return self._reject_content(content_id, callback_id, message, db)
             
+            elif callback_data.startswith('regenerate_'):
+                content_id_str = callback_data.split('_')[1]
+                if not content_id_str.isdigit():
+                    logger.error(f"Invalid content_id in regenerate callback: {content_id_str}")
+                    self._answer_callback_query(callback_id, "❌ Invalid content ID")
+                    return {"status": "error", "message": "Invalid content ID"}
+                
+                content_id = int(content_id_str)
+                return self._regenerate_image(content_id, callback_id, message, db)
+            
             self._answer_callback_query(callback_id, "❌ Unknown action")
             return {"status": "error", "message": "Unknown callback data"}
             
@@ -198,6 +208,89 @@ class TelegramWebhookHandler:
             db.rollback()
             self._answer_callback_query(callback_id, f"❌ Error: {str(e)[:100]}")
             return {"status": "error", "message": str(e)}
+    
+    def _regenerate_image(self, content_id: int, callback_id: str, message: Dict, db: Session) -> Dict:
+        """Regenerate image for article using AI-powered Unsplash search"""
+        
+        try:
+            article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
+            
+            if not article:
+                self._answer_callback_query(callback_id, "❌ Article not found")
+                return {"status": "error", "message": "Article not found"}
+            
+            if article.status not in ['pending_approval', 'approved', 'draft']:
+                self._answer_callback_query(callback_id, f"⚠️ Cannot regenerate - status: {article.status}")
+                return {"status": "error", "message": f"Cannot regenerate for status: {article.status}"}
+            
+            self._answer_callback_query(callback_id, "🔄 Fetching new image...")
+            
+            from services.unsplash_service import UnsplashService
+            unsplash = UnsplashService()
+            
+            title = article.translated_title or article.source_title or ""
+            content = article.translated_text or article.original_text or ""
+            
+            queries = unsplash.generate_ai_queries(title, content)
+            if not queries:
+                queries = unsplash.extract_smart_keywords(title, content)
+            
+            images = unsplash.fetch_unsplash_images(queries, limit=3)
+            
+            if not images:
+                self._send_text_message(message['chat']['id'], f"❌ No suitable images found for article #{content_id}")
+                return {"status": "error", "message": "No images found"}
+            
+            images.sort(key=lambda x: x.get('aesthetic_score', 0), reverse=True)
+            best_image = images[0]
+            
+            article.image_url = best_image['url']
+            article.image_photographer = best_image['photographer_name']
+            article.image_credit = f"Photo by {best_image['photographer_name']} on Unsplash"
+            article.image_credit_url = best_image['photographer_url']
+            article.unsplash_image_id = best_image['id']
+            article.local_image_path = None
+            article.image_data = None
+            
+            db.commit()
+            db.refresh(article)
+            
+            unsplash.trigger_download(best_image['download_url'])
+            
+            logger.info(f"Image regenerated for article {content_id}: {best_image['photographer_name']}")
+            
+            notification_service.send_approval_notification({
+                'id': article.id,
+                'translated_title': article.translated_title,
+                'translated_text': article.translated_text or '',
+                'image_url': best_image['url'],
+                'local_image_path': None,
+                'source': article.source or 'GradusMedia',
+                'created_at': article.created_at.strftime('%H:%M, %d %b %Y') if article.created_at else ''
+            })
+            
+            return {"status": "success", "message": "Image regenerated", "content_id": content_id}
+            
+        except Exception as e:
+            logger.error(f"Error regenerating image for content {content_id}: {e}")
+            db.rollback()
+            self._send_text_message(message['chat']['id'], f"❌ Error regenerating image: {str(e)[:100]}")
+            return {"status": "error", "message": str(e)}
+    
+    def _send_text_message(self, chat_id: int, text: str) -> bool:
+        """Send a simple text message"""
+        try:
+            url = f"{self.base_url}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML"
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            return response.json().get('ok', False)
+        except Exception as e:
+            logger.error(f"Error sending text message: {e}")
+            return False
     
     def _update_message_caption(self, message: Dict, new_caption: str) -> bool:
         """

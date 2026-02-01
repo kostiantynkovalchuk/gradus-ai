@@ -46,6 +46,9 @@ class NotificationService:
                 [
                     {"text": "✅ Approve & Post", "callback_data": f"approve_{content_id}"},
                     {"text": "❌ Reject", "callback_data": f"reject_{content_id}"}
+                ],
+                [
+                    {"text": "🔄 New Image", "callback_data": f"regenerate_{content_id}"}
                 ]
             ]
         }
