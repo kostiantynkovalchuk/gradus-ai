@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { CheckCircle, XCircle, Clock, Image } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import api from '../lib/api'
 
-function MiniStatCard({ label, value, colorClass }) {
+function MiniStatCard({ label, value, colorClass, onClick }) {
   return (
-    <div className="glass-card p-4">
+    <div 
+      className="glass-card p-4 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:bg-white/5"
+      onClick={onClick}
+    >
       <div className={`text-sm ${colorClass} opacity-70`}>{label}</div>
       <div className={`text-2xl font-bold ${colorClass}`}>{value}</div>
     </div>
@@ -13,10 +17,21 @@ function MiniStatCard({ label, value, colorClass }) {
 }
 
 function ContentApproval() {
+  const navigate = useNavigate()
   const [pendingContent, setPendingContent] = useState([])
   const [stats, setStats] = useState({ pending: 0, approved: 0, posted: 0, rejected: 0 })
   const [loading, setLoading] = useState(true)
-  const [imageVersions, setImageVersions] = useState({}) // Track cache-busting versions per article
+  const [imageVersions, setImageVersions] = useState({})
+
+  const handleStatClick = (status) => {
+    const statusMap = {
+      'pending': 'pending_approval',
+      'approved': 'approved',
+      'posted': 'posted',
+      'rejected': 'rejected'
+    }
+    navigate(`/articles?status=${statusMap[status] || ''}`)
+  }
 
   useEffect(() => {
     fetchData()
@@ -124,10 +139,10 @@ function ContentApproval() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <MiniStatCard label="Pending" value={stats.pending} colorClass="text-yellow-400" />
-        <MiniStatCard label="Approved" value={stats.approved} colorClass="text-green-400" />
-        <MiniStatCard label="Posted" value={stats.posted} colorClass="text-cyan-400" />
-        <MiniStatCard label="Rejected" value={stats.rejected} colorClass="text-pink-400" />
+        <MiniStatCard label="Pending" value={stats.pending} colorClass="text-yellow-400" onClick={() => handleStatClick('pending')} />
+        <MiniStatCard label="Approved" value={stats.approved} colorClass="text-green-400" onClick={() => handleStatClick('approved')} />
+        <MiniStatCard label="Posted" value={stats.posted} colorClass="text-cyan-400" onClick={() => handleStatClick('posted')} />
+        <MiniStatCard label="Rejected" value={stats.rejected} colorClass="text-pink-400" onClick={() => handleStatClick('rejected')} />
       </div>
 
       {pendingContent.length === 0 ? (

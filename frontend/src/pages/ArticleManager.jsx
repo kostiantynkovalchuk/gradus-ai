@@ -1,26 +1,45 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Search, Trash2, Eye, Download, RefreshCw, AlertTriangle, CheckCircle, X, ChevronLeft, ChevronRight, ImageIcon, Loader2 } from 'lucide-react'
 import api from '../lib/api'
 
-function StatCard({ label, value, colorClass }) {
+function StatCard({ label, value, colorClass, onClick, isActive }) {
   return (
-    <div className="glass-card p-3 text-center">
+    <div 
+      className={`glass-card p-3 text-center cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg ${
+        isActive ? 'ring-2 ring-white/50 bg-white/10' : ''
+      }`}
+      onClick={onClick}
+    >
       <div className={`text-xs ${colorClass} opacity-70`}>{label}</div>
       <div className={`text-xl font-bold ${colorClass}`}>{value}</div>
+      {isActive && <div className="text-[10px] text-white/50 mt-1">Active Filter</div>}
     </div>
   )
 }
 
 function ArticleManager() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [articles, setArticles] = useState([])
   const [stats, setStats] = useState({ total: 0, pending: 0, approved: 0, posted: 0, rejected: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+
+  const handleStatusFilterClick = (status, toggle = true) => {
+    const newStatus = toggle && statusFilter === status ? '' : status
+    setStatusFilter(newStatus)
+    setOffset(0)
+    if (newStatus) {
+      setSearchParams({ status: newStatus })
+    } else {
+      setSearchParams({})
+    }
+  }
   
   const [offset, setOffset] = useState(0)
   const [total, setTotal] = useState(0)
@@ -232,11 +251,41 @@ function ArticleManager() {
       </div>
 
       <div className="grid grid-cols-5 gap-3">
-        <StatCard label="Total" value={stats.total} colorClass="text-white" />
-        <StatCard label="Pending" value={stats.pending} colorClass="text-yellow-400" />
-        <StatCard label="Approved" value={stats.approved} colorClass="text-blue-400" />
-        <StatCard label="Posted" value={stats.posted} colorClass="text-green-400" />
-        <StatCard label="Rejected" value={stats.rejected} colorClass="text-red-400" />
+        <StatCard 
+          label="Total" 
+          value={stats.total} 
+          colorClass="text-white" 
+          onClick={() => handleStatusFilterClick('')}
+          isActive={statusFilter === ''}
+        />
+        <StatCard 
+          label="Pending" 
+          value={stats.pending} 
+          colorClass="text-yellow-400" 
+          onClick={() => handleStatusFilterClick('pending_approval')}
+          isActive={statusFilter === 'pending_approval'}
+        />
+        <StatCard 
+          label="Approved" 
+          value={stats.approved} 
+          colorClass="text-blue-400" 
+          onClick={() => handleStatusFilterClick('approved')}
+          isActive={statusFilter === 'approved'}
+        />
+        <StatCard 
+          label="Posted" 
+          value={stats.posted} 
+          colorClass="text-green-400" 
+          onClick={() => handleStatusFilterClick('posted')}
+          isActive={statusFilter === 'posted'}
+        />
+        <StatCard 
+          label="Rejected" 
+          value={stats.rejected} 
+          colorClass="text-red-400" 
+          onClick={() => handleStatusFilterClick('rejected')}
+          isActive={statusFilter === 'rejected'}
+        />
       </div>
 
       <div className="glass-card p-4">
@@ -256,7 +305,7 @@ function ArticleManager() {
           
           <select
             value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}
+            onChange={(e) => handleStatusFilterClick(e.target.value, false)}
             className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:border-blue-500 focus:outline-none"
           >
             <option value="">All Status</option>
