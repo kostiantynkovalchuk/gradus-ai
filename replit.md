@@ -32,7 +32,7 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 
 **Feature Specifications:**
 - **Content Management:** API for managing pending, approved, and rejected content with editing and history.
-- **Article Manager (Admin Dashboard):** Full-featured interface at `/articles` for paginated listing, search, filters, bulk deletion, CSV export, and real-time statistics.
+- **Article Manager (Admin Dashboard):** Full-featured interface at `/articles` for paginated listing, search, filters, bulk deletion, CSV export, and real-time statistics. Clickable status cards with URL sync for deep linking (e.g., `/articles?status=approved`).
 - **Article Categorization:** AI-powered classification (News, Reviews, Trends) using keyword matching and Claude AI fallback.
 - **AI Services:** Endpoints for Claude AI chat and English-to-Ukrainian translation.
 - **AI Avatar System (Maya & Alex Gradus):**
