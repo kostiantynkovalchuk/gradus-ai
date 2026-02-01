@@ -1,0 +1,111 @@
+TASK: Refetch images for specific articles with non-congruent imagery
+
+ARTICLES TO FIX (find IDs for these titles):
+1. "У Києві на Троєщині деякі продуктові супермаркети"
+2. "Робочі місця PepsiCo в Іспанії"
+3. "Grey Goose представляє Berry Rouge"
+4. "Звіт про бренди 2026: Горілка"
+5. "Mahou San Miguel виходить на Близький Схід"
+
+STEP 1: Find Article IDs
+```sql
+SELECT id, title FROM articles WHERE 
+  title LIKE '%Троєщині%супермаркети%' OR
+  title LIKE '%PepsiCo%Іспанії%' OR
+  title LIKE '%Grey Goose%Berry Rouge%' OR
+  title LIKE '%бренди 2026%Горілка%' OR
+  title LIKE '%Mahou San Miguel%';
+```
+
+STEP 2: Create Manual Refetch Script
+
+File: backend/scripts/refetch_images.py
+```python
+#!/usr/bin/env python3
+"""Manually refetch images for specific articles"""
+
+import asyncio
+from services.unsplash_service import fetch_unsplash_images_smart
+from database import db
+
+ARTICLE_IDS_TO_REFETCH = [
+    # Will be populated after STEP 1
+    342,  # Троєщина супермаркети
+    346,  # PepsiCo Іспанія
+    325,  # Grey Goose Berry Rouge
+    327,  # Звіт про бренди: Горілка
+    333,  # Mahou San Miguel
+]
+
+async def refetch_article_images():
+    """Refetch images using new intelligent AI system"""
+    
+    for article_id in ARTICLE_IDS_TO_REFETCH:
+        print(f"\n{'='*60}")
+        print(f"Processing Article ID: {article_id}")
+        
+        # Get article data
+        article = await db.get_article(article_id)
+        print(f"Title: {article.title[:60]}...")
+        print(f"Current photographer: {article.image_photographer or 'None'}")
+        
+        # Fetch new image with intelligent AI
+        images = await fetch_unsplash_images_smart(
+            title=article.title,
+            content=article.content,
+            limit=3  # Get top 3 options
+        )
+        
+        if images:
+            best_image = images[0]
+            
+            print(f"\nNew Image Selected:")
+            print(f"  Photographer: {best_image['photographer']}")
+            print(f"  Aesthetic Score: {best_image['aesthetic_score']}")
+            print(f"  Query Used: {best_image['query_used']}")
+            print(f"  URL: {best_image['url'][:60]}...")
+            
+            # Update database
+            await db.update_article_image(
+                article_id=article_id,
+                image_url=best_image['url'],
+                image_photographer=best_image['photographer'],
+                image_credit=f"Photo by {best_image['photographer']} on Unsplash",
+                image_credit_url=best_image['photographer_url'],
+                unsplash_image_id=best_image['id']
+            )
+            
+            # Trigger download for attribution
+            from services.unsplash_service import trigger_download
+            trigger_download(best_image['download_url'])
+            
+            print(f"✅ Updated successfully!")
+            
+        else:
+            print(f"❌ No suitable images found")
+        
+        # Small delay between requests
+        await asyncio.sleep(2)
+    
+    print(f"\n{'='*60}")
+    print(f"Refetch complete!")
+
+if __name__ == "__main__":
+    asyncio.run(refetch_article_images())
+```
+
+STEP 3: Run the Script
+```bash
+cd backend
+python scripts/refetch_images.py
+```
+
+STEP 4: Verify on gradusmedia.org
+
+After script runs, check each article on gradusmedia.org to verify:
+- Image matches article content
+- Aesthetic quality is premium (dark, moody, bokeh)
+- Attribution displays correctly
+
+DELIVERABLE:
+Report which articles were successfully refetched and which (if any) still need manual attention.
