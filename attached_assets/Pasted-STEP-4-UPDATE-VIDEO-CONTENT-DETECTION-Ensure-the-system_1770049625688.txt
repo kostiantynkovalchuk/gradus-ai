@@ -1,0 +1,209 @@
+STEP 4: UPDATE VIDEO CONTENT DETECTION
+
+Ensure the system correctly identifies which content has videos:
+```python
+def has_video_content(content_item) -> bool:
+    """Check if content has video attachment"""
+    return (
+        content_item.video_url is not None and 
+        content_item.video_url.strip() != ""
+    )
+
+# Usage:
+if has_video_content(content):
+    return send_video_only(content)
+else:
+    return send_text_response(content)
+```
+
+STEP 5: HANDLE MULTIPLE VIDEOS (if applicable)
+
+If one query might return multiple content items with videos:
+```python
+async def send_multiple_videos(chat_id, content_items):
+    """Send multiple videos as media group"""
+    
+    video_items = [item for item in content_items if has_video_content(item)]
+    
+    if len(video_items) == 1:
+        # Single video
+        await bot.send_video(
+            chat_id,
+            video_items[0].video_url,
+            caption=f"🎥 {video_items[0].title}"
+        )
+    elif len(video_items) > 1:
+        # Multiple videos
+        media_group = [
+            InputMediaVideo(
+                media=item.video_url,
+                caption=f"🎥 {item.title}"
+            )
+            for item in video_items
+        ]
+        await bot.send_media_group(chat_id, media_group)
+```
+
+=============================================================================
+SPECIFIC CONTENT TO UPDATE
+=============================================================================
+
+UPDATE 1: Company Values (Цінності)
+```python
+# When user asks about values
+if "цінност" in query.lower():
+    content = get_content("values")
+    if content.video_url:
+        await bot.send_video(
+            chat_id,
+            content.video_url,
+            caption="🎥 Цінності компанії AVTD"
+        )
+        return  # Don't send text
+```
+
+UPDATE 2: Company History (Історія)
+```python
+if "історі" in query.lower() or "history" in query.lower():
+    content = get_content("history")
+    if content.video_url:
+        await bot.send_video(
+            chat_id,
+            content.video_url,
+            caption="🎥 Історія компанії AVTD"
+        )
+        return
+```
+
+UPDATE 3: Company Overview (Про компанію)
+```python
+if "про компан" in query.lower() or "about company" in query.lower():
+    content = get_content("overview")
+    if content.video_url:
+        await bot.send_video(
+            chat_id,
+            content.video_url,
+            caption="🎥 Про компанію AVTD"
+        )
+        return
+```
+
+=============================================================================
+CAPTION VARIATIONS
+=============================================================================
+
+Add contextual captions based on content type:
+```python
+CAPTION_MAP = {
+    "values": "🎥 Цінності компанії AVTD",
+    "history": "🎥 Історія компанії AVTD (25+ років)",
+    "overview": "🎥 Про компанію AVTD",
+    "culture": "🎥 Корпоративна культура",
+    "products": "🎥 Наші бренди та продукція",
+    "default": "🎥 Відео від Maya HR"
+}
+
+def get_caption(content_type: str) -> str:
+    return CAPTION_MAP.get(content_type, CAPTION_MAP["default"])
+```
+
+=============================================================================
+ERROR HANDLING
+=============================================================================
+
+Handle cases where video URL is invalid or video fails to load:
+```python
+async def send_video_safe(chat_id, video_url, caption):
+    """Send video with fallback to text if video fails"""
+    try:
+        await bot.send_video(chat_id, video_url, caption=caption)
+    except Exception as e:
+        logger.error(f"Failed to send video: {e}")
+        # Fallback: send text version
+        await bot.send_message(
+            chat_id,
+            f"{caption}\n\nНа жаль, відео тимчасово недоступне. "
+            f"Спробуйте пізніше або зв'яжіться з HR."
+        )
+```
+
+=============================================================================
+TESTING CHECKLIST
+=============================================================================
+
+After implementation, test these scenarios:
+
+□ User asks "Розкажи про цінності" → Bot sends ONLY video (no text)
+□ User asks "Історія компанії" → Bot sends ONLY video (no text)
+□ User asks "Що таке AVTD?" → Bot sends ONLY video (no text)
+□ User asks question with NO video content → Bot sends text response
+□ Video URL is broken → Bot sends error message + offers text alternative
+□ Multiple videos available → Bot sends all videos (no text)
+□ Captions display correctly for each video type
+
+=============================================================================
+OPTIONAL ENHANCEMENTS
+=============================================================================
+
+ENHANCEMENT 1: Video Thumbnail Preview
+If Telegram supports it, add thumbnail:
+```python
+await bot.send_video(
+    chat_id,
+    video_url,
+    caption=caption,
+    thumb=thumbnail_url  # If available
+)
+```
+
+ENHANCEMENT 2: Video Duration Info
+Add duration to caption if known:
+```python
+caption = f"🎥 {title} ({duration})"
+# Example: "🎥 Цінності компанії AVTD (3:45)"
+```
+
+ENHANCEMENT 3: "Watch Later" Option
+Add button to save video for later:
+```python
+keyboard = InlineKeyboardMarkup([
+    [InlineKeyboardButton("📥 Зберегти для перегляду", callback_data=f"save_video:{video_id}")]
+])
+await bot.send_video(chat_id, video_url, caption=caption, reply_markup=keyboard)
+```
+
+=============================================================================
+DATABASE UPDATES (if needed)
+=============================================================================
+
+If content is stored in database, ensure video URLs are properly stored:
+```sql
+-- Check which content has videos
+SELECT 
+  id, 
+  title, 
+  CASE 
+    WHEN video_url IS NOT NULL THEN 'Has Video'
+    ELSE 'Text Only'
+  END as content_type
+FROM hr_content
+WHERE category IN ('Values', 'History', 'Overview');
+
+-- Ensure video URLs are valid
+UPDATE hr_content 
+SET video_url = NULL 
+WHERE video_url = '' OR video_url = 'null';
+```
+
+=============================================================================
+DELIVERABLES
+=============================================================================
+
+After implementation:
+1. Maya HR Bot sends ONLY videos for Values/History/Overview
+2. No redundant text when video is available
+3. Short, contextual captions for videos
+4. Fallback to text if video unavailable
+5. Test results confirming behavior
+
+BEGIN IMPLEMENTATION NOW.

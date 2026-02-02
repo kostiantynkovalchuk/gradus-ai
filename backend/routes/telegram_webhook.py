@@ -67,6 +67,34 @@ CONTENT_CATEGORY_MAP = {
     'q26': 'work',
 }
 
+VIDEO_CONTENT_TRIGGERS = {
+    'video_values': ['цінност', 'values', 'наші цінності', 'корпоративні цінності'],
+    'video_history': ['історі', 'history', 'історія компанії', 'як все почалось'],
+    'video_overview': ['про компан', 'about company', 'що таке avtd', 'що таке автд', 
+                       'загальна інформація', 'хто ми', 'про нас'],
+}
+
+VIDEO_CAPTIONS = {
+    'video_values': '🎥 Цінності компанії AVTD',
+    'video_history': '🎥 Історія компанії AVTD (25+ років)',
+    'video_overview': '🎥 Про компанію AVTD',
+}
+
+
+def detect_video_content(query: str) -> tuple:
+    """Check if query matches video content triggers.
+    Returns (content_id, caption) if match found, else (None, None)"""
+    query_lower = query.lower().strip()
+    
+    for content_id, triggers in VIDEO_CONTENT_TRIGGERS.items():
+        for trigger in triggers:
+            if trigger in query_lower:
+                caption = VIDEO_CAPTIONS.get(content_id, '🎥 Відео від Maya HR')
+                return content_id, caption
+    
+    return None, None
+
+
 def is_hr_question(text: str) -> bool:
     """Check if text is HR-related question"""
     text_lower = text.lower()
@@ -771,10 +799,54 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
 
 import time
 
+async def send_video_only_response(chat_id: int, content_id: str, caption: str) -> bool:
+    """Send video-only response for video content. Returns True if successful."""
+    try:
+        from models import get_db
+        from models.hr_models import HRContent
+        
+        with next(get_db()) as db:
+            content = db.query(HRContent).filter(HRContent.content_id == content_id).first()
+            
+            if not content or not content.video_url:
+                logger.warning(f"Video content not found or no video_url: {content_id}")
+                return False
+            
+            video_url = content.video_url
+            
+        nav_keyboard = create_main_menu_keyboard()
+        
+        success = await send_telegram_video(
+            chat_id,
+            video_url,
+            caption,
+            nav_keyboard
+        )
+        
+        if success:
+            logger.info(f"Sent video-only response for {content_id}")
+            return True
+        else:
+            logger.warning(f"Failed to send video for {content_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error sending video-only response: {e}")
+        return False
+
+
 async def handle_hr_question(chat_id: int, user_id: int, query: str):
     """Process HR question via RAG system with logging"""
     await send_typing_action(chat_id)
     start_time = time.time()
+    
+    video_content_id, video_caption = detect_video_content(query)
+    if video_content_id:
+        logger.info(f"Video content detected for query: {query[:50]} -> {video_content_id}")
+        success = await send_video_only_response(chat_id, video_content_id, video_caption)
+        if success:
+            return
+        logger.info(f"Video send failed, falling back to text response")
     
     try:
         async with httpx.AsyncClient() as client:
