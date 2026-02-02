@@ -40,7 +40,10 @@ HR_KEYWORDS = [
     'працевлаштування', 'новачок', 'перший день',
     'кпк', 'планшет', 'мобільна торгівля',
     'графік роботи', 'робочий день',
-    'технічна підтримка', '3636'
+    'технічна підтримка', '3636',
+    'стіл', 'крісло', 'замовити', 'закупити', 'основні фонди',
+    'техніка', 'комп\'ютер', 'ноутбук', 'монітор',
+    'контакти цо', 'центральний офіс', 'контакти офісу'
 ]
 
 CONTENT_CATEGORY_MAP = {
@@ -207,7 +210,7 @@ async def process_telegram_message(message: dict):
                     create_main_menu_keyboard()
                 )
             elif text == "/contacts":
-                await fetch_and_send_hr_content(chat_id, None, 'section_appendix_22.')
+                await fetch_and_send_hr_content(chat_id, None, 'appendix_22_contacts')
             return
         
         from services.bestbrands_video import detect_bestbrands_trigger, handle_bestbrands_request

@@ -78,6 +78,7 @@ def create_category_keyboard(category: str) -> Dict:
             ('🏥 Лікарняні', 'hr_content:q10'),
             ('🏠 Віддалена робота', 'hr_content:q11'),
             ('✈️ Відрядження', 'hr_content:q12'),
+            ('🪑 Основні фонди', 'hr_content:q21'),
             ('🤝 Вирішення конфліктів', 'hr_content:q20'),
             ('📤 Звільнення', 'hr_content:q26'),
             ('🔙 Назад', 'hr_menu:main')
@@ -98,7 +99,7 @@ def create_category_keyboard(category: str) -> Dict:
             ('🔙 Назад', 'hr_menu:main')
         ],
         'contacts': [
-            ('📋 Список контактів', 'hr_content:section_appendix_22.'),
+            ('📞 Контакти ЦО', 'hr_content:appendix_22_contacts'),
             ('🔙 Назад', 'hr_menu:main')
         ],
         'legal': [
