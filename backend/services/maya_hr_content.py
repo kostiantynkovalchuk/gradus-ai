@@ -385,7 +385,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
     "video_overview": {
         "title": "🎬 Загальна інформація про AVTD",
         "type": "video",
-        "video_url": "",
+        "video_url": "https://gradus-ai.onrender.com/static/videos/video_overview.mp4",
         "content": """🏢 **Загальна інформація про компанію AVTD**
 
 **Ми — група компаній AVTD**, один з найбільших дистриб'юторів та виробників алкогольних напоїв в Україні.
@@ -410,7 +410,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
     "video_values": {
         "title": "🎬 Цінності компанії AVTD",
         "type": "video",
-        "video_url": "",
+        "video_url": "https://gradus-ai.onrender.com/static/videos/video_values.mp4",
         "content": """💎 **Цінності компанії AVTD**
 
 **1. Якість продукту**
@@ -443,7 +443,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
     "video_history": {
         "title": "🎬 Історія компанії AVTD",
         "type": "video",
-        "video_url": "",
+        "video_url": "https://gradus-ai.onrender.com/static/videos/video_history.mp4",
         "content": """📜 **Історія компанії AVTD**
 
 Компанія заснована понад **25 років тому** і пройшла значний шлях розвитку.
