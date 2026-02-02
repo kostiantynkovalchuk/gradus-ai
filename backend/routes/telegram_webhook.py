@@ -660,6 +660,16 @@ async def handle_hr_callback(callback_query: dict):
         
         elif callback_data.startswith('hr_content:'):
             content_id = callback_data.split(':')[1]
+            logger.info(f"🔍 HR_CONTENT callback - Raw: {callback_data}, Extracted ID: {content_id}")
+            
+            direct = get_direct_content(content_id)
+            if direct:
+                logger.info(f"✅ Found in CONTENT_MAP: {content_id} → {direct.get('title', 'NO TITLE')}")
+                if direct.get('type') == 'link':
+                    logger.info(f"📎 Link type, URL: {direct.get('url', 'NO URL')[:60]}...")
+            else:
+                logger.error(f"❌ NOT FOUND in CONTENT_MAP: {content_id}")
+            
             parent_category = CONTENT_CATEGORY_MAP.get(content_id)
             await fetch_and_send_hr_content(chat_id, message_id, content_id, parent_category=parent_category)
         

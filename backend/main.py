@@ -34,11 +34,48 @@ from routes.messenger_webhook import router as messenger_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def log_appendix_mapping_diagnostic():
+    """Log appendix mapping for debugging"""
+    from services.maya_hr_content import get_direct_content, HR_DIRECT_CONTENT
+    
+    logger.info("=" * 60)
+    logger.info("📋 APPENDIX MAPPING DIAGNOSTIC")
+    logger.info("=" * 60)
+    
+    appendix_ids = [
+        "appendix_12_ranks",
+        "appendix_12_1_norms", 
+        "appendix_21_furniture",
+        "appendix_21_1_equipment",
+        "appendix_22_contacts"
+    ]
+    
+    for app_id in appendix_ids:
+        content = get_direct_content(app_id)
+        if content:
+            logger.info(f"✅ {app_id}")
+            logger.info(f"   Title: {content.get('title', 'MISSING')}")
+            logger.info(f"   URL: {content.get('url', 'MISSING')[:60]}...")
+        else:
+            logger.error(f"❌ {app_id} - NOT FOUND IN CONTENT_MAP")
+    
+    logger.info("\n📎 ATTACHMENTS CHECK:")
+    for content_id in ["q12", "q21"]:
+        content = get_direct_content(content_id)
+        if content:
+            attachments = content.get("attachments", [])
+            logger.info(f"   {content_id}: {attachments}")
+    
+    logger.info("=" * 60)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop scheduler"""
     logger.info("🚀 Starting Gradus Media AI Agent...")
     init_db()
+    
+    log_appendix_mapping_diagnostic()
+    
     content_scheduler.start()
     logger.info("✅ Scheduler started - automation enabled!")
     
