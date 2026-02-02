@@ -65,7 +65,13 @@ CONTENT_CATEGORY_MAP = {
     'q18': 'tech',
     'q19': 'tech',
     'q20': 'work',
+    'q21': 'work',
     'q26': 'work',
+    'appendix_12_ranks': 'work',
+    'appendix_12_1_norms': 'work',
+    'appendix_21_furniture': 'work',
+    'appendix_21_1_equipment': 'work',
+    'appendix_22_contacts': 'contacts',
 }
 
 VIDEO_CONTENT_TRIGGERS = {
@@ -789,18 +795,60 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
             )
         return
     
+    # Handle link type - send URL with description
+    if content_type == 'link':
+        url = direct_content.get('url', '') if direct_content else ''
+        description = direct_content.get('description', '') if direct_content else ''
+        emoji = direct_content.get('emoji', '📄') if direct_content else '📄'
+        
+        message = f"{emoji} *{title}*\n\n{description}\n\n🔗 [Відкрити документ]({url})"
+        
+        if message_id:
+            await edit_telegram_message(chat_id, message_id, message, nav_keyboard)
+        else:
+            await send_telegram_message_with_keyboard(chat_id, message, nav_keyboard)
+        return
+    
+    # Get attachments if present
+    attachments = direct_content.get('attachments', []) if direct_content else []
+    
     chunks = split_long_message(f"*{title}*\n\n{content}")
     
     for idx, chunk in enumerate(chunks):
+        # For last chunk, attach keyboard (either attachments or nav)
+        is_last = idx == len(chunks) - 1
+        keyboard_to_use = nav_keyboard if is_last and not attachments else None
+        
         if idx == 0 and message_id:
-            await edit_telegram_message(
-                chat_id, message_id, chunk,
-                nav_keyboard if len(chunks) == 1 else None
-            )
+            await edit_telegram_message(chat_id, message_id, chunk, keyboard_to_use)
         else:
+            await send_telegram_message_with_keyboard(chat_id, chunk, keyboard_to_use)
+    
+    # Send attachments as buttons if present
+    if attachments:
+        attachment_buttons = []
+        for attachment_id in attachments:
+            attachment = get_direct_content(attachment_id)
+            if attachment:
+                att_title = attachment.get('title', 'Додаток')
+                att_emoji = attachment.get('emoji', '📄')
+                # Truncate button text to 60 chars max (Telegram limit is 64)
+                button_text = f"{att_emoji} {att_title}"
+                if len(button_text) > 60:
+                    button_text = button_text[:57] + "..."
+                attachment_buttons.append([{
+                    "text": button_text,
+                    "callback_data": f"hr_content:{attachment_id}"
+                }])
+        
+        if attachment_buttons:
+            # Add back button
+            attachment_buttons.extend(nav_keyboard.get("inline_keyboard", []))
+            attachment_keyboard = {"inline_keyboard": attachment_buttons}
             await send_telegram_message_with_keyboard(
-                chat_id, chunk,
-                nav_keyboard if idx == len(chunks) - 1 else None
+                chat_id,
+                "📎 *Додаткові матеріали:*",
+                attachment_keyboard
             )
 
 
