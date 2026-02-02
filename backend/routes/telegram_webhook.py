@@ -774,15 +774,11 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
         if message_id:
             await delete_telegram_message(chat_id, message_id)
         
-        video_nav = nav_keyboard.copy()
-        text_button = [{"text": "📄 Текстова версія", "callback_data": f"hr_text:{content_id}"}]
-        video_nav["inline_keyboard"] = [text_button] + video_nav["inline_keyboard"]
-        
         success = await send_telegram_video(
             chat_id,
             video_url,
             f"🎬 *{title}*",
-            video_nav
+            nav_keyboard
         )
         
         if not success:
