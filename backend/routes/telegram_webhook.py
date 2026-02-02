@@ -20,6 +20,7 @@ from services.hr_keyboards import (
     create_content_navigation_keyboard,
     MENU_TITLES, split_long_message, LEGAL_CONTRACTS, CATEGORY_NAMES
 )
+from services.maya_hr_content import get_direct_content, has_direct_content
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -714,86 +715,96 @@ async def handle_hr_callback(callback_query: dict):
 
 
 async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str, text_only: bool = False, parent_category: str = None):
-    """Fetch content from HR API and send to user with proper back navigation"""
+    """Fetch content - uses direct memory lookup first, then falls back to API"""
     nav_keyboard = create_content_navigation_keyboard(parent_category)
     
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{API_BASE_URL}/api/hr/content/{content_id}",
-                timeout=10.0
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                title = data.get('title', 'Інформація')
-                content = data.get('content', 'Контент недоступний')
-                content_type = data.get('content_type', 'text')
-                video_url = data.get('video_url')
+    direct_content = get_direct_content(content_id)
+    if direct_content:
+        title = direct_content.get('title', 'Інформація')
+        content = direct_content.get('content', 'Контент недоступний')
+        content_type = direct_content.get('type', 'text')
+        video_url = direct_content.get('video_url')
+        logger.info(f"📦 Direct content lookup for {content_id} - instant response")
+    else:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{API_BASE_URL}/api/hr/content/{content_id}",
+                    timeout=10.0
+                )
                 
-                if content_type == 'video' and video_url and not text_only:
+                if response.status_code == 200:
+                    data = response.json()
+                    title = data.get('title', 'Інформація')
+                    content = data.get('content', 'Контент недоступний')
+                    content_type = data.get('content_type', 'text')
+                    video_url = data.get('video_url')
+                    logger.info(f"🌐 API lookup for {content_id} - database response")
+                else:
                     if message_id:
-                        await delete_telegram_message(chat_id, message_id)
-                    
-                    video_nav = nav_keyboard.copy()
-                    text_button = [{"text": "📄 Текстова версія", "callback_data": f"hr_text:{content_id}"}]
-                    video_nav["inline_keyboard"] = [text_button] + video_nav["inline_keyboard"]
-                    
-                    success = await send_telegram_video(
-                        chat_id,
-                        video_url,
-                        f"🎬 *{title}*",
-                        video_nav
-                    )
-                    
-                    if not success:
-                        await send_telegram_message_with_keyboard(
-                            chat_id,
-                            f"⚠️ Відео тимчасово недоступне.\n\n*{title}*\n\n{content}",
-                            nav_keyboard
-                        )
-                    return
-                
-                chunks = split_long_message(f"*{title}*\n\n{content}")
-                
-                for idx, chunk in enumerate(chunks):
-                    if idx == 0 and message_id:
                         await edit_telegram_message(
-                            chat_id, message_id, chunk,
-                            nav_keyboard if len(chunks) == 1 else None
+                            chat_id, message_id,
+                            "❌ Контент не знайдено. Спробуйте інший розділ.",
+                            create_main_menu_keyboard()
                         )
                     else:
                         await send_telegram_message_with_keyboard(
-                            chat_id, chunk,
-                            nav_keyboard if idx == len(chunks) - 1 else None
+                            chat_id,
+                            "❌ Контент не знайдено. Спробуйте інший розділ.",
+                            create_main_menu_keyboard()
                         )
+                    return
+        except Exception as e:
+            logger.error(f"Error fetching HR content: {e}")
+            if message_id:
+                await edit_telegram_message(
+                    chat_id, message_id,
+                    "❌ Помилка завантаження. Спробуйте пізніше.",
+                    create_main_menu_keyboard()
+                )
             else:
-                if message_id:
-                    await edit_telegram_message(
-                        chat_id, message_id,
-                        "❌ Контент не знайдено. Спробуйте інший розділ.",
-                        create_main_menu_keyboard()
-                    )
-                else:
-                    await send_telegram_message_with_keyboard(
-                        chat_id,
-                        "❌ Контент не знайдено. Спробуйте інший розділ.",
-                        create_main_menu_keyboard()
-                    )
+                await send_telegram_message_with_keyboard(
+                    chat_id,
+                    "❌ Помилка завантаження. Спробуйте пізніше.",
+                    create_main_menu_keyboard()
+                )
+            return
     
-    except Exception as e:
-        logger.error(f"Error fetching HR content: {e}")
+    if content_type == 'video' and video_url and not text_only:
         if message_id:
+            await delete_telegram_message(chat_id, message_id)
+        
+        video_nav = nav_keyboard.copy()
+        text_button = [{"text": "📄 Текстова версія", "callback_data": f"hr_text:{content_id}"}]
+        video_nav["inline_keyboard"] = [text_button] + video_nav["inline_keyboard"]
+        
+        success = await send_telegram_video(
+            chat_id,
+            video_url,
+            f"🎬 *{title}*",
+            video_nav
+        )
+        
+        if not success:
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                f"⚠️ Відео тимчасово недоступне.\n\n*{title}*\n\n{content}",
+                nav_keyboard
+            )
+        return
+    
+    chunks = split_long_message(f"*{title}*\n\n{content}")
+    
+    for idx, chunk in enumerate(chunks):
+        if idx == 0 and message_id:
             await edit_telegram_message(
-                chat_id, message_id,
-                "❌ Помилка завантаження. Спробуйте пізніше.",
-                create_main_menu_keyboard()
+                chat_id, message_id, chunk,
+                nav_keyboard if len(chunks) == 1 else None
             )
         else:
             await send_telegram_message_with_keyboard(
-                chat_id,
-                "❌ Помилка завантаження. Спробуйте пізніше.",
-                create_main_menu_keyboard()
+                chat_id, chunk,
+                nav_keyboard if idx == len(chunks) - 1 else None
             )
 
 
