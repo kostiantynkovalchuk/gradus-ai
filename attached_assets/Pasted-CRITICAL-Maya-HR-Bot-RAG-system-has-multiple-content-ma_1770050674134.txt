@@ -1,0 +1,386 @@
+CRITICAL: Maya HR Bot RAG system has multiple content matching issues
+
+CONTEXT:
+User's colleague tested Maya HR Bot and found systematic problems with content retrieval.
+The bot returns WRONG content for many queries - completely unrelated answers.
+
+TESTER FEEDBACK SUMMARY:
+✅ About Company section - working fine, skip
+✅ Legal Documents section - working fine, skip
+❌ Newcomers section - wrong content mapping
+❌ Salary & Payments - wrong content mapping  
+❌ Tech Support - wrong content mapping
+❌ First Steps - wrong content mapping
+
+=============================================================================
+PHASE 1: INVESTIGATION - Analyze Current RAG System
+=============================================================================
+
+STEP 1: AUDIT HR CONTENT DATABASE
+
+Check what's in hr_content table:
+```sql
+-- Get all content with categories and titles
+SELECT 
+  id,
+  category,
+  title,
+  content_type,
+  LENGTH(content) as content_length,
+  video_url IS NOT NULL as has_video
+FROM hr_content
+ORDER BY category, id;
+```
+
+Questions to answer:
+- How many content items exist?
+- Are categories correct?
+- Are titles descriptive enough?
+- Which items have videos?
+
+STEP 2: AUDIT PRESET ANSWERS
+```sql
+-- Check preset answers and their keywords
+SELECT 
+  id,
+  category,
+  answer_text,
+  keywords
+FROM hr_preset_answers
+ORDER BY category;
+```
+
+Questions:
+- Do keywords match user queries?
+- Are categories properly assigned?
+- Are there duplicate/conflicting presets?
+
+STEP 3: CHECK EMBEDDINGS QUALITY
+```sql
+-- Verify embeddings exist and are recent
+SELECT 
+  content_id,
+  created_at,
+  LENGTH(embedding) as embedding_size
+FROM hr_embeddings
+ORDER BY content_id;
+```
+
+Questions:
+- Do all content items have embeddings?
+- Are embeddings up to date?
+- Any missing embeddings?
+
+=============================================================================
+PHASE 2: SPECIFIC ISSUES TO FIX
+=============================================================================
+
+ISSUE 1: "Корп доступ" returns info about "Трудова книжка через Дію"
+
+Expected: Information about creating corporate account (УЗ)
+Actual: Returns info about work book via Diia app
+
+ROOT CAUSE ANALYSIS:
+- Check content item for "Корп доступ" (should be about corporate login/password)
+- Check if there's wrong content tagged with similar keywords
+- Verify embedding similarity isn't pulling wrong document
+
+FIX REQUIRED:
+1. Find content ID for "Створення корпоративної УЗ"
+2. Update keywords to include: "корп доступ", "логін", "пароль", "УЗ", "удаленный рабочий стол"
+3. Remove any wrong content associations
+4. Regenerate embeddings for this item
+
+ISSUE 2: "Перші кроки" returns info about foreigners employment
+
+Expected: Information for new employees (first days)
+Actual: Returns info about employing foreigners
+
+ROOT CAUSE: Wrong content mapped to "First Steps" category
+
+FIX REQUIRED:
+1. Find content about "Перші дні в компанії"
+2. Update category and keywords correctly
+3. Remove foreigners employment content from newcomers section
+4. Add proper "First Steps" content if missing
+
+ISSUE 3: "СТРОКИ І ВИПЛАТИ" (Payment Terms) returns work schedule info
+
+Expected: Info about salary payment dates (20-22, 5-7 of month)
+Actual: Returns work schedule
+
+ROOT CAUSE: Semantic confusion between "строки" (terms/deadlines) and schedule
+
+FIX REQUIRED:
+1. Find content ID 13 (payment terms from original doc: "Сроки выплаты заработной платы")
+2. Update keywords: "зарплата строки", "коли виплата", "аванс", "розрахунок"
+3. Separate from work schedule content
+4. Increase semantic weight for payment-specific terms
+
+ISSUE 4: "СТРОКИ І НАРАХУВАННЯ" (Payment Calculation) returns remote work info
+
+Expected: Who to ask about salary calculations (financial manager)
+Actual: Returns remote work info
+
+ROOT CAUSE: Wrong content association
+
+FIX REQUIRED:
+1. Find content ID 14 (salary questions: "Кому я могу задать вопрос по начислению...")
+2. Update keywords: "нарахування", "розрахунок зп", "фінансовий менеджер", "економіст"
+3. Remove remote work content from this query path
+
+ISSUE 5: Tech Support section completely broken
+
+All tech support queries return wrong content:
+- "ПРОБЛЕМИ З ПК" → returns УРС setup (should return IT contact info)
+- "СЕД БЛІЦ" → returns vacation info (should return SED Blitz support)
+- "УДАЛЕННАЯ РАБОТА" → returns УРС issues (should return УРС setup instructions)
+- "КАНЦТОВАРЫ" → returns conflict resolution (should return office supplies ordering)
+
+ROOT CAUSE: Mass confusion in technical support category
+
+FIX REQUIRED:
+1. Map each tech query to correct content:
+   - PC problems → content ID 17 (IT department: 3636, +380676235555, support@const.dp.ua)
+   - SED Blitz → content ID 16 (portal tdav.atlassian.net)
+   - Remote work setup → content ID 18 (УРС setup instruction)
+   - Office supplies → content ID 5 (канцтовары ordering process)
+
+2. Add distinct keywords for each:
+   - PC: "комп'ютер не працює", "тонкий клієнт", "ноутбук", "ІТ підтримка"
+   - SED: "блиц не працює", "СЕД помилка", "atlassian"
+   - УРС: "налаштувати удаленку", "forti", "віддалений доступ"
+   - Канцтовари: "замовити канцелярію", "папір", "ручки", "офіс-менеджер"
+
+3. Ensure no keyword overlap between these items
+
+ISSUE 6: Instruction #1 not appearing (ПФУ справка)
+
+In document list for newcomers, instruction about getting PFU certificate doesn't show.
+
+Expected: Step-by-step guide to get social insurance certificate via mobile app
+Actual: Missing from responses
+
+FIX REQUIRED:
+1. Verify content exists in database for "Інструкція №1"
+2. If missing, add it from source document (lines about ПФУ app)
+3. Link it to "Документи для прийому" content
+4. Add keywords: "ПФУ", "справка", "страхування", "витяг з ЕТК"
+
+=============================================================================
+PHASE 3: SYSTEMATIC FIX IMPLEMENTATION
+=============================================================================
+
+STEP 1: REBUILD CONTENT MAPPING
+
+File: backend/services/hr_content_processor.py or similar
+
+Create clean category-to-content mapping:
+```python
+CONTENT_CATEGORY_MAP = {
+    # NEWCOMERS
+    "documents_employment": [1],  # Список документів для прийому
+    "corporate_access": [2],      # Створення УЗ
+    "first_steps": [NEW],         # Перші дні (add if missing)
+    
+    # SALARY & PAYMENTS
+    "payment_terms": [13],        # Строки виплати ЗП
+    "payment_questions": [14],    # До кого звертатись з питань ЗП
+    
+    # TECH SUPPORT
+    "pc_problems": [17],          # Що робити якщо не працює ПК
+    "kpk_tablet": [15],           # КПК/планшет проблеми
+    "sed_blitz": [16],            # СЕД Бліц підтримка
+    "urs_setup": [18],            # Як налаштувати УРС
+    "urs_problems": [19],         # УРС не працює
+    "office_supplies": [5],       # Канцтовари замовлення
+    
+    # WORK PROCESSES
+    "vacation": [8, 9],           # Відпустка
+    "sick_leave": [10],           # Лікарняний
+    "remote_work": [11],          # Віддалена робота
+    "business_trip": [12],        # Відрядження
+    
+    # CONFLICTS & SUPPORT
+    "conflict_resolution": [20],  # Конфлікти
+    "dismissal": [26],            # Звільнення
+}
+```
+
+STEP 2: UPDATE KEYWORDS FOR EACH CONTENT ITEM
+
+For each problematic content, add/update keywords in database:
+```python
+KEYWORD_UPDATES = {
+    # ID: [new_keywords_list]
+    2: ["корп доступ", "УЗ", "логін пароль", "удаленный рабочий стол", "створення облікового запису"],
+    5: ["канцтовари", "замовити папір", "ручки", "офіс менеджер", "канцелярія"],
+    13: ["строки зарплати", "коли виплата", "аванс дата", "20-22 число", "5-7 число"],
+    14: ["нарахування зп", "фінменеджер", "економіст", "розрахунок зарплати"],
+    15: ["КПК не працює", "планшет проблема", "мобільна торгівля", "аналітик"],
+    16: ["СЕД бліц помилка", "atlassian портал", "бліц не працює"],
+    17: ["ПК не працює", "комп'ютер зламався", "ІТ підтримка", "3636", "тонкий клієнт"],
+    18: ["налаштувати удаленку", "УРС налаштування", "forti", "інструкція УРС"],
+    19: ["УРС не працює", "віддалений доступ проблема", "удалёнка не заходит"],
+    20: ["конфлікт на роботі", "суперечка з колегою", "непорозуміння"],
+}
+```
+
+STEP 3: REGENERATE EMBEDDINGS
+
+After keyword updates, regenerate embeddings:
+```python
+async def regenerate_embeddings():
+    """Regenerate embeddings for all HR content after updates"""
+    
+    # Get all content
+    content_items = await db.execute("SELECT * FROM hr_content")
+    
+    for item in content_items:
+        # Combine title, keywords, and content for embedding
+        text_to_embed = f"{item.title}. {item.keywords}. {item.content[:500]}"
+        
+        # Generate embedding via Claude or OpenAI
+        embedding = await generate_embedding(text_to_embed)
+        
+        # Update in database
+        await db.execute(
+            "UPDATE hr_embeddings SET embedding = :emb WHERE content_id = :id",
+            {"emb": embedding, "id": item.id}
+        )
+        
+    print("✅ Embeddings regenerated for all content")
+```
+
+STEP 4: IMPROVE SEMANTIC SEARCH
+
+File: backend/services/hr_rag_service.py
+
+Update search to prioritize exact category matches:
+```python
+async def search_hr_content(query: str, category: str = None) -> list:
+    """
+    Search with category priority
+    """
+    
+    # Generate query embedding
+    query_embedding = await generate_embedding(query)
+    
+    # Search with category filter if provided
+    if category:
+        # First try exact category match
+        results = await vector_search(
+            embedding=query_embedding,
+            filter_category=category,
+            limit=3
+        )
+        
+        if results:
+            return results
+    
+    # Fallback to general search
+    return await vector_search(
+        embedding=query_embedding,
+        limit=5
+    )
+```
+
+STEP 5: ADD PRESET ANSWERS FOR COMMON QUERIES
+
+Add preset answers for frequently asked questions to bypass RAG:
+```python
+NEW_PRESETS = [
+    {
+        "category": "Salary",
+        "query_pattern": "строки виплати|коли зарплата|аванс коли",
+        "answer": "Заробітна плата виплачується 2 рази на місяць:\n"
+                 "📅 20-22 числа — аванс на наступний місяць\n"
+                 "📅 5-7 числа — зарплата за відпрацьований місяць",
+        "content_id": 13
+    },
+    {
+        "category": "Tech Support",
+        "query_pattern": "пк не працює|комп'ютер зламався",
+        "answer": "Якщо є проблема з комп'ютером:\n"
+                 "📞 Зателефонуйте: 3636 або +380676235555\n"
+                 "📧 Або напишіть: support@const.dp.ua\n\n"
+                 "❗ ІТ працює тільки з корпоративною технікою",
+        "content_id": 17
+    },
+    {
+        "category": "Tech Support",
+        "query_pattern": "СЕД бліц|блиц не працює",
+        "answer": "При проблемі з СЕД Бліц:\n"
+                 "🔗 Подайте заявку: https://tdav.atlassian.net/servicedesk/customer/portals\n"
+                 "📂 Розділ: Питання пов'язані з СЕД Бліц",
+        "content_id": 16
+    },
+]
+```
+
+=============================================================================
+PHASE 4: VIDEO-ONLY RESPONSES
+=============================================================================
+
+When content has video_url, send ONLY video (separate task from earlier).
+
+Update response logic:
+```python
+async def send_hr_response(chat_id, content):
+    """Send video-only if video exists, otherwise text"""
+    
+    if content.video_url:
+        # Video exists - send ONLY video with short caption
+        caption = f"🎥 {content.title}"
+        await bot.send_video(chat_id, content.video_url, caption=caption)
+    else:
+        # No video - send text content
+        await bot.send_message(chat_id, content.content)
+```
+
+Apply to:
+- Values (Цінності) - has video
+- History (Історія) - has video  
+- Overview (Про компанію) - has video
+
+=============================================================================
+PHASE 5: TESTING PROTOCOL
+=============================================================================
+
+After fixes, test EVERY problematic query:
+
+TEST 1: Newcomers Section
+□ "Корп доступ" → Returns corporate account creation (NOT work book)
+□ "Перші кроки" → Returns first days info (NOT foreigners employment)
+□ "Документи" → Shows instruction #1 about PFU certificate
+
+TEST 2: Salary & Payments
+□ "Строки виплати" → Returns payment dates 20-22, 5-7 (NOT work schedule)
+□ "Нарахування ЗП" → Returns who to ask about calculations (NOT remote work)
+
+TEST 3: Tech Support
+□ "ПК не працює" → Returns IT contacts 3636/email (NOT УРС setup)
+□ "СЕД Бліц" → Returns atlassian portal link (NOT vacation info)
+□ "Налаштувати удаленку" → Returns УРС setup guide (NOT УРС problems)
+□ "Канцтовари" → Returns office supplies ordering (NOT conflicts)
+
+TEST 4: Video Content
+□ "Цінності" → Sends ONLY video (no text)
+□ "Історія" → Sends ONLY video (no text)
+□ "Про компанію" → Sends ONLY video (no text)
+
+=============================================================================
+DELIVERABLES
+=============================================================================
+
+1. Complete audit report of current content/keywords/embeddings
+2. Updated content mapping with correct categories
+3. New keywords for all problematic content items
+4. Regenerated embeddings
+5. Added preset answers for common queries
+6. Video-only logic implemented
+7. Test results showing all issues fixed
+
+BEGIN INVESTIGATION AND FIXES NOW.
+
+This is critical for Maya HR Bot usability - employees are getting wrong information.
