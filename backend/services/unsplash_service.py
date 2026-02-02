@@ -1,518 +1,676 @@
 """
-Unsplash API Integration for Article Images
-Replaces DALL-E with authentic photography for social media compliance
-Uses Claude AI for semantic query generation to improve image relevance
+Premium Unsplash Image Fetching Service
+4-Tier intelligent search strategy for GradusMedia
+
+Tiers:
+0. Geographical (if country mentioned)
+1. Context-based (business/production/etc)
+2. HoReCa/Cocktail fallback
+3. Safe abstract premium
 """
 import os
 import requests
 import logging
-import json
-from typing import Dict, List, Optional
+import random
 import re
-from anthropic import Anthropic
+from typing import Dict, List, Optional, Set
+from sqlalchemy.orm import Session
+from database import get_db
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_QUERY_PROMPT = """You are GradusMedia's AI photo editor. Analyze this article and find the PERFECT header image.
-
-GradusMedia is a premium beverage/hospitality publication with a sophisticated visual identity:
-- Dark, moody, cinematic aesthetic
-- Amber liquids, warm lighting, bokeh
-- Editorial quality (Monocle/Kinfolk style)
-- Brand-safe, context-congruent imagery
-
-===== ARTICLE =====
-Title: {title}
-Content: {content}
-
-===== STAGE 1: CONTENT ANALYSIS =====
-Identify:
-1. Subject type: place (bar/restaurant/supermarket), product, company news, trend/statistics, event, policy
-2. Brands mentioned (if any - we must avoid showing competitor products)
-3. Locations mentioned
-4. Tone: celebratory, analytical, serious, innovative
-
-===== STAGE 2: VISUAL STRATEGY =====
-- IF brands mentioned → Use brand-neutral scenes (glasses, ambiance, production), AVOID visible bottle labels
-- IF about a place (supermarket/bar/restaurant) → Show that exact type of place, NOT generic boardroom
-- IF about trends/statistics → Show the actual subject matter (protein → protein shakes, NOT graphs)
-- IF about policy/tariffs → Show affected products/places (wine tariffs → vineyard, NOT politicians)
-
-===== STAGE 3: GRADUSMEDIA AESTHETIC =====
-Every query MUST include aesthetic keywords:
-- LIGHTING: "dark background" / "moody lighting" / "warm light" / "golden hour" / "bokeh"
-- QUALITY: "premium" / "luxury" / "elegant" / "sophisticated" / "cinematic"
-- AVOID: "bright" / "fluorescent" / "office" / "boardroom" / "corporate" / "generic"
-
-===== EXAMPLES =====
-"Supermarket article" → ["premium supermarket interior dark moody lighting", "grocery aisle warm atmospheric lighting elegant", ...]
-"Grey Goose launch" → ["vodka martini crystal glass dark bokeh elegant", "craft cocktail moody bar warm light", ...] (NO branded bottles!)
-"Wine tariffs France" → ["french wine bottles vineyard dark moody", "burgundy wine cellar atmospheric warm light", ...]
-"Protein market trend" → ["protein shake glass dark background moody premium", "wellness beverage elegant warm light", ...]
-
-Return ONLY a JSON object:
-{{"queries": ["query1 with aesthetic keywords", "query2", "query3", "query4", "query5", "luxury hospitality dark moody", "premium bar ambiance warm bokeh"]}}"""
-
 UNSPLASH_API_URL = "https://api.unsplash.com"
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 
-BUSINESS_TERMS = {
-    'uk': ['угода', 'партнерство', 'інвестиції', 'злиття', 'придбання', 'контракт', 'угоду', 'партнерства'],
-    'en': ['deal', 'partnership', 'investment', 'acquisition', 'merger', 'contract', 'agreement']
+# ============================================================
+# TIER 0: GEOGRAPHICAL IMAGERY - International Content
+# ============================================================
+
+GEOGRAPHICAL_KEYWORDS = {
+    # Western Europe
+    "netherlands|dutch|holland|amsterdam|нідерланд|голланд|амстердам": [
+        "amsterdam canal houses golden hour architecture",
+        "dutch windmill countryside aerial view",
+        "tulip fields netherlands colorful landscape",
+        "rotterdam modern architecture waterfront"
+    ],
+    
+    "france|french|bordeaux|champagne|cognac|burgundy|франц|бордо|шампань|коньяк|бургунд": [
+        "bordeaux vineyard rows aerial sunset",
+        "french countryside provence landscape golden",
+        "burgundy wine region rolling hills",
+        "champagne region vineyards france aerial",
+        "cognac region vineyard landscape"
+    ],
+    
+    "italy|italian|tuscany|piedmont|італ|тоскан|п'ємонт": [
+        "tuscany vineyard sunset rolling hills",
+        "italian countryside villa landscape aerial",
+        "piedmont wine region italy dramatic",
+        "sicilian vineyard mount etna landscape"
+    ],
+    
+    "spain|spanish|rioja|catalonia|іспан|ріоха|каталон": [
+        "spanish vineyard landscape golden hour",
+        "rioja wine region aerial view sunset",
+        "catalonia vineyard rows dramatic",
+        "andalusia countryside landscape golden"
+    ],
+    
+    "portugal|portuguese|porto|douro|португал|порту|дору": [
+        "douro valley vineyard terraces aerial",
+        "portuguese vineyard landscape dramatic",
+        "porto wine region aerial sunset",
+        "portugal countryside golden hour"
+    ],
+    
+    "germany|german|rhine|mosel|німеч|рейн|мозель": [
+        "rhine valley vineyard terraces dramatic",
+        "german countryside landscape rolling hills",
+        "mosel river vineyard aerial view",
+        "germany wine region landscape"
+    ],
+    
+    "scotland|scottish|speyside|islay|highlands|шотланд|спейсайд|айла": [
+        "scottish highlands dramatic landscape moody",
+        "isle of islay coastal scenery atmospheric",
+        "speyside region scotland aerial view",
+        "scotland loch mountains dramatic lighting"
+    ],
+    
+    "ireland|irish|dublin|ірланд|дублін": [
+        "irish countryside green rolling hills",
+        "ireland coastal cliffs dramatic sunset",
+        "dublin whiskey district architecture",
+        "emerald isle landscape aerial dramatic"
+    ],
+    
+    "england|english|britain|uk|англ|британ": [
+        "english countryside rolling hills pastoral",
+        "british landscape green hills dramatic",
+        "cotswolds landscape golden hour",
+        "uk countryside scenic aerial"
+    ],
+    
+    # Americas
+    "usa|america|united states|сша|америк": [
+        "napa valley vineyard aerial sunset",
+        "california wine country landscape golden",
+        "american countryside rolling hills",
+        "sonoma valley golden hour vineyard"
+    ],
+    
+    "kentucky|bourbon|кентуккі|бурбон": [
+        "kentucky bourbon country landscape pastoral",
+        "kentucky countryside rolling hills golden",
+        "american south landscape pastoral scenic",
+        "bourbon country kentucky aerial view"
+    ],
+    
+    "mexico|mexican|jalisco|oaxaca|tequila|мексик|халіско|оахака|текіла": [
+        "jalisco agave field blue landscape dramatic",
+        "tequila region mexico aerial view",
+        "oaxaca countryside landscape golden hour",
+        "mexican highlands dramatic scenery sunset"
+    ],
+    
+    "canada|canadian|ontario|quebec|канад|онтаріо|квебек": [
+        "canadian vineyard okanagan valley sunset",
+        "niagara region vineyard aerial view",
+        "quebec countryside scenic landscape",
+        "ontario wine country golden hour"
+    ],
+    
+    "chile|chilean|чилі": [
+        "chilean vineyard andes mountains backdrop",
+        "colchagua valley landscape aerial sunset",
+        "chile wine region dramatic scenery",
+        "south american vineyard andes sunset"
+    ],
+    
+    "argentina|argentinian|mendoza|аргентин|мендоса": [
+        "mendoza vineyard andes backdrop sunset",
+        "argentinian wine region landscape dramatic",
+        "patagonia landscape dramatic lighting",
+        "mendoza wine country aerial view"
+    ],
+    
+    "brazil|brazilian|бразил": [
+        "brazilian countryside landscape golden",
+        "south american vineyard scenic aerial",
+        "brazil wine region landscape sunset",
+        "latin american countryside dramatic"
+    ],
+    
+    # Asia-Pacific
+    "japan|japanese|tokyo|kyoto|японі|японськ|токіо|кіото": [
+        "japanese sake brewery traditional architecture",
+        "kyoto traditional architecture atmospheric moody",
+        "japan rice terraces aerial view dramatic",
+        "japanese craftsmanship aesthetic minimal elegant"
+    ],
+    
+    "china|chinese|китай|китайськ": [
+        "chinese rice terraces yuanyang aerial dramatic",
+        "traditional chinese architecture atmospheric",
+        "asian countryside landscape dramatic sunset",
+        "china wine region landscape aerial"
+    ],
+    
+    "india|indian|інді": [
+        "indian countryside landscape golden hour",
+        "asian agricultural landscape aerial",
+        "indian terraces landscape dramatic",
+        "south asian countryside scenic"
+    ],
+    
+    "australia|australian|австралі": [
+        "australian vineyard landscape aerial sunset",
+        "barossa valley vineyard golden hour",
+        "margaret river landscape scenic dramatic",
+        "australian wine country rolling hills"
+    ],
+    
+    "new zealand|нова зеланд": [
+        "new zealand vineyard landscape dramatic mountains",
+        "marlborough region aerial view sunset",
+        "central otago vineyard mountains backdrop",
+        "new zealand countryside scenic dramatic"
+    ],
+    
+    # Eastern Europe
+    "georgia|georgian|грузі": [
+        "georgian vineyard kakheti region landscape",
+        "caucasus mountains vineyard dramatic sunset",
+        "traditional georgian winery landscape",
+        "eastern european countryside golden"
+    ],
+    
+    "ukraine|ukrainian|україн": [
+        "ukrainian countryside landscape golden sunset",
+        "eastern european pastoral landscape",
+        "ukrainian wheat field aerial view",
+        "ukraine rural landscape dramatic"
+    ],
+    
+    "poland|polish|польщ|польськ": [
+        "polish countryside landscape golden",
+        "eastern european rural landscape",
+        "poland agricultural landscape aerial",
+        "polish pastoral landscape sunset"
+    ],
+    
+    # Africa
+    "south africa|african|південь африк|африканськ": [
+        "south african vineyard stellenbosch sunset",
+        "cape winelands landscape aerial dramatic",
+        "african vineyard sunset golden hour",
+        "south africa countryside scenic mountains"
+    ]
 }
 
-GEOGRAPHY_TERMS = {
-    'uk': {
-        'україна': 'ukraine kyiv',
-        'франція': 'france paris',
-        'італія': 'italy rome',
-        'іспанія': 'spain barcelona',
-        'шотландія': 'scotland edinburgh',
-        'ірландія': 'ireland dublin',
-        'японія': 'japan tokyo',
-        'мексика': 'mexico',
-        'аргентина': 'argentina',
-        'німеччина': 'germany',
-        'великобританія': 'uk london',
-        'сша': 'usa',
-        'китай': 'china',
-        'австралія': 'australia'
+# ============================================================
+# TIER 1: CONTEXT-BASED KEYWORDS
+# ============================================================
+
+CONTEXT_KEYWORDS = {
+    "business_legal": {
+        "triggers": ["закон", "регул", "політик", "кодекс", "правил", "суд", "позов", "право", "захист", 
+                     "law", "regulation", "policy", "code", "legal", "lawsuit", "court", "protection",
+                     "угода", "контракт", "ліцензі"],
+        "searches": [
+            "corporate boardroom modern minimal architecture",
+            "business handshake professional elegant dark",
+            "executive meeting glass building modern",
+            "contract signing professional elegant",
+            "law office elegant dark wood sophisticated",
+            "business people discussion modern minimal",
+            "corporate office interior premium dark"
+        ]
     },
-    'en': {
-        'ukraine': 'ukraine kyiv',
-        'france': 'france paris',
-        'italy': 'italy rome',
-        'spain': 'spain barcelona',
-        'scotland': 'scotland edinburgh',
-        'ireland': 'ireland dublin',
-        'japan': 'japan tokyo',
-        'mexico': 'mexico',
-        'argentina': 'argentina',
-        'germany': 'germany',
-        'uk': 'uk london',
-        'usa': 'usa',
-        'china': 'china',
-        'australia': 'australia'
+    
+    "market_industry": {
+        "triggers": ["ринок", "індустрія", "експорт", "продаж", "зростання", "торгів", "market", 
+                     "industry", "export", "sales", "growth", "trade", "shipping", "імпорт", "обсяг"],
+        "searches": [
+            "global business network abstract concept",
+            "shipping containers port aerial view",
+            "warehouse logistics modern industrial",
+            "business growth abstract minimal dark",
+            "international trade concept elegant",
+            "distribution center premium modern",
+            "cargo ship aerial view dramatic"
+        ]
+    },
+    
+    "production": {
+        "triggers": ["виробниц", "завод", "дистилер", "броварн", "винороб", "production", 
+                     "distillery", "brewery", "winery", "manufacturing", "plant", "фабрик"],
+        "searches": [
+            "copper distillery equipment vintage atmospheric",
+            "oak barrel aging cellar dramatic lighting",
+            "industrial copper still atmospheric moody",
+            "craftsmanship hands working tools closeup",
+            "production line modern clean industrial",
+            "stainless steel equipment industrial premium"
+        ]
+    },
+    
+    "brand_product": {
+        "triggers": ["бренд", "продукт", "новинк", "запуск", "презент", "інновац", "brand", 
+                     "product", "launch", "innovation", "release", "new", "лінійк", "колекці"],
+        "searches": [
+            "luxury product photography minimal dark elegant",
+            "premium packaging design sophisticated",
+            "artisan craftsmanship hands elegant",
+            "modern design aesthetic minimal dark",
+            "innovation concept abstract elegant",
+            "sophisticated product display premium"
+        ]
+    },
+    
+    "sustainability": {
+        "triggers": ["екологі", "сталий", "зелен", "природ", "органіч", "ecology", 
+                     "sustainable", "green", "organic", "environment", "eco", "біо"],
+        "searches": [
+            "sustainable materials natural light organic",
+            "organic farming aerial view landscape",
+            "green business concept minimal",
+            "renewable resources abstract elegant",
+            "nature conservation landscape dramatic",
+            "eco friendly production modern"
+        ]
+    },
+    
+    "events": {
+        "triggers": ["подія", "свято", "церемон", "нагород", "фестива", "event", 
+                     "celebration", "ceremony", "award", "festival", "conference", "конференц"],
+        "searches": [
+            "elegant event venue lighting atmospheric",
+            "celebration toast champagne abstract dark",
+            "award ceremony elegant sophisticated",
+            "gala event sophisticated premium lighting",
+            "festive atmosphere premium elegant",
+            "luxury party venue moody dramatic"
+        ]
+    },
+    
+    "supermarket_retail": {
+        "triggers": ["супермаркет", "магазин", "рітейл", "роздріб", "полиц", "supermarket",
+                     "retail", "store", "shelf", "shop", "торгов"],
+        "searches": [
+            "premium supermarket interior dark moody lighting",
+            "grocery aisle warm atmospheric lighting elegant",
+            "retail store interior modern premium",
+            "liquor store shelves dramatic lighting",
+            "wine shop interior elegant atmospheric",
+            "premium retail space modern sophisticated"
+        ]
     }
 }
 
-SPIRITS_TERMS = {
-    'uk': ['віскі', 'коньяк', 'горілка', 'джин', 'текіла', 'вино', 'сідр', 'ром', 'бренді', 'лікер', 'шампанське', 'пиво', 'бурбон'],
-    'en': ['whisky', 'whiskey', 'cognac', 'vodka', 'gin', 'tequila', 'wine', 'cider', 'rum', 'brandy', 'liqueur', 'champagne', 'beer', 'bourbon', 'soju', 'sake']
-}
+# ============================================================
+# TIER 2: HORECA + COCKTAIL IMAGERY
+# ============================================================
 
-PREMIUM_TERMS = ['преміум', 'luxury', 'craft', 'artisan', 'exclusive', 'boutique', 'premium', 'елітний', 'ексклюзив']
-
-BUSINESS_QUERIES = [
-    "luxury boardroom meeting",
-    "business handshake premium",
-    "executive office modern",
-    "corporate meeting professional"
+HORECA_KEYWORDS = [
+    "luxury bar interior moody dramatic lighting",
+    "cocktail bar elegant dark sophisticated atmosphere",
+    "restaurant wine cellar atmospheric moody",
+    "modern bar counter premium design elegant",
+    "speakeasy bar vintage aesthetic moody",
+    "wine cellar oak barrels dramatic lighting",
+    "wine vineyard sunset golden hour aerial",
+    "sommelier wine tasting professional elegant",
+    "wine barrel room dramatic shadows moody",
+    "vineyard rows aerial view landscape",
+    "whiskey glass bokeh golden warm light",
+    "oak barrel aging warehouse atmospheric",
+    "copper still distillery vintage moody",
+    "craft brewery equipment copper premium",
+    "distillery equipment atmospheric dramatic",
+    "liquid splash abstract black background",
+    "golden liquid pour elegant minimal",
+    "glass reflection minimal dark sophisticated",
+    "bubbles carbonation macro abstract elegant",
+    "amber liquid glow atmospheric moody"
 ]
 
-CRAFT_QUERIES = [
-    "whiskey barrel cellar craftsmanship",
-    "artisan distillery copper stills",
-    "oak barrel aging room",
-    "vineyard premium winery",
-    "wine cellar luxury",
-    "craft brewery interior"
+COCKTAIL_KEYWORDS = [
+    "craft cocktail dark background minimal elegant",
+    "cocktail garnish artistic close up macro",
+    "mixology elegant dark moody atmospheric",
+    "cocktail splash abstract black background",
+    "premium cocktail minimal dark sophisticated",
+    "cocktail glass bokeh golden warm light",
+    "crystal cocktail glass elegant dark moody",
+    "cocktail ice macro photography abstract",
+    "coupe glass cocktail minimal elegant dark",
+    "highball glass garnish atmospheric moody",
+    "bartender hands making cocktail artistic dramatic",
+    "mixing cocktail shaker elegant motion blur",
+    "cocktail flame dramatic lighting moody",
+    "pouring cocktail elegant slow motion",
+    "cocktail preparation overhead flat lay minimal",
+    "cocktail bar counter moody dramatic lighting",
+    "craft cocktail smoke atmospheric dark elegant",
+    "cocktail ingredients flat lay minimal dark",
+    "bar tools copper brass elegant vintage",
+    "cocktail stirring glass macro elegant"
 ]
 
-HORECA_QUERIES = [
-    "luxury hotel bar interior",
-    "premium restaurant ambiance",
-    "exclusive cocktail lounge",
-    "fine dining atmosphere",
-    "craft cocktail artisan",
-    "upscale bar interior",
-    "hotel lobby bar",
-    "wine bar elegant"
+# ============================================================
+# PEOPLE IMAGERY - Strategic Human Element
+# ============================================================
+
+PEOPLE_HANDS_KEYWORDS = [
+    "hands holding wine glass elegant dark atmospheric",
+    "sommelier hands examining wine glass backlit dramatic",
+    "craftsman hands working oak barrel closeup",
+    "bartender hands making cocktail artistic dramatic lighting",
+    "hands toasting champagne glasses celebration elegant",
+    "wine tasting hands close up atmospheric moody",
+    "cooper hands crafting barrel traditional artisan",
+    "winemaker hands checking grapes closeup golden",
+    "bartender hands garnishing cocktail artistic elegant",
+    "hands pouring wine elegant minimal dark"
+]
+
+PEOPLE_CONTEXT_KEYWORDS = [
+    "sommelier from behind wine cellar dramatic lighting",
+    "businesspeople walking modern building corridor",
+    "bartender back view making cocktail moody",
+    "vineyard worker from behind rows sunset",
+    "conference attendees backs auditorium elegant",
+    "chef from behind kitchen professional dramatic",
+    "winemaker walking barrel room atmospheric",
+    "business meeting backs conference room modern"
+]
+
+# ============================================================
+# TIER 3: SAFE ABSTRACT FALLBACKS
+# ============================================================
+
+SAFE_FALLBACKS = [
+    "golden hour bokeh abstract warm atmospheric",
+    "dark moody atmospheric texture elegant",
+    "luxury minimalist background elegant dark",
+    "premium dark sophisticated ambiance moody",
+    "elegant abstract lighting design minimal",
+    "sophisticated dark background texture premium",
+    "minimal elegant black background atmospheric",
+    "warm golden light abstract bokeh",
+    "dramatic lighting atmosphere premium moody",
+    "refined elegant dark aesthetic minimal"
+]
+
+# ============================================================
+# BRAND FILTERING
+# ============================================================
+
+BRAND_KEYWORDS = [
+    "coca cola", "pepsi", "heineken", "budweiser", "corona",
+    "absolut", "smirnoff", "jack daniels", "johnnie walker",
+    "grey goose", "bacardi", "moet", "dom perignon",
+    "guinness", "stella artois", "carlsberg", "tuborg",
+    "jim beam", "makers mark", "wild turkey", "jameson",
+    "baileys", "kahlua", "malibu", "jagermeister",
+    "leffe", "hoegaarden", "kronenbourg",
+    "logo", "brand name", "trademark", "labeled bottle",
+    "brand label", "company logo"
 ]
 
 
 class UnsplashService:
     def __init__(self):
-        self.access_key = os.getenv("UNSPLASH_ACCESS_KEY")
-        if not self.access_key:
-            logger.warning("UNSPLASH_ACCESS_KEY not set - image fetching will not work")
-        self.headers = {
-            "Authorization": f"Client-ID {self.access_key}"
-        }
-        self.used_image_ids = set()
-        self.anthropic_client = None
+        self.access_key = UNSPLASH_ACCESS_KEY
+        self.used_image_ids: Set[str] = set()
+        
+    def get_used_image_ids_from_db(self) -> Set[str]:
+        """Get all previously used Unsplash image IDs from database"""
         try:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if api_key:
-                self.anthropic_client = Anthropic(api_key=api_key)
-                logger.info("Claude AI initialized for semantic image query generation")
+            from models.content import ContentQueue
+            db = next(get_db())
+            used_ids = db.query(ContentQueue.unsplash_image_id).filter(
+                ContentQueue.unsplash_image_id != None
+            ).all()
+            db.close()
+            return {id[0] for id in used_ids if id[0]}
         except Exception as e:
-            logger.warning(f"Could not initialize Anthropic client: {e}")
+            logger.error(f"Error fetching used image IDs: {e}")
+            return set()
     
-    def generate_ai_queries(self, title: str, content: str) -> Optional[List[str]]:
-        """
-        Use Claude Haiku to generate semantically relevant Unsplash search queries
-        with GradusMedia aesthetic (dark, moody, premium).
-        Returns list of 5-7 search queries or None if AI fails.
-        """
-        if not self.anthropic_client:
-            logger.warning("Anthropic client not available, falling back to keyword extraction")
-            return None
+    def detect_country(self, text: str) -> Optional[str]:
+        """Detect country mentioned in article and return search keyword"""
+        text_lower = text.lower()
         
-        try:
-            truncated_content = content[:800] if content else ""
-            prompt = CLAUDE_QUERY_PROMPT.format(title=title, content=truncated_content)
-            
-            response = self.anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=500,
-                timeout=15.0,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            response_text = response.content[0].text.strip()
-            
-            if response_text.startswith('{'):
-                result = json.loads(response_text)
-                queries = result.get('queries', [])
-                if isinstance(queries, list) and len(queries) >= 3:
-                    queries.extend(["luxury hospitality dark moody bokeh", "premium bar ambiance warm cinematic"])
-                    logger.info(f"AI generated aesthetic queries: {queries[:5]}")
-                    return queries[:7]
-            elif response_text.startswith('['):
-                queries = json.loads(response_text)
-                if isinstance(queries, list) and len(queries) >= 3:
-                    queries.extend(["luxury hospitality dark moody bokeh", "premium bar ambiance warm cinematic"])
-                    logger.info(f"AI generated queries: {queries[:5]}")
-                    return queries[:7]
-            
-            logger.warning(f"Invalid AI response format: {response_text[:100]}")
-            return None
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse AI response as JSON: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            return None
+        for region_pattern, keywords in GEOGRAPHICAL_KEYWORDS.items():
+            countries = region_pattern.split("|")
+            for country in countries:
+                if country in text_lower:
+                    keyword = random.choice(keywords)
+                    logger.info(f"🌍 TIER 0: Country detected: {country} → {keyword[:50]}...")
+                    return keyword
+        return None
     
-    def calculate_aesthetic_score(self, image: Dict) -> int:
-        """
-        Score image based on GradusMedia aesthetic criteria.
-        Higher score = better fit for premium, dark, moody visual identity.
-        """
-        desc_part = image.get('description', '') or ''
-        alt_part = image.get('alt_description', '') or ''
-        description = (desc_part + ' ' + alt_part).lower()
-        
-        score = 0
-        
-        if any(word in description for word in ['dark', 'moody', 'dramatic', 'noir', 'shadow']):
-            score += 3
-        if any(word in description for word in ['bokeh', 'blur', 'depth of field', 'shallow']):
-            score += 3
-        if any(word in description for word in ['warm', 'golden', 'amber', 'glow', 'candlelight']):
-            score += 2
-        if any(word in description for word in ['glass', 'crystal', 'tumbler', 'snifter']):
-            score += 2
-        if any(word in description for word in ['bar', 'restaurant', 'lounge', 'pub', 'distillery', 'cellar']):
-            score += 2
-        if any(word in description for word in ['luxury', 'premium', 'elegant', 'sophisticated', 'upscale']):
-            score += 1
-        if any(word in description for word in ['cinematic', 'atmospheric', 'editorial']):
-            score += 2
-        
-        if any(word in description for word in ['bright', 'fluorescent', 'daylight', 'sunny', 'white background']):
-            score -= 3
-        if any(word in description for word in ['office', 'boardroom', 'corporate', 'cubicle', 'meeting room']):
-            score -= 3
-        if any(word in description for word in ['generic', 'stock', 'template', 'cheap']):
-            score -= 2
-        
-        likes = image.get('likes', 0)
-        if likes > 2000:
-            score += 2
-        elif likes > 1000:
-            score += 1
-        
-        return score
-    
-    def extract_image_keywords(self, title: str, content: str) -> Dict:
-        """
-        Analyze article title + content and extract context for image search.
-        Returns dict with detected categories.
-        """
+    def interpret_context(self, title: str, content: str) -> Optional[str]:
+        """Interpret article context and return appropriate search keyword"""
         text = f"{title} {content}".lower()
         
-        context = {
-            'has_business': False,
-            'has_geography': None,
-            'has_spirits': False,
-            'has_premium': False,
-            'geography_query': None,
-            'detected_terms': []
-        }
-        
-        for lang in ['uk', 'en']:
-            for term in BUSINESS_TERMS[lang]:
-                if term in text:
-                    context['has_business'] = True
-                    context['detected_terms'].append(f"business:{term}")
-                    break
-        
-        for lang in ['uk', 'en']:
-            for term, query in GEOGRAPHY_TERMS[lang].items():
-                if term in text:
-                    context['has_geography'] = term
-                    context['geography_query'] = query
-                    context['detected_terms'].append(f"geo:{term}")
-                    break
-            if context['has_geography']:
-                break
-        
-        for lang in ['uk', 'en']:
-            for term in SPIRITS_TERMS[lang]:
-                if term in text:
-                    context['has_spirits'] = True
-                    context['detected_terms'].append(f"spirits:{term}")
-                    break
-        
-        for term in PREMIUM_TERMS:
-            if term in text:
-                context['has_premium'] = True
-                context['detected_terms'].append(f"premium:{term}")
-                break
-        
-        logger.info(f"Extracted context: {context['detected_terms']}")
-        return context
+        for category, config in CONTEXT_KEYWORDS.items():
+            triggers = config["triggers"]
+            if any(trigger in text for trigger in triggers):
+                keyword = random.choice(config["searches"])
+                logger.info(f"🎯 TIER 1: Context detected: {category} → {keyword[:50]}...")
+                return keyword
+        return None
     
-    def build_search_queries(self, context: Dict) -> List[str]:
-        """
-        Build prioritized search queries based on extracted context.
-        """
-        queries = []
+    def enhance_context_with_people(self, base_context: str, text: str) -> str:
+        """Determine if people imagery would enhance the context"""
+        text_lower = text.lower()
         
-        if context['has_business']:
-            queries.extend(BUSINESS_QUERIES[:2])
+        if any(word in text_lower for word in ["конференц", "зустріч", "подія", "церемон", 
+                                                 "презентац", "conference", "meeting", "event"]):
+            keyword = random.choice(PEOPLE_CONTEXT_KEYWORDS)
+            logger.info(f"👥 People enhancement: event → {keyword[:50]}...")
+            return keyword
         
-        if context['has_geography'] and context['geography_query']:
-            geo = context['geography_query']
-            queries.extend([
-                f"{geo} landscape architecture",
-                f"{geo} cityscape premium"
+        if any(word in text_lower for word in ["майстер", "виробниц", "ремесл", "craft", 
+                                                 "artisan", "craftsman"]):
+            keyword = random.choice(PEOPLE_HANDS_KEYWORDS)
+            logger.info(f"👥 People enhancement: craftsmanship → {keyword[:50]}...")
+            return keyword
+        
+        if any(word in text_lower for word in ["дегустац", "сомельє", "tasting", "sommelier"]):
+            keyword = random.choice([
+                "sommelier hands examining wine glass backlit dramatic",
+                "wine tasting hands close up atmospheric moody",
+                "hands holding wine glass elegant dark atmospheric"
             ])
+            logger.info(f"👥 People enhancement: tasting → {keyword[:50]}...")
+            return keyword
         
-        if context['has_spirits']:
-            queries.extend(CRAFT_QUERIES[:3])
-        
-        queries.extend(HORECA_QUERIES)
-        
-        seen = set()
-        unique_queries = []
-        for q in queries:
-            if q not in seen:
-                seen.add(q)
-                unique_queries.append(q)
-        
-        return unique_queries[:10]
+        return base_context
     
-    def fetch_unsplash_images(self, queries: List[str], limit: int = 5) -> List[Dict]:
-        """
-        Fetch images from Unsplash API based on search queries.
-        Returns list of image data with attribution info.
-        """
-        if not self.access_key:
-            logger.error("Unsplash API key not configured")
-            return []
-        
-        images = []
-        
-        for query in queries:
-            if len(images) >= limit:
-                break
-            
-            try:
-                response = requests.get(
-                    f"{UNSPLASH_API_URL}/search/photos",
-                    headers=self.headers,
-                    params={
-                        "query": query,
-                        "per_page": 10,
-                        "orientation": "landscape",
-                        "content_filter": "high"
-                    },
-                    timeout=10
-                )
-                
-                if response.status_code == 429:
-                    logger.warning("Unsplash rate limit reached")
-                    continue
-                
-                response.raise_for_status()
-                data = response.json()
-                
-                for photo in data.get('results', []):
-                    if photo['id'] in self.used_image_ids:
-                        continue
-                    
-                    likes = photo.get('likes', 0)
-                    user = photo.get('user', {})
-                    for_hire = user.get('for_hire', False)
-                    
-                    if likes >= 300 or for_hire:
-                        image_data = {
-                            'id': photo['id'],
-                            'url': photo['urls']['regular'],
-                            'download_url': photo['links']['download_location'],
-                            'photographer_name': user.get('name', 'Unknown'),
-                            'photographer_url': user.get('links', {}).get('html', 'https://unsplash.com'),
-                            'photographer_username': user.get('username', ''),
-                            'likes': likes,
-                            'description': photo.get('description') or '',
-                            'alt_description': photo.get('alt_description') or '',
-                            'query_used': query
-                        }
-                        
-                        image_data['aesthetic_score'] = self.calculate_aesthetic_score(image_data)
-                        
-                        if image_data['aesthetic_score'] >= -2:
-                            images.append(image_data)
-                            self.used_image_ids.add(photo['id'])
-                        
-                        if len(images) >= limit:
-                            break
-                
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Unsplash API error for query '{query}': {e}")
-                continue
-        
-        logger.info(f"Fetched {len(images)} images from Unsplash")
-        return images
-    
-    def trigger_download(self, download_url: str) -> bool:
-        """
-        Trigger download endpoint to track image usage (Unsplash API requirement).
-        This compensates photographers.
-        """
-        if not self.access_key:
+    def is_high_quality(self, photo: Dict) -> bool:
+        """Validate photo quality based on multiple criteria"""
+        likes = photo.get("likes", 0)
+        if likes < 50:  # Reduced from 100 for more results
             return False
+        
+        width = photo.get("width", 0)
+        height = photo.get("height", 0)
+        if width < 1800 or height < 1000:  # Slightly reduced for more results
+            return False
+        
+        description = (photo.get("description", "") or "").lower()
+        alt_description = (photo.get("alt_description", "") or "").lower()
+        
+        for brand in BRAND_KEYWORDS:
+            if brand in description or brand in alt_description:
+                logger.warning(f"❌ Brand detected in photo: {brand}")
+                return False
+        
+        photo_id = photo.get("id", "")
+        if photo_id in self.used_image_ids:
+            logger.info(f"⏭️ Skipping already used image: {photo_id}")
+            return False
+        
+        return True
+    
+    def search_unsplash(self, query: str, per_page: int = 30) -> Optional[Dict]:
+        """Search Unsplash with quality filtering"""
+        if not self.access_key:
+            logger.error("UNSPLASH_ACCESS_KEY not configured")
+            return None
+            
+        headers = {"Authorization": f"Client-ID {self.access_key}"}
+        params = {
+            "query": query,
+            "orientation": "landscape",
+            "per_page": per_page,
+            "order_by": "relevant"
+        }
         
         try:
             response = requests.get(
-                download_url,
-                headers=self.headers,
+                f"{UNSPLASH_API_URL}/search/photos",
+                headers=headers,
+                params=params,
                 timeout=10
             )
-            response.raise_for_status()
-            logger.info("Unsplash download tracked successfully")
-            return True
+            
+            if response.status_code != 200:
+                logger.error(f"Unsplash API error: {response.status_code}")
+                return None
+            
+            data = response.json()
+            photos = data.get("results", [])
+            
+            if not photos:
+                logger.warning(f"No photos found for query: {query[:50]}...")
+                return None
+            
+            quality_photos = [p for p in photos if self.is_high_quality(p)]
+            
+            if quality_photos:
+                selected = random.choice(quality_photos[:10])
+                logger.info(f"✅ Quality photo selected (likes: {selected.get('likes', 0)})")
+                return selected
+            
+            for photo in photos:
+                photo_id = photo.get("id", "")
+                if photo_id not in self.used_image_ids:
+                    logger.warning("No high-quality photos, using first unused result")
+                    return photo
+            
+            return None
+            
         except Exception as e:
-            logger.error(f"Failed to track Unsplash download: {e}")
-            return False
+            logger.error(f"Error searching Unsplash: {str(e)}")
+            return None
     
-    def format_attribution(self, photographer_name: str, photographer_url: str) -> Dict:
-        """
-        Format proper attribution as required by Unsplash API Terms Section 9.
-        """
-        credit_text = f"Photo by {photographer_name} on Unsplash"
-        credit_html = f'<a href="{photographer_url}">{photographer_name}</a> on <a href="https://unsplash.com">Unsplash</a>'
+    def extract_photo_data(self, photo: Dict, query_used: str, tier: str) -> Dict:
+        """Extract standardized data from Unsplash photo"""
+        photographer = photo.get("user", {})
+        photographer_name = photographer.get("name", "Unknown")
+        photographer_url = photographer.get("links", {}).get("html", "")
+        
+        image_url = photo.get("urls", {}).get("regular", "")
+        
+        download_url = photo.get("links", {}).get("download_location", "")
+        if download_url:
+            self.trigger_download(download_url)
+        
+        attribution = f"Photo by {photographer_name} on Unsplash"
         
         return {
-            'credit_text': credit_text,
-            'credit_html': credit_html,
-            'photographer_name': photographer_name,
-            'photographer_url': photographer_url
+            'image_url': image_url,
+            'unsplash_image_id': photo.get("id", ""),
+            'image_credit': attribution,
+            'image_credit_url': photographer_url,
+            'image_photographer': photographer_name,
+            'aesthetic_score': photo.get("likes", 0),
+            'query_used': query_used,
+            'query_method': f'premium_4tier_{tier}'
         }
     
-    def get_used_image_ids_from_db(self) -> set:
-        """
-        Query database for previously used Unsplash image IDs to prevent duplicates.
-        """
+    def trigger_download(self, download_location: str):
+        """Trigger Unsplash download endpoint for attribution compliance"""
+        if not download_location or not self.access_key:
+            return
         try:
-            from database import SessionLocal
-            from models.content import ContentQueue
-            
-            db = SessionLocal()
-            try:
-                used_ids = db.query(ContentQueue.unsplash_image_id).filter(
-                    ContentQueue.unsplash_image_id != None
-                ).all()
-                return {row[0] for row in used_ids if row[0]}
-            finally:
-                db.close()
+            headers = {"Authorization": f"Client-ID {self.access_key}"}
+            requests.get(download_location, headers=headers, timeout=5)
         except Exception as e:
-            logger.warning(f"Could not query DB for used image IDs: {e}")
-            return set()
+            logger.warning(f"Failed to trigger download: {e}")
     
     def select_image_for_article(self, title: str, content: str) -> Optional[Dict]:
         """
-        Complete pipeline: Use AI for semantic queries, fallback to keywords, fetch images.
-        Returns image data with attribution or None if no suitable image found.
+        4-TIER INTELLIGENT SEARCH STRATEGY:
+        
+        Tier 0: Geographical (if country mentioned) 🌍
+        Tier 1: Context-based with people enhancement 🏢
+        Tier 2: HoReCa/Cocktail fallback 🍷
+        Tier 3: Safe abstract premium 🎨
+        
+        Returns image data with attribution or None
         """
         db_used_ids = self.get_used_image_ids_from_db()
         self.used_image_ids = self.used_image_ids.union(db_used_ids)
-        logger.info(f"Excluding {len(self.used_image_ids)} previously used images")
+        logger.info(f"📸 Premium image search starting, excluding {len(self.used_image_ids)} used images")
         
-        ai_queries = self.generate_ai_queries(title, content)
+        full_text = f"{title} {content}"
         
-        if ai_queries:
-            logger.info(f"Using AI-generated aesthetic queries: {ai_queries[:3]}...")
-            images = self.fetch_unsplash_images(ai_queries, limit=10)
-            
-            if images:
-                images.sort(key=lambda x: (x.get('aesthetic_score', 0), x.get('likes', 0)), reverse=True)
-                selected = images[0]
-                logger.info(f"Selected image with aesthetic score: {selected.get('aesthetic_score', 0)}, likes: {selected.get('likes', 0)}")
-                
-                self.trigger_download(selected['download_url'])
-                attribution = self.format_attribution(
-                    selected['photographer_name'],
-                    selected['photographer_url']
-                )
-                return {
-                    'image_url': selected['url'],
-                    'unsplash_image_id': selected['id'],
-                    'image_credit': attribution['credit_text'],
-                    'image_credit_url': selected['photographer_url'],
-                    'image_photographer': selected['photographer_name'],
-                    'aesthetic_score': selected.get('aesthetic_score', 0),
-                    'query_used': selected.get('query_used', ''),
-                    'all_images': images[:5],
-                    'query_method': 'ai_semantic_aesthetic'
-                }
-            logger.warning("AI queries returned no images, falling back to keyword extraction")
+        # ===== TIER 0: GEOGRAPHICAL =====
+        geo_keyword = self.detect_country(full_text)
+        if geo_keyword:
+            photo = self.search_unsplash(geo_keyword)
+            if photo:
+                logger.info("✅ TIER 0 SUCCESS: Geographical image found")
+                return self.extract_photo_data(photo, geo_keyword, "tier0_geo")
         
-        context = self.extract_image_keywords(title, content)
-        queries = self.build_search_queries(context)
+        # ===== TIER 1: CONTEXT-BASED =====
+        base_context = self.interpret_context(title, content)
         
-        logger.info(f"Using keyword-based queries: {queries[:3]}...")
+        if base_context:
+            enhanced_context = self.enhance_context_with_people(base_context, full_text)
+            photo = self.search_unsplash(enhanced_context)
+            if photo:
+                logger.info("✅ TIER 1 SUCCESS: Context-based image found")
+                return self.extract_photo_data(photo, enhanced_context, "tier1_context")
         
-        images = self.fetch_unsplash_images(queries, limit=10)
+        # Check for cocktail context specifically
+        if any(word in full_text.lower() for word in ["коктейл", "cocktail", "бар", "bar", 
+                                                        "міксолог", "mixolog", "bartender"]):
+            cocktail_keyword = random.choice(COCKTAIL_KEYWORDS)
+            logger.info(f"🍸 TIER 1.5: Trying cocktail search: {cocktail_keyword[:50]}...")
+            photo = self.search_unsplash(cocktail_keyword)
+            if photo:
+                logger.info("✅ TIER 1.5 SUCCESS: Cocktail image found")
+                return self.extract_photo_data(photo, cocktail_keyword, "tier1_cocktail")
         
-        if not images:
-            logger.warning("No suitable images found from Unsplash")
-            return None
+        # ===== TIER 2: HORECA FALLBACK =====
+        horeca_pool = HORECA_KEYWORDS + COCKTAIL_KEYWORDS[:5]
+        horeca_keyword = random.choice(horeca_pool)
         
-        images.sort(key=lambda x: (x.get('aesthetic_score', 0), x.get('likes', 0)), reverse=True)
-        selected = images[0]
+        logger.info(f"🍷 TIER 2: Trying HoReCa fallback: {horeca_keyword[:50]}...")
+        photo = self.search_unsplash(horeca_keyword)
+        if photo:
+            logger.info("✅ TIER 2 SUCCESS: HoReCa image found")
+            return self.extract_photo_data(photo, horeca_keyword, "tier2_horeca")
         
-        self.trigger_download(selected['download_url'])
+        # ===== TIER 3: SAFE ABSTRACT =====
+        safe_keyword = random.choice(SAFE_FALLBACKS)
+        logger.info(f"🎨 TIER 3: Trying safe abstract: {safe_keyword[:50]}...")
+        photo = self.search_unsplash(safe_keyword)
         
-        attribution = self.format_attribution(
-            selected['photographer_name'],
-            selected['photographer_url']
-        )
+        if photo:
+            logger.info("✅ TIER 3 SUCCESS: Abstract image found")
+            return self.extract_photo_data(photo, safe_keyword, "tier3_abstract")
         
-        return {
-            'image_url': selected['url'],
-            'unsplash_image_id': selected['id'],
-            'image_credit': attribution['credit_text'],
-            'image_credit_url': selected['photographer_url'],
-            'image_photographer': selected['photographer_name'],
-            'aesthetic_score': selected.get('aesthetic_score', 0),
-            'query_used': selected.get('query_used', ''),
-            'all_images': images[:5],
-            'query_method': 'keyword_aesthetic'
-        }
+        logger.error("❌ ALL TIERS FAILED: No image found")
+        return None
 
 
 unsplash_service = UnsplashService()

@@ -282,6 +282,8 @@ class ContentScheduler:
                 for _ in range(10):  # Max 10 articles per run
                     # Get ONE article with FOR UPDATE SKIP LOCKED to prevent race conditions
                     article = db.query(ContentQueue).filter(
+                        # CRITICAL: Only select articles that haven't been notified yet
+                        ContentQueue.notification_sent == False,
                         or_(
                             # Translated articles ready for images
                             (ContentQueue.status == 'pending_approval'),
