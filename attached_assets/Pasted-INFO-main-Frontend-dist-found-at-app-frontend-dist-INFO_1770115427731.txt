@@ -1,0 +1,57 @@
+INFO:main:Frontend dist found at: /app/frontend/dist
+INFO:     10.23.141.66:39832 - "GET / HTTP/1.1" 200 OK
+INFO:     10.17.87.197:57714 - "GET /images/unnamed.png HTTP/1.1" 404 Not Found
+INFO:     10.23.141.66:39832 - "GET /assets/png/logotype.png HTTP/1.1" 404 Not Found
+INFO:     10.17.147.132:46566 - "GET /images/edopomoga.png HTTP/1.1" 404 Not Found
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:work
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.23.39.194:48964 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:q12
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:🔍 HR_CONTENT callback - Raw: hr_content:q12, Extracted ID: q12
+INFO:routes.telegram_webhook:✅ Found in CONTENT_MAP: q12 → ✈️ Відрядження
+INFO:routes.telegram_webhook:📦 Direct content lookup for q12 - instant response
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.19.206.196:45178 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:appendix_12_ranks
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:🔍 HR_CONTENT callback - Raw: hr_content:appendix_12_ranks, Extracted ID: appendix_12_ranks
+INFO:routes.telegram_webhook:✅ Found in CONTENT_MAP: appendix_12_ranks → 📊 Таблиця рангів посад для відряджень
+INFO:routes.telegram_webhook:📎 Link type, URL: https://docs.google.com/document/d/1IJnIqDP5iGVXrjStxTELCtHD...
+INFO:routes.telegram_webhook:📦 Direct content lookup for appendix_12_ranks - instant response
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.22.56.194:33958 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:work
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.19.183.65:40500 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:q12
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:🔍 HR_CONTENT callback - Raw: hr_content:q12, Extracted ID: q12
+INFO:routes.telegram_webhook:✅ Found in CONTENT_MAP: q12 → ✈️ Відрядження
+INFO:routes.telegram_webhook:📦 Direct content lookup for q12 - instant response
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.23.252.2:40778 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_content:appendix_12_1_norms
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:🔍 HR_CONTENT callback - Raw: hr_content:appendix_12_1_norms, Extracted ID: appendix_12_1_norms
+INFO:routes.telegram_webhook:✅ Found in CONTENT_MAP: appendix_12_1_norms → 💰 Норми витрат на відрядження
+INFO:routes.telegram_webhook:📎 Link type, URL: https://docs.google.com/document/d/1e6_bQ9X36lFMWFojhV9A10BN...
+INFO:routes.telegram_webhook:📦 Direct content lookup for appendix_12_1_norms - instant response
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.20.21.130:50210 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
