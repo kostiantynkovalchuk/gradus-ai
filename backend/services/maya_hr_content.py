@@ -397,14 +397,6 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
 • Бухгалтерія - фінансові питання"""
     },
     
-    "section_appendix_22.": {
-        "type": "link",
-        "title": "📞 Контакти центрального офісу",
-        "description": "Повний список контактів відповідальних співробітників ЦО за департаментами",
-        "url": "https://docs.google.com/document/d/1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_/edit",
-        "emoji": "📞"
-    },
-    
     "section_structure": {
         "title": "📊 Структура компанії",
         "type": "text",
