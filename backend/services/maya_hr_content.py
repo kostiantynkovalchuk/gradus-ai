@@ -516,7 +516,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
         "type": "link",
         "title": "📊 Таблиця рангів посад для відряджень",
         "description": "Повний список посад компанії з рангами для визначення норм витрат на відрядження",
-        "url": "https://docs.google.com/document/d/1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m/edit",
+        "url": "https://docs.google.com/document/d/1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_/edit",
         "emoji": "📊"
     },
     
@@ -524,7 +524,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
         "type": "link",
         "title": "💰 Норми витрат на відрядження",
         "description": "Детальні норми витрат на проживання, харчування та транспорт для України та закордонних відряджень за рангами",
-        "url": "https://docs.google.com/document/d/1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz/edit",
+        "url": "https://docs.google.com/document/d/13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu/edit",
         "emoji": "💰"
     },
     
@@ -540,7 +540,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
         "type": "link",
         "title": "💻 Бізнес-процес закупівлі комп'ютерної техніки",
         "description": "Покрокова інструкція замовлення комп'ютерів, ноутбуків та периферії через ІТ департамент",
-        "url": "https://docs.google.com/document/d/13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu/edit",
+        "url": "https://docs.google.com/document/d/1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz/edit",
         "emoji": "💻"
     },
     
@@ -548,7 +548,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
         "type": "link",
         "title": "📞 Контакти центрального офісу",
         "description": "Повний список контактів відповідальних співробітників ЦО за департаментами",
-        "url": "https://docs.google.com/document/d/1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_/edit",
+        "url": "https://docs.google.com/document/d/1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m/edit",
         "emoji": "📞"
     },
 }

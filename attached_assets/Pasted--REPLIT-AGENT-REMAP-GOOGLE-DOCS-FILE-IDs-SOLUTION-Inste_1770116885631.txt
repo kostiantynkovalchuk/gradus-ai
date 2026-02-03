@@ -1,0 +1,138 @@
+# REPLIT AGENT: REMAP GOOGLE DOCS FILE IDs
+
+## 🎯 SOLUTION
+
+Instead of re-uploading files, just **swap the file IDs** in `maya_hr_content.py` to match what's actually in each Google Doc URL.
+
+---
+
+## 📋 CURRENT SITUATION (From screenshots):
+
+| File ID | Currently Contains | Currently Assigned To |
+|---------|-------------------|----------------------|
+| `1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz` | Equipment (21.1) ✅ | Norms (12.1) ❌ |
+| `1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m` | Contacts (22) ✅ | Ranks (12) ❌ |
+| `1X8N5yR__-kydhqjKYZ_HFlLAI0oLrECZ` | Furniture (21) ✅ | Furniture (21) ✅ |
+| `13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu` | Norms (12.1) ✅ | Equipment (21.1) ❌ |
+| `1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_` | Ranks (12) ✅ | Contacts (22) ❌ |
+
+---
+
+## ✅ THE FIX
+
+In `backend/services/maya_hr_content.py`, find the appendices section and **SWAP the file IDs**:
+
+```python
+# OLD (WRONG):
+"appendix_12_ranks": {
+    "type": "link",
+    "title": "📊 Таблиця рангів посад для відряджень",
+    "url": "https://docs.google.com/document/d/1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m/edit",  # ❌ Has contacts
+},
+
+"appendix_12_1_norms": {
+    "type": "link",
+    "title": "💰 Норми витрат на відрядження",
+    "url": "https://docs.google.com/document/d/1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz/edit",  # ❌ Has equipment
+},
+
+"appendix_21_furniture": {
+    "type": "link",
+    "title": "🪑 Бізнес-процес закупівлі меблів",
+    "url": "https://docs.google.com/document/d/1X8N5yR__-kydhqjKYZ_HFlLAI0oLrECZ/edit",  # ✅ CORRECT
+},
+
+"appendix_21_1_equipment": {
+    "type": "link",
+    "title": "💻 Бізнес-процес закупівлі комп'ютерної техніки",
+    "url": "https://docs.google.com/document/d/13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu/edit",  # ❌ Has norms
+},
+
+"appendix_22_contacts": {
+    "type": "link",
+    "title": "📞 Контакти центрального офісу",
+    "url": "https://docs.google.com/document/d/1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_/edit",  # ❌ Has ranks
+},
+```
+
+**REPLACE WITH (CORRECT):**
+
+```python
+"appendix_12_ranks": {
+    "type": "link",
+    "title": "📊 Таблиця рангів посад для відряджень",
+    "description": "Повний список посад компанії з рангами",
+    "url": "https://docs.google.com/document/d/1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_/edit",  # ✅ NOW CORRECT
+    "emoji": "📊"
+},
+
+"appendix_12_1_norms": {
+    "type": "link",
+    "title": "💰 Норми витрат на відрядження",
+    "description": "Детальні норми витрат для України та Європи",
+    "url": "https://docs.google.com/document/d/13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu/edit",  # ✅ NOW CORRECT
+    "emoji": "💰"
+},
+
+"appendix_21_furniture": {
+    "type": "link",
+    "title": "🪑 Бізнес-процес закупівлі меблів",
+    "description": "Покрокова інструкція замовлення меблів",
+    "url": "https://docs.google.com/document/d/1X8N5yR__-kydhqjKYZ_HFlLAI0oLrECZ/edit",  # ✅ ALREADY CORRECT
+    "emoji": "🪑"
+},
+
+"appendix_21_1_equipment": {
+    "type": "link",
+    "title": "💻 Бізнес-процес закупівлі комп'ютерної техніки",
+    "description": "Покрокова інструкція замовлення техніки",
+    "url": "https://docs.google.com/document/d/1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz/edit",  # ✅ NOW CORRECT
+    "emoji": "💻"
+},
+
+"appendix_22_contacts": {
+    "type": "link",
+    "title": "📞 Контакти центрального офісу",
+    "description": "Повний список контактів ЦО",
+    "url": "https://docs.google.com/document/d/1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m/edit",  # ✅ NOW CORRECT
+    "emoji": "📞"
+},
+```
+
+---
+
+## 🔄 WHAT CHANGED:
+
+| Appendix | Old File ID | New File ID | Reason |
+|----------|-------------|-------------|---------|
+| Ranks (12) | `1IJnIqDP...` | `1MLBli5A...` | Swapped with Contacts |
+| Norms (12.1) | `1e6_bQ9X...` | `13vkM4p9X...` | Swapped with Equipment |
+| Furniture (21) | `1X8N5yR__...` | `1X8N5yR__...` | No change (already correct) |
+| Equipment (21.1) | `13vkM4p9X...` | `1e6_bQ9X...` | Swapped with Norms |
+| Contacts (22) | `1MLBli5A...` | `1IJnIqDP...` | Swapped with Ranks |
+
+---
+
+## ✅ VERIFICATION
+
+After this change:
+
+| Button | Will Open URL | Contains | Status |
+|--------|--------------|----------|--------|
+| 📊 Ranks | `1MLBli5A...` | Ranks table ✅ | Fixed |
+| 💰 Norms | `13vkM4p9X...` | Norms tables ✅ | Fixed |
+| 🪑 Furniture | `1X8N5yR__...` | Furniture process ✅ | Already worked |
+| 💻 Equipment | `1e6_bQ9X...` | Equipment process ✅ | Fixed |
+| 📞 Contacts | `1IJnIqDP...` | Contacts table ✅ | Fixed |
+
+---
+
+## 🚀 DEPLOYMENT
+
+1. Make this change in `maya_hr_content.py`
+2. Commit and push to GitHub
+3. Render auto-deploys
+4. Test all 5 buttons
+5. Done! ✅
+
+**No file re-uploading needed!** Just remap the IDs to match reality.
