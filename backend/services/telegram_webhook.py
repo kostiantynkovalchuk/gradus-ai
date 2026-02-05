@@ -225,39 +225,29 @@ class TelegramWebhookHandler:
             
             self._answer_callback_query(callback_id, "🔄 Fetching new image from Unsplash...")
             
-            from services.unsplash_service import UnsplashService
-            unsplash = UnsplashService()
+            from services.unsplash_service import unsplash_service
             
             title = article.translated_title or article.source_title or ""
             content = article.translated_text or article.original_text or ""
             
-            queries = unsplash.generate_ai_queries(title, content)
-            if not queries:
-                queries = unsplash.extract_smart_keywords(title, content)
+            result = unsplash_service.select_image_for_article(title, content)
             
-            images = unsplash.fetch_unsplash_images(queries, limit=3)
-            
-            if not images:
+            if not result or not result.get('image_url'):
                 self._send_text_message(message['chat']['id'], f"❌ No suitable images found for article #{content_id}")
                 return {"status": "error", "message": "No images found"}
             
-            images.sort(key=lambda x: x.get('aesthetic_score', 0), reverse=True)
-            best_image = images[0]
-            
-            article.image_url = best_image['url']
-            article.image_photographer = best_image['photographer_name']
-            article.image_credit = f"Photo by {best_image['photographer_name']} on Unsplash"
-            article.image_credit_url = best_image['photographer_url']
-            article.unsplash_image_id = best_image['id']
+            article.image_url = result['image_url']
+            article.image_photographer = result['image_photographer']
+            article.image_credit = result['image_credit']
+            article.image_credit_url = result['image_credit_url']
+            article.unsplash_image_id = result['unsplash_image_id']
             article.local_image_path = None
             article.image_data = None
             
             db.commit()
             db.refresh(article)
             
-            unsplash.trigger_download(best_image['download_url'])
-            
-            logger.info(f"New image fetched for article {content_id}: {best_image['photographer_name']}")
+            logger.info(f"New image fetched for article {content_id}: {result['image_photographer']}")
             
             notification_service.send_approval_notification({
                 'id': article.id,
