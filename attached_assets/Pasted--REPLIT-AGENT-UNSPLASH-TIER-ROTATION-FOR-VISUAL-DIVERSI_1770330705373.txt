@@ -1,0 +1,522 @@
+# REPLIT AGENT: UNSPLASH TIER ROTATION FOR VISUAL DIVERSITY
+
+## 🎯 OBJECTIVE
+
+Transform the 4-tier Unsplash system from sequential fallback (always Tier 0→1→2→3) to **round-robin rotation** for visual diversity across the content feed.
+
+**Problem:** Currently 80%+ images succeed at Tier 0-1 (landscapes), creating visual monotony.
+
+**Solution:** Rotate starting tier based on article ID + advance tier on "New Image" clicks.
+
+---
+
+## 📊 EXPECTED RESULTS
+
+### Before:
+```
+Article 1 → Tier 1 → Landscape 🏞️
+Article 2 → Tier 1 → Landscape 🏞️
+Article 3 → Tier 0 → Landscape 🏞️
+Article 4 → Tier 1 → Boardroom 🏢
+Article 5 → Tier 1 → Landscape 🏞️
+```
+**Diversity: 20% (1/5 different)**
+
+### After:
+```
+Article 1 → Start Tier 1 → Boardroom 🏢
+Article 2 → Start Tier 2 → Cocktail 🍸
+Article 3 → Start Tier 3 → Abstract ✨
+Article 4 → Start Tier 0 → Landscape 🏞️
+Article 5 → Start Tier 1 → Production 🏭
+```
+**Diversity: 100% (5/5 different)** ✅
+
+---
+
+## 🔧 IMPLEMENTATION
+
+### PHASE 1: Refactor Tier Functions
+
+In `backend/services/unsplash_service.py`, refactor the monolithic function into 4 separate tier functions:
+
+```python
+# ============================================================
+# TIER FUNCTIONS - Separated for Rotation System
+# ============================================================
+
+async def fetch_tier_0_geographical(text: str) -> Optional[str]:
+    """
+    TIER 0: Geographical/National imagery
+    Detects country mentions and returns relevant landscape
+    """
+    geo_keyword = detect_country(text)
+    if not geo_keyword:
+        return None
+    
+    logger.info(f"🌍 TIER 0 (Geographical): {geo_keyword[:50]}...")
+    photo = await search_unsplash(geo_keyword)
+    
+    if photo:
+        url = extract_photo_url(photo)
+        if url:
+            logger.info("✅ TIER 0 SUCCESS: Geographical image")
+            return url
+    
+    return None
+
+
+async def fetch_tier_1_context(text: str) -> Optional[str]:
+    """
+    TIER 1: Context-based imagery (business, production, events, etc.)
+    Interprets article context with optional people enhancement
+    """
+    base_context = interpret_context(text, text)
+    if not base_context:
+        return None
+    
+    # Check for people enhancement
+    enhanced_context = enhance_context_with_people(base_context, text)
+    
+    logger.info(f"🎯 TIER 1 (Context): {enhanced_context[:50]}...")
+    photo = await search_unsplash(enhanced_context)
+    
+    if photo:
+        url = extract_photo_url(photo)
+        if url:
+            logger.info("✅ TIER 1 SUCCESS: Context-based image")
+            return url
+    
+    # Check for cocktail context specifically
+    if any(word in text.lower() for word in ["коктейл", "cocktail", "бар", "bar", 
+                                               "міксолог", "mixolog", "bartender"]):
+        cocktail_keyword = random.choice(COCKTAIL_KEYWORDS)
+        logger.info(f"🍸 TIER 1.5 (Cocktail): {cocktail_keyword[:50]}...")
+        photo = await search_unsplash(cocktail_keyword)
+        if photo:
+            url = extract_photo_url(photo)
+            if url:
+                logger.info("✅ TIER 1.5 SUCCESS: Cocktail image")
+                return url
+    
+    return None
+
+
+async def fetch_tier_2_horeca(text: str = "") -> Optional[str]:
+    """
+    TIER 2: HoReCa/Cocktail fallback
+    Premium beverage industry imagery
+    """
+    # Mix cocktail and HoReCa keywords for variety
+    horeca_pool = HORECA_KEYWORDS + COCKTAIL_KEYWORDS[:5]
+    horeca_keyword = random.choice(horeca_pool)
+    
+    logger.info(f"🍷 TIER 2 (HoReCa): {horeca_keyword[:50]}...")
+    photo = await search_unsplash(horeca_keyword)
+    
+    if photo:
+        url = extract_photo_url(photo)
+        if url:
+            logger.info("✅ TIER 2 SUCCESS: HoReCa image")
+            return url
+    
+    return None
+
+
+async def fetch_tier_3_abstract(text: str = "") -> Optional[str]:
+    """
+    TIER 3: Safe abstract fallback
+    Always beautiful, guaranteed to work
+    """
+    safe_keyword = random.choice(SAFE_FALLBACKS)
+    
+    logger.info(f"🎨 TIER 3 (Abstract): {safe_keyword[:50]}...")
+    photo = await search_unsplash(safe_keyword)
+    
+    if photo:
+        url = extract_photo_url(photo)
+        if url:
+            logger.info("✅ TIER 3 SUCCESS: Abstract image")
+            return url
+    
+    return None
+```
+
+---
+
+### PHASE 2: Round-Robin Rotation Logic
+
+Add rotation logic to main function:
+
+```python
+def get_starting_tier(article_id: int) -> int:
+    """
+    Determine starting tier based on article ID
+    Returns 0, 1, 2, or 3 for round-robin diversity
+    
+    Examples:
+    - Article 1 → Start Tier 1 (context)
+    - Article 2 → Start Tier 2 (HoReCa)
+    - Article 3 → Start Tier 3 (abstract)
+    - Article 4 → Start Tier 0 (geographical)
+    - Article 5 → Start Tier 1 (context) ... cycle repeats
+    """
+    return article_id % 4
+
+
+async def fetch_premium_image_with_rotation(
+    title: str,
+    summary: str,
+    article_id: int
+) -> str:
+    """
+    4-TIER ROTATION STRATEGY FOR VISUAL DIVERSITY
+    
+    Instead of always starting at Tier 0, rotate starting point
+    based on article_id to ensure feed has visual variety.
+    
+    Args:
+        title: Article title
+        summary: Article summary/content
+        article_id: Unique article identifier for rotation
+    
+    Returns:
+        Image URL or empty string
+    """
+    
+    full_text = f"{title} {summary}"
+    
+    # Define tier functions
+    tier_functions = [
+        lambda: fetch_tier_0_geographical(full_text),
+        lambda: fetch_tier_1_context(full_text),
+        lambda: fetch_tier_2_horeca(full_text),
+        lambda: fetch_tier_3_abstract(full_text)
+    ]
+    
+    tier_names = ["Geographical", "Context", "HoReCa", "Abstract"]
+    
+    # Determine starting tier for this article
+    start_tier = get_starting_tier(article_id)
+    logger.info(f"🎨 Article #{article_id} → Starting at Tier {start_tier} ({tier_names[start_tier]})")
+    
+    # Try all 4 tiers in rotation order
+    for i in range(4):
+        tier_index = (start_tier + i) % 4
+        tier_name = tier_names[tier_index]
+        
+        logger.info(f"🔍 Attempt {i+1}/4: Tier {tier_index} ({tier_name})")
+        
+        try:
+            result = await tier_functions[tier_index]()
+            if result:
+                logger.info(f"✅ SUCCESS: Image found at Tier {tier_index} ({tier_name})")
+                return result
+        except Exception as e:
+            logger.error(f"❌ Error at Tier {tier_index}: {str(e)}")
+            continue
+    
+    logger.error(f"❌ ALL TIERS FAILED for article #{article_id}")
+    return ""
+
+
+# Keep backward compatibility - legacy function without rotation
+async def fetch_premium_image(title: str, summary: str) -> str:
+    """
+    Legacy function - uses sequential tiers (Tier 0→1→2→3)
+    Kept for backward compatibility
+    """
+    logger.warning("⚠️ Using legacy sequential tier system (no rotation)")
+    
+    full_text = f"{title} {summary}"
+    
+    # Sequential: 0 → 1 → 2 → 3
+    result = await fetch_tier_0_geographical(full_text)
+    if result: return result
+    
+    result = await fetch_tier_1_context(full_text)
+    if result: return result
+    
+    result = await fetch_tier_2_horeca(full_text)
+    if result: return result
+    
+    result = await fetch_tier_3_abstract(full_text)
+    if result: return result
+    
+    return ""
+```
+
+---
+
+### PHASE 3: Update Content Processor
+
+In `backend/services/content_processor.py`, pass article_id to image fetching:
+
+```python
+async def process_article_images(article_id: int, title: str, content: str):
+    """
+    Generate images for article using rotation system
+    """
+    from services.unsplash_service import fetch_premium_image_with_rotation
+    
+    logger.info(f"🖼️ Generating image for article #{article_id}")
+    
+    # Use rotation system for diversity
+    image_url = await fetch_premium_image_with_rotation(
+        title=title,
+        summary=content[:500],  # Use first 500 chars
+        article_id=article_id
+    )
+    
+    if image_url:
+        # Update article in database
+        await update_article_image(article_id, image_url)
+        logger.info(f"✅ Image saved for article #{article_id}")
+    else:
+        logger.error(f"❌ No image found for article #{article_id}")
+    
+    return image_url
+```
+
+---
+
+### PHASE 4: Database Schema Update
+
+Add tier tracking to articles table:
+
+```python
+# In database migration or schema definition
+
+# Add these columns to 'articles' table:
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS last_tier_used INTEGER DEFAULT NULL;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS tier_attempts TEXT DEFAULT '[]';  # JSON array
+
+# Example row after processing:
+{
+    "id": 123,
+    "title": "French wine exports...",
+    "image_url": "https://images.unsplash.com/...",
+    "last_tier_used": 1,  # Last successful tier
+    "tier_attempts": "[1]"  # History of attempts (JSON)
+}
+```
+
+---
+
+### PHASE 5: "New Image" Button Handler
+
+In `backend/routes/telegram_webhook.py`, add tier progression:
+
+```python
+async def handle_new_image_request(article_id: int, chat_id: int):
+    """
+    User clicked 'New Image' button - advance to next tier
+    """
+    from services.unsplash_service import (
+        fetch_tier_0_geographical,
+        fetch_tier_1_context,
+        fetch_tier_2_horeca,
+        fetch_tier_3_abstract
+    )
+    
+    # Get article from database
+    article = await db.get_article(article_id)
+    full_text = f"{article['title']} {article['content'][:500]}"
+    
+    # Get last tier used (default to article_id % 4 if first time)
+    last_tier = article.get('last_tier_used')
+    if last_tier is None:
+        last_tier = get_starting_tier(article_id)
+    
+    # Get tier attempts history
+    tier_attempts = json.loads(article.get('tier_attempts', '[]'))
+    
+    # Advance to NEXT tier
+    next_tier = (last_tier + 1) % 4
+    
+    logger.info(f"🔄 New Image: Article #{article_id}, Last Tier {last_tier} → Next Tier {next_tier}")
+    
+    # Define tier functions
+    tier_functions = [
+        lambda: fetch_tier_0_geographical(full_text),
+        lambda: fetch_tier_1_context(full_text),
+        lambda: fetch_tier_2_horeca(full_text),
+        lambda: fetch_tier_3_abstract(full_text)
+    ]
+    tier_names = ["Geographical", "Context", "HoReCa", "Abstract"]
+    
+    # Try tiers starting from next_tier
+    for i in range(4):
+        tier_index = (next_tier + i) % 4
+        
+        # Skip if already tried (avoid showing same image)
+        if tier_index in tier_attempts:
+            logger.info(f"⏭️ Skipping Tier {tier_index} (already tried)")
+            continue
+        
+        logger.info(f"🔍 Trying Tier {tier_index} ({tier_names[tier_index]})")
+        
+        result = await tier_functions[tier_index]()
+        if result:
+            # Update database with new tier and attempts
+            new_attempts = tier_attempts + [tier_index]
+            await db.update_article(article_id, {
+                'image_url': result,
+                'last_tier_used': tier_index,
+                'tier_attempts': json.dumps(new_attempts)
+            })
+            
+            # Send new image to Telegram
+            await send_telegram_photo(chat_id, result)
+            logger.info(f"✅ New image sent (Tier {tier_index})")
+            return
+    
+    # All tiers exhausted - reset and start over
+    logger.warning("All tiers exhausted, resetting attempts")
+    await db.update_article(article_id, {
+        'tier_attempts': '[]'  # Reset
+    })
+    await send_telegram_message(chat_id, "🔄 All image variations tried. Click again to restart cycle.")
+```
+
+---
+
+## 🧪 TESTING REQUIREMENTS
+
+### Test 1: Auto-Fetch Rotation
+Process 20 articles and verify tier distribution:
+
+```
+Article 1 (ID: 1) → Should start Tier 1
+Article 2 (ID: 2) → Should start Tier 2
+Article 3 (ID: 3) → Should start Tier 3
+Article 4 (ID: 4) → Should start Tier 0
+Article 5 (ID: 5) → Should start Tier 1 (cycle repeats)
+...
+Article 20 (ID: 20) → Should start Tier 0
+```
+
+**Expected distribution:** ~5 of each tier type (Tier 0, 1, 2, 3)
+
+### Test 2: Fallback Still Works
+If Tier 2 fails for an article, should fall back to Tier 3, then 0, then 1.
+
+Example:
+```
+Article 6 (ID: 6) → Start Tier 2
+  → Tier 2 fails ❌
+  → Try Tier 3 ✅ (success)
+Result: Article uses Tier 3 image
+```
+
+### Test 3: New Image Button Progression
+```
+Initial: Tier 1 (landscape)
+Click "New Image": Tier 2 (cocktail) 🔄
+Click "New Image": Tier 3 (abstract) 🔄
+Click "New Image": Tier 0 (geographical) 🔄
+Click "New Image": Skip Tier 1 (already tried), go to Tier 2
+Click "New Image": Skip Tier 2 (already tried), go to Tier 3
+... etc.
+```
+
+### Test 4: Database Persistence
+```sql
+SELECT id, last_tier_used, tier_attempts FROM articles WHERE id = 123;
+
+-- Should return:
+-- id: 123, last_tier_used: 2, tier_attempts: "[1, 2]"
+```
+
+---
+
+## 📊 MONITORING & ANALYTICS
+
+Add logging to track tier distribution:
+
+```python
+# Add to scheduler or daily job
+async def log_tier_analytics():
+    """
+    Daily analytics: which tiers are being used most?
+    """
+    results = await db.query("""
+        SELECT 
+            last_tier_used,
+            COUNT(*) as count
+        FROM articles
+        WHERE created_at > NOW() - INTERVAL '7 days'
+        GROUP BY last_tier_used
+    """)
+    
+    logger.info("=" * 60)
+    logger.info("📊 TIER USAGE (Last 7 Days)")
+    logger.info("=" * 60)
+    for row in results:
+        tier_name = ["Geographical", "Context", "HoReCa", "Abstract"][row['last_tier_used']]
+        logger.info(f"Tier {row['last_tier_used']} ({tier_name}): {row['count']} images")
+    logger.info("=" * 60)
+```
+
+---
+
+## 🎯 EXPECTED OUTCOMES
+
+### Visual Diversity:
+- **Before:** 80% landscapes (Tier 0-1)
+- **After:** 25% each tier (Tier 0, 1, 2, 3) ✅
+
+### User Experience:
+- Feed looks varied and professional ✅
+- "New Image" gives genuinely different images ✅
+- Still guaranteed to get an image (fallback works) ✅
+
+### Performance:
+- No additional API calls (still 1 success per article)
+- Slightly more variety in which tier succeeds
+- Same reliability as before ✅
+
+---
+
+## 🚀 DEPLOYMENT CHECKLIST
+
+1. ✅ Refactor `unsplash_service.py` into 4 tier functions
+2. ✅ Add `get_starting_tier()` rotation logic
+3. ✅ Add `fetch_premium_image_with_rotation()` main function
+4. ✅ Update `content_processor.py` to pass `article_id`
+5. ✅ Add database columns: `last_tier_used`, `tier_attempts`
+6. ✅ Update "New Image" button handler
+7. ✅ Test with 20 articles - verify distribution
+8. ✅ Deploy to production
+9. ✅ Monitor tier analytics for 7 days
+
+---
+
+## 💡 FUTURE ENHANCEMENTS
+
+### Smart Tier Selection (ML-Based):
+```python
+# Future: Learn which tiers work best for which topics
+async def predict_best_tier(title: str, content: str) -> int:
+    """
+    Use ML to predict which tier will find best image
+    Based on historical success rates per topic
+    """
+    # Analyze topic
+    topic = classify_topic(title, content)  # "legal", "production", "market", etc.
+    
+    # Look up success rates
+    success_rates = {
+        "legal": [0.2, 0.8, 0.1, 0.05],  # Tier 1 works best
+        "production": [0.1, 0.7, 0.3, 0.1],  # Tier 1 works best
+        "market": [0.3, 0.5, 0.2, 0.1],  # Tier 0-1 work best
+        "events": [0.1, 0.4, 0.5, 0.1],  # Tier 2 works best
+    }
+    
+    rates = success_rates.get(topic, [0.25, 0.25, 0.25, 0.25])  # Default: equal
+    return rates.index(max(rates))  # Start with highest success tier
+```
+
+---
+
+**PRIORITY: HIGH - This significantly improves user experience and content quality with minimal code changes.**

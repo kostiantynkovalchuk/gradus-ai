@@ -313,7 +313,7 @@ class ContentScheduler:
                         title = article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else '')
                         content = article.translated_text or article.original_text or ''
                         
-                        result = unsplash_service.select_image_for_article(title, content)
+                        result = unsplash_service.select_image_for_article(title, content, article_id=article_id)
                         
                         if result and result.get('image_url'):
                             article.image_url = result['image_url']
@@ -321,6 +321,8 @@ class ContentScheduler:
                             article.image_credit_url = result['image_credit_url']
                             article.image_photographer = result['image_photographer']
                             article.unsplash_image_id = result['unsplash_image_id']
+                            article.last_tier_used = result.get('last_tier_used')
+                            article.tier_attempts = result.get('attempted_tiers', [])
                             article.image_prompt = None
                             article.local_image_path = None
                             article.image_data = None

@@ -223,14 +223,24 @@ class TelegramWebhookHandler:
                 self._answer_callback_query(callback_id, f"⚠️ Cannot regenerate - status: {article.status}")
                 return {"status": "error", "message": f"Cannot regenerate for status: {article.status}"}
             
-            self._answer_callback_query(callback_id, "🔄 Fetching new image from Unsplash...")
-            
             from services.unsplash_service import unsplash_service
+            
+            last_tier = article.last_tier_used
+            tier_attempts = list(article.tier_attempts) if article.tier_attempts else []
+            
+            if last_tier is not None:
+                next_tier = (last_tier + 1) % 4
+            else:
+                next_tier = (content_id % 4 + 1) % 4
+            
+            tier_name = unsplash_service.TIER_NAMES[next_tier]
+            self._answer_callback_query(callback_id, f"🔄 Fetching new image (Tier {next_tier}: {tier_name})...")
+            logger.info(f"🔄 New Image: Article #{content_id}, Last Tier {last_tier} → Next Tier {next_tier}")
             
             title = article.translated_title or article.source_title or ""
             content = article.translated_text or article.original_text or ""
             
-            result = unsplash_service.select_image_for_article(title, content)
+            result = unsplash_service.select_image_for_article(title, content, article_id=content_id, start_tier=next_tier)
             
             if not result or not result.get('image_url'):
                 self._send_text_message(message['chat']['id'], f"❌ No suitable images found for article #{content_id}")
@@ -241,13 +251,19 @@ class TelegramWebhookHandler:
             article.image_credit = result['image_credit']
             article.image_credit_url = result['image_credit_url']
             article.unsplash_image_id = result['unsplash_image_id']
+            article.last_tier_used = result.get('last_tier_used')
+            new_attempts = result.get('attempted_tiers', [])
+            for t in new_attempts:
+                if t not in tier_attempts:
+                    tier_attempts.append(t)
+            article.tier_attempts = tier_attempts
             article.local_image_path = None
             article.image_data = None
             
             db.commit()
             db.refresh(article)
             
-            logger.info(f"New image fetched for article {content_id}: {result['image_photographer']}")
+            logger.info(f"New image fetched for article {content_id}: {result['image_photographer']} (Tier {new_tier})")
             
             notification_service.send_approval_notification({
                 'id': article.id,

@@ -44,6 +44,10 @@ class ContentQueue(Base):
     image_photographer = Column(String(255), nullable=True)
     unsplash_image_id = Column(String(100), nullable=True)
     
+    # Tier rotation for visual diversity
+    last_tier_used = Column(Integer, nullable=True, default=None)
+    tier_attempts = Column(JSON, nullable=True, default=None)
+    
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted', 'posting_facebook', 'posting_linkedin')",

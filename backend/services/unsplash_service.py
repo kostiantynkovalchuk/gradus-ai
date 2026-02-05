@@ -605,32 +605,23 @@ class UnsplashService:
         except Exception as e:
             logger.warning(f"Failed to trigger download: {e}")
     
-    def select_image_for_article(self, title: str, content: str) -> Optional[Dict]:
-        """
-        4-TIER INTELLIGENT SEARCH STRATEGY:
-        
-        Tier 0: Geographical (if country mentioned) 🌍
-        Tier 1: Context-based with people enhancement 🏢
-        Tier 2: HoReCa/Cocktail fallback 🍷
-        Tier 3: Safe abstract premium 🎨
-        
-        Returns image data with attribution or None
-        """
-        db_used_ids = self.get_used_image_ids_from_db()
-        self.used_image_ids = self.used_image_ids.union(db_used_ids)
-        logger.info(f"📸 Premium image search starting, excluding {len(self.used_image_ids)} used images")
-        
+    TIER_NAMES = ["Geographical", "Context", "HoReCa", "Abstract"]
+    
+    def _fetch_tier_0(self, title: str, content: str) -> Optional[Dict]:
+        """TIER 0: Geographical imagery based on country mentions"""
         full_text = f"{title} {content}"
-        
-        # ===== TIER 0: GEOGRAPHICAL =====
         geo_keyword = self.detect_country(full_text)
-        if geo_keyword:
-            photo = self.search_unsplash(geo_keyword)
-            if photo:
-                logger.info("✅ TIER 0 SUCCESS: Geographical image found")
-                return self.extract_photo_data(photo, geo_keyword, "tier0_geo")
-        
-        # ===== TIER 1: CONTEXT-BASED =====
+        if not geo_keyword:
+            return None
+        photo = self.search_unsplash(geo_keyword)
+        if photo:
+            logger.info("✅ TIER 0 SUCCESS: Geographical image found")
+            return self.extract_photo_data(photo, geo_keyword, "tier0_geo")
+        return None
+    
+    def _fetch_tier_1(self, title: str, content: str) -> Optional[Dict]:
+        """TIER 1: Context-based imagery with people enhancement + cocktail fallback"""
+        full_text = f"{title} {content}"
         base_context = self.interpret_context(title, content)
         
         if base_context:
@@ -640,8 +631,7 @@ class UnsplashService:
                 logger.info("✅ TIER 1 SUCCESS: Context-based image found")
                 return self.extract_photo_data(photo, enhanced_context, "tier1_context")
         
-        # Check for cocktail context specifically
-        if any(word in full_text.lower() for word in ["коктейл", "cocktail", "бар", "bar", 
+        if any(word in full_text.lower() for word in ["коктейл", "cocktail", "бар", "bar",
                                                         "міксолог", "mixolog", "bartender"]):
             cocktail_keyword = random.choice(COCKTAIL_KEYWORDS)
             logger.info(f"🍸 TIER 1.5: Trying cocktail search: {cocktail_keyword[:50]}...")
@@ -649,25 +639,87 @@ class UnsplashService:
             if photo:
                 logger.info("✅ TIER 1.5 SUCCESS: Cocktail image found")
                 return self.extract_photo_data(photo, cocktail_keyword, "tier1_cocktail")
-        
-        # ===== TIER 2: HORECA FALLBACK =====
+        return None
+    
+    def _fetch_tier_2(self, title: str, content: str) -> Optional[Dict]:
+        """TIER 2: HoReCa/Cocktail fallback imagery"""
         horeca_pool = HORECA_KEYWORDS + COCKTAIL_KEYWORDS[:5]
         horeca_keyword = random.choice(horeca_pool)
-        
         logger.info(f"🍷 TIER 2: Trying HoReCa fallback: {horeca_keyword[:50]}...")
         photo = self.search_unsplash(horeca_keyword)
         if photo:
             logger.info("✅ TIER 2 SUCCESS: HoReCa image found")
             return self.extract_photo_data(photo, horeca_keyword, "tier2_horeca")
-        
-        # ===== TIER 3: SAFE ABSTRACT =====
+        return None
+    
+    def _fetch_tier_3(self, title: str, content: str) -> Optional[Dict]:
+        """TIER 3: Safe abstract premium fallback"""
         safe_keyword = random.choice(SAFE_FALLBACKS)
         logger.info(f"🎨 TIER 3: Trying safe abstract: {safe_keyword[:50]}...")
         photo = self.search_unsplash(safe_keyword)
-        
         if photo:
             logger.info("✅ TIER 3 SUCCESS: Abstract image found")
             return self.extract_photo_data(photo, safe_keyword, "tier3_abstract")
+        return None
+    
+    def _get_tier_function(self, tier_index: int):
+        """Get tier function by index"""
+        tier_map = {
+            0: self._fetch_tier_0,
+            1: self._fetch_tier_1,
+            2: self._fetch_tier_2,
+            3: self._fetch_tier_3,
+        }
+        return tier_map.get(tier_index)
+    
+    def select_image_for_article(self, title: str, content: str, article_id: int = None, start_tier: int = None) -> Optional[Dict]:
+        """
+        4-TIER INTELLIGENT SEARCH with ROUND-ROBIN ROTATION:
+        
+        Tier 0: Geographical (if country mentioned)
+        Tier 1: Context-based with people enhancement
+        Tier 2: HoReCa/Cocktail fallback
+        Tier 3: Safe abstract premium
+        
+        When article_id is provided, starting tier rotates based on article_id % 4
+        for visual diversity across the feed.
+        When start_tier is provided, it overrides the rotation (used by New Image).
+        
+        Returns image data dict with tier info, or None
+        """
+        db_used_ids = self.get_used_image_ids_from_db()
+        self.used_image_ids = self.used_image_ids.union(db_used_ids)
+        logger.info(f"📸 Premium image search starting, excluding {len(self.used_image_ids)} used images")
+        
+        if start_tier is not None:
+            rotation_start = start_tier % 4
+        elif article_id is not None:
+            rotation_start = article_id % 4
+        else:
+            rotation_start = 0
+        
+        logger.info(f"🎨 Rotation: starting at Tier {rotation_start} ({self.TIER_NAMES[rotation_start]})"
+                     + (f" for article #{article_id}" if article_id else ""))
+        
+        attempted_tiers = []
+        
+        for i in range(4):
+            tier_index = (rotation_start + i) % 4
+            tier_name = self.TIER_NAMES[tier_index]
+            logger.info(f"🔍 Attempt {i+1}/4: Tier {tier_index} ({tier_name})")
+            attempted_tiers.append(tier_index)
+            
+            try:
+                tier_fn = self._get_tier_function(tier_index)
+                result = tier_fn(title, content)
+                if result:
+                    result['last_tier_used'] = tier_index
+                    result['attempted_tiers'] = attempted_tiers
+                    logger.info(f"✅ SUCCESS at Tier {tier_index} ({tier_name})")
+                    return result
+            except Exception as e:
+                logger.error(f"❌ Error at Tier {tier_index}: {str(e)}")
+                continue
         
         logger.error("❌ ALL TIERS FAILED: No image found")
         return None
