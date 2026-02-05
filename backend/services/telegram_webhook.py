@@ -210,7 +210,7 @@ class TelegramWebhookHandler:
             return {"status": "error", "message": str(e)}
     
     def _regenerate_image(self, content_id: int, callback_id: str, message: Dict, db: Session) -> Dict:
-        """Regenerate image for article using AI-powered Unsplash search"""
+        """Fetch new image for article from Unsplash"""
         
         try:
             article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
@@ -223,7 +223,7 @@ class TelegramWebhookHandler:
                 self._answer_callback_query(callback_id, f"⚠️ Cannot regenerate - status: {article.status}")
                 return {"status": "error", "message": f"Cannot regenerate for status: {article.status}"}
             
-            self._answer_callback_query(callback_id, "🔄 Fetching new image...")
+            self._answer_callback_query(callback_id, "🔄 Fetching new image from Unsplash...")
             
             from services.unsplash_service import UnsplashService
             unsplash = UnsplashService()
@@ -257,7 +257,7 @@ class TelegramWebhookHandler:
             
             unsplash.trigger_download(best_image['download_url'])
             
-            logger.info(f"Image regenerated for article {content_id}: {best_image['photographer_name']}")
+            logger.info(f"New image fetched for article {content_id}: {best_image['photographer_name']}")
             
             notification_service.send_approval_notification({
                 'id': article.id,
@@ -269,12 +269,12 @@ class TelegramWebhookHandler:
                 'created_at': article.created_at.strftime('%H:%M, %d %b %Y') if article.created_at else ''
             })
             
-            return {"status": "success", "message": "Image regenerated", "content_id": content_id}
+            return {"status": "success", "message": "New image fetched", "content_id": content_id}
             
         except Exception as e:
-            logger.error(f"Error regenerating image for content {content_id}: {e}")
+            logger.error(f"Error fetching new image for content {content_id}: {e}")
             db.rollback()
-            self._send_text_message(message['chat']['id'], f"❌ Error regenerating image: {str(e)[:100]}")
+            self._send_text_message(message['chat']['id'], f"❌ Error fetching new image: {str(e)[:100]}")
             return {"status": "error", "message": str(e)}
     
     def _send_text_message(self, chat_id: int, text: str) -> bool:

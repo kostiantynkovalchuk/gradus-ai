@@ -15,7 +15,7 @@ import random
 import re
 from typing import Dict, List, Optional, Set
 from sqlalchemy.orm import Session
-from database import get_db
+from models import get_db
 
 logger = logging.getLogger(__name__)
 
