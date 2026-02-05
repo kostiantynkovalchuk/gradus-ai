@@ -253,7 +253,7 @@ class TelegramWebhookHandler:
                 'id': article.id,
                 'translated_title': article.translated_title,
                 'translated_text': article.translated_text or '',
-                'image_url': best_image['url'],
+                'image_url': article.image_url,
                 'local_image_path': None,
                 'source': article.source or 'GradusMedia',
                 'created_at': article.created_at.strftime('%H:%M, %d %b %Y') if article.created_at else ''
