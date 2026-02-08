@@ -263,7 +263,7 @@ class TelegramWebhookHandler:
             db.commit()
             db.refresh(article)
             
-            logger.info(f"New image fetched for article {content_id}: {result['image_photographer']} (Tier {new_tier})")
+            logger.info(f"New image fetched for article {content_id}: {result['image_photographer']} (Tier {result.get('last_tier_used')})")
             
             notification_service.send_approval_notification({
                 'id': article.id,
