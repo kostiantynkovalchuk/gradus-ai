@@ -81,12 +81,15 @@ VIDEO_CONTENT_TRIGGERS = {
     'video_history': ['історі', 'history', 'історія компанії', 'як все почалось'],
     'video_overview': ['про компан', 'about company', 'що таке avtd', 'що таке автд', 
                        'загальна інформація', 'хто ми', 'про нас'],
+    'q26': ['звільнен', 'звільнити', 'звільняюсь', 'хочу звільнитись', 'процес звільнення',
+            'як звільнитись', 'offboarding', 'resignation', 'хочу піти', 'хочу йти'],
 }
 
 VIDEO_CAPTIONS = {
     'video_values': '🎥 Цінності компанії AVTD',
     'video_history': '🎥 Історія компанії AVTD (25+ років)',
     'video_overview': '🎥 Про компанію AVTD',
+    'q26': '📤 Звільнення',
 }
 
 
@@ -869,17 +872,24 @@ import time
 async def send_video_only_response(chat_id: int, content_id: str, caption: str) -> bool:
     """Send video-only response for video content. Returns True if successful."""
     try:
-        from models import get_db
-        from models.hr_models import HRContent
+        video_url = None
         
-        with next(get_db()) as db:
-            content = db.query(HRContent).filter(HRContent.content_id == content_id).first()
-            
-            if not content or not content.video_url:
-                logger.warning(f"Video content not found or no video_url: {content_id}")
-                return False
-            
-            video_url = content.video_url
+        from services.maya_hr_content import HR_CONTENT
+        direct_content = HR_CONTENT.get(content_id)
+        if direct_content and direct_content.get('type') == 'video' and direct_content.get('video_url'):
+            video_url = direct_content['video_url']
+        
+        if not video_url:
+            from models import get_db
+            from models.hr_models import HRContent
+            with next(get_db()) as db:
+                content = db.query(HRContent).filter(HRContent.content_id == content_id).first()
+                if content and content.video_url:
+                    video_url = content.video_url
+        
+        if not video_url:
+            logger.warning(f"Video content not found or no video_url: {content_id}")
+            return False
             
         nav_keyboard = create_main_menu_keyboard()
         

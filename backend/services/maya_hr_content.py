@@ -350,7 +350,8 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
     
     "q26": {
         "title": "📤 Звільнення",
-        "type": "text",
+        "type": "video",
+        "video_url": "https://gradus-ai.onrender.com/static/videos/video_offboarding.mp4",
         "content": """📤 **Як правильно запустити процес звільнення?**
 
 **⏸️ Перш ніж приймати рішення, дай собі трохи часу.**
