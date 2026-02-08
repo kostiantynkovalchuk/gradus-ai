@@ -17,6 +17,9 @@ class ArticleResponse(BaseModel):
     source: Optional[str]
     source_url: Optional[str]
     image_url: Optional[str]
+    image_credit: Optional[str] = None
+    image_credit_url: Optional[str] = None
+    image_photographer: Optional[str] = None
     platforms: Optional[List[str]]
     published_at: Optional[datetime]
     language: Optional[str]
@@ -75,6 +78,9 @@ async def get_published_articles(
             source=article.source,
             source_url=article.source_url,
             image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+            image_credit=article.image_credit,
+            image_credit_url=article.image_credit_url,
+            image_photographer=article.image_photographer,
             platforms=article.platforms,
             published_at=article.posted_at or article.reviewed_at or article.created_at,
             language=article.language,
@@ -123,6 +129,9 @@ async def search_articles(
             "content": content_preview,
             "source": article.source,
             "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+            "image_credit": article.image_credit,
+            "image_credit_url": article.image_credit_url,
+            "image_photographer": article.image_photographer,
             "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None,
             "category": article.category
         })
@@ -159,6 +168,9 @@ async def get_article_by_id(
         "source": article.source,
         "source_url": article.source_url,
         "image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+        "image_credit": article.image_credit,
+        "image_credit_url": article.image_credit_url,
+        "image_photographer": article.image_photographer,
         "platforms": article.platforms,
         "published_at": (article.posted_at or article.reviewed_at or article.created_at).isoformat() if (article.posted_at or article.reviewed_at or article.created_at) else None,
         "language": article.language,
