@@ -11,6 +11,7 @@ pinecone-client==3.0.0
 playwright
 psycopg2-binary
 pydantic
+email-validator>=2.0.0
 python-dotenv
 python-multipart
 python-telegram-bot
