@@ -414,6 +414,40 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
     
+    def check_expired_subscriptions_task(self):
+        """
+        Task: Expire subscriptions past their expiry date
+        Runs at: 04:00 AM daily
+        """
+        logger.info("🤖 [SCHEDULER] Checking expired subscriptions...")
+        try:
+            db = self._get_db_session()
+            try:
+                from models.maya_models import MayaUser
+                expired_users = db.query(MayaUser).filter(
+                    MayaUser.subscription_tier.in_(['standard', 'premium']),
+                    MayaUser.subscription_expires_at < datetime.utcnow(),
+                    MayaUser.subscription_status == 'active'
+                ).all()
+
+                for user in expired_users:
+                    old_tier = user.subscription_tier
+                    user.subscription_tier = 'free'
+                    user.subscription_status = 'expired'
+                    user.questions_limit = 5
+                    user.updated_at = datetime.utcnow()
+                    logger.info(f"⏰ Expired: {user.email} from {old_tier} → free")
+
+                if expired_users:
+                    db.commit()
+                    logger.info(f"✅ [SCHEDULER] Expired {len(expired_users)} subscriptions")
+                else:
+                    logger.info("✅ [SCHEDULER] No expired subscriptions")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Subscription check failed: {e}")
+
     def check_api_services_task(self):
         """
         Task: Comprehensive API monitoring - Check all services
@@ -937,6 +971,15 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        # Subscription expiry: Daily at 4:00 AM
+        self.scheduler.add_job(
+            self.check_expired_subscriptions_task,
+            CronTrigger(hour=4, minute=0),
+            id='check_expired_subscriptions',
+            name='Check expired subscriptions',
+            replace_existing=True
+        )
+        
         # API monitoring: Daily at 8:00 AM
         self.scheduler.add_job(
             self.check_api_services_task,
@@ -978,6 +1021,7 @@ class ContentScheduler:
         logger.info("🔧 MAINTENANCE:")
         logger.info("   • API monitoring: Daily 8:00 AM")
         logger.info("   • Cleanup: Daily 3:00 AM")
+        logger.info("   • Subscription expiry: Daily 4:00 AM")
         logger.info("")
         logger.info("=" * 60)
         logger.info("🚀 System ready! Waiting for next scheduled task...")
