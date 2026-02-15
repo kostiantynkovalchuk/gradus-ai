@@ -1,0 +1,252 @@
+# URGENT: Fix Maya Bot Personality - Switch from Marketing to HR Assistant
+
+## PROBLEM
+Maya bot is responding as "Майя, маркетинг-эксперт по алкогольной индустрии в Gradus Media" instead of "Maya, HR-асистент Торгового Дому АВ". The entire bot needs to be reconfigured as an HR assistant.
+
+## INVESTIGATION STEPS
+
+### Step 1: Check Current Bot Configuration
+
+**File: Look for bot personality/system prompt definitions**
+
+Search these files for "маркетинг-эксперт" or "Gradus Media" or "алкогольной индустрии":
+- `main.py`
+- `telegram_bot.py`
+- `hr_handlers.py`
+- Any file with PERSONALITY, SYSTEM_PROMPT, or bot_instructions
+
+**Find and document:**
+- Where is the bot's personality defined?
+- What system prompt is currently being used?
+- Is there a Claude API call with old instructions?
+
+### Step 2: Identify Handler Architecture
+
+**Check which handlers are active:**
+
+Look in the bot initialization file (likely `telegram_bot.py` or `main.py`) for:
+```python
+app.add_handler(CommandHandler(...))
+app.add_handler(MessageHandler(...))
+```
+
+**Document:**
+- What handlers are registered?
+- Is there a "GradusMedia" handler vs "HR" handler?
+- Which one runs first/has priority?
+
+### Step 3: Check for Multiple Bot Instances
+
+**Look for:**
+- Multiple `TELEGRAM_BOT_TOKEN` definitions
+- Different bot initialization blocks
+- Separate marketing vs HR bot configurations
+
+## REQUIRED FIXES
+
+### Fix 1: Replace Bot Personality (CRITICAL)
+
+**Find the system prompt or personality definition and replace it with:**
+```python
+HR_ASSISTANT_PERSONALITY = """
+Ти Maya — HR-асистент Торгового Дому АВ (TD AV).
+
+ТВОЯ РОЛЬ:
+- Допомагаєш співробітникам TD AV з HR-питаннями
+- Надаєш інформацію про компанію, бренди, процедури
+- Відповідаєш на питання про відпустки, зарплату, техпідтримку
+- Персоналізуєш відповіді на основі посади користувача
+
+ЩО ТИ НЕ РОБИШ:
+- Не є маркетинг-експертом
+- Не обговорюєш загальні тренди індустрії (якщо тільки не про бренди TD AV)
+- Не даєш консультації зовнішнім клієнтам
+
+СТИЛЬ СПІЛКУВАННЯ:
+- Дружній, професійний український
+- Звертаєшся по імені (якщо знаєш)
+- Враховуєш посаду користувача у відповідях
+
+БРЕНДИ TD AV (про які ти можеш розповідати):
+- Горілка: GREENDAY, HELSINKI, UKRAINKA
+- Коньяк: DOVBUSH, ADJARI  
+- Вино: VILLA UA, KRISTI VALLEY, DIDI LARI
+- Соджу: FUNJU
+
+Завжди пам'ятай: ти внутрішній HR-помічник для команди TD AV, а не зовнішній маркетинг-консультант.
+"""
+```
+
+**Remove or comment out any old marketing personality like:**
+```python
+# OLD - DELETE THIS
+GRADUSMEDIA_PERSONALITY = """
+Ти — Майя, маркетинг-эксперт по алкогольной індустрії...
+"""
+```
+
+### Fix 2: Update Message Handlers
+
+**Ensure the main message handler uses HR logic:**
+```python
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Main message handler - HR assistant mode"""
+    
+    telegram_id = update.effective_user.id
+    message_text = update.message.text
+    
+    # Check if user is verified
+    user = await db.fetchrow(
+        "SELECT * FROM hr_users WHERE telegram_id = $1 AND is_active = TRUE",
+        telegram_id
+    )
+    
+    if not user:
+        # Redirect to registration
+        await update.message.reply_text(
+            "⚠️ Для використання Maya потрібна реєстрація.\n\n"
+            "Надішли /start та введи свій номер телефону."
+        )
+        return
+    
+    # Process HR query with proper personality
+    response = await process_hr_query(
+        user=user,
+        query=message_text,
+        personality=HR_ASSISTANT_PERSONALITY  # Use HR personality
+    )
+    
+    await update.message.reply_text(response)
+```
+
+### Fix 3: Update Greeting Messages
+
+**Find and replace all greeting messages:**
+
+**OLD (Marketing):**
+```python
+"Я — Майя, маркетинг-эксперт по алкогольной индустрии в Gradus Media"
+```
+
+**NEW (HR):**
+```python
+"Я Maya, HR-асистент Торгового Дому АВ"
+```
+
+**Search for these patterns and replace:**
+- "маркетинг-эксперт"
+- "Gradus Media"  
+- "алкогольной индустрии"
+- "трендами алкогольного рынка"
+
+**Replace with:**
+- "HR-асистент"
+- "Торговий Дім АВ" or "TD AV"
+- "HR-питаннями"
+- "інформацією про компанію"
+
+### Fix 4: Update RAG/Claude API Calls
+
+**If using Claude API for responses, update the system prompt:**
+```python
+async def get_hr_response(query: str, user_context: dict):
+    """Get response from Claude with HR personality"""
+    
+    messages = [
+        {
+            "role": "system",
+            "content": HR_ASSISTANT_PERSONALITY  # Use HR personality
+        },
+        {
+            "role": "user", 
+            "content": f"""
+            Користувач: {user_context['first_name']}
+            Посада: {user_context['position']}
+            Відділ: {user_context['department']}
+            
+            Питання: {query}
+            """
+        }
+    ]
+    
+    # Call Claude API with HR context
+    response = await claude_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        messages=messages,
+        max_tokens=1000
+    )
+    
+    return response.content[0].text
+```
+
+### Fix 5: Remove or Disable Marketing Features
+
+**If there are separate marketing functions, disable them:**
+```python
+# DISABLED - Old Gradus Media marketing features
+# async def marketing_expert_response(...):
+#     ...
+
+# DISABLED - Market trend analysis
+# async def analyze_market_trends(...):
+#     ...
+```
+
+## TESTING CHECKLIST
+
+After making changes, test:
+
+1. **Send /start** → Should say "HR-асистент Торгового Дому АВ"
+2. **Ask HR question** → Should respond as HR assistant, not marketing expert
+3. **Check greeting** → No mention of "маркетинг-эксперт" or "Gradus Media"
+4. **Verify persona** → All responses should be HR-focused
+
+## DELIVERABLES
+
+1. List all files where marketing personality was found
+2. Show the old vs new personality definitions  
+3. Confirm all handlers now use HR_ASSISTANT_PERSONALITY
+4. Test output showing correct HR responses
+5. Document any remaining marketing features (if they should be preserved separately)
+
+## CRITICAL NOTES
+
+- This is URGENT - users are getting wrong bot persona
+- DO NOT delete authentication code we just implemented
+- DO NOT break phone verification flow
+- DO keep admin commands (/admin, /adduser, /logs, etc.)
+- The bot should ONLY be an HR assistant now, not a marketing expert
+
+IMPLEMENT ALL FIXES ABOVE AND REPORT WHAT WAS CHANGED.
+```
+
+---
+
+## **🔍 WHAT THIS WILL DO**
+
+The Replit Agent will:
+
+1. ✅ **Search all files** for old marketing personality references
+2. ✅ **Replace with HR personality** throughout the codebase
+3. ✅ **Update greeting messages** to say "HR-асистент"
+4. ✅ **Fix Claude API calls** to use HR system prompt
+5. ✅ **Remove marketing features** that don't belong in HR bot
+6. ✅ **Test the changes** and confirm HR personality is active
+7. ✅ **Generate report** of what was changed
+
+---
+
+## **📊 EXPECTED RESULT AFTER FIX**
+
+**BEFORE (Current - Wrong):**
+```
+Привет! 👋
+Я — Майя, маркетинг-эксперт по алкогольной индустрии в Gradus Media.
+...вопросы по алкогольному рынку или маркетингу?
+```
+
+**AFTER (Correct - HR):**
+```
+Привіт! 👋
+Я Maya, HR-асистент Торгового Дому АВ.
+...питання про роботу, відпустки, або компанію?
