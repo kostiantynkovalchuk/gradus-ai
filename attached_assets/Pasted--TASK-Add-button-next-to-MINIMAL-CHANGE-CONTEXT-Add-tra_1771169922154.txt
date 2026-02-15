@@ -1,0 +1,208 @@
+# TASK: Add "Навчання" button next to "Юридичні документи" - MINIMAL CHANGE
+
+## CONTEXT
+Add training button that links to Google Doc, same mechanism as legal documents. Place both buttons on same row for better UX.
+
+## STEP 1: Update Keyboard Layout
+
+**Find `get_menu_for_access_level()` function**
+
+Change this line:
+```python
+["📄 Юридичні документи"],
+```
+
+To:
+```python
+["📄 Юр. документи", "📚 Навчання"],
+```
+
+**Apply to all access levels:**
+```python
+def get_menu_for_access_level(access_level: str):
+    """Return appropriate keyboard based on user access level"""
+    
+    if access_level == "developer":
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Тех. підтримка", "📞 Контакти"],
+            ["📄 Юр. документи", "📚 Навчання"],  # ← CHANGED THIS LINE
+            ["💬 Задати своє питання"],
+            ["👨‍💻 Admin", "📊 Stats", "🔍 Logs"],
+            ["➕ Add User", "🔄 Sync Users"]
+        ]
+    elif access_level == "admin_hr":
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Тех. підтримка", "📞 Контакти"],
+            ["📄 Юр. документи", "📚 Навчання"],  # ← CHANGED THIS LINE
+            ["💬 Задати своє питання"],
+            ["⚙️ Admin Panel", "➕ Add User", "📊 Stats"]
+        ]
+    else:  # employee or contractor
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Тех. підтримка", "📞 Контакти"],
+            ["📄 Юр. документи", "📚 Навчання"],  # ← CHANGED THIS LINE
+            ["💬 Задати своє питання"]
+        ]
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+```
+
+## STEP 2: Add Training Document URL
+
+**Find where legal documents Google Doc URL is stored** (likely in hr_content table or a config file)
+
+Add training document in the same way:
+
+**Option A: If stored in hr_content table:**
+```sql
+-- Find existing legal documents entry
+SELECT * FROM hr_content WHERE section = 'legal';
+
+-- Add training document using same pattern
+INSERT INTO hr_content (section, subsection, title, content, content_type, google_doc_url)
+VALUES (
+    'training',
+    'hr_processes',
+    'Робота в системі «Бліц» та HR-процеси',
+    '',  -- Empty if using Google Doc
+    'google_doc',
+    'https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit'
+)
+ON CONFLICT (section, subsection) DO UPDATE
+SET google_doc_url = EXCLUDED.google_doc_url;
+```
+
+**Option B: If using hr_menu_structure table:**
+```sql
+-- Add to menu structure
+INSERT INTO hr_menu_structure (menu_key, button_text, action_type, action_target, menu_order)
+VALUES (
+    'training',
+    '📚 Навчання',
+    'google_doc',
+    'https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit',
+    8
+)
+ON CONFLICT (menu_key) DO UPDATE
+SET action_target = EXCLUDED.action_target;
+```
+
+## STEP 3: Add Button Handler
+
+**Find existing handler for "📄 Юридичні документи" button**
+
+Copy the exact same pattern for "📚 Навчання":
+```python
+# In message handler, add this case alongside legal documents handler:
+
+if message_text == "📚 Навчання":
+    # Use same mechanism as legal documents
+    doc_url = "https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit"
+    
+    await update.message.reply_text(
+        "📚 **Навчальні матеріали**\n\n"
+        "📋 HR-процеси та робота в системі «Бліц»\n\n"
+        "👉 [Відкрити документ](" + doc_url + ")",
+        parse_mode="Markdown",
+        reply_markup=get_menu_for_access_level(user["access_level"])
+    )
+    return
+```
+
+**OR if there's a generic document handler function, just add to the mapping:**
+```python
+# If there's a document mapping dictionary:
+DOCUMENT_URLS = {
+    "📄 Юр. документи": "https://docs.google.com/...",
+    "📚 Навчання": "https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit"
+}
+```
+
+## TESTING CHECKLIST
+
+1. **Button appears** - "📚 Навчання" shows next to "📄 Юр. документи"
+2. **Same row** - Both buttons on same line (visual check)
+3. **Click works** - Opens/links to Google Doc
+4. **Same behavior as legal docs** - Identical mechanism
+5. **All access levels** - Works for employee, admin_hr, developer
+6. **No regressions** - Other buttons still work
+
+## EXPECTED RESULT
+
+**Before:**
+```
+┌─────────────────────────────────────┐
+│ 📖 Про компанію    🚀 Новачкам      │
+│ 💼 Робочі питання  💰 Зарплата      │
+│ 🔧 Тех. підтримка  📞 Контакти      │
+│ 📄 Юридичні документи               │  ← Single button
+│ 💬 Задати своє питання              │
+└─────────────────────────────────────┘
+```
+
+**After:**
+```
+┌─────────────────────────────────────┐
+│ 📖 Про компанію    🚀 Новачкам      │
+│ 💼 Робочі питання  💰 Зарплата      │
+│ 🔧 Тех. підтримка  📞 Контакти      │
+│ 📄 Юр. документи   📚 Навчання      │  ← Two buttons on same row
+│ 💬 Задати своє питання              │
+└─────────────────────────────────────┘
+```
+
+## CRITICAL NOTES
+
+- **Copy legal documents mechanism EXACTLY** - don't create new logic
+- **Shortened button text** - "Юридичні документи" → "Юр. документи" to fit both buttons
+- **Same row placement** - Better visual balance, saves vertical space
+- **Minimal code changes** - Just add to existing pattern
+
+FIND HOW "📄 Юридичні документи" WORKS AND REPLICATE FOR "📚 Навчання".
+```
+
+---
+
+## **✅ WHY THIS IS BETTER**
+
+**Your approach:**
+- ✅ Simpler (no database inserts needed)
+- ✅ Consistent (same as legal docs)
+- ✅ Better UX (8 rows vs 9 rows)
+- ✅ Less code (just add to existing pattern)
+- ✅ Saves space (two buttons on one row)
+
+**My overcomplicated approach:**
+- ❌ Inserted whole document into database
+- ❌ Created new content processing
+- ❌ More code to maintain
+- ❌ Wasted vertical space
+
+---
+
+## **📊 FINAL LAYOUT**
+
+**Regular Employee (8 button rows → 7 button rows):**
+```
+┌─────────────────────────────────────┐
+│ 📖 Про компанію    🚀 Новачкам      │
+│ 💼 Робочі питання  💰 Зарплата      │
+│ 🔧 Тех. підтримка  📞 Контакти      │
+│ 📄 Юр. документи   📚 Навчання      │
+│ 💬 Задати своє питання              │
+└─────────────────────────────────────┘
+```
+
+**Developer (adds 2 admin rows):**
+```
+│ 📄 Юр. документи   📚 Навчання      │
+│ 💬 Задати своє питання              │
+│ 👨‍💻 Admin  📊 Stats  🔍 Logs       │
+│ ➕ Add User    🔄 Sync Users        │
+└─────────────────────────────────────┘
