@@ -262,6 +262,20 @@ async def process_telegram_message(message: dict):
             logger.warning(f"ТДАВ handler failed, falling back to AI")
         
         if is_hr_question(text):
+            auth_db_gen = get_db()
+            auth_db = next(auth_db_gen)
+            try:
+                user = get_user_by_telegram_id(auth_db, telegram_id)
+                if not user:
+                    await send_telegram_message(
+                        chat_id,
+                        "Для доступу до HR-довідника потрібно пройти верифікацію.\n\n"
+                        "Натисни /start щоб розпочати."
+                    )
+                    return
+            finally:
+                auth_db.close()
+
             logger.info(f"📋 HR question detected from {chat_id}: {text[:50]}...")
             user_id = message.get("from", {}).get("id", 0)
             await handle_hr_question(chat_id, user_id, text)

@@ -32,7 +32,16 @@ class SEDService:
                     json={"phone": phone}
                 )
 
-                data = response.json()
+                if response.status_code != 200:
+                    logger.error(f"SED API HTTP {response.status_code} for {phone}")
+                    return {"verified": False, "employee": None, "error": f"http_{response.status_code}"}
+
+                try:
+                    data = response.json()
+                except Exception:
+                    logger.error(f"SED API invalid JSON for {phone}")
+                    return {"verified": False, "employee": None, "error": "invalid_response"}
+
                 logger.info(f"SED API response for {phone}: {data.get('status')}")
 
                 if data.get("status") == "success" and data.get("data"):
