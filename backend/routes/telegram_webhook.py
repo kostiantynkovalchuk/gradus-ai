@@ -138,7 +138,11 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             callback_data = data['callback_query'].get('data', '')
             logger.info(f"🔘 Callback query: {callback_data}")
             
-            if callback_data.startswith('hr_'):
+            if callback_data.startswith('admin_cmd:'):
+                result = await handle_admin_button_callback(data['callback_query'], db)
+                logger.info(f"✓ Admin button callback processed")
+                return result
+            elif callback_data.startswith('hr_'):
                 result = await handle_hr_callback(data['callback_query'])
                 logger.info(f"✓ HR callback processed")
                 return result
@@ -659,6 +663,36 @@ async def answer_callback(callback_id: str, text: str = ""):
             }, timeout=5.0)
     except Exception as e:
         logger.warning(f"Error answering callback: {e}")
+
+
+async def handle_admin_button_callback(callback_query: dict, db):
+    """Handle admin button callbacks from inline keyboard"""
+    callback_id = callback_query.get('id')
+    callback_data = callback_query.get('data', '')
+    chat_id = callback_query.get('message', {}).get('chat', {}).get('id')
+    telegram_id = callback_query.get('from', {}).get('id')
+    cmd = callback_data.replace('admin_cmd:', '')
+
+    await answer_callback_query(callback_id, f"Виконую {cmd}...")
+
+    from services.hr_auth import (
+        handle_admin_command, handle_adduser_command,
+        handle_logs_command, handle_stats_command,
+        handle_listusers_command
+    )
+
+    if cmd == "admin":
+        await handle_admin_command(chat_id, telegram_id, db)
+    elif cmd == "stats":
+        await handle_stats_command(chat_id, telegram_id, db)
+    elif cmd == "logs":
+        await handle_logs_command(chat_id, telegram_id, db)
+    elif cmd == "adduser":
+        await handle_adduser_command(chat_id, telegram_id, [], db)
+    elif cmd == "listusers":
+        await handle_listusers_command(chat_id, telegram_id, db)
+
+    return {"ok": True}
 
 
 async def handle_hr_callback(callback_query: dict):

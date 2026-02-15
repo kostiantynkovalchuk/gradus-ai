@@ -577,7 +577,27 @@ async def handle_listusers_command(chat_id: int, telegram_id: int, db: Session):
 
 def get_inline_menu_for_access_level(access_level: str) -> dict:
     from services.hr_keyboards import create_main_menu_keyboard
-    return create_main_menu_keyboard()
+    base = create_main_menu_keyboard()
+    buttons = list(base.get("inline_keyboard", []))
+
+    if access_level == "developer":
+        buttons.append([
+            {"text": "👨‍💻 Admin", "callback_data": "admin_cmd:admin"},
+            {"text": "📊 Stats", "callback_data": "admin_cmd:stats"},
+            {"text": "🔍 Logs", "callback_data": "admin_cmd:logs"}
+        ])
+        buttons.append([
+            {"text": "➕ Add User", "callback_data": "admin_cmd:adduser"},
+            {"text": "👥 List Users", "callback_data": "admin_cmd:listusers"}
+        ])
+    elif access_level in ("admin_hr", "admin_it"):
+        buttons.append([
+            {"text": "⚙️ Admin", "callback_data": "admin_cmd:admin"},
+            {"text": "➕ Add User", "callback_data": "admin_cmd:adduser"},
+            {"text": "📊 Stats", "callback_data": "admin_cmd:stats"}
+        ])
+
+    return {"inline_keyboard": buttons}
 
 
 async def send_message(chat_id: int, text: str):
