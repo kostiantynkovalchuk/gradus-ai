@@ -59,3 +59,8 @@ externalPort = 8000
 deploymentTarget = "vm"
 run = ["bash", "-c", "cd backend && uvicorn main:app --host 0.0.0.0 --port 5000 --log-level info"]
 build = ["bash", "-c", "cd frontend && npm install && npm run build"]
+
+[userenv]
+
+[userenv.shared]
+SED_API_URL = "https://api-sed.tdav.net.ua"

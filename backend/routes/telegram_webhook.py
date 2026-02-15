@@ -21,6 +21,12 @@ from services.hr_keyboards import (
     MENU_TITLES, split_long_message, LEGAL_CONTRACTS, CATEGORY_NAMES
 )
 from services.maya_hr_content import get_direct_content, has_direct_content
+from services.hr_auth import (
+    handle_start_command, handle_phone_verification,
+    is_awaiting_phone, get_user_by_telegram_id, get_access_level,
+    handle_admin_command, handle_adduser_command, handle_logs_command,
+    handle_stats_command, handle_listusers_command
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -162,58 +168,87 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
 
 
 async def process_telegram_message(message: dict):
-    """Process Maya bot chat messages"""
+    """Process Maya bot chat messages with auth"""
     try:
         chat_id = message.get("chat", {}).get("id")
         text = message.get("text", "")
         user_name = message.get("from", {}).get("first_name", "Friend")
+        telegram_id = message.get("from", {}).get("id", chat_id)
         
         if not text or not chat_id:
             return
         
-        if text.startswith("/"):
-            if text == "/start":
-                await send_telegram_message(
-                    chat_id,
-                    "Привіт! Я Maya 👋\n\n"
-                    "AI-експертка з маркетингу та трендів алкогольної індустрії від Gradus Media.\n\n"
-                    "Запитай мене про:\n"
-                    "🍸 Бренди горілки, коньяку, вина\n"
-                    "🍹 Коктейлі та рецепти\n"
-                    "📊 Тренди та маркетинг\n\n"
-                    "👥 /hr - HR-довідник для співробітників\n\n"
-                    "Я завжди рада допомогти!"
-                )
-            elif text == "/help":
-                await send_telegram_message(
-                    chat_id,
-                    "Я Maya - ваш AI-консультант з алкогольної індустрії! 🥂\n\n"
-                    "Можу розповісти про:\n"
-                    "• Бренди Торгового Дому АВ (GREENDAY, HELSINKI, UKRAINKA)\n"
-                    "• DOVBUSH коньяк\n"
-                    "• Коктейлі та їх приготування\n"
-                    "• Маркетингові тренди\n\n"
-                    "*Команди:*\n"
-                    "/hr - HR-довідник для співробітників\n"
-                    "/contacts - Контакти спеціалістів\n\n"
-                    "Просто напишіть питання!"
-                )
-            elif text == "/hr":
-                user_name = message.get("from", {}).get("first_name", "")
-                await send_telegram_message_with_keyboard(
-                    chat_id,
-                    f"👋 *Вітаю, {user_name}!*\n\n"
-                    "Я Maya — HR асистент ТД АВ. Допоможу вам з:\n\n"
-                    "• Питаннями про зарплату та відпустки\n"
-                    "• Технічною підтримкою\n"
-                    "• Інформацією для новачків\n"
-                    "• Контактами спеціалістів\n\n"
-                    "Оберіть розділ або напишіть своє питання 👇",
-                    create_main_menu_keyboard()
-                )
-            elif text == "/contacts":
-                await fetch_and_send_hr_content(chat_id, None, 'appendix_22_contacts')
-            return
+        from models import get_db
+        db_gen = get_db()
+        db = next(db_gen)
+        
+        try:
+            if is_awaiting_phone(telegram_id) and not text.startswith("/"):
+                user_info = {
+                    "first_name": message.get("from", {}).get("first_name", ""),
+                    "last_name": message.get("from", {}).get("last_name", ""),
+                    "username": message.get("from", {}).get("username"),
+                }
+                await handle_phone_verification(chat_id, telegram_id, text.strip(), user_info, db)
+                return
+
+            if text.startswith("/"):
+                if text == "/start":
+                    await handle_start_command(chat_id, telegram_id, user_name, db)
+                elif text == "/help":
+                    await send_telegram_message(
+                        chat_id,
+                        "Я Maya - ваш AI-консультант! 🥂\n\n"
+                        "Можу розповісти про:\n"
+                        "• Бренди Торгового Дому АВ\n"
+                        "• Коктейлі та їх приготування\n"
+                        "• Маркетингові тренди\n\n"
+                        "*Команди:*\n"
+                        "/start - Реєстрація / головне меню\n"
+                        "/hr - HR-довідник для співробітників\n"
+                        "/contacts - Контакти спеціалістів\n"
+                        "/admin - Адмін-панель (для адмінів)\n\n"
+                        "Просто напишіть питання!"
+                    )
+                elif text == "/hr":
+                    user = get_user_by_telegram_id(db, telegram_id)
+                    if not user:
+                        await send_telegram_message(
+                            chat_id,
+                            "Для доступу до HR-довідника потрібно пройти верифікацію.\n\n"
+                            "Натисни /start щоб розпочати."
+                        )
+                    else:
+                        await send_telegram_message_with_keyboard(
+                            chat_id,
+                            f"👋 *Вітаю, {user.first_name or user_name}!*\n\n"
+                            "Я Maya — HR асистент ТД АВ. Допоможу вам з:\n\n"
+                            "• Питаннями про зарплату та відпустки\n"
+                            "• Технічною підтримкою\n"
+                            "• Інформацією для новачків\n"
+                            "• Контактами спеціалістів\n\n"
+                            "Оберіть розділ або напишіть своє питання 👇",
+                            create_main_menu_keyboard()
+                        )
+                elif text == "/contacts":
+                    await fetch_and_send_hr_content(chat_id, None, 'appendix_22_contacts')
+                elif text == "/admin":
+                    await handle_admin_command(chat_id, telegram_id, db)
+                elif text.startswith("/adduser"):
+                    args = text[len("/adduser"):].strip()
+                    await handle_adduser_command(chat_id, telegram_id, args, db)
+                elif text == "/logs":
+                    await handle_logs_command(chat_id, telegram_id, db)
+                elif text == "/stats":
+                    await handle_stats_command(chat_id, telegram_id, db)
+                elif text == "/listusers":
+                    await handle_listusers_command(chat_id, telegram_id, db)
+                return
+        finally:
+            try:
+                db.close()
+            except:
+                pass
         
         from services.bestbrands_video import detect_bestbrands_trigger, handle_bestbrands_request
         
