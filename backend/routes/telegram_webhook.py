@@ -673,7 +673,7 @@ async def handle_admin_button_callback(callback_query: dict, db):
     telegram_id = callback_query.get('from', {}).get('id')
     cmd = callback_data.replace('admin_cmd:', '')
 
-    await answer_callback_query(callback_id, f"Виконую {cmd}...")
+    await answer_callback(callback_id, f"Виконую {cmd}...")
 
     from services.hr_auth import (
         handle_admin_command, handle_adduser_command,
@@ -724,6 +724,24 @@ async def handle_hr_callback(callback_query: dict):
                         "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
                         create_main_menu_keyboard()
                     )
+            elif menu_id == 'training':
+                training_url = "https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit"
+                training_keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "📖 Відкрити документ", "url": training_url}],
+                        [{"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}]
+                    ]
+                }
+                training_msg = (
+                    "📚 *Навчальні матеріали*\n\n"
+                    "HR-процеси та робота в системі «Бліц»\n\n"
+                    "Покрокова інструкція щодо підбору, оформлення та звільнення співробітників."
+                )
+                if is_video_message:
+                    await delete_telegram_message(chat_id, message_id)
+                    await send_telegram_message_with_keyboard(chat_id, training_msg, training_keyboard)
+                else:
+                    await edit_telegram_message(chat_id, message_id, training_msg, training_keyboard)
             elif menu_id in MENU_TITLES:
                 if is_video_message:
                     await delete_telegram_message(chat_id, message_id)

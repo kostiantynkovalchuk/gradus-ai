@@ -23,7 +23,7 @@ def create_main_menu_keyboard() -> Dict:
         ],
         [
             {"text": "📄 Юр. документи", "callback_data": "hr_menu:legal"},
-            {"text": "📚 Навчання", "url": "https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit"}
+            {"text": "📚 Навчання", "callback_data": "hr_menu:training"}
         ],
         [
             {"text": "💬 Задати своє питання", "callback_data": "hr_ask"}

@@ -1,0 +1,194 @@
+# FIX: Make "Навчання" button work exactly like legal documents with rich preview
+
+## PROBLEM
+1. Admin buttons crash: `answer_callback_query is not defined`
+2. "Навчання" button opens direct link instead of showing rich Google Docs preview card like legal documents
+
+## REFERENCE: How legal documents work (correct behavior)
+When user clicks legal document button:
+1. Shows rich preview card with "Відкрити документ" link
+2. Displays Google Docs icon and document preview
+3. Shows document title and description
+4. Has navigation buttons below (e.g., "💼 Робочі питання", "🏠 Головне меню")
+
+## FIX 1: Admin buttons crash
+
+**File: `backend/routes/telegram_webhook.py` around line 676**
+
+**Find:**
+```python
+await answer_callback_query(callback_id, f"Виконую {cmd}...")
+```
+
+**Diagnose:** Check what other callbacks use in the same file. Look for successful callback patterns.
+
+**Likely fix options:**
+```python
+# Option A: Direct bot method
+await bot.answer_callback_query(callback_id, text=f"Виконую {cmd}...")
+
+# Option B: If there's an answer_callback function
+await answer_callback(callback_id, f"Виконую {cmd}...")
+
+# Option C: Using callback query object directly  
+await callback_query.answer(f"Виконую {cmd}...")
+```
+
+**Action:** Find how legal document callbacks successfully answer (they work in logs), copy that exact pattern.
+
+## FIX 2: Make Навчання work like legal documents
+
+### Investigation needed:
+
+1. **Find how legal documents create that rich preview**
+   - Search for code that sends Google Docs links
+   - Look for where "Відкрити документ" link is generated
+   - Find the message format that creates the preview card
+
+2. **Likely using Telegram's link preview feature**
+   - When sending message with Google Docs URL
+   - Telegram auto-generates rich preview
+   - Need correct message format
+
+### Implementation:
+
+**Step 1: Find existing legal document message format**
+
+Search codebase for where legal documents are sent. Look for:
+- Message that includes Google Docs URL
+- Format that triggers rich preview
+- Navigation buttons structure
+
+**Likely pattern (find the actual code):**
+```python
+# When sending legal document:
+message = f"""
+📄 **{document_title}**
+
+{document_description}
+
+🔗 {google_docs_url}
+"""
+
+keyboard = ReplyKeyboardMarkup([
+    ["💼 Робочі питання", "🏠 Головне меню"]
+])
+
+await update.message.reply_text(
+    message,
+    parse_mode="Markdown",
+    reply_markup=keyboard,
+    disable_web_page_preview=False  # Important: allows rich preview
+)
+```
+
+**Step 2: Apply same pattern to training document**
+
+**Find where "📚 Навчання" button is handled and replace with:**
+```python
+if message_text == "📚 Навчання":
+    # Use EXACT same format as legal documents
+    training_doc_url = "https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit"
+    
+    message = f"""
+📚 **Навчальні матеріали**
+
+Повний посібник з роботи в системі «Бліц» та HR-процесів
+
+🔗 Відкрити документ
+{training_doc_url}
+
+Покрокова інструкція щодо підбору, оформлення та звільнення співробітників.
+"""
+    
+    # Get user's keyboard
+    user = await db.fetchrow(
+        "SELECT access_level FROM hr_users WHERE telegram_id = $1",
+        update.effective_user.id
+    )
+    keyboard = get_menu_for_access_level(user["access_level"]) if user else None
+    
+    await update.message.reply_text(
+        message,
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+        disable_web_page_preview=False  # CRITICAL: enables rich preview
+    )
+    return
+```
+
+**Step 3: Verify the format**
+
+**Critical settings for rich Google Docs preview:**
+- ✅ `disable_web_page_preview=False` (default, but make explicit)
+- ✅ Include full Google Docs URL in message
+- ✅ Use Markdown formatting
+- ✅ Include descriptive text
+
+**Alternative if above doesn't work - use inline keyboard:**
+```python
+# If rich preview doesn't work, use inline button like legal docs might:
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+keyboard_inline = InlineKeyboardMarkup([
+    [InlineKeyboardButton("📖 Відкрити документ", url=training_doc_url)]
+])
+
+keyboard_reply = get_menu_for_access_level(user["access_level"])
+
+await update.message.reply_text(
+    "📚 **Навчальні матеріали**\n\n"
+    "HR-процеси та робота в системі «Бліц»\n\n"
+    "Покрокова інструкція щодо підбору, оформлення та звільнення співробітників.",
+    parse_mode="Markdown",
+    reply_markup=keyboard_inline  # Inline button for document
+)
+
+# Send keyboard separately if needed
+await update.message.reply_text(
+    "Меню:",
+    reply_markup=keyboard_reply
+)
+```
+
+## ACTION STEPS
+
+1. **Find the exact code** where legal documents are sent successfully
+2. **Copy that exact pattern** - don't reinvent
+3. **Apply to training document** with same format
+4. **Fix admin callback function name** using working callback pattern
+5. **Test both fixes**
+
+## TESTING CHECKLIST
+
+**Навчання button:**
+1. Click "📚 Навчання" 
+2. Should show rich preview card (like screenshot)
+3. "Відкрити документ" link should be visible
+4. Google Docs icon and preview should appear
+5. Navigation buttons below
+6. Clicking link opens Google Doc in browser
+
+**Admin buttons:**
+1. Click "👨‍💻 Admin" → no crash
+2. Click "📊 Stats" → works
+3. Click "🔍 Logs" → works
+4. No `NameError` in logs
+
+## WHERE TO LOOK
+
+**Files to check:**
+- `backend/routes/telegram_webhook.py` - main webhook handler
+- `backend/routes/hr_routes.py` or similar - where legal docs might be handled
+- Search for "Відкрити документ" in codebase
+- Search for "Юридичні документи" handler
+
+**Search patterns:**
+```bash
+grep -r "Відкрити документ" backend/
+grep -r "disable_web_page_preview" backend/
+grep -r "Юридичні документи" backend/
+grep -r "google.com/document" backend/
+```
+
+FIND THE LEGAL DOCUMENTS CODE AND REPLICATE IT EXACTLY FOR TRAINING.
