@@ -1,0 +1,63 @@
+# TASK: Remove Spanish phone format from user-facing messages
+
+## CONTEXT
+The welcome message currently shows both Ukrainian (+380) and Spanish (+34) phone formats, but this confuses Ukrainian employees. Only Ukrainian format should be shown to regular users.
+
+## CHANGES NEEDED
+
+**File: `hr_auth_handlers.py`**
+
+Find the `start_handler` function where it sends the phone request message to new users.
+
+**Current code:**
+```python
+await update.message.reply_text(
+    "👋 Привіт! Я Maya, HR-асистент Торгового Дому АВ.\n\n"
+    "Для доступу до бота підтвердь, що ти співробітник компанії.\n\n"
+    "📱 Введи свій номер телефону в форматі:\n"
+    "+380XXXXXXXXX або +34XXXXXXXXX\n\n"
+    "Наприклад: +380671234567"
+)
+```
+
+**Replace with:**
+```python
+await update.message.reply_text(
+    "👋 Привіт! Я Maya, HR-асистент Торгового Дому АВ.\n\n"
+    "Для доступу до бота підтвердь, що ти співробітник компанії.\n\n"
+    "📱 Введи свій номер телефону в форматі:\n"
+    "+380XXXXXXXXX\n\n"
+    "Наприклад: +380671234567"
+)
+```
+
+**Also update the error message in `phone_verification_handler`:**
+
+**Current code:**
+```python
+if not re.match(r'^\+380\d{9}$', phone) and not re.match(r'^\+34\d{9}$', phone):
+    await update.message.reply_text(
+        "❌ Невірний формат номера.\n\n"
+        "Використовуй формат:\n"
+        "• +380XXXXXXXXX (Україна)\n"
+        "• +34XXXXXXXXX (Іспанія)\n\n"
+        "Наприклад: +380671234567"
+    )
+```
+
+**Replace with:**
+```python
+if not re.match(r'^\+380\d{9}$', phone) and not re.match(r'^\+34\d{9}$', phone):
+    await update.message.reply_text(
+        "❌ Невірний формат номера.\n\n"
+        "Використовуй формат: +380XXXXXXXXX\n\n"
+        "Наприклад: +380671234567"
+    )
+```
+
+**IMPORTANT:** Keep the Spanish phone validation in the code (`not re.match(r'^\+34\d{9}$', phone)`) - just remove it from the user-facing messages. This ensures:
+- Konstantin's +34 number still works (via whitelist)
+- Ukrainian employees only see relevant instructions
+- Code still accepts both formats technically
+
+Make these changes and redeploy.
