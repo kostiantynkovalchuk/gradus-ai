@@ -277,6 +277,12 @@ async def handle_verification_failure(db: Session, chat_id: int, telegram_id: in
             "⚠️ Не вдалося зв'язатися з сервером.\n\n"
             "Спробуй ще раз через хвилину. Напиши /start"
         )
+    elif error == "http_401":
+        user_message = (
+            "⚠️ Помилка авторизації сервера верифікації.\n\n"
+            "Адміністратори вже повідомлені. Спробуй пізніше або зверніся в HR-відділ: hr@vinkom.net"
+        )
+        logger.error(f"SED API 401 Unauthorized - API key may be invalid or expired")
     elif error == "not_configured":
         user_message = (
             "⚠️ Система верифікації тимчасово недоступна.\n\n"
@@ -421,12 +427,14 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
             "*Формат:*\n"
             "`/adduser +380XXXXXXXXX Ім'я Прізвище рівень Причина`\n\n"
             "*Рівні доступу:*\n"
-            "• `contractor` - Підрядник\n"
+            "• `employee` - співробітник TD AV\n"
+            "• `contractor` - підрядник\n"
             "• `admin_hr` - HR адміністратор\n"
             "• `admin_it` - IT адміністратор\n"
-            "• `developer` - Розробник\n\n"
-            "*Приклад:*\n"
-            "`/adduser +380671234567 Олег Петренко contractor Зовнішній консультант`"
+            "• `developer` - розробник системи\n\n"
+            "*Приклади:*\n"
+            "`/adduser +380671234567 Олег Петренко employee Торговий представник`\n"
+            "`/adduser +380501234567 Марія Іванова contractor Зовнішній консультант`"
         )
         return
 
@@ -438,12 +446,22 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
     reason = " ".join(parts[4:]) if len(parts) > 4 else "Додано вручну"
 
     if not is_valid_phone(phone):
-        await send_message(chat_id, "❌ Невірний формат телефону. Використовуй +380XXXXXXXXX або +34XXXXXXXXX")
+        await send_message(chat_id, "❌ Невірний формат телефону. Використовуй +380XXXXXXXXX")
         return
 
-    valid_levels = ["contractor", "admin_hr", "admin_it", "developer"]
+    valid_levels = ["employee", "contractor", "admin_hr", "admin_it", "developer"]
     if access_level_new not in valid_levels:
-        await send_message(chat_id, f"❌ Невірний рівень доступу. Доступні: {', '.join(valid_levels)}")
+        await send_message(
+            chat_id,
+            "❌ Невірний рівень доступу. Доступні:\n"
+            "• `employee` - співробітник\n"
+            "• `contractor` - підрядник\n"
+            "• `admin_hr` - HR адміністратор\n"
+            "• `admin_it` - IT адміністратор\n"
+            "• `developer` - розробник\n\n"
+            "Приклад:\n"
+            "`/adduser +380671234567 Іван Іванов employee Співробітник відділу продажів`"
+        )
         return
 
     try:

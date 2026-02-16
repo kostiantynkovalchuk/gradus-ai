@@ -1,0 +1,305 @@
+# URGENT: Fix 3 Critical Maya HR Bugs
+
+## BUG 1: Fix SED API 401 Unauthorized Error
+
+**Problem:** SED API returns HTTP 401 - authentication failing
+
+**Investigation:**
+1. Check current API key in environment:
+```bash
+# In Render dashboard, check:
+SED_API_KEY=f10e2b75-2c4c-4e26-be72-98d1a6aafa4c
+```
+
+2. Test SED API manually:
+```bash
+curl -X POST https://api-sed.tdav.net.ua/api/employees \
+  -H "X-API-Key: f10e2b75-2c4c-4e26-be72-98d1a6aafa4c" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "+380671234567"}'
+```
+
+**Fix:**
+- If key is wrong → Get correct key from AVTD IT and update in Render
+- If endpoint changed → Update SED_API_URL
+- Add better error handling to show specific error to user
+
+---
+
+## BUG 2: Add "employee" to /adduser Access Levels
+
+**Problem:** /adduser command rejects "employee" access level
+
+**Find the validation code:**
+```bash
+grep -r "contractor, admin_hr, admin_it, developer" backend/
+# Or
+grep -r "Невірний рівень доступу" backend/
+```
+
+**Fix:**
+
+**File: Likely in `backend/routes/hr_admin_commands.py` or similar**
+
+**Find this:**
+```python
+ALLOWED_ACCESS_LEVELS = ["contractor", "admin_hr", "admin_it", "developer"]
+
+# Or validation like:
+if access_level not in ["contractor", "admin_hr", "admin_it", "developer"]:
+    return "❌ Невірний рівень доступу..."
+```
+
+**Change to:**
+```python
+ALLOWED_ACCESS_LEVELS = ["employee", "contractor", "admin_hr", "admin_it", "developer"]
+
+# Update error message:
+if access_level not in ALLOWED_ACCESS_LEVELS:
+    return (
+        "❌ Невірний рівень доступу. Доступні:\n"
+        "• employee - звичайний співробітник\n"
+        "• contractor - зовнішній консультант\n"
+        "• admin_hr - HR адміністратор\n"
+        "• admin_it - IT адміністратор\n"
+        "• developer - розробник\n\n"
+        "Приклад:\n"
+        "/adduser +380671234567 Іван Іванов employee Співробітник відділу продажів"
+    )
+```
+
+**Update help message for /adduser:**
+```python
+async def adduser_help():
+    return """
+📝 **Команда /adduser**
+
+Додати користувача вручну (для HR адміністраторів)
+
+**Формат:**
+/adduser +380XXXXXXXXX Ім'я Прізвище access_level причина
+
+**Рівні доступу:**
+- `employee` - звичайний співробітник TD AV
+- `contractor` - зовнішній консультант
+- `admin_hr` - HR адміністратор
+- `admin_it` - IT адміністратор  
+- `developer` - розробник системи
+
+**Приклади:**
+
+Додати співробітника:
+/adduser +380671234567 Олег Петренко employee Торговий представник
+
+Додати консультанта:
+/adduser +380501234567 Марія Іванова contractor Зовнішній HR-консультант
+"""
+```
+
+---
+
+## BUG 3: RAG Not Working - Maya Ignores Knowledge Base
+
+**Problem:** Maya responds with generic info instead of using AVTD training documents
+
+**Investigation Steps:**
+
+### Step 1: Check if Training Document is in Database
+```sql
+-- Connect to PostgreSQL and run:
+SELECT id, section, subsection, title 
+FROM hr_content 
+WHERE section = 'training' 
+  AND subsection = 'hr_processes_blitz';
+
+-- Check if embeddings exist:
+SELECT COUNT(*) FROM hr_embeddings 
+WHERE content_id IN (
+  SELECT id FROM hr_content WHERE section = 'training'
+);
+```
+
+### Step 2: Check RAG Pipeline Code
+
+**Find the chat/query processing code:**
+```bash
+grep -r "openai.com/v1/embeddings" backend/
+grep -r "pinecone" backend/
+grep -r "rag" backend/ -i
+```
+
+**Look for these files:**
+- `backend/services/hr_rag_service.py`
+- `backend/routes/chat_endpoints.py`
+- `backend/services/hr_query_processor.py`
+
+### Step 3: Verify RAG is Called
+
+**Check if RAG search happens before Claude API call:**
+
+**Correct flow should be:**
+```python
+# 1. Generate embedding for user query
+embedding = await openai.embeddings.create(
+    model="text-embedding-3-small",
+    input=user_message
+)
+
+# 2. Search Pinecone for relevant content
+results = pinecone_index.query(
+    vector=embedding.data[0].embedding,
+    top_k=3,
+    include_metadata=True,
+    namespace="hr_content"  # Make sure namespace is correct!
+)
+
+# 3. Extract relevant context
+context = "\n\n".join([
+    match.metadata.get("content", "") 
+    for match in results.matches 
+    if match.score > 0.7  # Only high-relevance matches
+])
+
+# 4. Build system prompt with context
+system_prompt = f"""
+Ти Maya, HR-асистент Торгового Дому АВ.
+
+ВАЖЛИВО: Використовуй ТІЛЬКИ інформацію з наданого контексту для відповіді на питання про TD AV.
+
+КОНТЕКСТ З ДОКУМЕНТІВ TD AV:
+{context}
+
+Якщо інформації немає в контексті, скажи що потрібно звернутися в HR-відділ.
+"""
+
+# 5. Call Claude with context
+response = await claude_api.messages.create(
+    model="claude-haiku-4-5-20251001",
+    system=system_prompt,
+    messages=[{"role": "user", "content": user_message}]
+)
+```
+
+### Step 4: Check Pinecone Namespace
+
+**Problem might be wrong namespace:**
+```python
+# Check if code uses correct namespace
+results = pinecone_index.query(
+    vector=embedding,
+    namespace="hr_content"  # ← Check this!
+)
+
+# List all namespaces to verify:
+stats = pinecone_index.describe_index_stats()
+print(stats.namespaces)  # Should show 'hr_content' with vectors
+```
+
+### Step 5: Add Debug Logging
+
+**Add logging to RAG pipeline:**
+```python
+logger.info(f"🔍 RAG Search for query: {user_message[:50]}...")
+logger.info(f"📊 Found {len(results.matches)} matches")
+logger.info(f"🎯 Top match score: {results.matches[0].score if results.matches else 0}")
+logger.info(f"📝 Context length: {len(context)} chars")
+```
+
+### Step 6: Verify Training Content Added to Pinecone
+
+**Re-process training document if missing:**
+```python
+# In hr_content_processor.py or similar:
+
+async def reprocess_training_content():
+    """Re-add training document to Pinecone"""
+    
+    # Get training content from database
+    content = await db.fetchrow("""
+        SELECT id, content, title 
+        FROM hr_content 
+        WHERE section = 'training' 
+          AND subsection = 'hr_processes_blitz'
+    """)
+    
+    if not content:
+        logger.error("Training content not found in database!")
+        return
+    
+    # Generate embedding
+    embedding = await openai.embeddings.create(
+        model="text-embedding-3-small",
+        input=f"{content['title']}\n\n{content['content']}"
+    )
+    
+    # Upsert to Pinecone
+    pinecone_index.upsert(
+        vectors=[(
+            f"hr_content_{content['id']}",
+            embedding.data[0].embedding,
+            {
+                "content_id": content['id'],
+                "content": content['content'][:1000],  # First 1000 chars
+                "title": content['title'],
+                "section": "training"
+            }
+        )],
+        namespace="hr_content"
+    )
+    
+    logger.info(f"✅ Re-added training content {content['id']} to Pinecone")
+```
+
+---
+
+## TESTING CHECKLIST
+
+After fixes:
+
+**BUG 1 - SED API:**
+- [ ] Employee with valid TD AV phone registers successfully
+- [ ] No more 401 errors in logs
+- [ ] SED API returns employee data
+
+**BUG 2 - /adduser:**
+- [ ] `/adduser +380XXX Name Surname employee reason` works
+- [ ] Error message shows all 5 access levels
+- [ ] Help shows examples for employee level
+
+**BUG 3 - RAG:**
+- [ ] Ask "як оформити відпустку?" → Maya mentions СЗ, Бліц, шаблони
+- [ ] Ask "як звільнитися?" → Maya references training document
+- [ ] Logs show: RAG search → high relevance scores → context included
+- [ ] Query about TD AV brands → mentions GREENDAY, HELSINKI, etc.
+
+---
+
+## PRIORITY ORDER
+
+1. **FIX BUG 1 FIRST** (SED API) - Blocks all new registrations
+2. **FIX BUG 2** (adduser) - Blocks HR from adding employees manually
+3. **FIX BUG 3** (RAG) - Makes Maya give wrong/generic info
+
+---
+
+## INVESTIGATION COMMANDS
+
+Run these to diagnose:
+```bash
+# Check environment variables
+env | grep SED
+
+# Test SED API
+curl -X POST https://api-sed.tdav.net.ua/api/employees \
+  -H "X-API-Key: $SED_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "+380671234567"}'
+
+# Check training content in DB
+psql $DATABASE_URL -c "SELECT section, COUNT(*) FROM hr_content GROUP BY section;"
+
+# Check Pinecone stats
+python -c "import pinecone; pinecone.init(); print(pinecone.Index('maya-hr').describe_index_stats())"
+```
+
+IMPLEMENT ALL THREE FIXES AND TEST THOROUGHLY.
