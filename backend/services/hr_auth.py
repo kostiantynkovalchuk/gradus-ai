@@ -7,19 +7,21 @@ from sqlalchemy.orm import Session
 
 from models.hr_auth_models import HRUser, HRWhitelist, VerificationLog
 from services.hr_sed_service import sed_service
+from utils.phone_normalizer import normalize_phone, format_for_display
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 
-PHONE_REGEX_UA = re.compile(r'^\+380\d{9}$')
-PHONE_REGEX_ES = re.compile(r'^\+34\d{9}$')
-
 PENDING_VERIFICATIONS = {}
 
 
 def is_valid_phone(phone: str) -> bool:
-    return bool(PHONE_REGEX_UA.match(phone) or PHONE_REGEX_ES.match(phone))
+    try:
+        normalized = normalize_phone(phone)
+        return len(normalized) == 12
+    except ValueError:
+        return False
 
 
 def get_user_by_telegram_id(db: Session, telegram_id: int):
@@ -81,9 +83,10 @@ async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: 
         chat_id,
         "👋 Привіт! Я Maya, HR-асистент Торгового Дому АВ.\n\n"
         "Для доступу до бота підтвердь, що ти співробітник компанії.\n\n"
-        "📱 Введи свій номер телефону в форматі:\n"
-        "+380XXXXXXXXX\n\n"
-        "Наприклад: +380671234567"
+        "📱 Введи свій номер телефону у будь-якому форматі:\n"
+        "✅ +380671234567\n"
+        "✅ 0671234567\n"
+        "✅ 380671234567"
     )
     return True
 
@@ -94,33 +97,49 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
         await send_message(
             chat_id,
             "❌ Невірний формат номера.\n\n"
-            "Використовуй формат: +380XXXXXXXXX\n\n"
-            "Наприклад: +380671234567"
+            "📱 Введіть український номер у будь-якому форматі:\n"
+            "✅ +380671234567\n"
+            "✅ 0671234567\n"
+            "✅ 380671234567\n\n"
+            "Спробуйте ще раз:"
         )
         return
 
-    whitelist_entry = db.query(HRWhitelist).filter(
-        HRWhitelist.phone == phone,
-        HRWhitelist.is_active == True
-    ).first()
+    try:
+        phone_normalized = normalize_phone(phone)
+    except ValueError:
+        phone_normalized = phone
+    phone_display = format_for_display(phone_normalized)
+
+    whitelist_entry = None
+    for fmt in [phone, phone_normalized, f"+{phone_normalized}", f"0{phone_normalized[3:]}" if len(phone_normalized) == 12 else None]:
+        if fmt is None:
+            continue
+        entry = db.query(HRWhitelist).filter(
+            HRWhitelist.phone == fmt,
+            HRWhitelist.is_active == True
+        ).first()
+        if entry:
+            whitelist_entry = entry
+            break
 
     if whitelist_entry:
-        logger.info(f"Whitelist match for {phone}: {whitelist_entry.access_level}")
-        await create_whitelisted_user(db, chat_id, telegram_id, phone, whitelist_entry)
+        logger.info(f"Whitelist match for {phone_display}: {whitelist_entry.access_level}")
+        await create_whitelisted_user(db, chat_id, telegram_id, phone_normalized, whitelist_entry)
         set_awaiting_phone(telegram_id, False)
         return
 
-    await send_message(chat_id, "🔍 Перевіряю номер в базі співробітників...")
+    await send_message(chat_id, f"🔍 Перевіряю номер {phone_display} в базі співробітників...")
 
-    result = await sed_service.verify_employee(phone)
+    result = await sed_service.verify_employee(phone_normalized)
 
     if result["verified"]:
-        logger.info(f"SED verification success for {phone}")
-        await create_sed_verified_user(db, chat_id, telegram_id, phone, result["employee"])
+        logger.info(f"SED verification success for {phone_display}")
+        await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, result["employee"])
         set_awaiting_phone(telegram_id, False)
     else:
-        logger.warning(f"Verification failed for {phone}: {result.get('error')}")
-        await handle_verification_failure(db, chat_id, telegram_id, phone, result, user_info)
+        logger.warning(f"Verification failed for {phone_display}: {result.get('error')}")
+        await handle_verification_failure(db, chat_id, telegram_id, phone_normalized, result, user_info)
         set_awaiting_phone(telegram_id, False)
 
 
@@ -438,16 +457,25 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
         )
         return
 
-    phone = parts[0]
+    phone_raw = parts[0]
     first_name = parts[1]
     last_name = parts[2]
     full_name = f"{first_name} {last_name}"
     access_level_new = parts[3]
     reason = " ".join(parts[4:]) if len(parts) > 4 else "Додано вручну"
 
-    if not is_valid_phone(phone):
-        await send_message(chat_id, "❌ Невірний формат телефону. Використовуй +380XXXXXXXXX")
+    if not is_valid_phone(phone_raw):
+        await send_message(
+            chat_id,
+            "❌ Невірний формат телефону.\n"
+            "Підтримуються: +380XXXXXXXXX, 0XXXXXXXXX, 380XXXXXXXXX"
+        )
         return
+
+    try:
+        phone = normalize_phone(phone_raw)
+    except ValueError:
+        phone = phone_raw
 
     valid_levels = ["employee", "contractor", "admin_hr", "admin_it", "developer"]
     if access_level_new not in valid_levels:
