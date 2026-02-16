@@ -1,0 +1,197 @@
+# URGENT: Fix Maya HR RAG - Training Documents Not Found
+
+## PROBLEM EVIDENCE
+User asked: "Як працювати в бліц?"
+Maya responded: "Вибачте, я не знайшов відповідної інформації в базі знань"
+
+BUT: Training document exists with title "Робота в системі «Бліц» та HR-процеси"
+This is a direct keyword match - RAG should find it instantly.
+
+## FULL DIAGNOSTIC AND FIX
+
+### Step 1: Check Database
+```sql
+-- Check if training content exists
+SELECT id, section, subsection, title, LENGTH(content) as content_length
+FROM hr_content 
+WHERE section = 'training' AND subsection = 'hr_processes_blitz';
+
+-- Check if ANY embeddings exist for training
+SELECT content_id, COUNT(*) as embedding_count
+FROM hr_embeddings
+WHERE content_id IN (
+  SELECT id FROM hr_content WHERE section = 'training'
+)
+GROUP BY content_id;
+```
+
+### Step 2: Find RAG Implementation
+Search codebase for these files/patterns:
+- `backend/services/hr_rag_service.py` (RAG search logic)
+- `backend/routes/chat_endpoints.py` (message processing)
+- Look for: `pinecone`, `openai.embeddings`, `query`, `vector`
+
+### Step 3: Trace Message Flow
+Find where Maya processes Telegram messages:
+1. Message arrives → `telegram_webhook.py`
+2. Extract user text
+3. **WHERE IS RAG CALLED?** (find this!)
+4. Generate embedding
+5. Query Pinecone
+6. Extract context
+7. Call Claude with context
+
+### Step 4: Common Issues to Check
+
+**Issue A: Training docs never embedded**
+```python
+# Check if this code exists and was run:
+from backend.services.hr_content_processor import process_training_content
+
+# If not, we need to add embeddings manually
+```
+
+**Issue B: RAG not called in message handler**
+```python
+# WRONG (no RAG):
+async def handle_message(message):
+    response = await claude_api.call(message)
+    return response
+
+# CORRECT (with RAG):
+async def handle_message(message):
+    # 1. Generate embedding
+    embedding = await openai.embeddings.create(input=message)
+    
+    # 2. Search Pinecone
+    results = pinecone_index.query(
+        vector=embedding.data[0].embedding,
+        namespace="hr_content",  # CHECK THIS!
+        top_k=3
+    )
+    
+    # 3. Extract context
+    context = "\n".join([r.metadata.get("content") for r in results.matches])
+    
+    # 4. Call Claude with context
+    system_prompt = f"Ти Maya. Використовуй ТІЛЬКИ цей контекст: {context}"
+    response = await claude_api.call(system_prompt, message)
+    return response
+```
+
+**Issue C: Wrong namespace**
+```python
+# Check what namespace is used:
+results = pinecone_index.query(namespace="???")
+
+# Should be: "hr_content" or "" (default)
+# List all namespaces to verify:
+stats = pinecone_index.describe_index_stats()
+print(stats.namespaces)  # Show what exists
+```
+
+**Issue D: Context not passed to Claude**
+```python
+# Check Claude API call - does it include RAG context?
+# Look for system prompt or messages array
+```
+
+### Step 5: Fix Based on Findings
+
+**If embeddings missing:**
+1. Run content processor on training document
+2. Generate embeddings
+3. Upload to Pinecone with correct namespace
+
+**If RAG not called:**
+1. Add RAG search to message handler
+2. Insert between message receipt and Claude call
+3. Pass results as context
+
+**If wrong namespace:**
+1. Update query to use correct namespace
+2. Or re-upload with correct namespace
+
+**If context not passed:**
+1. Update Claude system prompt
+2. Include RAG results in messages
+
+## OUTPUT REQUIRED
+
+1. Show me the diagnostic results:
+   - Does training content exist in DB? (yes/no + ID)
+   - Do embeddings exist? (yes/no + count)
+   - Where is RAG called in code? (file:line)
+   - What namespace is used? (name)
+
+2. Implement the fix:
+   - Add missing embeddings if needed
+   - Connect RAG to message handler if missing
+   - Fix namespace if wrong
+   - Update system prompt to use context
+
+3. Add logging for debugging:
+```python
+logger.info(f"🔍 RAG search for: {message[:50]}")
+logger.info(f"📊 Found {len(results.matches)} results")
+logger.info(f"🎯 Top result score: {results.matches[0].score}")
+logger.info(f"📝 Context length: {len(context)} chars")
+```
+
+4. Test the fix:
+   - Query: "Як працювати в бліц?"
+   - Should now return: Content about Blitz system from training doc
+
+## CRITICAL
+This is blocking 800 employees from getting correct answers. Fix thoroughly and test before declaring done.
+```
+
+**Estimated cost:** $12-18 (comprehensive diagnostic + fix + testing)
+
+---
+
+## **🎯 WHAT AGENT SHOULD DO**
+
+**Phase 1: Diagnostic (~$5-7)**
+- Check database for training content
+- Find RAG implementation
+- Identify what's broken
+
+**Phase 2: Fix (~$5-8)**
+- Add missing embeddings, OR
+- Connect RAG to message flow, OR
+- Fix namespace/context issues
+
+**Phase 3: Testing (~$2-3)**
+- Test query: "Як працювати в бліц?"
+- Verify response includes Blitz content
+- Add logging for future debugging
+
+**Total:** ~$12-18 of your $92-95 remaining credits
+
+---
+
+## **✅ AFTER THIS FIX**
+
+**Test these queries to verify RAG works:**
+
+1. "Як оформити відпустку?" → Should mention СЗ, шаблон, Бліц
+2. "Що таке СЗ?" → Should say "службова записка"
+3. "Хто такий ДФ?" → Should say "директор філії"
+4. "Як звільнитися?" → Should reference training doc process
+5. "Робота в Бліц" → Should explain Blitz system
+
+**All should return AVTD-specific answers, not generic HR advice!**
+
+---
+
+## **📊 FINAL BUG STATUS UPDATE**
+```
+✅ Bug 2: /adduser - FIXED ($3-5 spent)
+⚠️ Bug 1: SED API - Needs new key from AVTD IT (error handling added)
+🔧 Bug 3: RAG - CONFIRMED BROKEN, fixing now (~$12-18)
+
+Total spent: $15-23 of $100
+Remaining: $77-85
+
+After fixes: All 800 employees get accurate AVTD answers ✅

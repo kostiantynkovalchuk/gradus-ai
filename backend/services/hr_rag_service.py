@@ -22,7 +22,7 @@ anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
-RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.7"))
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.3"))
 
 
 @dataclass
@@ -110,9 +110,13 @@ class HRRagService:
                     metadata=metadata
                 ))
             
+            all_count = len(search_results)
+            if search_results:
+                logger.info(f"🎯 Top match score: {search_results[0].score:.4f} | Title: {search_results[0].title}")
+            
             search_results = [r for r in search_results if r.score >= RAG_SIMILARITY_THRESHOLD]
             
-            logger.info(f"Semantic search for '{query[:50]}...' returned {len(search_results)} results")
+            logger.info(f"Semantic search for '{query[:50]}...' returned {all_count} raw, {len(search_results)} above threshold ({RAG_SIMILARITY_THRESHOLD})")
             return search_results
             
         except Exception as e:
@@ -222,8 +226,16 @@ class HRRagService:
             return preset_answer
         
         search_results = await self.semantic_search(query, top_k=5)
+        logger.info(f"🔍 RAG semantic search for: '{query[:50]}' -> {len(search_results)} results above threshold")
         
         if not search_results:
+            logger.info(f"🔄 Falling back to keyword search for: '{query[:50]}'")
+            search_results = await self._keyword_search(query)
+            search_results = [r for r in search_results if r.score > 0]
+            logger.info(f"📝 Keyword search returned {len(search_results)} results")
+        
+        if not search_results:
+            logger.warning(f"❌ No results found for query: '{query[:50]}'")
             return AnswerResponse(
                 text="Вибачте, я не знайшов відповідної інформації в базі знань. Спробуйте переформулювати питання або зверніться до HR-відділу.",
                 sources=[],
