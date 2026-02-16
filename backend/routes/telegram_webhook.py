@@ -157,6 +157,12 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
         elif "message" in data:
             message = data["message"]
             text = message.get("text", "")
+
+            if message.get("document") and not text:
+                logger.info(f"📎 Document received: {message['document'].get('file_name', 'unknown')}")
+                await handle_document_upload(message, db)
+                return {"ok": True}
+
             logger.info(f"💬 Message from user: {text[:50]}")
             
             await process_telegram_message(message)
@@ -1104,4 +1110,146 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str):
             chat_id,
             "❌ Не вдалося обробити запит. Зверніться до HR департаменту.",
             create_main_menu_keyboard()
+        )
+
+
+def _extract_text_from_bytes(content: bytes, filename: str) -> str:
+    filename_lower = filename.lower()
+    if filename_lower.endswith('.txt'):
+        return content.decode('utf-8', errors='replace')
+    elif filename_lower.endswith('.pdf'):
+        import io
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(content))
+        return '\n'.join(page.extract_text() or '' for page in reader.pages)
+    elif filename_lower.endswith('.docx'):
+        import io
+        from docx import Document as DocxDocument
+        doc = DocxDocument(io.BytesIO(content))
+        return '\n'.join(p.text for p in doc.paragraphs)
+    else:
+        return content.decode('utf-8', errors='replace')
+
+
+ALLOWED_DOC_EXTENSIONS = {'.txt', '.pdf', '.docx', '.md'}
+MAX_DOC_SIZE = 5 * 1024 * 1024
+
+
+async def handle_document_upload(message: dict, db: Session):
+    chat_id = message.get("chat", {}).get("id")
+    telegram_id = message.get("from", {}).get("id")
+    doc_info = message.get("document", {})
+    file_name = doc_info.get("file_name", "unknown")
+    file_size = doc_info.get("file_size", 0)
+    file_id = doc_info.get("file_id")
+    caption = message.get("caption", "")
+
+    access = get_access_level(db, telegram_id)
+    if not access or access not in ("developer", "admin_hr", "admin_it"):
+        await send_telegram_message(
+            chat_id,
+            "⚠️ Завантаження документів доступне лише для HR-адміністраторів."
+        )
+        return
+
+    ext = '.' + file_name.rsplit('.', 1)[-1].lower() if '.' in file_name else ''
+    if ext not in ALLOWED_DOC_EXTENSIONS:
+        await send_telegram_message(
+            chat_id,
+            f"⚠️ Непідтримуваний формат: *{ext}*\n"
+            f"Підтримуються: {', '.join(ALLOWED_DOC_EXTENSIONS)}"
+        )
+        return
+
+    if file_size > MAX_DOC_SIZE:
+        await send_telegram_message(chat_id, "⚠️ Файл завеликий (макс. 5 МБ).")
+        return
+
+    await send_typing_action(chat_id)
+
+    try:
+        bot_token = TELEGRAM_MAYA_BOT_TOKEN
+        async with httpx.AsyncClient() as client:
+            file_resp = await client.get(
+                f"https://api.telegram.org/bot{bot_token}/getFile",
+                params={"file_id": file_id},
+                timeout=10.0
+            )
+            if file_resp.status_code != 200:
+                logger.error(f"Telegram getFile failed: {file_resp.status_code} {file_resp.text[:200]}")
+                await send_telegram_message(chat_id, "❌ Не вдалося отримати файл від Telegram.")
+                return
+            file_data = file_resp.json()
+            if not file_data.get("ok"):
+                logger.error(f"Telegram getFile error: {file_data}")
+                await send_telegram_message(chat_id, "❌ Не вдалося отримати файл.")
+                return
+            file_path = file_data.get("result", {}).get("file_path")
+            if not file_path:
+                await send_telegram_message(chat_id, "❌ Не вдалося отримати файл.")
+                return
+
+            dl_resp = await client.get(
+                f"https://api.telegram.org/file/bot{bot_token}/{file_path}",
+                timeout=30.0
+            )
+            if dl_resp.status_code != 200:
+                logger.error(f"Telegram file download failed: {dl_resp.status_code}")
+                await send_telegram_message(chat_id, "❌ Не вдалося завантажити файл.")
+                return
+            content_bytes = dl_resp.content
+
+        text_content = _extract_text_from_bytes(content_bytes, file_name)
+
+        if len(text_content.strip()) < 50:
+            await send_telegram_message(
+                chat_id,
+                "⚠️ Не вдалося витягти текст з документа або текст занадто короткий."
+            )
+            return
+
+        title = caption.strip() if caption.strip() else file_name.rsplit('.', 1)[0]
+
+        from routes.hr_routes import hr_pinecone_index
+        from services.hr_rag_service import get_hr_rag_service
+
+        rag_service = get_hr_rag_service(
+            pinecone_index=hr_pinecone_index,
+            db_session=db
+        )
+
+        result = await rag_service.ingest_document(
+            title=title,
+            content=text_content,
+            category="uploaded",
+            subcategory="telegram_upload"
+        )
+
+        if result.get('status') == 'success':
+            await send_telegram_message(
+                chat_id,
+                f"✅ *Документ завантажено до бази знань!*\n\n"
+                f"📄 *Назва:* {title}\n"
+                f"🆔 *ID:* `{result['content_id']}`\n"
+                f"📏 *Розмір:* {result['content_length']} символів\n\n"
+                f"Документ тепер доступний через пошук Maya."
+            )
+            logger.info(f"Document ingested via Telegram: {result['content_id']} by user {telegram_id}")
+        elif result.get('status') == 'partial':
+            await send_telegram_message(
+                chat_id,
+                f"⚠️ *Документ збережено частково*\n\n"
+                f"📄 *Назва:* {title}\n"
+                f"🆔 *ID:* `{result['content_id']}`\n\n"
+                f"Помилка: {result.get('error', 'unknown')}\n"
+                f"Текст збережено в БД, але семантичний пошук може не працювати."
+            )
+        else:
+            await send_telegram_message(chat_id, "❌ Не вдалося завантажити документ.")
+
+    except Exception as e:
+        logger.error(f"Document upload error: {e}", exc_info=True)
+        await send_telegram_message(
+            chat_id,
+            "❌ Помилка при обробці документа. Спробуйте ще раз."
         )

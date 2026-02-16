@@ -700,6 +700,72 @@ class HRRagService:
             return []
 
 
+    async def ingest_document(
+        self,
+        title: str,
+        content: str,
+        category: str = "uploaded",
+        subcategory: str = "hr_admin",
+        content_type: str = "document",
+        keywords: list = None
+    ) -> Dict:
+        if not self.db_session or not self.pinecone_index:
+            raise ValueError("Database session and Pinecone index required for ingestion")
+
+        import re as _re
+        import uuid as _uuid
+        slug = _re.sub(r'[^a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9]+', '_', title.lower())[:50].strip('_')
+        uid = _uuid.uuid4().hex[:8]
+        content_id = f"doc_{slug}_{uid}"
+
+        from models.hr_models import HRContent
+        new_doc = HRContent(
+            content_id=content_id,
+            content_type=content_type,
+            title=title,
+            content=content,
+            category=category,
+            subcategory=subcategory,
+            keywords=keywords or []
+        )
+        self.db_session.add(new_doc)
+        self.db_session.commit()
+        logger.info(f"DB insert OK: {content_id}")
+
+        try:
+            embedding = self._get_embedding(content[:8000])
+
+            preview = content[:800].replace('\n', ' ')
+            self.pinecone_index.upsert(
+                vectors=[(
+                    f"hr_content_{content_id}",
+                    embedding,
+                    {
+                        'content_id': content_id,
+                        'title': title,
+                        'category': category,
+                        'text': preview
+                    }
+                )],
+                namespace=self.HR_NAMESPACE
+            )
+            logger.info(f"Pinecone upsert OK: {content_id}")
+        except Exception as e:
+            logger.error(f"Embedding/Pinecone error for {content_id}: {e}")
+            return {
+                'content_id': content_id,
+                'status': 'partial',
+                'error': f'DB OK, but embedding failed: {e}'
+            }
+
+        return {
+            'content_id': content_id,
+            'status': 'success',
+            'title': title,
+            'content_length': len(content)
+        }
+
+
 def get_hr_rag_service(pinecone_index=None, db_session=None) -> HRRagService:
     """Factory function to create HR RAG service instance"""
     return HRRagService(pinecone_index=pinecone_index, db_session=db_session)
