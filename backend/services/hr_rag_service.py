@@ -215,27 +215,54 @@ class HRRagService:
         user_context: dict = None
     ) -> AnswerResponse:
         """
-        Get AI-generated answer with RAG context
-        1. Check presets first (fast path)
-        2. Semantic search for context
-        3. Generate answer with Claude
+        Get AI-generated answer with cost-optimized flow:
+        1. Check presets first (instant, free)
+        2. PostgreSQL keyword search (fast, free)
+        3. RAG semantic search (only if keyword fails, costs $$$)
         """
+        import time as _time
+        _start = _time.time()
+        
         preset_answer = await self.check_preset_answer(query)
         if preset_answer:
-            logger.info(f"Returning preset answer for: {query[:50]}...")
+            _ms = int((_time.time() - _start) * 1000)
+            logger.info(f"✅ PRESET hit for: '{query[:50]}' ({_ms}ms, cost: $0)")
             return preset_answer
         
-        search_results = await self.semantic_search(query, top_k=5)
-        logger.info(f"🔍 RAG semantic search for: '{query[:50]}' -> {len(search_results)} results above threshold")
+        keyword_results = await self._keyword_search(query)
+        keyword_results = sorted(keyword_results, key=lambda r: r.score, reverse=True)
+        search_method = "keyword"
+        
+        def _keyword_quality_ok(results):
+            if not results:
+                return False
+            best = results[0]
+            if best.score >= 0.8:
+                return True
+            return False
+        
+        if _keyword_quality_ok(keyword_results):
+            search_results = [r for r in keyword_results if r.score >= 0.5]
+            _ms = int((_time.time() - _start) * 1000)
+            logger.info(f"✅ KEYWORD hit for: '{query[:50]}' -> {len(search_results)} results (top: {search_results[0].score:.2f}, {_ms}ms, cost: $0)")
+        else:
+            if keyword_results:
+                logger.info(f"⚠️ Keyword results below threshold (best: {keyword_results[0].score:.2f}), escalating to RAG")
+            else:
+                logger.info(f"🔍 No keyword matches, using RAG for: '{query[:50]}'")
+            search_results = await self.semantic_search(query, top_k=5)
+            search_method = "rag"
+            
+            if not search_results and keyword_results:
+                search_results = [r for r in keyword_results if r.score > 0]
+                search_method = "keyword_fallback"
+                logger.info(f"🔄 RAG empty, using weak keyword results: {len(search_results)}")
+            else:
+                _ms = int((_time.time() - _start) * 1000)
+                logger.info(f"{'✅' if search_results else '❌'} RAG search for: '{query[:50]}' -> {len(search_results)} results ({_ms}ms, cost: ~$0.0001)")
         
         if not search_results:
-            logger.info(f"🔄 Falling back to keyword search for: '{query[:50]}'")
-            search_results = await self._keyword_search(query)
-            search_results = [r for r in search_results if r.score > 0]
-            logger.info(f"📝 Keyword search returned {len(search_results)} results")
-        
-        if not search_results:
-            logger.warning(f"❌ No results found for query: '{query[:50]}'")
+            logger.warning(f"❌ NO RESULTS for: '{query[:50]}' (tried keyword + RAG)")
             return AnswerResponse(
                 text="Вибачте, я не знайшов відповідної інформації в базі знань. Спробуйте переформулювати питання або зверніться до HR-відділу.",
                 sources=[],
@@ -329,6 +356,18 @@ class HRRagService:
         
         return [item['result'] for item in sorted_results[:RAG_TOP_K]]
     
+    STOP_WORDS_UK = {
+        'як', 'що', 'де', 'чи', 'та', 'і', 'а', 'в', 'на', 'з', 'до', 'від',
+        'за', 'по', 'для', 'при', 'про', 'це', 'той', 'та', 'ті', 'ця', 'цей',
+        'мій', 'мені', 'мне', 'його', 'її', 'їх', 'наш', 'ваш', 'свій',
+        'бути', 'є', 'був', 'була', 'було', 'будь', 'можна', 'треба', 'потрібно',
+        'не', 'ні', 'так', 'вже', 'ще', 'або', 'але', 'якщо', 'коли',
+        'хто', 'чому', 'скільки', 'який', 'яка', 'яке', 'які',
+        'дуже', 'також', 'тому', 'тоді', 'зараз', 'після',
+        'робота', 'роботи', 'працювати', 'робити', 'зробити',
+        'системі', 'система', 'компанії', 'компанія'
+    }
+    
     async def _keyword_search(self, query: str) -> List[SearchResult]:
         """PostgreSQL keyword search in HR content"""
         if not self.db_session:
@@ -339,7 +378,14 @@ class HRRagService:
             from sqlalchemy import or_, func
             
             query_lower = query.lower()
-            keywords = query_lower.split()
+            all_keywords = query_lower.split()
+            keywords = [kw for kw in all_keywords if kw not in self.STOP_WORDS_UK and len(kw) > 2]
+            
+            if not keywords:
+                keywords = [kw for kw in all_keywords if len(kw) > 2]
+            
+            if not keywords:
+                return []
             
             filters = []
             for kw in keywords:
@@ -353,8 +399,12 @@ class HRRagService:
             
             search_results = []
             for r in results:
-                match_count = sum(1 for kw in keywords if kw in r.title.lower() or kw in r.content.lower())
-                score = min(1.0, match_count / len(keywords)) if keywords else 0.0
+                title_lower = r.title.lower()
+                content_lower = r.content.lower()
+                match_count = sum(1 for kw in keywords if kw in title_lower or kw in content_lower)
+                title_match = sum(1 for kw in keywords if kw in title_lower)
+                title_bonus = 0.2 if title_match > 0 else 0.0
+                score = min(1.0, (match_count / len(keywords)) + title_bonus) if keywords else 0.0
                 
                 search_results.append(SearchResult(
                     content_id=r.content_id,
