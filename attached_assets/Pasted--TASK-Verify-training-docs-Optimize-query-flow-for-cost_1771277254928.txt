@@ -1,0 +1,186 @@
+# TASK: Verify training docs + Optimize query flow for cost efficiency
+
+## PART 1: DATABASE VERIFICATION (2 minutes)
+
+Run these queries and show results:
+```sql
+-- 1. Show all content sections
+SELECT section, COUNT(*) as count, 
+       STRING_AGG(DISTINCT subsection, ', ') as subsections
+FROM hr_content
+GROUP BY section
+ORDER BY section;
+
+-- 2. Check specifically for training/Навчання
+SELECT id, section, subsection, title, 
+       LENGTH(content) as content_length,
+       LEFT(content, 150) as preview
+FROM hr_content
+WHERE section = 'training'
+   OR title ILIKE '%навчання%'
+   OR title ILIKE '%бліц%'
+   OR title ILIKE '%hr-процес%';
+
+-- 3. Verify embeddings exist for training content
+SELECT 
+    c.id,
+    c.title,
+    COUNT(e.id) as embedding_count
+FROM hr_content c
+LEFT JOIN hr_embeddings e ON c.id = e.content_id
+WHERE c.section = 'training'
+GROUP BY c.id, c.title;
+```
+
+Show me the full results so I can verify the "Навчання" document is in the database.
+
+---
+
+## PART 2: OPTIMIZE QUERY FLOW (15 minutes)
+
+**Current problem:** RAG semantic search (which costs money) runs on EVERY query that doesn't hit presets. But many queries could be answered with FREE PostgreSQL keyword search first.
+
+**Required change:**
+```
+BEFORE: Preset → RAG (costs $$$) → Keyword fallback
+AFTER:  Preset → Keyword (FREE) → RAG (only when needed)
+```
+
+### Find and refactor the query processing code:
+
+**Files to check:**
+- `backend/services/hr_rag_service.py`
+- `backend/routes/chat_endpoints.py`
+- Wherever user queries are processed
+
+**Change the flow to:**
+```python
+async def process_hr_query(user_message: str):
+    # 1. Check presets (instant, free)
+    preset = await check_preset_answers(user_message)
+    if preset:
+        logger.info(f"✅ PRESET hit for: {user_message[:50]}")
+        return preset
+    
+    # 2. PostgreSQL keyword search (fast, free)
+    keyword_results = await keyword_search_content(user_message)
+    if keyword_results and len(keyword_results) > 0:
+        logger.info(f"✅ KEYWORD search hit for: {user_message[:50]}")
+        # Use keyword results to build context
+        context = build_context_from_results(keyword_results)
+        return await generate_answer_with_context(user_message, context)
+    
+    # 3. RAG semantic search (only when needed, costs $$$)
+    logger.info(f"🔍 RAG semantic search for: {user_message[:50]}")
+    rag_results = await rag_semantic_search(user_message)
+    if rag_results and len(rag_results.matches) > 0:
+        logger.info(f"✅ RAG hit - top score: {rag_results.matches[0].score}")
+        context = build_context_from_rag(rag_results)
+        return await generate_answer_with_context(user_message, context)
+    
+    # 4. No results from any method
+    logger.warning(f"❌ NO RESULTS for: {user_message[:50]}")
+    return "Вибачте, я не знайшов відповідної інформації в базі знань. Спробуйте переформулювати питання або зверніться до HR-відділу."
+```
+
+### Enhance keyword search:
+
+Make sure keyword search is robust with PostgreSQL full-text search:
+```python
+async def keyword_search_content(query: str, limit: int = 3):
+    """
+    Fast PostgreSQL full-text search using Ukrainian dictionary
+    Returns top matching content from hr_content table
+    """
+    # Clean query
+    query_clean = query.strip()
+    
+    # PostgreSQL full-text search with ranking
+    results = await db.fetch("""
+        SELECT 
+            id,
+            section,
+            title,
+            content,
+            ts_rank_cd(
+                to_tsvector('ukrainian', title || ' ' || content),
+                plainto_tsquery('ukrainian', $1)
+            ) as rank
+        FROM hr_content
+        WHERE to_tsvector('ukrainian', title || ' ' || content) 
+              @@ plainto_tsquery('ukrainian', $1)
+        ORDER BY rank DESC
+        LIMIT $2
+    """, query_clean, limit)
+    
+    # Log results
+    if results:
+        logger.info(f"  → Found {len(results)} keyword matches")
+        logger.info(f"  → Top match: {results[0]['title']} (rank: {results[0]['rank']:.4f})")
+    
+    return results if results else []
+```
+
+### Add detailed logging:
+```python
+# At the start of query processing
+logger.info(f"📨 Query received: '{user_message[:100]}...'")
+start_time = time.time()
+
+# After each method
+logger.info(f"⏱️  Response time: {(time.time() - start_time)*1000:.0f}ms")
+logger.info(f"💰 Method: {method}")  # preset/keyword/rag
+logger.info(f"💵 Cost: ${cost}")  # $0 for preset/keyword, $0.0001 for RAG
+```
+
+---
+
+## PART 3: TESTING (5 minutes)
+
+After implementing, test these queries and show me which method each uses:
+
+1. **Should hit preset:**
+   - "Як оформити відпустку?"
+   - Expected log: "✅ PRESET hit"
+
+2. **Should hit keyword search:**
+   - "Робота в системі Бліц"
+   - "Контакти HR відділу"
+   - Expected log: "✅ KEYWORD search hit"
+
+3. **Should fall back to RAG:**
+   - "Як мені підготуватися до першого робочого дня?"
+   - Expected log: "🔍 RAG semantic search"
+
+Run all 4 test queries and show me the logs for each.
+
+---
+
+## DELIVERABLES
+
+1. ✅ Database verification results (confirm training doc exists)
+2. ✅ Refactored query flow (Preset → Keyword → RAG)
+3. ✅ Enhanced keyword search with logging
+4. ✅ Test results showing which method each query uses
+5. ✅ Backend running with optimized flow
+
+This will reduce RAG API costs by 60-80% while maintaining answer quality.
+```
+
+---
+
+## **💰 EXPECTED OUTCOME**
+
+**Cost for this task:** ~$5-10
+
+**Benefits:**
+- ✅ Verify training docs are in database
+- ✅ Optimize query flow (keyword before RAG)
+- ✅ Save 60-80% on embedding API costs
+- ✅ Faster response times
+- ✅ Better logging for monitoring
+
+**After optimization:**
+```
+Remaining credits: $64-70 of $100
+ROI: This optimization pays for itself in ~6 months of operation
