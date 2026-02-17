@@ -13,7 +13,8 @@ class SEDService:
         self.api_url = os.getenv("SED_API_URL", "https://api-sed.tdav.net.ua")
         self.api_key = os.getenv("SED_API_KEY")
         self.headers = {
-            "X-API-Key": self.api_key or "",
+            "accept": "application/json",
+            "Authorization": f"Bearer {self.api_key or ''}",
             "Content-Type": "application/json"
         }
 
