@@ -1,0 +1,165 @@
+# URGENT: Fix ModuleNotFoundError - rapidfuzz not installing on Render
+
+## PROBLEM
+Render deployment crashes with:
+`ModuleNotFoundError: No module named 'rapidfuzz'`
+
+Despite:
+- rapidfuzz>=3.14.3 listed in pyproject.toml ✅
+- requirements.txt created with rapidfuzz ✅
+- Works locally in Replit ✅
+
+Root cause: Render is not properly installing dependencies.
+
+## INVESTIGATION FIRST
+```bash
+# Check Render build configuration
+cat render.yaml
+
+# Check if there's a specific build command
+cat Procfile 2>/dev/null || echo "No Procfile"
+
+# Check what start command Render uses
+grep -r "uvicorn\|gunicorn\|start" render.yaml 2>/dev/null
+
+# Check if pinecone or other deps also missing
+grep -E "^from|^import" backend/services/hr_rag_service.py | head -30
+```
+
+Show me the output before making changes.
+
+---
+
+## FIX 1: Verify render.yaml build command
+
+Find render.yaml and check/update the build command:
+```yaml
+# render.yaml should look like:
+services:
+  - type: web
+    name: gradus-ai
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+If buildCommand is missing or wrong, update it to:
+```
+pip install -r requirements.txt
+```
+
+---
+
+## FIX 2: Ensure requirements.txt is complete
+
+Verify ALL imports in hr_rag_service.py and other route files are in requirements.txt:
+```bash
+# Find all imports across the backend
+grep -rh "^from\|^import" backend/ | sort -u | head -50
+```
+
+Then make sure requirements.txt includes EVERY third-party package used.
+
+Known required packages from the codebase:
+```
+anthropic>=0.72.1
+apscheduler>=3.11.1
+beautifulsoup4>=4.14.2
+email-validator>=2.3.0
+fastapi>=0.121.1
+feedparser>=6.0.12
+fuzzywuzzy>=0.18.0
+httpx>=0.28.1
+lxml>=6.0.2
+openai>=2.7.0
+pinecone-client>=3.0.0
+psycopg2-binary>=2.9.11
+pydantic>=2.12.4
+pypdf2>=3.0.1
+python-docx>=1.2.0
+python-dotenv>=1.2.1
+python-levenshtein>=0.27.3
+python-multipart>=0.0.20
+python-telegram-bot>=22.5
+rapidfuzz>=3.14.3
+requests>=2.32.5
+sqlalchemy>=2.0.44
+trafilatura>=2.0.0
+unidecode>=1.4.0
+uvicorn>=0.38.0
+```
+
+Check if pinecone is imported anywhere:
+```bash
+grep -rn "pinecone" backend/ --include="*.py" | head -10
+```
+
+If yes, add to requirements.txt:
+```
+pinecone-client>=3.0.0
+```
+
+---
+
+## FIX 3: Update render.yaml explicitly
+
+Make sure render.yaml has explicit build command:
+```yaml
+services:
+  - type: web
+    name: gradus-ai
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+```
+
+Key additions:
+- `pip install --upgrade pip &&` before install
+- Explicit Python version 3.11 (matches Replit's 3.11, not system 3.12)
+
+---
+
+## FIX 4: Add requirements.txt verification script
+
+Create a script to verify all imports resolve:
+```bash
+# File: scripts/check_deps.sh
+#!/bin/bash
+echo "Checking dependencies..."
+cd backend
+python -c "
+from services.hr_rag_service import HRRagService
+from routes.hr_routes import hr_router
+from routes.telegram_webhook import router
+print('✅ All imports OK')
+"
+```
+
+---
+
+## AFTER FIXES
+
+Run locally to verify:
+```bash
+cd backend
+python -c "from rapidfuzz import fuzz; print('✅ rapidfuzz OK')"
+python -c "from services.hr_rag_service import HRRagService; print('✅ hr_rag_service OK')"
+```
+
+Then commit and push:
+```bash
+git add requirements.txt render.yaml
+git commit -m "Fix Render deployment: explicit build command and complete dependencies"
+git push
+```
+
+## SUCCESS CRITERIA
+- Render build log shows: `Successfully installed rapidfuzz-3.14.3`
+- No ModuleNotFoundError in deploy logs
+- Service starts successfully
+- Maya HR Bot responds to messages
