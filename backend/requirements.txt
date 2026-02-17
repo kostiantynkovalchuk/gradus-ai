@@ -4,6 +4,7 @@ beautifulsoup4>=4.14.2
 email-validator>=2.3.0
 fastapi>=0.121.1
 feedparser>=6.0.12
+fuzzywuzzy>=0.18.0
 httpx>=0.28.1
 lxml>=6.0.2
 openai>=2.7.2
