@@ -9,11 +9,12 @@ HR RAG Service for Knowledge Retrieval
 import re
 import os
 import logging
+import time as _time_module
 from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass
 from openai import OpenAI
 from anthropic import Anthropic
-from fuzzywuzzy import fuzz
+from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,105 @@ anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.3"))
+
+RAG_HIGH_CONFIDENCE = 0.45
+RAG_MEDIUM_CONFIDENCE = 0.35
+
+META_KEYWORDS = [
+    'keyword', 'search', 'database', 'знайди', 'пошук', 'бази',
+    'query', 'find', 'use', 'команда', 'функція', 'system',
+    'look up', 'retrieve', 'sql', 'db'
+]
+
+UKRAINIAN_WORD_ROOTS = {
+    'відпустк': ['відпустка', 'відпустки', 'відпустку', 'відпустці',
+                  'відпустко', 'відпустками', 'відпустках', 'відпусток'],
+    'звільнен': ['звільнення', 'звільнити', 'звільнитися', 'звільнили',
+                  'звільняють'],
+    'зарплат': ['зарплата', 'зарплати', 'зарплату', 'зарплатою',
+                  'зарплатні', 'заробітна плата'],
+    'лікарнян': ['лікарняний', 'лікарняного', 'лікарняному', 'лікарняним',
+                   'лікарняна', 'лікарняне'],
+    'оформит': ['оформити', 'оформлення', 'оформляти', 'оформив',
+                  'оформила', 'оформлено'],
+    'відряджен': ['відрядження', 'відряджень', 'відрядженню', 'відрядженням'],
+    'техпідтримк': ['техпідтримка', 'техпідтримки', 'техпідтримку'],
+}
+
+DOMAIN_PAIRS = [
+    (
+        ['стул', 'стілець', 'меблі', 'крісло', 'диван'],
+        ['комп\'ютер', 'урс', 'налаштувати', 'програм', 'windows', 'мережа']
+    ),
+    (
+        ['відпустка', 'лікарняний', 'звільнення', 'оклад'],
+        ['комп\'ютер', 'урс', 'принтер', 'мережа', 'пароль']
+    ),
+    (
+        ['пароль', 'комп\'ютер', 'доступ', 'мережа'],
+        ['відпустка', 'лікарняний', 'звільнення', 'меблі']
+    ),
+]
+
+
+def is_meta_instruction(query: str) -> bool:
+    query_lower = query.lower()
+    for keyword in META_KEYWORDS:
+        if keyword in query_lower:
+            return True
+    return False
+
+
+def normalize_ukrainian_query(query: str) -> str:
+    normalized = query.lower().strip()
+    normalized = re.sub(r"[^\w\s']", '', normalized)
+    for root, forms in UKRAINIAN_WORD_ROOTS.items():
+        for form in forms:
+            if form in normalized:
+                normalized = normalized.replace(form, root)
+    return normalized.strip()
+
+
+def calculate_preset_match_score(query: str, preset_question: str) -> float:
+    direct_score = fuzz.ratio(
+        query.lower().strip(),
+        preset_question.lower().strip()
+    ) / 100.0
+    normalized_query = normalize_ukrainian_query(query)
+    normalized_preset = normalize_ukrainian_query(preset_question)
+    normalized_score = fuzz.ratio(normalized_query, normalized_preset) / 100.0
+    token_score = fuzz.token_set_ratio(
+        query.lower(),
+        preset_question.lower()
+    ) / 100.0
+    partial_score = fuzz.partial_ratio(
+        query.lower(),
+        preset_question.lower()
+    ) / 100.0
+    return max(direct_score, normalized_score, token_score, partial_score)
+
+
+def detect_domain_mismatch(query: str, result_content: str) -> bool:
+    query_lower = query.lower()
+    result_lower = result_content.lower()
+    for query_keywords, mismatch_keywords in DOMAIN_PAIRS:
+        query_matches = any(kw in query_lower for kw in query_keywords)
+        if query_matches:
+            result_mismatch = any(kw in result_lower for kw in mismatch_keywords)
+            if result_mismatch:
+                return True
+    return False
+
+
+def format_not_found_response(query: str) -> str:
+    return (
+        f"🔍 На жаль, я не знайшов точної інформації по запиту "
+        f"*\"{query}\"* в базі знань TD AV.\n\n"
+        f"Що можна зробити:\n"
+        f"• Спробуйте переформулювати питання\n"
+        f"• Зверніться до HR-відділу: hr@vinkom.net\n"
+        f"• Або зателефонуйте Наталії Решетіловій"
+    )
 
 
 @dataclass
@@ -125,8 +225,9 @@ class HRRagService:
     
     async def check_preset_answer(self, query: str) -> Optional[AnswerResponse]:
         """
-        Check if query matches any preset answers
-        Uses: exact match, fuzzy match, keyword detection
+        Check if query matches any preset answers.
+        Uses: meta-instruction filter, exact regex, multi-signal fuzzy matching
+        with Ukrainian morphology normalization.
         """
         if self._presets_cache is None:
             await self._load_presets()
@@ -134,33 +235,59 @@ class HRRagService:
         if not self._presets_cache:
             return None
         
+        if is_meta_instruction(query):
+            logger.info(f"🚫 Meta-instruction detected, skipping presets: '{query[:50]}'")
+            return None
+        
         query_lower = query.lower().strip()
         
         for preset in self._presets_cache:
             pattern = preset['pattern']
-            
-            if re.search(pattern, query_lower):
-                await self._increment_preset_usage(preset['id'])
-                return AnswerResponse(
-                    text=preset['answer'],
-                    sources=[],
-                    from_preset=True,
-                    confidence=1.0
-                )
-        
-        for preset in self._presets_cache:
-            keywords = preset['pattern'].split('|')
-            for keyword in keywords:
-                ratio = fuzz.partial_ratio(keyword.strip(), query_lower)
-                if ratio >= 85:
+            try:
+                if re.search(pattern, query_lower):
                     await self._increment_preset_usage(preset['id'])
                     return AnswerResponse(
                         text=preset['answer'],
                         sources=[],
                         from_preset=True,
-                        confidence=ratio / 100.0
+                        confidence=1.0
                     )
+            except re.error:
+                pass
         
+        best_match = None
+        best_score = 0.0
+        PRESET_FUZZY_THRESHOLD = 0.75
+        
+        for preset in self._presets_cache:
+            keywords = preset['pattern'].split('|')
+            for keyword in keywords:
+                keyword = keyword.strip()
+                if not keyword:
+                    continue
+                score = calculate_preset_match_score(query, keyword)
+                if score > best_score:
+                    best_score = score
+                    best_match = preset
+        
+        if best_score >= PRESET_FUZZY_THRESHOLD and best_match:
+            logger.info(
+                f"✅ PRESET MATCH: '{query[:50]}' → "
+                f"pattern '{best_match['pattern'][:50]}' "
+                f"(score: {best_score:.2f})"
+            )
+            await self._increment_preset_usage(best_match['id'])
+            return AnswerResponse(
+                text=best_match['answer'],
+                sources=[],
+                from_preset=True,
+                confidence=best_score
+            )
+        
+        logger.info(
+            f"❌ NO PRESET: '{query[:50]}' "
+            f"(best score: {best_score:.2f}, threshold: {PRESET_FUZZY_THRESHOLD})"
+        )
         return None
     
     async def _load_presets(self):
@@ -219,13 +346,13 @@ class HRRagService:
         1. Check presets first (instant, free)
         2. PostgreSQL keyword search (fast, free)
         3. RAG semantic search (only if keyword fails, costs $$$)
+        4. Confidence-based response generation
         """
-        import time as _time
-        _start = _time.time()
+        _start = _time_module.time()
         
         preset_answer = await self.check_preset_answer(query)
         if preset_answer:
-            _ms = int((_time.time() - _start) * 1000)
+            _ms = int((_time_module.time() - _start) * 1000)
             logger.info(f"✅ PRESET hit for: '{query[:50]}' ({_ms}ms, cost: $0)")
             return preset_answer
         
@@ -236,14 +363,11 @@ class HRRagService:
         def _keyword_quality_ok(results):
             if not results:
                 return False
-            best = results[0]
-            if best.score >= 0.8:
-                return True
-            return False
+            return results[0].score >= 0.8
         
         if _keyword_quality_ok(keyword_results):
             search_results = [r for r in keyword_results if r.score >= 0.5]
-            _ms = int((_time.time() - _start) * 1000)
+            _ms = int((_time_module.time() - _start) * 1000)
             logger.info(f"✅ KEYWORD hit for: '{query[:50]}' -> {len(search_results)} results (top: {search_results[0].score:.2f}, {_ms}ms, cost: $0)")
         else:
             if keyword_results:
@@ -258,16 +382,40 @@ class HRRagService:
                 search_method = "keyword_fallback"
                 logger.info(f"🔄 RAG empty, using weak keyword results: {len(search_results)}")
             else:
-                _ms = int((_time.time() - _start) * 1000)
+                _ms = int((_time_module.time() - _start) * 1000)
                 logger.info(f"{'✅' if search_results else '❌'} RAG search for: '{query[:50]}' -> {len(search_results)} results ({_ms}ms, cost: ~$0.0001)")
         
         if not search_results:
             logger.warning(f"❌ NO RESULTS for: '{query[:50]}' (tried keyword + RAG)")
             return AnswerResponse(
-                text="Вибачте, я не знайшов відповідної інформації в базі знань. Спробуйте переформулювати питання або зверніться до HR-відділу.",
+                text=format_not_found_response(query),
                 sources=[],
                 from_preset=False,
                 confidence=0.0
+            )
+        
+        top_result = search_results[0]
+        top_score = top_result.score
+        
+        if detect_domain_mismatch(query, top_result.text):
+            logger.warning(
+                f"🚫 Domain mismatch detected for: '{query[:50]}' "
+                f"→ Top match: '{top_result.title}' (score: {top_score:.4f})"
+            )
+            return AnswerResponse(
+                text=format_not_found_response(query),
+                sources=[],
+                from_preset=False,
+                confidence=0.0
+            )
+        
+        if search_method == "rag" and top_score < RAG_MEDIUM_CONFIDENCE:
+            logger.warning(f"❌ LOW confidence ({top_score:.2f}) - returning not found for: '{query[:50]}'")
+            return AnswerResponse(
+                text=format_not_found_response(query),
+                sources=[],
+                from_preset=False,
+                confidence=top_score
             )
         
         context_parts = []
@@ -300,6 +448,10 @@ class HRRagService:
             answer_text = response.content[0].text
             
             avg_score = sum(r.score for r in search_results[:3]) / min(3, len(search_results))
+            
+            if search_method == "rag" and top_score < RAG_HIGH_CONFIDENCE:
+                logger.info(f"⚠️ MEDIUM confidence ({top_score:.2f}) - adding disclaimer")
+                answer_text += "\n\n⚠️ _Рекомендую уточнити інформацію у HR-відділі._"
             
             return AnswerResponse(
                 text=answer_text,
@@ -764,6 +916,75 @@ class HRRagService:
             'title': title,
             'content_length': len(content)
         }
+
+
+    async def detect_knowledge_gaps(self, days: int = 7, min_count: int = 2) -> List[Dict]:
+        """Detect knowledge gaps - queries with negative feedback or no results"""
+        if not self.db_session:
+            return []
+        
+        try:
+            from sqlalchemy import text
+            
+            result = self.db_session.execute(text("""
+                SELECT 
+                    ql.query_normalized,
+                    COUNT(*) as total_asks,
+                    COUNT(*) FILTER (WHERE ql.satisfied = FALSE) as negative_count,
+                    COUNT(*) FILTER (WHERE ql.satisfied IS NULL) as no_feedback_count,
+                    COALESCE(AVG(ql.response_time_ms)::INTEGER, 0) as avg_response_ms,
+                    MAX(ql.created_at) as last_asked
+                FROM hr_query_log ql
+                WHERE ql.created_at >= NOW() - make_interval(days => :days)
+                    AND ql.preset_matched = FALSE
+                GROUP BY ql.query_normalized
+                HAVING COUNT(*) >= :min_count
+                    OR COUNT(*) FILTER (WHERE ql.satisfied = FALSE) > 0
+                ORDER BY COUNT(*) FILTER (WHERE ql.satisfied = FALSE) DESC, COUNT(*) DESC
+                LIMIT 30
+            """), {'days': days, 'min_count': min_count})
+            
+            gaps = []
+            for row in result.fetchall():
+                gaps.append({
+                    'query': row[0],
+                    'total_asks': row[1],
+                    'negative_feedback': row[2],
+                    'no_feedback': row[3],
+                    'avg_response_ms': row[4],
+                    'last_asked': row[5].isoformat() if row[5] else None,
+                    'priority': 'high' if row[2] > 0 else ('medium' if row[1] >= 3 else 'low')
+                })
+            
+            logger.info(f"Detected {len(gaps)} knowledge gaps in last {days} days")
+            return gaps
+            
+        except Exception as e:
+            logger.error(f"Failed to detect knowledge gaps: {e}")
+            return []
+
+    async def create_preset_candidate(self, query_log_id: int) -> bool:
+        """Create a preset candidate from negative feedback"""
+        if not self.db_session:
+            return False
+        
+        try:
+            from sqlalchemy import text
+            
+            result = self.db_session.execute(text("""
+                SELECT query, query_normalized FROM hr_query_log WHERE id = :log_id
+            """), {'log_id': query_log_id})
+            
+            row = result.fetchone()
+            if not row:
+                return False
+            
+            logger.info(f"📋 Preset candidate created from negative feedback: '{row[0][:50]}'")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to create preset candidate: {e}")
+            return False
 
 
 def get_hr_rag_service(pinecone_index=None, db_session=None) -> HRRagService:

@@ -271,51 +271,23 @@ async def process_telegram_message(message: dict):
                 return
             logger.warning(f"ТДАВ handler failed, falling back to AI")
         
-        if is_hr_question(text):
-            auth_db_gen = get_db()
-            auth_db = next(auth_db_gen)
-            try:
-                user = get_user_by_telegram_id(auth_db, telegram_id)
-                if not user:
-                    await send_telegram_message(
-                        chat_id,
-                        "Для доступу до HR-довідника потрібно пройти верифікацію.\n\n"
-                        "Натисни /start щоб розпочати."
-                    )
-                    return
-            finally:
-                auth_db.close()
-
-            logger.info(f"📋 HR question detected from {chat_id}: {text[:50]}...")
-            user_id = message.get("from", {}).get("id", 0)
-            await handle_hr_question(chat_id, user_id, text)
-            return
-        
-        logger.info(f"📨 Telegram message from {chat_id}: {text[:50]}...")
-        
-        await send_typing_action(chat_id)
-        
+        auth_db_gen = get_db()
+        auth_db = next(auth_db_gen)
         try:
-            from routes.chat_endpoints import chat_with_avatars, ChatRequest
-            
-            chat_request = ChatRequest(
-                message=text,
-                avatar="maya",
-                source="telegram"
-            )
-            response_data = await chat_with_avatars(chat_request)
-            
-            if hasattr(response_data, 'response'):
-                response_text = response_data.response
-            elif isinstance(response_data, dict):
-                response_text = response_data.get("response", "Вибачте, виникла помилка.")
-            else:
-                response_text = str(response_data)
-        except Exception as e:
-            logger.error(f"Error getting Maya response: {e}")
-            response_text = "Привіт! Я Maya, HR-асистент Торгового Дому АВ. Зараз у мене технічні складнощі, але я скоро повернусь! 💫"
-        
-        await send_telegram_message(chat_id, response_text)
+            user = get_user_by_telegram_id(auth_db, telegram_id)
+            if not user:
+                await send_telegram_message(
+                    chat_id,
+                    "Для доступу до бота потрібно пройти верифікацію.\n\n"
+                    "Натисни /start щоб розпочати."
+                )
+                return
+        finally:
+            auth_db.close()
+
+        user_id = message.get("from", {}).get("id", 0)
+        logger.info(f"📋 Routing to hr_rag_service for {chat_id}: {text[:50]}...")
+        await handle_hr_question(chat_id, user_id, text)
         
         logger.info(f"✅ Maya responded to {user_name} on Telegram")
         
@@ -816,12 +788,28 @@ async def handle_hr_callback(callback_query: dict):
                             },
                             timeout=5.0
                         )
-                except:
-                    pass
+                        
+                        if feedback_type == 'not_helpful':
+                            from routes.hr_routes import hr_pinecone_index
+                            from services.hr_rag_service import get_hr_rag_service
+                            from models import get_db
+                            
+                            fb_db = next(get_db())
+                            try:
+                                rag_service = get_hr_rag_service(
+                                    pinecone_index=hr_pinecone_index,
+                                    db_session=fb_db
+                                )
+                                await rag_service.create_preset_candidate(log_id)
+                            finally:
+                                fb_db.close()
+                except Exception as fb_err:
+                    logger.warning(f"Feedback processing error: {fb_err}")
             
             if feedback_type == 'helpful':
-                await answer_callback(callback_id, "Дякуємо за відгук! 🙏")
+                await answer_callback(callback_id, "Дякую! 😊")
             elif feedback_type == 'not_helpful':
+                await answer_callback(callback_id, "Зрозуміло, передам HR-команді!")
                 await send_telegram_message_with_keyboard(
                     chat_id,
                     "Вибачте, що не змогла допомогти.\n\n"

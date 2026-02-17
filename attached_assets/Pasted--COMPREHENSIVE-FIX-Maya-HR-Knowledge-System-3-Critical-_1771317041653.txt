@@ -1,0 +1,607 @@
+# COMPREHENSIVE FIX: Maya HR Knowledge System - 3 Critical Issues
+
+## CONTEXT
+Maya HR Bot serves 800 AVTD employees via Telegram. 
+Analysis of production logs revealed 3 critical issues affecting answer quality.
+
+---
+
+## PROBLEM SUMMARY (from production logs)
+
+### Problem 1: Two Separate Processing Paths
+Some queries bypass hr_rag_service entirely:
+```
+# WRONG PATH (no preset/RAG):
+"Як оформити відпустку?" 
+→ INFO:routes.chat_endpoints:Chat using model claude-haiku-4-5-20251001
+→ Goes straight to OpenAI embeddings + Claude API
+→ Generic answer, costs money
+
+# CORRECT PATH (has preset/RAG):
+"Як користуватися бліц?"
+→ INFO:services.hr_rag_service:Loaded 31 preset answers
+→ Checks presets → keyword → RAG
+→ AVTD-specific answer, often free
+```
+
+### Problem 2: Preset False Positives + Missed Matches
+```
+# False positive (WRONG):
+"Use відпустка keyword to search data in your hr da"
+→ PRESET hit! ← Should NOT match (meta-instruction, not HR question)
+
+# Missed match (WRONG):
+"Як оформити відпустку?" → NO preset hit
+"Як оформити відпустку" → NO preset hit  
+"Як оформити відпустку ?" → NO preset hit
+← All should hit vacation preset!
+```
+
+### Problem 3: Low-Confidence RAG Returns Wrong Matches
+```
+# Wrong match (WRONG):
+"Як замовити стул?" (order a chair)
+→ Top RAG: "Як налаштувати віддалений робочий стіл (УРС)?" (score: 0.4569)
+← "стул" matched "стіл" (chair vs desktop) - completely different!
+```
+
+---
+
+## INVESTIGATION FIRST
+
+Before making any changes, investigate:
+
+### Step 1: Find Both Processing Paths
+```bash
+# Find where queries are routed
+grep -rn "chat_endpoints\|hr_rag_service\|HR question detected" backend/routes/telegram_webhook.py
+
+# Find the routing logic
+grep -rn "hr_question\|is_hr\|HR question" backend/routes/telegram_webhook.py
+
+# Find all places Claude API is called
+grep -rn "anthropic\|claude\|chat_endpoints" backend/routes/telegram_webhook.py
+grep -rn "chat_using_model\|Chat using model" backend/routes/
+```
+
+### Step 2: Understand Current Preset Matching
+```bash
+# Find preset matching code
+grep -rn "fuzz\|fuzzy\|preset.*match\|find_preset" backend/services/hr_rag_service.py
+
+# See current threshold values
+grep -rn "threshold\|0\.85\|0\.8\|confidence" backend/services/hr_rag_service.py
+
+# Find where presets are loaded
+grep -rn "Loaded.*preset\|preset_answers" backend/services/hr_rag_service.py
+```
+
+### Step 3: Understand RAG Response Generation
+```bash
+# Find where RAG results are used to generate answers
+grep -rn "generate_answer\|call_claude\|anthropic" backend/services/hr_rag_service.py
+
+# Find confidence/score handling
+grep -rn "score\|threshold\|0\.3\|0\.4\|0\.5" backend/services/hr_rag_service.py
+```
+
+Show me the findings before making changes.
+
+---
+
+## FIX 1: Unify ALL Queries Through hr_rag_service
+
+### Goal
+ALL authenticated employee messages must go through hr_rag_service.
+NO queries should bypass preset → keyword → RAG pipeline.
+
+### Find the routing logic in telegram_webhook.py
+
+Look for code similar to:
+```python
+# Current broken routing:
+if some_condition:  # "HR question detected"
+    # Goes to hr_rag_service
+else:
+    # Goes to chat_endpoints BYPASSING presets!
+    await chat_endpoints.process(message)
+```
+
+### Fix the routing
+```python
+# CORRECT routing for authenticated employees:
+async def process_employee_message(update, context, user):
+    """
+    ALL employee messages go through hr_rag_service.
+    No exceptions. No bypass.
+    """
+    
+    user_message = update.message.text
+    telegram_id = update.effective_user.id
+    
+    # ALWAYS use hr_rag_service for authenticated employees
+    # This ensures: preset → keyword → RAG pipeline
+    answer = await hr_rag_service.get_answer(
+        query=user_message,
+        user_context={
+            'telegram_id': telegram_id,
+            'full_name': user.get('full_name'),
+            'position': user.get('position'),
+            'department': user.get('department'),
+            'access_level': user.get('access_level')
+        }
+    )
+    
+    await send_message(update, answer)
+```
+
+### Key rules:
+- ✅ Authenticated employees → ALWAYS hr_rag_service
+- ✅ Admin commands (/adduser, /listusers, etc.) → admin handler
+- ✅ Unauthenticated users → phone verification flow
+- ❌ NEVER route employee messages directly to chat_endpoints
+
+---
+
+## FIX 2: Strengthen Preset Matching
+
+### Goal
+- Remove false positives (meta-instructions should NOT match presets)
+- Catch more natural language variations
+- Handle Ukrainian morphology better
+
+### Update preset matching in hr_rag_service.py
+```python
+from rapidfuzz import fuzz
+from typing import Optional
+import re
+
+# Meta-instruction keywords that should NEVER match presets
+META_KEYWORDS = [
+    'keyword', 'search', 'database', 'знайди', 'пошук', 'бази',
+    'query', 'find', 'use', 'команда', 'функція', 'system',
+    'look up', 'retrieve', 'sql', 'db'
+]
+
+# Ukrainian word root variations for better matching
+# Maps root → all common forms
+UKRAINIAN_WORD_ROOTS = {
+    'відпустк': ['відпустка', 'відпустки', 'відпустку', 'відпустці', 
+                  'відпустко', 'відпустками', 'відпустках', 'відпусток'],
+    'звільнен': ['звільнення', 'звільнити', 'звільнитися', 'звільнили',
+                  'звільняють', 'звільнення'],
+    'зарплат': ['зарплата', 'зарплати', 'зарплату', 'зарплатою',
+                  'зарплатні', 'заробітна плата'],
+    'лікарнян': ['лікарняний', 'лікарняного', 'лікарняному', 'лікарняним',
+                   'лікарняна', 'лікарняне'],
+    'оформит': ['оформити', 'оформлення', 'оформляти', 'оформив',
+                  'оформила', 'оформлено'],
+}
+
+
+def is_meta_instruction(query: str) -> bool:
+    """
+    Detect if query is a meta-instruction (not a real HR question).
+    Meta-instructions should never match presets.
+    
+    Examples:
+    - "Use відпустка keyword to search" → True (meta)
+    - "Знайди в базі даних..." → True (meta)
+    - "Як оформити відпустку?" → False (real question)
+    """
+    query_lower = query.lower()
+    
+    for keyword in META_KEYWORDS:
+        if keyword in query_lower:
+            return True
+    
+    return False
+
+
+def normalize_ukrainian_query(query: str) -> str:
+    """
+    Normalize Ukrainian query for better preset matching.
+    
+    - Lowercase
+    - Remove punctuation
+    - Normalize word forms using root mapping
+    """
+    # Lowercase and strip
+    normalized = query.lower().strip()
+    
+    # Remove punctuation except apostrophes
+    normalized = re.sub(r"[^\w\s']", '', normalized)
+    
+    # Normalize word forms
+    for root, forms in UKRAINIAN_WORD_ROOTS.items():
+        for form in forms:
+            if form in normalized:
+                normalized = normalized.replace(form, root)
+    
+    return normalized.strip()
+
+
+def calculate_preset_match_score(query: str, preset_question: str) -> float:
+    """
+    Calculate comprehensive match score using multiple signals.
+    
+    Returns score 0.0-1.0
+    """
+    
+    # Signal 1: Direct fuzzy match
+    direct_score = fuzz.ratio(
+        query.lower().strip(),
+        preset_question.lower().strip()
+    ) / 100.0
+    
+    # Signal 2: Normalized fuzzy match (handles morphology)
+    normalized_query = normalize_ukrainian_query(query)
+    normalized_preset = normalize_ukrainian_query(preset_question)
+    normalized_score = fuzz.ratio(normalized_query, normalized_preset) / 100.0
+    
+    # Signal 3: Token set ratio (handles word order)
+    token_score = fuzz.token_set_ratio(
+        query.lower(),
+        preset_question.lower()
+    ) / 100.0
+    
+    # Signal 4: Partial ratio (query is subset of preset or vice versa)
+    partial_score = fuzz.partial_ratio(
+        query.lower(),
+        preset_question.lower()
+    ) / 100.0
+    
+    # Take the best score across all signals
+    best_score = max(direct_score, normalized_score, token_score, partial_score)
+    
+    return best_score
+
+
+def find_preset_match(
+    query: str,
+    presets: list,
+    threshold: float = 0.75  # Lowered from 0.85 to catch more variations
+) -> Optional[dict]:
+    """
+    Find best matching preset with improved matching logic.
+    
+    Args:
+        query: User's question
+        presets: List of preset dicts with 'question' and 'answer'
+        threshold: Minimum score to accept match (0.0-1.0)
+    
+    Returns:
+        Best matching preset dict or None
+    """
+    
+    # RULE 1: Never match meta-instructions to presets
+    if is_meta_instruction(query):
+        logger.info(f"🚫 Meta-instruction detected, skipping presets: '{query[:50]}'")
+        return None
+    
+    best_match = None
+    best_score = 0.0
+    
+    for preset in presets:
+        score = calculate_preset_match_score(query, preset['question'])
+        
+        if score > best_score:
+            best_score = score
+            best_match = preset
+    
+    # Check threshold
+    if best_score >= threshold and best_match:
+        logger.info(
+            f"✅ PRESET MATCH: '{query[:50]}' → "
+            f"'{best_match['question'][:50]}' "
+            f"(score: {best_score:.2f})"
+        )
+        return {**best_match, 'confidence': best_score}
+    
+    logger.info(
+        f"❌ NO PRESET: '{query[:50]}' "
+        f"(best score: {best_score:.2f}, threshold: {threshold})"
+    )
+    return None
+```
+
+### Test cases to verify Fix 2:
+```python
+# These should NOT match (meta-instructions):
+test_no_match = [
+    "Use відпустка keyword to search data in your hr database",
+    "Знайди в базі даних hr інформацію по заказу мебелі",
+    "Search for vacation information in database",
+    "keyword: відпустка",
+]
+
+# These SHOULD match vacation preset:
+test_should_match = [
+    "Як оформити відпустку?",
+    "Як оформити відпустку",      # No question mark
+    "Як оформити відпустку ?",    # Space before question mark
+    "відпустка",                   # Single keyword
+    "Відпустка",                   # Capitalized
+    "хочу у відпустку",            # Natural language
+    "оформлення відпустки",        # Different form
+    "як взяти відпустку?",         # Slight variation
+]
+
+# Run assertions:
+for query in test_no_match:
+    result = find_preset_match(query, presets)
+    assert result is None, f"Should NOT match: {query}"
+    print(f"✅ Correctly rejected meta: {query[:50]}")
+
+for query in test_should_match:
+    result = find_preset_match(query, presets)
+    assert result is not None, f"Should MATCH: {query}"
+    print(f"✅ Correctly matched: {query[:50]} → {result['question'][:50]}")
+```
+
+---
+
+## FIX 3: Confidence-Based Response Generation
+
+### Goal
+- High confidence (score > 0.45): Answer normally
+- Medium confidence (score 0.35-0.45): Answer with disclaimer
+- Low confidence (score < 0.35): Honest "not found" instead of hallucination
+
+### Update response generation in hr_rag_service.py
+```python
+# Confidence thresholds
+RAG_HIGH_CONFIDENCE = 0.45
+RAG_MEDIUM_CONFIDENCE = 0.35
+
+# Domain mismatch detection
+DOMAIN_PAIRS = [
+    # (query_keywords, result_keywords_that_indicate_mismatch)
+    (
+        ['стул', 'стілець', 'меблі', 'крісло', 'диван'],
+        ['комп\'ютер', 'урс', 'налаштувати', 'програм', 'windows', 'мережа']
+    ),
+    (
+        ['відпустка', 'лікарняний', 'звільнення', 'оклад'],
+        ['комп\'ютер', 'урс', 'принтер', 'мережа', 'пароль']
+    ),
+    (
+        ['пароль', 'комп\'ютер', 'доступ', 'мережа'],
+        ['відпустка', 'лікарняний', 'звільнення', 'меблі']
+    ),
+]
+
+
+def detect_domain_mismatch(query: str, result_content: str) -> bool:
+    """
+    Detect if RAG result is from wrong domain.
+    
+    Example: 
+    Query: "стул" (furniture)
+    Result: about "стіл" as in desktop/IT (IT domain)
+    → MISMATCH!
+    """
+    query_lower = query.lower()
+    result_lower = result_content.lower()
+    
+    for query_keywords, mismatch_keywords in DOMAIN_PAIRS:
+        # Check if query is in one domain
+        query_matches = any(kw in query_lower for kw in query_keywords)
+        
+        if query_matches:
+            # Check if result is from wrong domain
+            result_mismatch = any(kw in result_lower for kw in mismatch_keywords)
+            
+            if result_mismatch:
+                return True
+    
+    return False
+
+
+async def generate_answer_with_confidence(
+    query: str,
+    rag_results: list,
+    user_context: dict
+) -> str:
+    """
+    Generate answer based on confidence level.
+    
+    High confidence → Full answer
+    Medium confidence → Answer + disclaimer
+    Low confidence OR domain mismatch → Honest "not found"
+    """
+    
+    if not rag_results:
+        return format_not_found_response(query)
+    
+    # Get best score
+    top_result = rag_results[0]
+    top_score = top_result.score if hasattr(top_result, 'score') else 0.0
+    top_content = top_result.metadata.get('content', '') if hasattr(top_result, 'metadata') else str(top_result)
+    
+    # Check for domain mismatch
+    if detect_domain_mismatch(query, top_content):
+        logger.warning(
+            f"🚫 Domain mismatch detected for: '{query[:50]}' "
+            f"→ Top match: '{top_content[:100]}'"
+        )
+        return format_not_found_response(query)
+    
+    # Route based on confidence
+    if top_score >= RAG_HIGH_CONFIDENCE:
+        # High confidence - answer normally
+        logger.info(f"✅ HIGH confidence ({top_score:.2f}) - answering normally")
+        return await call_claude_with_context(query, rag_results, user_context)
+    
+    elif top_score >= RAG_MEDIUM_CONFIDENCE:
+        # Medium confidence - answer with disclaimer
+        logger.info(f"⚠️ MEDIUM confidence ({top_score:.2f}) - answering with disclaimer")
+        answer = await call_claude_with_context(query, rag_results, user_context)
+        
+        return (
+            f"{answer}\n\n"
+            f"⚠️ _Рекомендую уточнити інформацію у HR-відділі._"
+        )
+    
+    else:
+        # Low confidence - don't hallucinate
+        logger.warning(f"❌ LOW confidence ({top_score:.2f}) - returning not found")
+        return format_not_found_response(query)
+
+
+def format_not_found_response(query: str) -> str:
+    """
+    Format honest 'not found' response.
+    Better than hallucinating wrong answers!
+    """
+    return (
+        f"🔍 На жаль, я не знайшов точної інформації по запиту "
+        f"*\"{query}\"* в базі знань TD AV.\n\n"
+        f"Що можна зробити:\n"
+        f"• Спробуйте переформулювати питання\n"
+        f"• Зверніться до HR-відділу: hr@vinkom.net\n"
+        f"• Або зателефонуйте Наталії Решетіловій"
+    )
+```
+
+---
+
+## INTEGRATION: Connect All 3 Fixes
+
+### Update main query processing in hr_rag_service.py
+```python
+async def get_answer(query: str, user_context: dict) -> str:
+    """
+    Main query processing pipeline.
+    ALL authenticated queries go through this method.
+    
+    Flow:
+    1. Check presets (instant, free) - with improved matching
+    2. Check keyword search (fast, free)
+    3. RAG semantic search (costs ~$0.0001)
+    4. Confidence-based response generation
+    """
+    
+    start_time = time.time()
+    
+    # Step 1: Check presets (improved matching)
+    preset_result = find_preset_match(query, self.presets, threshold=0.75)
+    
+    if preset_result:
+        elapsed = int((time.time() - start_time) * 1000)
+        logger.info(f"✅ PRESET hit for: '{query[:50]}' ({elapsed}ms, cost: $0)")
+        return preset_result['answer']
+    
+    # Step 2: Keyword search
+    keyword_results = await self.keyword_search(query)
+    
+    if keyword_results and keyword_results['top_score'] >= 0.8:
+        elapsed = int((time.time() - start_time) * 1000)
+        logger.info(f"✅ KEYWORD hit for: '{query[:50]}' ({elapsed}ms, cost: $0)")
+        context = self.build_context(keyword_results['results'])
+        return await call_claude_with_context(query, context, user_context)
+    
+    # Step 3: RAG semantic search
+    logger.info(f"🔍 RAG search for: '{query[:50]}'")
+    rag_results = await self.semantic_search(query)
+    
+    elapsed = int((time.time() - start_time) * 1000)
+    cost = "~$0.0001"
+    logger.info(f"✅ RAG search for: '{query[:50]}' -> {len(rag_results)} results ({elapsed}ms, cost: {cost})")
+    
+    # Step 4: Confidence-based response (Fix 3)
+    return await generate_answer_with_confidence(query, rag_results, user_context)
+```
+
+---
+
+## TESTING CHECKLIST
+
+After all fixes, run these tests:
+
+### Test Fix 1 (Unified routing):
+```python
+# ALL these should show hr_rag_service in logs, NOT chat_endpoints:
+queries = [
+    "Як оформити відпустку?",     # Was bypassing to chat_endpoints!
+    "Як оформити відпустку",       # No question mark
+    "відпустка",                   # Single word
+    "Як замовити стул?",           # Non-HR question
+    "Розкажи про компанію",        # General question
+]
+
+# Expected logs for ALL:
+# INFO:services.hr_rag_service:Loaded 31 preset answers
+# NOT:
+# INFO:routes.chat_endpoints:Chat using model...
+```
+
+### Test Fix 2 (Preset matching):
+```python
+# Should NOT match (meta-instructions):
+assert find_preset_match("Use відпустка keyword to search", presets) is None
+assert find_preset_match("Знайди в базі даних hr інформацію", presets) is None
+
+# SHOULD match:
+assert find_preset_match("Як оформити відпустку?", presets) is not None
+assert find_preset_match("відпустка", presets) is not None
+assert find_preset_match("Як оформити відпустку", presets) is not None
+assert find_preset_match("хочу у відпустку", presets) is not None
+```
+
+### Test Fix 3 (Confidence responses):
+```python
+# Domain mismatch → should return "not found"
+result = await get_answer("Як замовити стул?", user_context)
+assert "не знайшов" in result or "HR-відділ" in result
+assert "УРС" not in result  # Should NOT mention remote desktop!
+
+# Known HR topic → should return AVTD-specific answer
+result = await get_answer("Як оформити відпустку?", user_context)
+assert "СЗ" in result or "шаблон" in result or "Бліц" in result
+assert "зазвичай" not in result  # Should NOT give generic answer
+```
+
+### Log verification:
+```
+# Good logs after fixes:
+✅ PRESET hit for: 'відпустка' (13ms, cost: $0)
+✅ PRESET hit for: 'Як оформити відпустку?' (19ms, cost: $0)
+🚫 Meta-instruction detected, skipping presets: 'Use відпустка keyword...'
+🚫 Domain mismatch detected: 'стул' → IT content
+❌ LOW confidence (0.35) - returning not found
+✅ RAG search for: 'Як користуватися бліц?' -> 5 results (1265ms, cost: ~$0.0001)
+
+# Bad logs (should no longer appear):
+INFO:routes.chat_endpoints:Chat using model claude-haiku... ← should be gone!
+```
+
+---
+
+## DELIVERABLES
+
+After implementation:
+
+1. ✅ ALL employee queries routed through hr_rag_service (no bypass)
+2. ✅ Meta-instructions rejected from preset matching
+3. ✅ Better Ukrainian morphology handling in presets
+4. ✅ Domain mismatch detection (стул ≠ стіл)
+5. ✅ Confidence-based responses (no hallucinations)
+6. ✅ Full test suite passing
+7. ✅ Clean production logs (no chat_endpoints for employees)
+
+---
+
+## EXPECTED IMPROVEMENTS
+
+Before:
+- "Як оформити відпустку?" → generic answer (expensive, wrong path)
+- "Use відпустка keyword" → false preset match
+- "Як замовити стул?" → wrong domain answer (IT instead of furniture)
+
+After:
+- "Як оформити відпустку?" → preset (instant, free, AVTD-specific) ✅
+- "Use відпустка keyword" → no false match, goes to RAG ✅  
+- "Як замовити стул?" → honest "not found" or correct answer ✅
+
+Implement all three fixes in one session and test thoroughly!

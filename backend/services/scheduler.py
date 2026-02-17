@@ -485,6 +485,74 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] API monitoring failed: {e}")
     
+    def detect_knowledge_gaps_task(self):
+        """
+        Task: Detect HR knowledge gaps and send report to admins
+        Runs at: 07:00 AM daily
+        """
+        logger.info("🤖 [SCHEDULER] Detecting HR knowledge gaps...")
+        try:
+            import asyncio
+            db = self._get_db_session()
+            try:
+                from routes.hr_routes import hr_pinecone_index
+                from services.hr_rag_service import get_hr_rag_service
+                
+                rag_service = get_hr_rag_service(
+                    pinecone_index=hr_pinecone_index,
+                    db_session=db
+                )
+                
+                loop = asyncio.new_event_loop()
+                try:
+                    gaps = loop.run_until_complete(rag_service.detect_knowledge_gaps(days=7, min_count=2))
+                    
+                    if gaps:
+                        high_priority = [g for g in gaps if g['priority'] == 'high']
+                        medium_priority = [g for g in gaps if g['priority'] == 'medium']
+                        
+                        report = "📊 *Звіт: Пробіли в базі знань HR*\n\n"
+                        
+                        if high_priority:
+                            report += "🔴 *Негативний відгук:*\n"
+                            for g in high_priority[:10]:
+                                report += f"• \"{g['query']}\" ({g['negative_feedback']}x neg, {g['total_asks']}x total)\n"
+                            report += "\n"
+                        
+                        if medium_priority:
+                            report += "🟡 *Часті питання без пресетів:*\n"
+                            for g in medium_priority[:10]:
+                                report += f"• \"{g['query']}\" ({g['total_asks']}x)\n"
+                        
+                        logger.info(f"📋 Knowledge gaps report: {len(high_priority)} high, {len(medium_priority)} medium")
+                        
+                        try:
+                            from routes.telegram_webhook import send_telegram_message
+                            from models.hr_auth_models import HRUser
+                            
+                            admins = db.query(HRUser).filter(
+                                HRUser.access_level.in_(['developer', 'admin_hr']),
+                                HRUser.is_active == True
+                            ).all()
+                            
+                            for admin in admins:
+                                if admin.telegram_id:
+                                    loop.run_until_complete(
+                                        send_telegram_message(admin.telegram_id, report)
+                                    )
+                            
+                            logger.info(f"✅ Gap report sent to {len(admins)} admin(s)")
+                        except Exception as e:
+                            logger.warning(f"Could not send gap report: {e}")
+                    else:
+                        logger.info("✅ No significant knowledge gaps detected")
+                finally:
+                    loop.close()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Gap detection failed: {e}")
+
     def post_to_facebook_task(self):
         """
         Post approved content to Facebook at scheduled time
@@ -989,6 +1057,14 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        self.scheduler.add_job(
+            self.detect_knowledge_gaps_task,
+            CronTrigger(hour=7, minute=0),
+            id='detect_knowledge_gaps',
+            name='Detect HR knowledge gaps',
+            replace_existing=True
+        )
+        
         self.scheduler.start()
         
         logger.info("=" * 60)
@@ -1022,6 +1098,7 @@ class ContentScheduler:
         logger.info("   • API monitoring: Daily 8:00 AM")
         logger.info("   • Cleanup: Daily 3:00 AM")
         logger.info("   • Subscription expiry: Daily 4:00 AM")
+        logger.info("   • Knowledge gap detection: Daily 7:00 AM")
         logger.info("")
         logger.info("=" * 60)
         logger.info("🚀 System ready! Waiting for next scheduled task...")
