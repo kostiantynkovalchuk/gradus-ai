@@ -1,0 +1,241 @@
+# URGENT: Implement Multi-Format Phone Verification for SED API
+
+## PROBLEM
+Real employee (phone: 380999065560) cannot register in Maya HR Bot.
+Error: "Номер не знайдено в СЕД Бліц"
+
+Employee exists in SED but phone format doesn't match.
+
+## ROOT CAUSE
+We only try ONE phone format when querying SED API.
+SED stores phones in various formats:
+- +380999065560
+- 0999065560  
+- 380999065560
+- With spaces/dashes
+
+## API DETAILS FROM SWAGGER
+
+**Endpoint:** POST /api/employees
+**Auth:** Authorization: Bearer {SED_API_KEY}
+**Request:**
+```json
+{"phone": "string"}
+```
+
+**Response 200:**
+```json
+{
+  "status": true,
+  "data": {
+    "employee_id": 0,
+    "phone": "string",
+    "full_name": "string",
+    "first_name": "string",
+    "last_name": "string",
+    "department": "string",
+    "position": "string",
+    "start_date": "2026-02-19T08:51:24.488Z",
+    "email": "string"
+  },
+  "errors": ["string"]
+}
+```
+
+**Response 404:**
+```json
+{
+  "status": false,
+  "data": null,
+  "errors": ["Employee not found."]
+}
+```
+
+## SOLUTION
+
+Update `backend/services/hr_sed_service.py` to try multiple phone formats:
+```python
+import httpx
+import logging
+from typing import Optional, Dict
+
+logger = logging.getLogger(__name__)
+
+SED_API_URL = "https://api-sed.tdav.net.ua"
+SED_API_KEY = os.environ.get("SED_API_KEY")
+
+
+def normalize_phone(phone: str) -> str:
+    """
+    Normalize phone to 380XXXXXXXXX format.
+    Removes all non-digits.
+    """
+    import re
+    digits = re.sub(r'\D', '', phone)
+    
+    # Add 380 prefix if needed
+    if digits.startswith('0'):
+        digits = '380' + digits[1:]
+    elif not digits.startswith('380'):
+        digits = '380' + digits
+    
+    return digits
+
+
+def generate_phone_formats(phone: str) -> list:
+    """
+    Generate all possible phone format variations for SED API.
+    
+    Args:
+        phone: User's phone in any format
+    
+    Returns:
+        List of phone format variations to try
+    """
+    normalized = normalize_phone(phone)  # 380999065560
+    
+    if len(normalized) != 12:
+        logger.warning(f"Invalid phone length: {normalized}")
+        return [phone]  # Return original if invalid
+    
+    local_digits = normalized[3:]  # 999065560
+    
+    variations = [
+        normalized,                      # 380999065560
+        f"+{normalized}",                # +380999065560
+        f"0{local_digits}",              # 0999065560
+        f"+380 {local_digits[0:2]} {local_digits[2:5]} {local_digits[5:7]} {local_digits[7:9]}",  # +380 99 906 55 60
+        f"380{local_digits[0:2]}{local_digits[2:5]}{local_digits[5:7]}{local_digits[7:9]}",      # 38099906556
+    ]
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique = []
+    for v in variations:
+        if v not in seen:
+            seen.add(v)
+            unique.append(v)
+    
+    return unique
+
+
+async def verify_employee_in_sed(phone: str) -> Optional[Dict]:
+    """
+    Verify employee in SED by trying multiple phone format variations.
+    
+    Args:
+        phone: User's phone number (any format)
+    
+    Returns:
+        Employee data if found, None otherwise
+    """
+    
+    # Generate all phone format variations
+    phone_formats = generate_phone_formats(phone)
+    
+    logger.info(f"Verifying phone {phone} with {len(phone_formats)} format variations")
+    
+    # Try each format
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for i, phone_format in enumerate(phone_formats, 1):
+            try:
+                logger.info(f"Attempt {i}/{len(phone_formats)}: Trying '{phone_format}'")
+                
+                response = await client.post(
+                    f"{SED_API_URL}/api/employees",
+                    headers={
+                        "accept": "application/json",
+                        "Authorization": f"Bearer {SED_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={"phone": phone_format},
+                    timeout=5.0
+                )
+                
+                # Parse response
+                data = response.json()
+                
+                # Check if employee found
+                if response.status_code == 200 and data.get("status") == True:
+                    employee = data.get("data")
+                    
+                    logger.info(
+                        f"✅ Employee found with format '{phone_format}': "
+                        f"{employee.get('full_name', 'Unknown')}"
+                    )
+                    
+                    # Add normalized phone and format used
+                    employee['phone_normalized'] = normalize_phone(phone)
+                    employee['phone_format_matched'] = phone_format
+                    
+                    return employee
+                
+                elif response.status_code == 401:
+                    logger.error("SED API 401 Unauthorized - check API key")
+                    raise Exception("SED API authentication failed")
+                
+                elif response.status_code == 404 or data.get("status") == False:
+                    logger.debug(f"Format '{phone_format}' not found, trying next...")
+                    continue
+                
+                else:
+                    logger.warning(f"Unexpected response {response.status_code}: {data}")
+                    continue
+                    
+            except httpx.TimeoutException:
+                logger.warning(f"Timeout for format '{phone_format}', trying next...")
+                continue
+                
+            except Exception as e:
+                logger.error(f"Error trying format '{phone_format}': {e}")
+                continue
+    
+    # None of the formats worked
+    logger.warning(
+        f"❌ Employee not found with ANY format variation. "
+        f"Phone: {phone}, Tried: {phone_formats}"
+    )
+    return None
+```
+
+## TEST THE FIX
+
+After implementing, test with the real phone:
+```python
+# Test case
+result = await verify_employee_in_sed("380999065560")
+
+# Should try:
+# 1. 380999065560
+# 2. +380999065560
+# 3. 0999065560
+# 4. +380 99 906 55 60
+# etc.
+
+# And return employee data when match found
+```
+
+## SUCCESS CRITERIA
+
+1. ✅ User 380999065560 can register successfully
+2. ✅ Logs show: "Employee found with format 'X': Full Name"
+3. ✅ Maya responds: "Вітаю, [Full Name]! Ви успішно авторизовані"
+4. ✅ All phone format variations are tried before giving up
+
+## ADDITIONAL FIX
+
+Also update the error message in telegram_webhook.py to be more helpful:
+```python
+# When verification fails:
+await update.message.reply_text(
+    f"❌ Номер {phone_display} не знайдено в базі співробітників TD AV.\n\n"
+    f"Перевірте:\n"
+    f"• Ви ввели правильний номер?\n"
+    f"• Ви вже в системі Бліц?\n"
+    f"• Номер активний в компанії?\n\n"
+    f"📞 Якщо впевнені, що номер вірний:\n"
+    f"Зверніться до HR-відділу: hr@vinkom.net"
+)
+```
+
+Implement these changes and test with real employee phone: 380999065560

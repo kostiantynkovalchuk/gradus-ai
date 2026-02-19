@@ -34,6 +34,10 @@ class SEDService:
                 logger.error("SED API 401 Unauthorized (API key invalid or expired)")
                 return {"verified": False, "employee": None, "error": "http_401", "stop": True}
 
+            if response.status_code == 404:
+                logger.debug(f"SED API 404 for format '{phone_format}' - not found")
+                return {"verified": False, "employee": None, "error": "not_found"}
+
             if response.status_code != 200:
                 logger.debug(f"SED API HTTP {response.status_code} for format '{phone_format}'")
                 return {"verified": False, "employee": None, "error": f"http_{response.status_code}"}
@@ -43,7 +47,7 @@ class SEDService:
             except Exception:
                 return {"verified": False, "employee": None, "error": "invalid_response"}
 
-            if data.get("status") == "success" and data.get("data"):
+            if data.get("status") is True and data.get("data"):
                 emp = data["data"]
                 logger.info(f"SED employee found with format '{phone_format}': {emp.get('full_name')}")
                 return {

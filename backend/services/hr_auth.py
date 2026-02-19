@@ -284,11 +284,18 @@ async def handle_verification_failure(db: Session, chat_id: int, telegram_id: in
     db.add(log)
     db.commit()
 
+    from utils.phone_normalizer import format_for_display
+    phone_display = format_for_display(phone)
+
     if error == "not_found":
         user_message = (
-            "❌ Вибач, я не знайшла тебе в базі співробітників.\n\n"
-            "Можливо, твій номер ще не внесений у систему.\n\n"
-            "📧 Напиши в HR-відділ: hr@vinkom.net"
+            f"❌ Номер {phone_display} не знайдено в базі співробітників TD AV.\n\n"
+            f"Перевірте:\n"
+            f"• Ви ввели правильний номер?\n"
+            f"• Ви вже в системі Бліц?\n"
+            f"• Номер активний в компанії?\n\n"
+            f"📞 Якщо впевнені, що номер вірний:\n"
+            f"Зверніться до HR-відділу: hr@vinkom.net"
         )
     elif error == "timeout":
         user_message = (
