@@ -60,25 +60,29 @@ class DocumentService:
         if not keywords:
             return []
         
-        from models.hr_models import HRDocument
-        from sqlalchemy import func, cast, String
+        from sqlalchemy import text
         
-        docs = db.query(HRDocument).filter(
-            HRDocument.is_active == True,
-            HRDocument.topics.overlap(keywords)
-        ).limit(limit).all()
+        rows = db.execute(text("""
+            SELECT id, title, document_type, document_number,
+                   url, category, description
+            FROM hr_documents
+            WHERE topics && :keywords::text[]
+              AND is_active = TRUE
+            ORDER BY document_number
+            LIMIT :limit
+        """), {"keywords": keywords, "limit": limit}).fetchall()
         
         return [
             {
-                'id': doc.id,
-                'title': doc.title,
-                'document_type': doc.document_type,
-                'document_number': doc.document_number,
-                'url': doc.url,
-                'category': doc.category,
-                'description': doc.description
+                'id': row[0],
+                'title': row[1],
+                'document_type': row[2],
+                'document_number': row[3],
+                'url': row[4],
+                'category': row[5],
+                'description': row[6]
             }
-            for doc in docs
+            for row in rows
         ]
     
     @staticmethod
