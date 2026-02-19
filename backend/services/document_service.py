@@ -57,33 +57,46 @@ class DocumentService:
                       'потрібно', 'для', 'при', 'або', 'але', 'та', 'це', 'той', 'ця'}
         keywords = [w for w in words if w not in stopwords]
         
+        logger.info(f"🔍 Document topic search: query='{query[:50]}', keywords={keywords}")
+        
         if not keywords:
+            logger.info("ℹ️ No keywords extracted from query")
             return []
         
-        from sqlalchemy import text
+        from models.hr_models import HRDocument
         
-        rows = db.execute(text("""
-            SELECT id, title, document_type, document_number,
-                   url, category, description
-            FROM hr_documents
-            WHERE topics && CAST(:keywords AS varchar[])
-              AND is_active = TRUE
-            ORDER BY document_number
-            LIMIT :limit
-        """), {"keywords": keywords, "limit": limit}).fetchall()
+        all_docs = db.query(HRDocument).filter(
+            HRDocument.is_active == True
+        ).all()
         
-        return [
-            {
-                'id': row[0],
-                'title': row[1],
-                'document_type': row[2],
-                'document_number': row[3],
-                'url': row[4],
-                'category': row[5],
-                'description': row[6]
-            }
-            for row in rows
-        ]
+        scored_docs = []
+        for doc in all_docs:
+            if not doc.topics:
+                continue
+            doc_topics = [t.lower() for t in doc.topics]
+            match_count = sum(1 for kw in keywords if kw in doc_topics)
+            if match_count > 0:
+                scored_docs.append((doc, match_count))
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        results = []
+        for doc, score in scored_docs[:limit]:
+            logger.info(f"  📄 Match: {doc.document_number} '{doc.title}' (score: {score})")
+            results.append({
+                'id': doc.id,
+                'title': doc.title,
+                'document_type': doc.document_type,
+                'document_number': doc.document_number,
+                'url': doc.url,
+                'category': doc.category,
+                'description': doc.description
+            })
+        
+        if not results:
+            logger.info(f"ℹ️ No topic matches for keywords: {keywords}")
+        
+        return results
     
     @staticmethod
     def find_documents(db: Session, query: str, answer_text: str, category: Optional[str] = None) -> List[Dict]:
@@ -91,7 +104,7 @@ class DocumentService:
         
         mentioned_numbers = DocumentService.extract_document_numbers(answer_text)
         if mentioned_numbers:
-            logger.info(f"Found document numbers in answer: {mentioned_numbers}")
+            logger.info(f"🔢 Found document numbers in answer: {mentioned_numbers}")
             mentioned_docs = DocumentService.find_documents_by_numbers(db, mentioned_numbers)
             documents.extend(mentioned_docs)
         
@@ -107,7 +120,7 @@ class DocumentService:
                 unique_docs.append(doc)
         
         if unique_docs:
-            logger.info(f"📄 Found {len(unique_docs)} documents for query: '{query[:50]}'")
+            logger.info(f"📄 Attaching {len(unique_docs)} documents for query: '{query[:50]}'")
         return unique_docs[:3]
     
     @staticmethod

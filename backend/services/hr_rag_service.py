@@ -157,15 +157,20 @@ class HRRagService:
     
     def _attach_documents(self, query: str, answer_text: str) -> str:
         if not self.db_session:
+            logger.info("ℹ️ No db_session for document linking")
             return answer_text
         try:
             from services.document_service import document_service
+            logger.info(f"🔗 Attempting document linking for: '{query[:50]}'")
             documents = document_service.find_documents(self.db_session, query, answer_text)
             if documents:
                 doc_text = document_service.format_documents_text(documents)
+                logger.info(f"📄 Attached {len(documents)} document links to answer")
                 return answer_text + doc_text
+            else:
+                logger.info("ℹ️ No matching documents found")
         except Exception as e:
-            logger.warning(f"Document linking error: {e}")
+            logger.warning(f"Document linking error: {e}", exc_info=True)
         return answer_text
 
     def _get_embedding(self, text: str) -> List[float]:
