@@ -1,0 +1,31 @@
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.21.98.79:53318 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'message']
+INFO:routes.telegram_webhook:💬 Message from user: Як працювати в бліц?
+INFO:routes.telegram_webhook:📋 Routing to hr_rag_service for 441389791: Як працювати в бліц?...
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendChatAction "HTTP/1.1 200 OK"
+INFO:services.hr_rag_service:Loaded 31 preset answers
+INFO:services.hr_rag_service:✅ PRESET MATCH: 'Як працювати в бліц?' → pattern 'доступ сед бліц|sed blitz|як зайти в бліц|сед бліц' (score: 0.77)
+WARNING:services.hr_rag_service:Document linking error: (psycopg2.errors.SyntaxError) syntax error at or near ":"
+LINE 5:             WHERE topics && :keywords::text[]
+                                    ^
+[SQL: 
+            SELECT id, title, document_type, document_number,
+                   url, category, description
+            FROM hr_documents
+            WHERE topics && :keywords::text[]
+              AND is_active = TRUE
+            ORDER BY document_number
+            LIMIT %(limit)s
+        ]
+[parameters: {'limit': 2}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+INFO:services.hr_rag_service:✅ PRESET hit for: 'Як працювати в бліц?' (46ms, cost: $0)
+INFO:     10.16.32.68:57596 - "POST /api/hr/answer HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://gradus-ai.onrender.com/api/hr/answer "HTTP/1.1 200 OK"
+INFO:routes.hr_routes:HR Query logged: user=441389791, preset=True, rag=False, time=163ms, log_id=15
+INFO:     10.16.32.68:57596 - "POST /api/hr/log-query HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://gradus-ai.onrender.com/api/hr/log-query "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✅ Maya responded to Konstantin on Telegram
+INFO:     10.18.164.3:54702 - "POST /api/telegram/webhook HTTP/1.1" 200 OK

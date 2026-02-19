@@ -66,7 +66,7 @@ class DocumentService:
             SELECT id, title, document_type, document_number,
                    url, category, description
             FROM hr_documents
-            WHERE topics && :keywords::text[]
+            WHERE topics && CAST(:keywords AS text[])
               AND is_active = TRUE
             ORDER BY document_number
             LIMIT :limit
