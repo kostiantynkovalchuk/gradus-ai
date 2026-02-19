@@ -1,0 +1,66 @@
+# Fix Telegram Markdown Escaping for Document Links
+
+## PROBLEM
+Document links are being attached correctly, but Telegram API rejects the message:
+`can't parse entities: Can't find end of the entity starting at byte offset 946`
+
+This happens because special characters in document titles or URLs aren't escaped for Telegram MarkdownV2.
+
+## FIX
+
+In `backend/services/document_service.py`, update `format_documents_markdown`:
+```python
+@staticmethod
+def format_documents_markdown(documents: List[Dict]) -> str:
+    """
+    Format documents as Telegram-safe markdown.
+    Escapes special characters for MarkdownV2.
+    """
+    if not documents:
+        return ""
+    
+    def escape_markdown(text: str) -> str:
+        """Escape special characters for Telegram MarkdownV2."""
+        # Characters that need escaping in MarkdownV2
+        special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in special_chars:
+            text = text.replace(char, f'\\{char}')
+        return text
+    
+    lines = ["\n\n📚 **Документи:**"]
+    
+    for doc in documents:
+        title = doc['title']
+        url = doc['url']
+        
+        # Escape title but NOT the URL (URLs don't need escaping in markdown links)
+        safe_title = escape_markdown(title)
+        
+        # Create markdown link
+        lines.append(f"• [{safe_title}]({url})")
+    
+    return "\n".join(lines)
+```
+
+## TEST
+
+After fix, both queries should work:
+```bash
+# Test 1
+curl -X POST https://gradus-ai.onrender.com/api/hr/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Як працювати в бліц?", "user_id": 441389791}'
+
+# Test 2  
+curl -X POST https://gradus-ai.onrender.com/api/hr/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Як замовити стілець?", "user_id": 441389791}'
+```
+
+Both should return successfully AND send to Telegram without errors.
+
+## SUCCESS CRITERIA
+- ✅ No more "can't parse entities" errors
+- ✅ Document links appear correctly in Telegram
+- ✅ Links are clickable
+- ✅ All special characters properly escaped

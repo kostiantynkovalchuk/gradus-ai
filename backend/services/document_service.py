@@ -124,6 +124,12 @@ class DocumentService:
         return unique_docs[:3]
     
     @staticmethod
+    def _escape_markdown(text: str) -> str:
+        for char in ['*', '_', '`', '[', ']', '(', ')']:
+            text = text.replace(char, '')
+        return text
+
+    @staticmethod
     def format_documents_text(documents: List[Dict]) -> str:
         if not documents:
             return ""
@@ -131,9 +137,9 @@ class DocumentService:
         lines = ["\n\n📚 Документи:"]
         
         for doc in documents:
-            title = doc['title']
+            title = DocumentService._escape_markdown(doc['title'])
             url = doc['url']
-            lines.append(f"• {title}\n  {url}")
+            lines.append(f"• [{title}]({url})")
         
         return "\n".join(lines)
 
