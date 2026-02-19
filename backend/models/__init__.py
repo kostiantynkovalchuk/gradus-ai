@@ -34,5 +34,5 @@ def get_db():
     finally:
         db.close()
 
-from .hr_models import HRContent, HRMenuStructure, HREmbedding, HRPresetAnswer
+from .hr_models import HRContent, HRMenuStructure, HREmbedding, HRPresetAnswer, HRDocument
 from .hr_auth_models import HRUser, HRWhitelist, VerificationLog

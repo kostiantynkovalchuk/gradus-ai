@@ -51,6 +51,26 @@ class HREmbedding(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class HRDocument(Base):
+    """HR Documents for Smart Linking to Answers"""
+    __tablename__ = "hr_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(500), nullable=False)
+    document_type = Column(String(50))
+    document_number = Column(String(50), index=True)
+    url = Column(Text, nullable=False)
+    access_level = Column(String(50), default='all')
+    topics = Column(ARRAY(String))
+    keywords = Column(ARRAY(String))
+    category = Column(String(100))
+    description = Column(Text)
+    file_format = Column(String(50), default='google_doc')
+    is_active = Column(Boolean, default=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+
 class HRPresetAnswer(Base):
     """Quick Response Presets for Common HR Questions"""
     __tablename__ = "hr_preset_answers"

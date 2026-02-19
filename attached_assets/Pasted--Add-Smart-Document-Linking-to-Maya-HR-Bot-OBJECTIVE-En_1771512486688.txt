@@ -1,0 +1,562 @@
+# Add Smart Document Linking to Maya HR Bot
+
+## OBJECTIVE
+Enhance Maya HR Bot to automatically attach relevant documents (Google Docs, templates, appendices) to ALL answers — whether they come from presets or RAG search.
+
+## CURRENT STATE
+- Maya has 31 preset answers covering common questions
+- RAG system handles non-preset queries
+- Documents referenced in answers (e.g., "шаблон №69") but NO LINKS provided
+- Users can't access the actual documents
+
+## PROBLEM
+```
+User: "Як оформити відпустку?"
+Maya: "18 робочих днів... СЗ в СЕД Бліц (шаблон №69)"
+      ❌ No link to шаблон №69!
+      
+User clicks where? Has to search manually.
+```
+
+## SOLUTION ARCHITECTURE
+
+### 1. Create Documents Database Table
+
+**File:** Create migration or add to existing schema
+```sql
+CREATE TABLE hr_documents (
+    id SERIAL PRIMARY KEY,
+    
+    -- Document identity
+    title VARCHAR(500) NOT NULL,
+    document_type VARCHAR(50),              -- 'шаблон', 'додаток', 'інструкція'
+    document_number VARCHAR(50),            -- '№69', '№33', '№42.1'
+    
+    -- Access
+    url TEXT NOT NULL,                      -- Google Doc URL
+    access_level VARCHAR(50) DEFAULT 'all', -- 'all', 'office_only', 'admin'
+    
+    -- Matching signals
+    topics TEXT[],                          -- {'відпустка', 'бліц', 'сед', 'доступ'}
+    keywords TEXT[],                        -- {'vacation', 'blitz', 'access'}
+    category VARCHAR(100),                  -- 'hr_process', 'tech_support', 'onboarding'
+    
+    -- Metadata
+    description TEXT,
+    file_format VARCHAR(50) DEFAULT 'google_doc',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for fast matching
+CREATE INDEX idx_hr_docs_topics ON hr_documents USING GIN(topics);
+CREATE INDEX idx_hr_docs_number ON hr_documents(document_number);
+CREATE INDEX idx_hr_docs_category ON hr_documents(category);
+CREATE INDEX idx_hr_docs_active ON hr_documents(is_active) WHERE is_active = TRUE;
+```
+
+### 2. Seed Initial Documents
+
+**File:** `backend/scripts/seed_hr_documents.py`
+```python
+import asyncio
+import asyncpg
+import os
+
+INITIAL_DOCUMENTS = [
+    {
+        'title': 'Шаблон №69 - Оформлення відпустки',
+        'document_type': 'шаблон',
+        'document_number': '№69',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace with actual URL
+        'topics': ['відпустка', 'шаблон', 'сз', 'оформлення', 'бліц'],
+        'keywords': ['vacation', 'template', 'form', 'blitz'],
+        'category': 'hr_process',
+        'description': 'Шаблон службової записки для оформлення відпустки в СЕД Бліц'
+    },
+    {
+        'title': 'Додаток №33 - Робота в СЕД Бліц',
+        'document_type': 'додаток',
+        'document_number': '№33',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace
+        'topics': ['бліц', 'сед', 'система', 'доступ', 'робота', 'інструкція'],
+        'keywords': ['blitz', 'sed', 'access', 'work', 'instruction'],
+        'category': 'tech_support',
+        'description': 'Повна інструкція з роботи в системі СЕД Бліц'
+    },
+    {
+        'title': 'Шаблон №63 - Підбір персоналу',
+        'document_type': 'шаблон',
+        'document_number': '№63',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace
+        'topics': ['підбір', 'персонал', 'прийом', 'співробітник', 'вакансія'],
+        'keywords': ['recruitment', 'hiring', 'employee', 'vacancy'],
+        'category': 'hr_process',
+        'description': 'Шаблон для підбору нового співробітника'
+    },
+    {
+        'title': 'Додаток №42.1 - Прийом на роботу',
+        'document_type': 'додаток',
+        'document_number': '№42.1',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace
+        'topics': ['прийом', 'оформлення', 'новий', 'співробітник', 'онбординг'],
+        'keywords': ['onboarding', 'hire', 'new employee', 'start'],
+        'category': 'onboarding',
+        'description': 'Процес оформлення нового співробітника'
+    },
+    {
+        'title': 'Шаблон №114 - ШДС (Доступи до систем)',
+        'document_type': 'шаблон',
+        'document_number': '№114',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace
+        'topics': ['шдс', 'доступи', 'система', 'налаштування', 'акаунт'],
+        'keywords': ['access', 'system', 'setup', 'account'],
+        'category': 'tech_support',
+        'description': 'Шаблон для налаштування доступів до систем компанії'
+    },
+    {
+        'title': 'Шаблон №83 - Перевірка служби безпеки',
+        'document_type': 'шаблон',
+        'document_number': '№83',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace
+        'topics': ['безпека', 'перевірка', 'підбір', 'новий співробітник'],
+        'keywords': ['security', 'check', 'screening', 'recruitment'],
+        'category': 'hr_process',
+        'description': 'Службова записка на перевірку кандидата службою безпеки'
+    },
+    {
+        'title': 'Додаток №42.2 - Звільнення співробітника',
+        'document_type': 'додаток',
+        'document_number': '№42.2',
+        'url': 'https://docs.google.com/document/d/YOUR_DOC_ID/edit',  # TODO: Replace
+        'topics': ['звільнення', 'розірвання', 'контракт', 'співробітник'],
+        'keywords': ['termination', 'dismissal', 'leaving', 'resignation'],
+        'category': 'hr_process',
+        'description': 'Процес звільнення співробітника'
+    },
+]
+
+async def seed_documents():
+    conn = await asyncpg.connect(os.environ.get('DATABASE_URL'))
+    
+    try:
+        for doc in INITIAL_DOCUMENTS:
+            await conn.execute("""
+                INSERT INTO hr_documents (
+                    title, document_type, document_number, url,
+                    topics, keywords, category, description
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT DO NOTHING
+            """, 
+                doc['title'], doc['document_type'], doc['document_number'], 
+                doc['url'], doc['topics'], doc['keywords'], 
+                doc['category'], doc['description']
+            )
+        
+        print(f"✅ Seeded {len(INITIAL_DOCUMENTS)} documents")
+    finally:
+        await conn.close()
+
+if __name__ == "__main__":
+    asyncio.run(seed_documents())
+```
+
+### 3. Document Detection & Matching Service
+
+**File:** `backend/services/document_service.py`
+```python
+import re
+import logging
+from typing import List, Dict, Optional
+from services.database import get_db_pool
+
+logger = logging.getLogger(__name__)
+
+
+class DocumentService:
+    """
+    Intelligently match documents to queries and answers.
+    Works for both preset and RAG responses.
+    """
+    
+    @staticmethod
+    def extract_document_numbers(text: str) -> List[str]:
+        """
+        Extract document numbers mentioned in text.
+        
+        Examples:
+        "шаблон №69" → ["№69"]
+        "додаток №42.1" → ["№42.1"]
+        "шаблони №63, №83" → ["№63", "№83"]
+        """
+        patterns = [
+            r'№\s*(\d+(?:\.\d+)?)',           # №69, №42.1
+            r'шаблон\s*(\d+)',                # шаблон 69
+            r'додаток\s*(\d+(?:\.\d+)?)',    # додаток 42.1
+        ]
+        
+        numbers = []
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            numbers.extend([f"№{m}" for m in matches])
+        
+        return list(set(numbers))  # Dedupe
+    
+    @staticmethod
+    async def find_documents_by_numbers(numbers: List[str]) -> List[Dict]:
+        """
+        Find documents by their numbers (e.g., №69, №33).
+        """
+        if not numbers:
+            return []
+        
+        pool = await get_db_pool()
+        
+        rows = await pool.fetch("""
+            SELECT 
+                id, title, document_type, document_number,
+                url, category, description
+            FROM hr_documents
+            WHERE document_number = ANY($1)
+              AND is_active = TRUE
+            ORDER BY document_type, document_number
+        """, numbers)
+        
+        return [dict(row) for row in rows]
+    
+    @staticmethod
+    async def find_documents_by_topics(query: str, limit: int = 3) -> List[Dict]:
+        """
+        Find documents by matching query keywords to document topics.
+        
+        Uses array overlap (&&) for fast topic matching.
+        """
+        # Extract meaningful words from query
+        import re
+        from unidecode import unidecode
+        
+        # Normalize and extract keywords
+        query_lower = query.lower()
+        words = re.findall(r'\b\w{3,}\b', query_lower)  # Words 3+ chars
+        
+        # Remove common stopwords
+        stopwords = {'який', 'як', 'що', 'коли', 'де', 'можна', 'треба', 'потрібно'}
+        keywords = [w for w in words if w not in stopwords]
+        
+        if not keywords:
+            return []
+        
+        pool = await get_db_pool()
+        
+        # Match documents where topics overlap with query keywords
+        rows = await pool.fetch("""
+            SELECT 
+                id, title, document_type, document_number,
+                url, category, description,
+                -- Calculate relevance score
+                (
+                    SELECT COUNT(*)
+                    FROM unnest(topics) topic
+                    WHERE topic = ANY($1)
+                ) as relevance
+            FROM hr_documents
+            WHERE topics && $1  -- Array overlap
+              AND is_active = TRUE
+            ORDER BY relevance DESC, document_number
+            LIMIT $2
+        """, keywords, limit)
+        
+        return [dict(row) for row in rows]
+    
+    @staticmethod
+    async def find_documents(
+        query: str, 
+        answer_text: str,
+        category: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        Universal document finder for ANY answer.
+        
+        Strategy:
+        1. Extract document numbers from answer (e.g., "шаблон №69")
+        2. Match query topics to document topics
+        3. Deduplicate and rank
+        
+        Args:
+            query: User's original question
+            answer_text: Maya's generated answer
+            category: Optional category filter
+        
+        Returns:
+            List of relevant documents
+        """
+        documents = []
+        
+        # Strategy 1: Find docs explicitly mentioned in answer
+        mentioned_numbers = DocumentService.extract_document_numbers(answer_text)
+        if mentioned_numbers:
+            logger.info(f"Found document numbers in answer: {mentioned_numbers}")
+            mentioned_docs = await DocumentService.find_documents_by_numbers(mentioned_numbers)
+            documents.extend(mentioned_docs)
+        
+        # Strategy 2: Find docs by query topics (if we need more)
+        if len(documents) < 2:
+            topic_docs = await DocumentService.find_documents_by_topics(query, limit=2)
+            documents.extend(topic_docs)
+        
+        # Deduplicate by ID
+        seen_ids = set()
+        unique_docs = []
+        for doc in documents:
+            if doc['id'] not in seen_ids:
+                seen_ids.add(doc['id'])
+                unique_docs.append(doc)
+        
+        logger.info(f"Found {len(unique_docs)} documents for query: '{query[:50]}'")
+        return unique_docs[:3]  # Max 3 documents
+    
+    @staticmethod
+    def format_documents_markdown(documents: List[Dict]) -> str:
+        """
+        Format documents as Telegram markdown.
+        
+        Returns:
+        📚 **Документи:**
+        • [Шаблон №69 - Відпустка](https://...)
+        • [Додаток №33 - Бліц](https://...)
+        """
+        if not documents:
+            return ""
+        
+        lines = ["\n\n📚 **Документи:**"]
+        
+        for doc in documents:
+            # Create clickable link
+            title = doc['title']
+            url = doc['url']
+            lines.append(f"• [{title}]({url})")
+        
+        return "\n".join(lines)
+
+
+# Singleton instance
+document_service = DocumentService()
+```
+
+### 4. Update HR RAG Service to Use Documents
+
+**File:** `backend/services/hr_rag_service.py`
+
+Add document linking to the existing `get_answer` method:
+```python
+from services.document_service import document_service
+
+# Find the get_answer method and update it:
+
+async def get_answer(self, query: str, user_context: dict) -> dict:
+    """
+    Main query processing with universal document linking.
+    
+    Flow:
+    1. Try preset (instant)
+    2. Try keyword search
+    3. Try RAG semantic search
+    4. Attach relevant documents (works for ALL paths)
+    """
+    start_time = time.time()
+    
+    # Step 1: Check presets
+    preset_result = self.find_preset_match(query, threshold=0.75)
+    
+    if preset_result:
+        elapsed = int((time.time() - start_time) * 1000)
+        logger.info(f"✅ PRESET hit: '{query[:50]}' ({elapsed}ms)")
+        
+        answer_text = preset_result['answer']
+        method = 'preset'
+        sources = []
+        confidence = preset_result.get('confidence', 1.0)
+    
+    else:
+        # Step 2: Keyword search
+        keyword_results = await self.keyword_search(query)
+        
+        if keyword_results and keyword_results['top_score'] >= 0.8:
+            elapsed = int((time.time() - start_time) * 1000)
+            logger.info(f"✅ KEYWORD hit: '{query[:50]}' ({elapsed}ms)")
+            
+            context = self.build_context(keyword_results['results'])
+            answer_text = await self.call_claude_with_context(query, context, user_context)
+            method = 'keyword'
+            sources = keyword_results['results'][:3]
+            confidence = keyword_results['top_score']
+        
+        else:
+            # Step 3: RAG semantic search
+            logger.info(f"🔍 RAG search: '{query[:50]}'")
+            rag_results = await self.semantic_search(query)
+            
+            answer_text = await self.generate_answer_with_confidence(
+                query, rag_results, user_context
+            )
+            
+            elapsed = int((time.time() - start_time) * 1000)
+            logger.info(f"✅ RAG: '{query[:50]}' ({elapsed}ms)")
+            
+            method = 'rag'
+            sources = rag_results[:3]
+            confidence = rag_results[0].score if rag_results else 0.0
+    
+    # Step 4: UNIVERSAL DOCUMENT DETECTION (works for all paths!)
+    documents = await document_service.find_documents(
+        query=query,
+        answer_text=answer_text,
+        category=user_context.get('category')
+    )
+    
+    # Step 5: Append document links to answer
+    if documents:
+        doc_links = document_service.format_documents_markdown(documents)
+        answer_text += doc_links
+        logger.info(f"📄 Added {len(documents)} document links")
+    
+    # Return enhanced response
+    return {
+        'text': answer_text,
+        'sources': sources,
+        'documents': documents,  # Include for API clients
+        'from_preset': (method == 'preset'),
+        'method': method,
+        'confidence': confidence,
+        'response_time_ms': int((time.time() - start_time) * 1000)
+    }
+```
+
+### 5. Testing & Verification
+
+**Create test script:** `backend/scripts/test_documents.py`
+```python
+import asyncio
+from services.hr_rag_service import HRRagService
+
+async def test_document_linking():
+    """
+    Test that documents are attached to answers.
+    """
+    service = HRRagService()
+    
+    test_cases = [
+        {
+            'query': 'Як оформити відпустку?',
+            'expected_doc': '№69',
+            'expected_method': 'preset'
+        },
+        {
+            'query': 'Як працювати в бліц?',
+            'expected_doc': '№33',
+            'expected_method': 'preset'  # or 'rag'
+        },
+        {
+            'query': 'Прийом нового співробітника',
+            'expected_doc': '№42.1',
+            'expected_method': 'rag'
+        }
+    ]
+    
+    for i, test in enumerate(test_cases, 1):
+        print(f"\n{'='*60}")
+        print(f"Test {i}: {test['query']}")
+        print(f"{'='*60}")
+        
+        result = await service.get_answer(
+            query=test['query'],
+            user_context={'user_id': 441389791}
+        )
+        
+        print(f"Method: {result['method']}")
+        print(f"Documents found: {len(result.get('documents', []))}")
+        
+        for doc in result.get('documents', []):
+            print(f"  • {doc['document_number']}: {doc['title']}")
+        
+        # Check expectations
+        has_expected_doc = any(
+            test['expected_doc'] in doc['document_number']
+            for doc in result.get('documents', [])
+        )
+        
+        if has_expected_doc:
+            print(f"✅ PASS: Found expected document {test['expected_doc']}")
+        else:
+            print(f"⚠️ WARN: Expected document {test['expected_doc']} not found")
+        
+        print(f"\nAnswer:\n{result['text'][:200]}...")
+
+if __name__ == "__main__":
+    asyncio.run(test_document_linking())
+```
+
+## IMPLEMENTATION CHECKLIST
+
+### Phase 1: Database & Seed Data
+- [ ] Run SQL to create `hr_documents` table
+- [ ] Update `seed_hr_documents.py` with real Google Doc URLs
+- [ ] Run seed script: `python backend/scripts/seed_hr_documents.py`
+- [ ] Verify: `SELECT COUNT(*) FROM hr_documents;` should return 7
+
+### Phase 2: Document Service
+- [ ] Create `backend/services/document_service.py`
+- [ ] Test document number extraction
+- [ ] Test topic matching
+
+### Phase 3: Integration
+- [ ] Update `hr_rag_service.py` to call document_service
+- [ ] Test with preset queries
+- [ ] Test with RAG queries
+
+### Phase 4: Verification
+- [ ] Run test script
+- [ ] Test in production via Telegram
+- [ ] Verify document links are clickable
+- [ ] Check logs for "📄 Added N document links"
+
+## SUCCESS CRITERIA
+
+**Before:**
+```
+User: Як оформити відпустку?
+Maya: 18 робочих днів... шаблон №69
+      ❌ No link
+```
+
+**After:**
+```
+User: Як оформити відпустку?
+Maya: 18 робочих днів... шаблон №69
+
+📚 Документи:
+- Шаблон №69 - Оформлення відпустки
+  https://docs.google.com/...
+      ✅ Clickable link!
+```
+
+**Metrics:**
+- ✅ Documents attached to 70%+ of answers
+- ✅ Works for both preset AND RAG paths
+- ✅ <50ms overhead for document detection
+- ✅ User clicks on document links (track with analytics later)
+
+## IMPORTANT NOTES
+
+1. **Google Doc URLs:** Replace all `YOUR_DOC_ID` placeholders in `seed_hr_documents.py` with actual document IDs
+2. **Access Control:** Some documents may require Google account access - ensure links have proper permissions
+3. **Testing:** Test thoroughly with real employee queries before pushing to production
+4. **Monitoring:** Watch logs for "📄 Added N document links" to verify system is working
+
+## ESTIMATED COST & TIME
+- Database schema: 5 min
+- Document service: 15 min  
+- Integration: 10 min
+- Testing: 10 min
+- **Total: ~40 minutes, $10-12 credits**
