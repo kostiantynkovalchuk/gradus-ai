@@ -155,6 +155,19 @@ class HRRagService:
         self.db_session = db_session
         self._presets_cache = None
     
+    def _attach_documents(self, query: str, answer_text: str) -> str:
+        if not self.db_session:
+            return answer_text
+        try:
+            from services.document_service import document_service
+            documents = document_service.find_documents(self.db_session, query, answer_text)
+            if documents:
+                doc_text = document_service.format_documents_text(documents)
+                return answer_text + doc_text
+        except Exception as e:
+            logger.warning(f"Document linking error: {e}")
+        return answer_text
+
     def _get_embedding(self, text: str) -> List[float]:
         """Generate embedding for query"""
         try:
@@ -352,6 +365,7 @@ class HRRagService:
         
         preset_answer = await self.check_preset_answer(query)
         if preset_answer:
+            preset_answer.text = self._attach_documents(query, preset_answer.text)
             _ms = int((_time_module.time() - _start) * 1000)
             logger.info(f"✅ PRESET hit for: '{query[:50]}' ({_ms}ms, cost: $0)")
             return preset_answer
@@ -453,6 +467,8 @@ class HRRagService:
                 logger.info(f"⚠️ MEDIUM confidence ({top_score:.2f}) - adding disclaimer")
                 answer_text += "\n\n⚠️ _Рекомендую уточнити інформацію у HR-відділі._"
             
+            answer_text = self._attach_documents(query, answer_text)
+            
             return AnswerResponse(
                 text=answer_text,
                 sources=search_results[:3],
@@ -463,8 +479,10 @@ class HRRagService:
         except Exception as e:
             logger.error(f"Claude API error: {e}")
             best_result = search_results[0]
+            fallback_text = f"На основі бази знань:\n\n{best_result.text[:500]}..."
+            fallback_text = self._attach_documents(query, fallback_text)
             return AnswerResponse(
-                text=f"На основі бази знань:\n\n{best_result.text[:500]}...",
+                text=fallback_text,
                 sources=[best_result],
                 from_preset=False,
                 confidence=best_result.score
