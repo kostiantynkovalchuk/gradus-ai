@@ -2,11 +2,12 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+import hmac
 import hashlib
-import base64
-import json
+import time
 import os
 import logging
+import httpx
 
 from models import get_db
 from models.maya_models import MayaUser, MayaSubscription
@@ -14,154 +15,198 @@ from models.maya_models import MayaUser, MayaSubscription
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 logger = logging.getLogger(__name__)
 
-LIQPAY_PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY")
-LIQPAY_PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY")
-
 PRICES = {
-    'standard': {'monthly': 7.00, 'annual': 70.00},
-    'premium': {'monthly': 10.00, 'annual': 100.00},
+    'standard': 7,
+    'premium': 10,
 }
 
 
 class CheckoutRequest(BaseModel):
     email: EmailStr
     tier: str
-    billing_cycle: str
 
 
-class CheckoutResponse(BaseModel):
-    data: str
-    signature: str
-    liqpay_url: str
-
-
-def generate_liqpay_signature(data: str) -> str:
-    sign_string = LIQPAY_PRIVATE_KEY + data + LIQPAY_PRIVATE_KEY
-    return base64.b64encode(hashlib.sha1(sign_string.encode()).digest()).decode()
-
-
-@router.post("/create-checkout", response_model=CheckoutResponse)
-async def create_checkout(checkout: CheckoutRequest, db: Session = Depends(get_db)):
+async def get_usd_to_uah_rate() -> float:
     try:
-        if checkout.tier not in ('standard', 'premium'):
-            raise HTTPException(400, "Invalid tier")
-        if checkout.billing_cycle not in ('monthly', 'annual'):
-            raise HTTPException(400, "Invalid billing cycle")
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?valcode=USD&json",
+                timeout=5.0
+            )
+            data = r.json()
+            return float(data[0]['rate'])
+    except Exception as e:
+        logger.warning(f"NBU rate fetch failed: {e}, using fallback")
+        return 41.5
 
-        if not LIQPAY_PUBLIC_KEY or not LIQPAY_PRIVATE_KEY:
-            raise HTTPException(503, "Платіжна система тимчасово недоступна")
 
-        user = db.query(MayaUser).filter(MayaUser.email == checkout.email).first()
-        if not user:
-            raise HTTPException(404, "Користувач не зареєстрований")
+def generate_wayforpay_signature(params: list, secret_key: str) -> str:
+    string = ";".join(str(p) for p in params)
+    return hmac.new(
+        secret_key.encode('utf-8'),
+        string.encode('utf-8'),
+        hashlib.md5
+    ).hexdigest()
 
-        amount = PRICES[checkout.tier][checkout.billing_cycle]
-        order_id = f"SUB-{checkout.email}-{int(datetime.now().timestamp())}"
 
-        payment_data = {
-            "version": 3,
-            "public_key": LIQPAY_PUBLIC_KEY,
-            "action": "subscribe",
-            "amount": amount,
-            "currency": "USD",
-            "description": f"Gradus Media {checkout.tier.capitalize()} - {checkout.billing_cycle}",
-            "order_id": order_id,
-            "subscribe_date_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "subscribe_periodicity": "month" if checkout.billing_cycle == "monthly" else "year",
-            "result_url": "https://gradusmedia.org/payment/success",
-            "server_url": "https://gradus-ai.onrender.com/api/payments/webhook",
-            "language": "uk",
-        }
+@router.get("/uah-rate")
+async def get_rate():
+    rate = await get_usd_to_uah_rate()
+    return {"rate": rate}
 
-        data_encoded = base64.b64encode(json.dumps(payment_data).encode()).decode()
-        signature = generate_liqpay_signature(data_encoded)
 
+@router.post("/create-checkout")
+async def create_checkout(checkout: CheckoutRequest, db: Session = Depends(get_db)):
+    merchant_login = os.getenv("WAYFORPAY_MERCHANT_LOGIN")
+    secret_key = os.getenv("WAYFORPAY_MERCHANT_SECRET")
+
+    if not merchant_login or not secret_key:
+        raise HTTPException(503, "Платіжна система тимчасово недоступна")
+
+    if checkout.tier not in ('standard', 'premium'):
+        raise HTTPException(400, "Invalid tier")
+
+    user = db.query(MayaUser).filter(MayaUser.email == checkout.email).first()
+    if not user:
+        raise HTTPException(404, "Користувач не зареєстрований")
+
+    order_reference = f"gradus_{checkout.email.replace('@', '_')}_{int(time.time())}"
+    order_date = int(time.time())
+
+    uah_rate = await get_usd_to_uah_rate()
+    usd_price = PRICES[checkout.tier]
+    amount = round(usd_price * uah_rate, 2)
+
+    product_name = (
+        "Підписка Gradus Media Standard"
+        if checkout.tier == "standard"
+        else "Підписка Gradus Media Premium"
+    )
+
+    signature_params = [
+        merchant_login,
+        "gradusmedia.org",
+        order_reference,
+        order_date,
+        amount,
+        "UAH",
+        product_name,
+        1,
+        amount
+    ]
+    signature = generate_wayforpay_signature(signature_params, secret_key)
+
+    try:
         sub = MayaSubscription(
             email=checkout.email,
             tier=checkout.tier,
-            billing_cycle=checkout.billing_cycle,
+            billing_cycle="monthly",
             amount=amount,
-            currency="USD",
-            liqpay_order_id=order_id,
+            currency="UAH",
+            wayforpay_order_id=order_reference,
             payment_status='pending',
         )
         db.add(sub)
         db.commit()
-
-        logger.info(f"Checkout created: {order_id} for {checkout.email}")
-        return CheckoutResponse(data=data_encoded, signature=signature, liqpay_url="https://www.liqpay.ua/api/3/checkout")
-
-    except HTTPException:
-        raise
+        logger.info(f"WayForPay checkout created: {order_reference} for {checkout.email} ({amount} UAH)")
     except Exception as e:
         db.rollback()
-        logger.error(f"Checkout error: {e}")
+        logger.error(f"Failed to save subscription: {e}")
         raise HTTPException(500, "Помилка створення платежу")
+
+    return {
+        "merchantAccount": merchant_login,
+        "merchantDomainName": "gradusmedia.org",
+        "orderReference": order_reference,
+        "orderDate": order_date,
+        "amount": amount,
+        "currency": "UAH",
+        "productName": product_name,
+        "productPrice": amount,
+        "productCount": 1,
+        "merchantSignature": signature,
+        "language": "UA",
+        "usdPrice": usd_price,
+        "uahRate": uah_rate
+    }
 
 
 @router.post("/webhook")
-async def liqpay_webhook(request: Request, db: Session = Depends(get_db)):
+async def wayforpay_webhook(request: Request, db: Session = Depends(get_db)):
     try:
-        form_data = await request.form()
-        data = form_data.get('data')
-        signature = form_data.get('signature')
+        data = await request.json()
+        secret_key = os.getenv("WAYFORPAY_MERCHANT_SECRET")
 
-        if not data or not signature:
-            raise HTTPException(400, "Missing data or signature")
-
-        if not LIQPAY_PRIVATE_KEY:
-            logger.error("LIQPAY_PRIVATE_KEY not configured")
+        if not secret_key:
+            logger.error("WAYFORPAY_MERCHANT_SECRET not configured")
             raise HTTPException(500, "Payment system not configured")
 
-        expected_signature = generate_liqpay_signature(data)
-        if signature != expected_signature:
-            logger.error("Invalid LiqPay signature")
+        sig_params = [
+            data.get('merchantAccount', ''),
+            data.get('orderReference', ''),
+            data.get('amount', ''),
+            data.get('currency', ''),
+            data.get('authCode', ''),
+            data.get('cardPan', ''),
+            data.get('transactionStatus', ''),
+            data.get('reasonCode', '')
+        ]
+        expected = generate_wayforpay_signature(sig_params, secret_key)
+        if data.get('merchantSignature') != expected:
+            logger.error("Invalid WayForPay signature")
             raise HTTPException(401, "Invalid signature")
 
-        payment_info = json.loads(base64.b64decode(data))
-        order_id = payment_info.get('order_id')
-        status = payment_info.get('status')
+        order_id = data.get('orderReference')
+        status = data.get('transactionStatus')
 
-        logger.info(f"LiqPay webhook: {order_id}, status: {status}")
+        logger.info(f"WayForPay webhook: {order_id}, status: {status}")
 
-        sub = db.query(MayaSubscription).filter(MayaSubscription.liqpay_order_id == order_id).first()
+        sub = db.query(MayaSubscription).filter(
+            MayaSubscription.wayforpay_order_id == order_id
+        ).first()
+
         if not sub:
             logger.error(f"Subscription not found: {order_id}")
             return {"status": "error", "message": "Subscription not found"}
 
-        email = sub.email
-        tier = sub.tier
-        billing_cycle = sub.billing_cycle
-
-        if status in ('subscribed', 'success'):
-            expires_at = datetime.now() + timedelta(days=30 if billing_cycle == 'monthly' else 365)
+        if status == 'Approved':
+            expires_at = datetime.now() + timedelta(days=30)
 
             sub.payment_status = 'success'
             sub.started_at = datetime.utcnow()
             sub.expires_at = expires_at
-            sub.payment_data = payment_info
+            sub.payment_data = data
             sub.updated_at = datetime.utcnow()
 
-            user = db.query(MayaUser).filter(MayaUser.email == email).first()
+            user = db.query(MayaUser).filter(MayaUser.email == sub.email).first()
             if user:
-                user.subscription_tier = tier
+                user.subscription_tier = sub.tier
                 user.subscription_status = 'active'
                 user.subscription_started_at = datetime.utcnow()
                 user.subscription_expires_at = expires_at
-                user.liqpay_order_id = order_id
+                user.wayforpay_order_id = order_id
                 user.updated_at = datetime.utcnow()
 
             db.commit()
-            logger.info(f"Subscription activated: {email} -> {tier}")
+            logger.info(f"Subscription activated: {sub.email} -> {sub.tier}")
 
-        elif status in ('failure', 'error'):
+        elif status in ('Declined', 'Expired', 'RefundedFull'):
             sub.payment_status = 'failed'
-            sub.payment_data = payment_info
+            sub.payment_data = data
             sub.updated_at = datetime.utcnow()
             db.commit()
-            logger.error(f"Payment failed: {order_id}")
+            logger.error(f"Payment failed: {order_id}, status: {status}")
 
-        return {"status": "ok"}
+        confirm_time = int(time.time())
+        confirm_params = [order_id, 'accept', confirm_time]
+        confirm_sig = generate_wayforpay_signature(confirm_params, secret_key)
+
+        return {
+            "orderReference": order_id,
+            "status": "accept",
+            "time": confirm_time,
+            "signature": confirm_sig
+        }
 
     except HTTPException:
         raise

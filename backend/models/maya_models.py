@@ -21,7 +21,7 @@ class MayaUser(Base):
     subscription_started_at = Column(TIMESTAMP)
     subscription_expires_at = Column(TIMESTAMP)
     
-    liqpay_order_id = Column(String(255))
+    wayforpay_order_id = Column(String(255))
     
     registered_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
@@ -43,7 +43,7 @@ class MayaSubscription(Base):
     amount = Column(DECIMAL(10, 2), nullable=False)
     currency = Column(String(3), default='USD')
     
-    liqpay_order_id = Column(String(255), unique=True)
+    wayforpay_order_id = Column(String(255), unique=True)
     payment_status = Column(String(50), default='pending')
     payment_data = Column(JSONB)
     

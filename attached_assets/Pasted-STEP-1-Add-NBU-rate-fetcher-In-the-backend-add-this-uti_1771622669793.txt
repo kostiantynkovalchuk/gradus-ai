@@ -1,0 +1,296 @@
+STEP 1 — Add NBU rate fetcher
+In the backend, add this utility function:
+pythonimport httpx
+
+async def get_usd_to_uah_rate() -> float:
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?valcode=USD&json",
+                timeout=5.0
+            )
+            data = r.json()
+            return float(data[0]['rate'])
+    except Exception:
+        return 41.5  # fallback rate if NBU API is unavailable
+
+STEP 2 — Add WayForPay signature generator
+pythonimport hmac
+import hashlib
+
+def generate_wayforpay_signature(params: list, secret_key: str) -> str:
+    string = ";".join(str(p) for p in params)
+    return hmac.new(
+        secret_key.encode('utf-8'),
+        string.encode('utf-8'),
+        hashlib.md5
+    ).hexdigest()
+
+STEP 3 — Replace payment checkout endpoint
+Replace the existing /api/payments/create-checkout with:
+python@app.post("/api/payments/create-checkout")
+async def create_checkout(request: PaymentRequest, db=Depends(get_db)):
+    merchant_login = os.getenv("WAYFORPAY_MERCHANT_LOGIN")
+    secret_key = os.getenv("WAYFORPAY_MERCHANT_SECRET")
+    
+    if not merchant_login or not secret_key:
+        raise HTTPException(500, "Payment configuration missing")
+    
+    order_reference = f"gradus_{request.email.replace('@','_')}_{int(time.time())}"
+    order_date = int(time.time())
+    
+    # Convert USD to UAH at live NBU rate
+    uah_rate = await get_usd_to_uah_rate()
+    usd_price = 7 if request.tier == "standard" else 10
+    amount = round(usd_price * uah_rate, 2)
+    
+    product_name = (
+        "Підписка Gradus Media Standard" 
+        if request.tier == "standard" 
+        else "Підписка Gradus Media Premium"
+    )
+    
+    # Generate HMAC_MD5 signature
+    signature_params = [
+        merchant_login,
+        "gradusmedia.org",
+        order_reference,
+        order_date,
+        amount,
+        "UAH",
+        product_name,
+        1,      # productCount
+        amount  # productPrice
+    ]
+    signature = generate_wayforpay_signature(signature_params, secret_key)
+    
+    # Save pending subscription to DB
+    await db.execute("""
+        INSERT INTO maya_subscriptions 
+        (email, tier, wayforpay_order_id, payment_status, created_at, updated_at)
+        VALUES ($1, $2, $3, 'pending', NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+            tier = EXCLUDED.tier,
+            wayforpay_order_id = EXCLUDED.wayforpay_order_id,
+            payment_status = 'pending',
+            updated_at = NOW()
+    """, request.email, request.tier, order_reference)
+    
+    return {
+        "merchantAccount": merchant_login,
+        "merchantDomainName": "gradusmedia.org",
+        "orderReference": order_reference,
+        "orderDate": order_date,
+        "amount": amount,
+        "currency": "UAH",
+        "productName": product_name,
+        "productPrice": amount,
+        "productCount": 1,
+        "merchantSignature": signature,
+        "language": "UA",
+        "usdPrice": usd_price,
+        "uahRate": uah_rate
+    }
+
+STEP 4 — Replace webhook handler
+Replace the existing /api/payments/webhook with:
+python@app.post("/api/payments/webhook")
+async def wayforpay_webhook(request: Request, db=Depends(get_db)):
+    try:
+        data = await request.json()
+        secret_key = os.getenv("WAYFORPAY_MERCHANT_SECRET")
+        
+        # Verify incoming signature
+        sig_params = [
+            data.get('merchantAccount'),
+            data.get('orderReference'),
+            data.get('amount'),
+            data.get('currency'),
+            data.get('authCode'),
+            data.get('cardPan'),
+            data.get('transactionStatus'),
+            data.get('reasonCode')
+        ]
+        expected = generate_wayforpay_signature(sig_params, secret_key)
+        if data.get('merchantSignature') != expected:
+            logger.error("Invalid WayForPay signature")
+            raise HTTPException(401, "Invalid signature")
+        
+        order_id = data.get('orderReference')
+        status = data.get('transactionStatus')
+        
+        logger.info(f"WayForPay webhook: {order_id}, status: {status}")
+        
+        if status == 'Approved':
+            expires_at = datetime.now() + timedelta(days=30)
+            
+            # Update subscription record
+            await db.execute("""
+                UPDATE maya_subscriptions
+                SET payment_status = 'success',
+                    started_at = NOW(),
+                    expires_at = $1,
+                    updated_at = NOW()
+                WHERE wayforpay_order_id = $2
+            """, expires_at, order_id)
+            
+            # Get subscription details
+            sub = await db.fetchrow("""
+                SELECT email, tier FROM maya_subscriptions 
+                WHERE wayforpay_order_id = $1
+            """, order_id)
+            
+            if sub:
+                # Upgrade user tier
+                await db.execute("""
+                    UPDATE maya_users 
+                    SET subscription_tier = $1,
+                        subscription_status = 'active',
+                        subscription_expires_at = $2,
+                        updated_at = NOW()
+                    WHERE email = $3
+                """, sub['tier'], expires_at, sub['email'])
+                
+                logger.info(f"Subscription activated: {sub['email']} -> {sub['tier']}")
+        
+        elif status in ('Declined', 'Expired', 'RefundedFull'):
+            await db.execute("""
+                UPDATE maya_subscriptions
+                SET payment_status = 'failed', updated_at = NOW()
+                WHERE wayforpay_order_id = $1
+            """, order_id)
+        
+        # WayForPay REQUIRES this confirmation response — do not remove
+        confirm_time = int(time.time())
+        confirm_params = [order_id, 'accept', confirm_time]
+        confirm_sig = generate_wayforpay_signature(confirm_params, secret_key)
+        
+        return {
+            "orderReference": order_id,
+            "status": "accept",
+            "time": confirm_time,
+            "signature": confirm_sig
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+
+STEP 5 — Frontend: replace payment button logic
+In the pricing/chat component, replace the payment handler with:
+javascript// Add WayForPay widget script to index.html <head>:
+// <script src="https://secure.wayforpay.com/server/pay-widget.js"></script>
+
+const handlePayment = async (tier) => {
+    try {
+        setPaymentLoading(true);
+        
+        const response = await fetch('/api/payments/create-checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                email: userEmail, 
+                tier: tier 
+            })
+        });
+        
+        if (!response.ok) throw new Error('Checkout creation failed');
+        const params = await response.json();
+        
+        // Show user the UAH equivalent under the button
+        // e.g. "≈ 290 ₴ за курсом НБУ"
+        
+        const wayforpay = new window.Wayforpay();
+        wayforpay.run({
+            merchantAccount: params.merchantAccount,
+            merchantDomainName: params.merchantDomainName,
+            authorizationType: "SimpleSignature",
+            merchantSignature: params.merchantSignature,
+            orderReference: params.orderReference,
+            orderDate: params.orderDate,
+            amount: params.amount,
+            currency: "UAH",
+            productName: params.productName,
+            productPrice: params.productPrice,
+            productCount: params.productCount,
+            language: "UA",
+            straightWidget: true
+        },
+        function(response) {
+            // Approved
+            setPaymentLoading(false);
+            setUserTier(tier);
+            showNotification('Підписку активовано! Дякуємо 🎉');
+        },
+        function(response) {
+            // Declined
+            setPaymentLoading(false);
+            showNotification('Оплата відхилена. Спробуйте ще раз.', 'error');
+        },
+        function(response) {
+            // Pending
+            setPaymentLoading(false);
+            showNotification('Платіж обробляється...', 'info');
+        });
+        
+    } catch (error) {
+        setPaymentLoading(false);
+        console.error('Payment error:', error);
+        showNotification('Помилка оплати. Спробуйте пізніше.', 'error');
+    }
+};
+
+STEP 6 — Add UAH rate display on pricing page
+Under each paid tier price, add a subtle line that fetches and displays the UAH equivalent:
+javascript// On pricing page load:
+const fetchRate = async () => {
+    const res = await fetch('/api/payments/uah-rate');
+    const data = await res.json();
+    setUahRate(data.rate);
+};
+
+// Display under "$7/month":
+// <span className="text-xs text-gray-400">≈ {Math.round(7 * uahRate)} ₴ за курсом НБУ</span>
+Add a simple rate endpoint to backend:
+python@app.get("/api/payments/uah-rate")
+async def get_rate():
+    rate = await get_usd_to_uah_rate()
+    return {"rate": rate}
+```
+
+---
+
+**STEP 7 — Environment variables needed on Render.com**
+
+Make sure these are set:
+```
+WAYFORPAY_MERCHANT_LOGIN=gradusmedia_org
+WAYFORPAY_MERCHANT_SECRET=<secret key from WayForPay dashboard>
+WAYFORPAY_MERCHANT_PASSWORD=<password from WayForPay dashboard>
+```
+
+Remove or disable old LiqPay variables:
+```
+LIQPAY_PUBLIC_KEY — remove
+LIQPAY_PRIVATE_KEY — remove
+```
+
+---
+
+**STEP 8 — Set webhook URL in WayForPay dashboard**
+
+After deployment, go to WayForPay → Налаштування магазину → Service URL and set:
+```
+https://gradus-ai.onrender.com/api/payments/webhook
+
+TEST after deployment using these test credentials:
+
+Card: 4111 1111 1111 1111
+Expiry: any future date
+CVV: any 3 digits
+Test merchant for verification: test_merch_n1
+
+Make sure all existing features remain working: email gate, 5 free questions/day, question counter, user registration. Only the payment processing changes.
+
