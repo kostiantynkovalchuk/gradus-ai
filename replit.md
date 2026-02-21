@@ -64,3 +64,13 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **WayForPay:** Ukrainian payment gateway with UAH pricing, HMAC-MD5 signature verification, and pay-widget.js checkout.
 - **NBU API:** National Bank of Ukraine exchange rates for real-time USD→UAH conversion.
 - **Trafilatura:** Clean content extraction for the news scraper.
+
+## Adding New Tables or Columns
+
+NEVER run raw SQL directly against the DB for schema changes. Instead:
+1. Add a new entry to `MIGRATIONS` list in `backend/db_migrations.py`
+2. Use a sequential version number: `"010_your_feature_name"`
+3. Use `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE ADD COLUMN IF NOT EXISTS`
+4. Push to GitHub → Render auto-deploys → migrations run on startup
+5. Migrations are tracked in `schema_migrations` table — safe to run many times
+6. Each migration runs inside a transaction; if it fails, startup halts with a clear error

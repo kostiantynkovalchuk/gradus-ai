@@ -1,0 +1,164 @@
+CREATE: Automated database migration system that runs on every Render deploy.
+
+GOAL: Ensure production Neon DB always has all required tables.
+Never again have "relation does not exist" errors after deploying new features.
+
+STEP 1 - CREATE backend/db_migrations.py:
+
+This script runs automatically on startup and creates any missing tables.
+It uses CREATE TABLE IF NOT EXISTS so it's safe to run repeatedly.
+
+The script should:
+1. Connect to DATABASE_URL (production Neon on Render, local DB in Replit)
+2. Run all migrations in order
+3. Track which migrations have been applied in a schema_migrations table
+4. Log each migration result clearly
+5. Never fail silently — raise exception if a migration errors
+
+Structure:
+
+  MIGRATIONS = [
+    {
+      "version": "001_initial_tables",
+      "sql": """
+        CREATE TABLE IF NOT EXISTS maya_users (...);
+        CREATE TABLE IF NOT EXISTS maya_subscriptions (...);
+        CREATE TABLE IF NOT EXISTS maya_query_log (...);
+      """
+    },
+    {
+      "version": "002_alex_presets",
+      "sql": """
+        CREATE TABLE IF NOT EXISTS alex_preset_answers (
+          id SERIAL PRIMARY KEY,
+          question_pattern VARCHAR(500) NOT NULL,
+          answer_text TEXT NOT NULL,
+          category VARCHAR(50) DEFAULT 'general',
+          priority INTEGER DEFAULT 5,
+          usage_count INTEGER DEFAULT 0,
+          is_active BOOLEAN DEFAULT TRUE,
+          last_used_at TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_alex_preset_category 
+          ON alex_preset_answers(category);
+        CREATE INDEX IF NOT EXISTS idx_alex_preset_active 
+          ON alex_preset_answers(is_active);
+      """
+    },
+    {
+      "version": "003_alex_preset_candidates",
+      "sql": """
+        CREATE TABLE IF NOT EXISTS alex_preset_candidates (
+          id SERIAL PRIMARY KEY,
+          question_text TEXT NOT NULL,
+          frequency INTEGER DEFAULT 1,
+          avg_response_time_ms INTEGER,
+          first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          status VARCHAR(20) DEFAULT 'candidate',
+          promoted_preset_id INTEGER REFERENCES alex_preset_answers(id),
+          sample_claude_answer TEXT,
+          dominant_tier VARCHAR(20) DEFAULT 'free'
+        );
+      """
+    },
+    {
+      "version": "004_maya_users_position",
+      "sql": """
+        ALTER TABLE maya_users 
+          ADD COLUMN IF NOT EXISTS position VARCHAR(100);
+      """
+    },
+    {
+      "version": "005_content_queue_category",
+      "sql": """
+        ALTER TABLE content_queue 
+          ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+        ALTER TABLE content_queue 
+          ADD COLUMN IF NOT EXISTS image_photographer VARCHAR(255);
+        CREATE INDEX IF NOT EXISTS idx_content_category 
+          ON content_queue(category);
+      """
+    }
+  ]
+
+  def run_migrations():
+    engine = create_engine(os.getenv("DATABASE_URL"))
+    
+    with engine.connect() as conn:
+      # Create tracking table first
+      conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          version VARCHAR(255) PRIMARY KEY,
+          applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      """))
+      conn.commit()
+      
+      # Get already applied migrations
+      applied = {row[0] for row in conn.execute(
+        text("SELECT version FROM schema_migrations")
+      )}
+      
+      # Run pending migrations in order
+      for migration in MIGRATIONS:
+        version = migration["version"]
+        if version in applied:
+          logger.info(f"✅ Migration {version} — already applied, skipping")
+          continue
+        
+        try:
+          conn.execute(text(migration["sql"]))
+          conn.execute(
+            text("INSERT INTO schema_migrations (version) VALUES (:v)"),
+            {"v": version}
+          )
+          conn.commit()
+          logger.info(f"✅ Migration {version} — applied successfully")
+        except Exception as e:
+          conn.rollback()
+          logger.error(f"❌ Migration {version} FAILED: {e}")
+          raise  # Stop startup if migration fails
+
+STEP 2 - HOOK INTO main.py STARTUP:
+
+In main.py, find the startup event (lifespan or @app.on_event("startup"))
+and call run_migrations() as the FIRST thing before anything else:
+
+  from db_migrations import run_migrations
+
+  @asynccontextmanager
+  async def lifespan(app: FastAPI):
+      logger.info("🔄 Running database migrations...")
+      run_migrations()
+      logger.info("✅ Migrations complete")
+      # ... rest of startup (scheduler, etc.)
+      yield
+      # ... shutdown
+
+STEP 3 - ADD FUTURE MIGRATION INSTRUCTIONS TO replit.md:
+
+Add a section:
+  ## Adding New Tables or Columns
+  
+  NEVER run raw SQL directly against the DB for schema changes.
+  Instead:
+  1. Add a new entry to MIGRATIONS list in backend/db_migrations.py
+  2. Use a sequential version number: "006_your_feature_name"
+  3. Use CREATE TABLE IF NOT EXISTS or ALTER TABLE ADD COLUMN IF NOT EXISTS
+  4. Push to GitHub → Render auto-deploys → migrations run on startup
+  5. Migrations are tracked in schema_migrations table — safe to run many times
+
+STEP 4 - VERIFY:
+Restart the backend and confirm logs show:
+  "🔄 Running database migrations..."
+  "✅ Migration 001_initial_tables — already applied, skipping"
+  "✅ Migration 002_alex_presets — applied successfully"  (or skipping if exists)
+  "✅ Migration 003_alex_preset_candidates — applied successfully"
+  "✅ Migration 004_maya_users_position — applied successfully"
+  "✅ Migration 005_content_queue_category — already applied, skipping"
+  "✅ Migrations complete"
+
+Then confirm GET /api/admin/analytics/overview returns 200 (not 500).

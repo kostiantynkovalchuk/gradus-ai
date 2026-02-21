@@ -72,6 +72,16 @@ def log_appendix_mapping_diagnostic():
 async def lifespan(app: FastAPI):
     """Application lifespan - start/stop scheduler"""
     logger.info("🚀 Starting Gradus Media AI Agent...")
+    
+    logger.info("🔄 Running database migrations...")
+    try:
+        from db_migrations import run_migrations
+        run_migrations()
+        logger.info("✅ Migrations complete")
+    except Exception as e:
+        logger.error(f"❌ Migration failed: {e}")
+        raise
+    
     init_db()
     
     log_appendix_mapping_diagnostic()
