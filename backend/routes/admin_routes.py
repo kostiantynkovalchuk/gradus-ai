@@ -177,6 +177,29 @@ async def analytics_overview(request: Request):
         """))
         questions_per_day = [{"date": str(r[0]), "free": r[1], "standard": r[2], "premium": r[3]} for r in daily]
 
+        roles_rows = db.execute(text("""
+            SELECT COALESCE(NULLIF(TRIM(position), ''), 'Unknown') as role, COUNT(*) as cnt
+            FROM maya_users
+            GROUP BY role ORDER BY cnt DESC
+        """))
+        roles_breakdown = [{"role": r[0], "count": r[1]} for r in roles_rows]
+
+        rtm_rows = db.execute(text("""
+            SELECT COALESCE(NULLIF(TRIM(position), ''), 'Unknown') as role,
+                   COALESCE(subscription_tier, 'free') as tier, COUNT(*) as cnt
+            FROM maya_users
+            GROUP BY role, tier ORDER BY role, tier
+        """))
+        role_tier_map = {}
+        for r in rtm_rows:
+            role = r[0]
+            if role not in role_tier_map:
+                role_tier_map[role] = {"role": role, "free": 0, "standard": 0, "premium": 0, "total": 0}
+            tier = r[1] if r[1] in ("free", "standard", "premium") else "free"
+            role_tier_map[role][tier] += r[2]
+            role_tier_map[role]["total"] += r[2]
+        role_tier_matrix = sorted(role_tier_map.values(), key=lambda x: x["total"], reverse=True)
+
         return {
             "total_users": users,
             "active_subscriptions": subs,
@@ -193,6 +216,8 @@ async def analytics_overview(request: Request):
             "top_questions": top_questions,
             "top_questions_by_tier": top_by_tier,
             "questions_per_day": questions_per_day,
+            "roles_breakdown": roles_breakdown,
+            "role_tier_matrix": role_tier_matrix,
         }
     finally:
         db.close()
@@ -202,6 +227,7 @@ async def analytics_overview(request: Request):
 async def list_users(
     request: Request,
     tier: str = Query(None),
+    position: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
 ):
@@ -213,6 +239,9 @@ async def list_users(
         if tier:
             where += " AND subscription_tier = :tier"
             params["tier"] = tier
+        if position:
+            where += " AND LOWER(COALESCE(position, '')) = LOWER(:position)"
+            params["position"] = position
 
         total = db.execute(text(f"SELECT COUNT(*) FROM maya_users {where}"), params).scalar() or 0
 
@@ -239,7 +268,12 @@ async def list_users(
                 "total_questions": r[10] or 0,
             })
 
-        return {"total": total, "page": page, "limit": limit, "users": users}
+        pos_rows = db.execute(text(
+            "SELECT DISTINCT position FROM maya_users WHERE position IS NOT NULL AND TRIM(position) != '' ORDER BY position"
+        ))
+        distinct_positions = [r[0] for r in pos_rows]
+
+        return {"total": total, "page": page, "limit": limit, "users": users, "positions": distinct_positions}
     finally:
         db.close()
 

@@ -1,0 +1,73 @@
+IMPROVEMENT: Add user roles/positions to admin dashboard analytics.
+
+STEP 1 - CHECK EXISTING DATA:
+Run this query first and report results:
+
+  SELECT column_name, data_type 
+  FROM information_schema.columns 
+  WHERE table_name = 'maya_users'
+  ORDER BY ordinal_position;
+
+  -- Then check what position values actually exist:
+  SELECT position, COUNT(*) as count
+  FROM maya_users
+  WHERE position IS NOT NULL
+  GROUP BY position
+  ORDER BY count DESC;
+
+STEP 2 - IF position COLUMN EXISTS:
+Add role breakdown to GET /api/admin/analytics/overview:
+
+  roles_breakdown: [
+    { role: 'owner', count: int },
+    { role: 'bartender', count: int },
+    { role: 'manager', count: int },
+    -- etc, all distinct values ordered by count DESC
+  ]
+
+Also add to GET /api/admin/users response:
+  Include position field in every user row.
+  Add position as a column in the users table in the dashboard.
+  Add position filter dropdown alongside the existing tier filter.
+
+STEP 3 - IF position COLUMN IS NULL OR MISSING:
+Add the column:
+  ALTER TABLE maya_users 
+  ADD COLUMN IF NOT EXISTS position VARCHAR(100);
+
+Then update the registration endpoint (POST /api/maya/register)
+to accept and save position from the request body.
+The frontend already collects it during signup — just needs saving.
+
+STEP 4 - ADD ROLES CHART TO ANALYTICS TAB:
+In the /admin dashboard HTML, add a new card/chart after the 
+tier breakdown showing role distribution as a horizontal bar chart:
+
+  "Ролі користувачів"
+  Owner      ████████ 24
+  Bartender  ██████ 18  
+  Manager    ████ 12
+  Other      ██ 6
+
+Use Chart.js horizontal bar (indexAxis: 'y').
+
+STEP 5 - CROSS-SEGMENT ROLES WITH TIERS:
+Add a small breakdown showing role vs tier conversion:
+
+  SELECT position, subscription_tier, COUNT(*)
+  FROM maya_users
+  GROUP BY position, subscription_tier
+  ORDER BY position, subscription_tier;
+
+Surface this in the dashboard as a table:
+  Role | Free | Standard | Premium | Total
+  Owner | 12 | 8 | 4 | 24
+  Bartender | 16 | 2 | 0 | 18
+
+This shows which roles convert to paid — critical for targeting.
+
+STEP 6 - VERIFY:
+1. /api/admin/analytics/overview includes roles_breakdown array
+2. /admin Analytics tab shows role distribution chart
+3. /admin Users tab has Position column and filter dropdown
+4. Role × Tier conversion table visible in Analytics tab

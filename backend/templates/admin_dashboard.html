@@ -452,6 +452,21 @@
                 <canvas id="chart-questions-daily"></canvas>
             </div>
         </div>
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Roles Distribution</h3>
+                <canvas id="chart-roles"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Role x Tier Conversion</h3>
+                <div class="table-wrap" id="role-tier-table-wrap">
+                    <table>
+                        <thead><tr><th>Role</th><th>Free</th><th>Standard</th><th>Premium</th><th>Total</th></tr></thead>
+                        <tbody id="role-tier-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="tab-presets" class="tab-panel">
@@ -517,7 +532,10 @@
                         <option value="standard">Standard</option>
                         <option value="premium">Premium</option>
                     </select>
-                    <button class="btn btn-outline" onclick="exportUsersCSV()">⬇ Export CSV</button>
+                    <select id="users-position-filter" onchange="loadUsers()">
+                        <option value="">All Positions</option>
+                    </select>
+                    <button class="btn btn-outline" onclick="exportUsersCSV()">Export CSV</button>
                 </div>
             </div>
             <div class="table-wrap">
@@ -526,6 +544,7 @@
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
+                            <th>Position</th>
                             <th>Registered</th>
                             <th>Tier</th>
                             <th>Expires</th>
@@ -603,6 +622,7 @@ let usersPage = 1;
 let subsPage = 1;
 let topQChart = null;
 let dailyChart = null;
+let rolesChart = null;
 let allUsersData = [];
 let analyticsData = null;
 
@@ -706,6 +726,8 @@ async function loadAnalytics() {
 
         renderTopQuestionsChart(d.top_questions || []);
         renderDailyChart(d.questions_per_day || []);
+        renderRolesChart(d.roles_breakdown || []);
+        renderRoleTierTable(d.role_tier_matrix || []);
     } catch (e) {
         showToast('Failed to load analytics: ' + e.message, 'error');
     }
@@ -803,6 +825,55 @@ function renderDailyChart(data) {
             }
         }
     });
+}
+
+function renderRolesChart(data) {
+    const ctx = document.getElementById('chart-roles');
+    if (rolesChart) rolesChart.destroy();
+    if (!data.length) {
+        rolesChart = null;
+        ctx.parentElement.innerHTML = '<h3>Roles Distribution</h3><p style="color:var(--text-muted);text-align:center;padding:2rem">No user data yet</p>';
+        return;
+    }
+    const colors = ['#38bdf8','#fb923c','#a78bfa','#22c55e','#f59e0b','#ef4444','#64748b','#06b6d4','#ec4899','#84cc16'];
+    rolesChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: data.map(r => r.role),
+            datasets: [{
+                label: 'Users',
+                data: data.map(r => r.count),
+                backgroundColor: data.map((_, i) => colors[i % colors.length] + '80'),
+                borderColor: data.map((_, i) => colors[i % colors.length]),
+                borderWidth: 1,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,.3)' }, beginAtZero: true },
+                y: { ticks: { color: '#94a3b8', font: { size: 12 } }, grid: { display: false } }
+            }
+        }
+    });
+}
+
+function renderRoleTierTable(data) {
+    const tb = document.getElementById('role-tier-body');
+    if (!data.length) {
+        tb.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No user data yet</td></tr>';
+        return;
+    }
+    tb.innerHTML = data.map(r => `<tr>
+        <td style="font-weight:600">${escHtml(r.role)}</td>
+        <td><span class="tier-mini tier-mini-free">${r.free}</span></td>
+        <td><span class="tier-mini tier-mini-standard">${r.standard}</span></td>
+        <td><span class="tier-mini tier-mini-premium">${r.premium}</span></td>
+        <td style="font-weight:700">${r.total}</td>
+    </tr>`).join('');
 }
 
 async function loadPresets() {
@@ -942,9 +1013,11 @@ async function togglePreset(id, active) {
 
 async function loadUsers() {
     const tier = document.getElementById('users-tier-filter').value;
+    const position = document.getElementById('users-position-filter').value;
     try {
         const params = new URLSearchParams({ page: usersPage, limit: 50 });
         if (tier) params.set('tier', tier);
+        if (position) params.set('position', position);
         const d = await api('/api/admin/users?' + params);
         allUsersData = d.users || [];
 
@@ -954,22 +1027,33 @@ async function loadUsers() {
             else if (u.tier === 'standard') std++;
             else free++;
         });
-        if (!tier) {
+        if (!tier && !position) {
             document.getElementById('users-total').textContent = d.total;
             document.getElementById('users-free').textContent = d.total - std - prem;
             document.getElementById('users-standard').textContent = std;
             document.getElementById('users-premium').textContent = prem;
         }
 
+        const posFilter = document.getElementById('users-position-filter');
+        if (d.positions && posFilter.options.length <= 1) {
+            d.positions.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                posFilter.appendChild(opt);
+            });
+        }
+
         const tb = document.getElementById('users-body');
         if (allUsersData.length === 0) {
-            tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text-muted)">No users found</td></tr>';
+            tb.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--text-muted)">No users found</td></tr>';
         } else {
             tb.innerHTML = allUsersData.map(u => {
                 const tierClass = u.tier === 'premium' ? 'badge-premium' : u.tier === 'standard' ? 'badge-standard' : 'badge-free';
                 return `<tr>
                     <td>${escHtml(u.name || '—')}</td>
                     <td>${escHtml(u.email)}</td>
+                    <td>${escHtml(u.position || '—')}</td>
                     <td>${formatDate(u.registered_at)}</td>
                     <td><span class="badge ${tierClass}">${u.tier || 'free'}</span></td>
                     <td>${formatDate(u.expires_at)}</td>
@@ -993,9 +1077,9 @@ async function loadUsers() {
 
 function exportUsersCSV() {
     if (!allUsersData.length) { showToast('No data to export', 'error'); return; }
-    const headers = ['Name','Email','Registered','Tier','Expires','Questions Today','Total Questions','Last Active'];
+    const headers = ['Name','Email','Position','Registered','Tier','Expires','Questions Today','Total Questions','Last Active'];
     const rows = allUsersData.map(u => [
-        u.name || '', u.email, u.registered_at || '', u.tier || 'free',
+        u.name || '', u.email, u.position || '', u.registered_at || '', u.tier || 'free',
         u.expires_at || '', u.questions_today, u.total_questions, u.last_active || ''
     ]);
     let csv = headers.join(',') + '\n';
