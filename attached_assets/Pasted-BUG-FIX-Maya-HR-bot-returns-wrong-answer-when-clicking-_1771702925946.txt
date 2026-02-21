@@ -1,0 +1,73 @@
+BUG FIX: Maya HR bot returns wrong answer when clicking suggested question buttons.
+
+SYMPTOM:
+- Asking "Як замовити стілець?" → correct answer about furniture ordering ✅
+- Clicking the suggested button "Як замовити основні фонди (меб..." → returns 
+  conflict resolution answer instead ❌
+
+ROOT CAUSE INVESTIGATION:
+
+STEP 1 - CHECK BUTTON CALLBACK DATA:
+Find where suggested question buttons are created in:
+  backend/services/hr_keyboards.py (or similar)
+  backend/services/hr_rag_service.py
+
+Look for where "related questions" or "sources" buttons are built.
+Check: what is stored as callback_data for these buttons?
+Is it the full question text or the truncated display label?
+
+Telegram buttons have two fields:
+  text = what user sees (can be truncated)
+  callback_data = what gets sent to bot (max 64 bytes)
+
+If callback_data is being set to the truncated text, that's the bug.
+
+STEP 2 - CHECK CALLBACK HANDLER:
+Find the callback query handler that processes button clicks.
+When a user clicks a suggested question button, what happens?
+Does it:
+  A) Send the callback_data as a new message → goes through full RAG pipeline
+  B) Look up callback_data in a mapping table → retrieves stored answer
+  C) Something else?
+
+STEP 3 - FIX OPTIONS:
+
+Option A (if callback_data is truncated):
+  Store full question text as callback_data.
+  Telegram callback_data limit is 64 bytes.
+  If question exceeds 64 bytes, store a question_id instead:
+  
+    callback_data = f"q:{question_id}"
+    
+  Then in the callback handler, look up the full question text by ID
+  from hr_content or hr_preset_answers table before processing.
+
+Option B (if callback_data is correct but matching fails):
+  In the callback handler, when processing a suggested question click,
+  bypass fuzzy matching entirely and do a direct lookup:
+  
+    # For button clicks, use exact content_id lookup if available
+    # rather than sending through the full RAG pipeline
+    if callback_data.startswith("q:"):
+        content_id = callback_data[2:]
+        answer = get_answer_by_content_id(content_id)
+    else:
+        answer = rag_pipeline(callback_data)
+
+STEP 4 - CHECK SPECIFIC CASE:
+Find the preset or content item for "Як замовити основні фонди (меблі/обладнання)?"
+What is its content_id or preset_id?
+Verify it exists and has correct answer content.
+
+Also check: why is the conflict resolution preset matching?
+What keyword in "основні фонди" could trigger conflict resolution?
+Look at conflict preset patterns - is there an overlap?
+
+STEP 5 - FIX AND TEST:
+After fix, test these scenarios:
+1. Type "Як замовити основні фонди?" → should get furniture/equipment answer
+2. Click the suggested button → should get same correct answer
+3. Type "Як замовити стілець?" then click "Як замовити основні фонди" button
+   → both should return correct distinct answers
+
+Report the root cause found and what was changed.
