@@ -1,0 +1,68 @@
+We need to migrate data from the Replit internal database to the new 
+independent Neon database. Use pg_dump and psql only. 
+No Python scripts. No DELETE statements. No TRUNCATE statements.
+Do NOT modify the Replit internal database in any way.
+
+═══════════════════════════════════════
+STEP 1: DUMP FROM REPLIT INTERNAL DATABASE
+═══════════════════════════════════════
+
+PGPASSWORD=$PGPASSWORD pg_dump \
+  -h $PGHOST \
+  -U $PGUSER \
+  -d $PGDATABASE \
+  --no-owner \
+  --no-acl \
+  --data-only \
+  --disable-triggers \
+  -f /tmp/gradus_backup.sql
+
+Report the file size after completion.
+
+═══════════════════════════════════════
+STEP 2: VERIFY DUMP
+═══════════════════════════════════════
+
+wc -l /tmp/gradus_backup.sql
+grep -c "COPY\|INSERT INTO" /tmp/gradus_backup.sql
+
+Report both numbers before proceeding.
+
+═══════════════════════════════════════
+STEP 3: RESTORE TO NEW NEON DATABASE
+═══════════════════════════════════════
+
+psql "postgresql://neondb_owner:npg_UELne7c9VQSh@ep-red-dream-ak1x3nde-pooler.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" \
+  -f /tmp/gradus_backup.sql
+
+Report any errors. Ignore "already exists" warnings.
+
+═══════════════════════════════════════
+STEP 4: VERIFY ROW COUNTS IN NEW DATABASE
+═══════════════════════════════════════
+
+psql "postgresql://neondb_owner:npg_UELne7c9VQSh@ep-red-dream-ak1x3nde-pooler.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" -c "
+SELECT 'hr_whitelist' as table_name, COUNT(*) FROM hr_whitelist
+UNION ALL SELECT 'hr_users', COUNT(*) FROM hr_users
+UNION ALL SELECT 'hr_content', COUNT(*) FROM hr_content
+UNION ALL SELECT 'hr_preset_answers', COUNT(*) FROM hr_preset_answers
+UNION ALL SELECT 'hr_embeddings', COUNT(*) FROM hr_embeddings
+UNION ALL SELECT 'content_queue', COUNT(*) FROM content_queue
+UNION ALL SELECT 'approval_log', COUNT(*) FROM approval_log
+UNION ALL SELECT 'hr_query_log', COUNT(*) FROM hr_query_log
+UNION ALL SELECT 'hr_feedback', COUNT(*) FROM hr_feedback;
+"
+
+Expected counts:
+- hr_whitelist: 3
+- hr_users: 5
+- hr_content: 43
+- hr_preset_answers: 31
+- hr_embeddings: 39
+- content_queue: 335
+- approval_log: 420
+- hr_query_log: 22
+- hr_feedback: 7
+
+STOP if any count does not match. Report the error.
+Do not proceed past any failure.
