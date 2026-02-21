@@ -1,0 +1,54 @@
+Do not restore data yet. Fix the target database first.
+
+STEP A: Dump schema only from Replit internal database:
+
+PGPASSWORD=$PGPASSWORD pg_dump \
+  -h $PGHOST \
+  -U $PGUSER \
+  -d $PGDATABASE \
+  --no-owner \
+  --no-acl \
+  --schema-only \
+  -f /tmp/gradus_schema.sql
+
+STEP B: Apply schema to new Neon database:
+
+psql "postgresql://neondb_owner:npg_UELne7c9VQSh@ep-red-dream-ak1x3nde-pooler.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" \
+  -f /tmp/gradus_schema.sql
+
+Ignore "already exists" errors — those are tables that are fine.
+Report any errors that are NOT "already exists".
+
+STEP C: Clear duplicate data from previous failed attempt:
+
+psql "postgresql://neondb_owner:npg_UELne7c9VQSh@ep-red-dream-ak1x3nde-pooler.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" -c "
+TRUNCATE TABLE content_queue CASCADE;
+TRUNCATE TABLE hr_whitelist CASCADE;
+TRUNCATE TABLE hr_users CASCADE;
+TRUNCATE TABLE hr_content CASCADE;
+TRUNCATE TABLE hr_preset_answers CASCADE;
+TRUNCATE TABLE hr_embeddings CASCADE;
+TRUNCATE TABLE approval_log CASCADE;
+"
+
+STEP D: Retry the data restore:
+
+psql "postgresql://neondb_owner:npg_UELne7c9VQSh@ep-red-dream-ak1x3nde-pooler.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" \
+  -f /tmp/gradus_backup.sql
+
+STEP E: Verify final row counts:
+
+psql "postgresql://neondb_owner:npg_UELne7c9VQSh@ep-red-dream-ak1x3nde-pooler.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" -c "
+SELECT 'hr_whitelist' as table_name, COUNT(*) FROM hr_whitelist
+UNION ALL SELECT 'hr_users', COUNT(*) FROM hr_users
+UNION ALL SELECT 'hr_content', COUNT(*) FROM hr_content
+UNION ALL SELECT 'hr_preset_answers', COUNT(*) FROM hr_preset_answers
+UNION ALL SELECT 'hr_embeddings', COUNT(*) FROM hr_embeddings
+UNION ALL SELECT 'content_queue', COUNT(*) FROM content_queue
+UNION ALL SELECT 'approval_log', COUNT(*) FROM approval_log
+UNION ALL SELECT 'hr_query_log', COUNT(*) FROM hr_query_log
+UNION ALL SELECT 'hr_feedback', COUNT(*) FROM hr_feedback;
+"
+
+Expected: 3, 5, 43, 31, 39, 335, 420, 22, 7
+STOP if any number does not match.
