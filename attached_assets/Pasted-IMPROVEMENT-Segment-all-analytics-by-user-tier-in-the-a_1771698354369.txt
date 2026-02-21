@@ -1,0 +1,78 @@
+IMPROVEMENT: Segment all analytics by user tier in the admin dashboard.
+
+The maya_query_log table already has a user_tier field ('free', 'standard', 'premium').
+Update the analytics to split metrics by tier everywhere.
+
+STEP 1 - UPDATE /api/admin/analytics/overview:
+
+Add tier breakdown to every metric:
+
+{
+  total_questions: int,
+  questions_by_tier: {
+    free: int,
+    standard: int, 
+    premium: int
+  },
+  questions_today_by_tier: {
+    free: int,
+    standard: int,
+    premium: int
+  },
+  preset_hit_rate_by_tier: {
+    free: float,   -- free users likely hit same presets repeatedly
+    standard: float,
+    premium: float
+  },
+  avg_response_time_by_tier: {
+    free: float,
+    standard: float,
+    premium: float
+  },
+  top_questions_by_tier: {
+    free: [{text, count}],      -- top 10 per tier
+    standard: [{text, count}],
+    premium: [{text, count}]
+  },
+  questions_per_day: [{date, free, standard, premium}]
+  -- stacked by tier for the line chart
+}
+
+STEP 2 - UPDATE ANALYTICS TAB in /admin dashboard HTML:
+
+Summary cards row: add tier badge breakdown under total questions.
+Example card:
+  "Всього питань: 1,247"
+  Free: 891 | Standard: 312 | Premium: 44
+
+Preset hit rate card: show per-tier rate, not just overall.
+
+Top questions chart: add tier filter dropdown (All / Free / Standard / Premium)
+  Switching filter re-renders the bar chart for selected tier only.
+
+Daily questions line chart: make it stacked by tier (3 colored lines):
+  Free = gray, Standard = orange, Premium = gold
+  This visually shows if paid usage is growing vs free.
+
+STEP 3 - UPDATE PRESET CANDIDATES logic:
+
+In the daily aggregation task (scheduler.py), when creating candidates
+also store which tier the questions came from most:
+
+ALTER TABLE alex_preset_candidates 
+ADD COLUMN IF NOT EXISTS dominant_tier VARCHAR(20) DEFAULT 'free';
+
+This shows whether a candidate question is driven by free users 
+(low priority to presetify) or paid users (high priority — they 
+need better/faster answers).
+
+Show dominant_tier as a badge in the Preset Candidates tab.
+Paid-user-driven candidates should be visually highlighted 
+(orange border or "💎 Paid" badge) since those are highest priority.
+
+STEP 4 - VERIFY:
+1. Hit /api/admin/analytics/overview and confirm response has 
+   questions_by_tier breakdown
+2. Open /admin → Analytics tab → confirm tier breakdown visible on cards
+3. Confirm line chart shows 3 separate colored lines
+4. Confirm top questions dropdown filter works
