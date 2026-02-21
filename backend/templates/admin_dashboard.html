@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GradusMedia Admin Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --card-hover: #253349;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #38bdf8;
+            --accent-hover: #0ea5e9;
+            --border: #334155;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --purple: #a78bfa;
+            --slate: #64748b;
+            --blue: #3b82f6;
+            --orange: #fb923c;
+            --gray-badge: #475569;
+            --radius: 12px;
+            --shadow: 0 4px 20px rgba(0,0,0,.3);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .header {
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 1.5rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 42px; height: 42px;
+            background: linear-gradient(135deg, var(--accent), #0284c7);
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            color: #0f172a; font-weight: 800; font-size: 1.2rem;
+        }
+
+        .logo h1 { font-size: 1.3rem; color: var(--text); font-weight: 700; }
+        .logo p { font-size: 0.8rem; color: var(--text-muted); }
+
+        .header-actions {
+            display: flex; align-items: center; gap: 0.75rem;
+        }
+
+        .header-actions button {
+            padding: 0.5rem 1rem;
+            background: var(--accent);
+            color: #0f172a;
+            border: none; border-radius: 8px;
+            font-weight: 600; font-size: 0.85rem;
+            cursor: pointer; transition: background .15s;
+        }
+        .header-actions button:hover { background: var(--accent-hover); }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+
+        .tabs {
+            display: flex;
+            gap: 0.25rem;
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 0.35rem;
+            margin-bottom: 1.5rem;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            padding: 0.65rem 1.25rem;
+            background: transparent;
+            color: var(--text-muted);
+            border: none; border-radius: 8px;
+            font-weight: 600; font-size: 0.85rem;
+            cursor: pointer; transition: all .2s;
+            white-space: nowrap;
+        }
+        .tab-btn:hover { color: var(--text); background: rgba(56,189,248,.08); }
+        .tab-btn.active { background: var(--accent); color: #0f172a; }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; animation: fadeIn .25s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+        .cards-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            transition: transform .15s, box-shadow .15s;
+        }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+
+        .card-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: .5rem; }
+        .card-value { font-size: 1.75rem; font-weight: 700; color: var(--text); }
+        .card-value.accent { color: var(--accent); }
+        .card-value.success { color: var(--success); }
+        .card-value.warning { color: var(--warning); }
+        .card-value.danger { color: var(--danger); }
+        .card-value.purple { color: var(--purple); }
+
+        .chart-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .chart-card {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+        }
+        .chart-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text); }
+
+        .section-card {
+            background: var(--card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+
+        .section-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        .section-header h3 { font-size: 1.1rem; font-weight: 700; }
+
+        .section-tools {
+            display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+        }
+
+        .section-tools select, .section-tools input {
+            padding: 0.4rem 0.75rem;
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.8rem;
+        }
+
+        .btn {
+            padding: 0.4rem 0.85rem;
+            border: none; border-radius: 8px;
+            font-weight: 600; font-size: 0.78rem;
+            cursor: pointer; transition: all .15s;
+            display: inline-flex; align-items: center; gap: 0.3rem;
+        }
+        .btn-accent { background: var(--accent); color: #0f172a; }
+        .btn-accent:hover { background: var(--accent-hover); }
+        .btn-success { background: var(--success); color: #0f172a; }
+        .btn-success:hover { background: #16a34a; }
+        .btn-warning { background: var(--warning); color: #0f172a; }
+        .btn-warning:hover { background: #d97706; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-ghost { background: rgba(255,255,255,.08); color: var(--text-dim); }
+        .btn-ghost:hover { background: rgba(255,255,255,.14); }
+        .btn-outline { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+        .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+        .table-wrap { overflow-x: auto; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        table thead { background: rgba(0,0,0,.2); }
+        table th {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            border-bottom: 1px solid var(--border);
+        }
+        table td {
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            border-bottom: 1px solid rgba(51,65,85,.4);
+        }
+        table tbody tr { transition: background .12s; }
+        table tbody tr:hover { background: var(--card-hover); }
+        table tbody tr.dismissed { opacity: 0.4; }
+
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.55rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+        }
+        .badge-candidate { background: rgba(251,146,60,.15); color: var(--orange); }
+        .badge-promoted { background: rgba(34,197,94,.15); color: var(--success); }
+        .badge-dismissed { background: rgba(71,85,105,.3); color: var(--slate); }
+        .badge-free { background: rgba(100,116,139,.2); color: var(--slate); }
+        .badge-standard { background: rgba(59,130,246,.15); color: var(--blue); }
+        .badge-premium { background: rgba(167,139,250,.15); color: var(--purple); }
+        .badge-success { background: rgba(34,197,94,.15); color: var(--success); }
+        .badge-pending { background: rgba(245,158,11,.15); color: var(--warning); }
+        .badge-failed { background: rgba(239,68,68,.15); color: var(--danger); }
+        .badge-refunded { background: rgba(71,85,105,.3); color: var(--slate); }
+
+        .toggle {
+            position: relative;
+            width: 40px; height: 22px;
+            cursor: pointer;
+        }
+        .toggle input { display: none; }
+        .toggle-track {
+            position: absolute; inset: 0;
+            background: var(--border);
+            border-radius: 11px;
+            transition: background .2s;
+        }
+        .toggle input:checked + .toggle-track { background: var(--accent); }
+        .toggle-thumb {
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 18px; height: 18px;
+            background: white;
+            border-radius: 50%;
+            transition: transform .2s;
+        }
+        .toggle input:checked ~ .toggle-thumb { transform: translateX(18px); }
+
+        .modal-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,.6);
+            z-index: 1000;
+            align-items: center; justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: var(--card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            width: 90%; max-width: 700px;
+            max-height: 85vh;
+            overflow-y: auto;
+            padding: 1.5rem;
+            box-shadow: 0 20px 60px rgba(0,0,0,.5);
+        }
+        .modal h3 { margin-bottom: 1rem; color: var(--accent); }
+        .modal-body { margin-bottom: 1rem; }
+        .modal-body pre {
+            background: var(--bg);
+            padding: 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-dim);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .modal-footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
+
+        .promote-form {
+            display: none;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 0.5rem;
+        }
+        .promote-form.show { display: block; }
+        .promote-form label { font-size: 0.78rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: .25rem; margin-top: .5rem; }
+        .promote-form textarea, .promote-form select, .promote-form input {
+            width: 100%; padding: 0.5rem;
+            background: var(--card); color: var(--text);
+            border: 1px solid var(--border); border-radius: 6px;
+            font-size: 0.85rem;
+        }
+        .promote-form textarea { min-height: 100px; resize: vertical; }
+        .promote-form .form-actions { margin-top: .75rem; display: flex; gap: .5rem; }
+
+        .loading { text-align: center; padding: 3rem; color: var(--text-muted); }
+        .spinner {
+            display: inline-block; width: 32px; height: 32px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .pagination {
+            display: flex; justify-content: center; align-items: center;
+            gap: 0.5rem; padding: 1rem; color: var(--text-muted); font-size: 0.85rem;
+        }
+
+        .toast {
+            position: fixed; bottom: 1.5rem; right: 1.5rem;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 600; font-size: 0.85rem;
+            z-index: 2000;
+            transform: translateY(100px); opacity: 0;
+            transition: all .3s;
+        }
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast-success { background: var(--success); color: #0f172a; }
+        .toast-error { background: var(--danger); color: white; }
+
+        @media (max-width: 900px) {
+            .chart-row { grid-template-columns: 1fr; }
+            .cards-row { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+            .header-inner { flex-direction: column; align-items: stretch; }
+            .header-actions { justify-content: flex-end; }
+            .cards-row { grid-template-columns: 1fr; }
+            .container { padding: 1rem 0.75rem; }
+            .tabs { border-radius: 8px; }
+            .tab-btn { padding: 0.5rem 0.85rem; font-size: 0.78rem; }
+            .card-value { font-size: 1.4rem; }
+            .section-header { padding: 0.75rem 1rem; }
+            table th, table td { padding: 0.5rem 0.65rem; font-size: 0.78rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-inner">
+        <div class="logo">
+            <div class="logo-icon">G</div>
+            <div>
+                <h1>GradusMedia Admin</h1>
+                <p>Dashboard &amp; Analytics</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button onclick="refreshCurrentTab()">↻ Refresh</button>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('analytics')">Analytics</button>
+        <button class="tab-btn" onclick="switchTab('presets')">Preset Candidates</button>
+        <button class="tab-btn" onclick="switchTab('users')">Users</button>
+        <button class="tab-btn" onclick="switchTab('subscriptions')">Subscriptions</button>
+    </div>
+
+    <div id="tab-analytics" class="tab-panel active">
+        <div class="cards-row" id="analytics-cards">
+            <div class="card"><div class="card-label">Total Users</div><div class="card-value" id="stat-total-users">—</div></div>
+            <div class="card"><div class="card-label">Active Subscriptions</div><div class="card-value accent" id="stat-active-subs">—</div></div>
+            <div class="card"><div class="card-label">Total Questions</div><div class="card-value" id="stat-total-questions">—</div></div>
+            <div class="card"><div class="card-label">Questions Today</div><div class="card-value success" id="stat-questions-today">—</div></div>
+            <div class="card"><div class="card-label">Preset Hit Rate</div><div class="card-value warning" id="stat-preset-hit">—</div></div>
+            <div class="card"><div class="card-label">Avg Response Time</div><div class="card-value purple" id="stat-avg-time">—</div></div>
+        </div>
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Top 10 Most Asked Questions</h3>
+                <canvas id="chart-top-questions"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Questions Per Day (Last 30 Days)</h3>
+                <canvas id="chart-questions-daily"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-presets" class="tab-panel">
+        <div class="section-card">
+            <div class="section-header">
+                <h3>Preset Candidates</h3>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Question</th>
+                            <th>Freq</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                            <th>Avg Time</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="candidates-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <div class="section-header">
+                <h3>Active Presets</h3>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pattern</th>
+                            <th>Category</th>
+                            <th>Usage Count</th>
+                            <th>Last Used</th>
+                            <th>Priority</th>
+                            <th>Active</th>
+                        </tr>
+                    </thead>
+                    <tbody id="presets-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-users" class="tab-panel">
+        <div class="cards-row" id="users-cards">
+            <div class="card"><div class="card-label">Total Users</div><div class="card-value" id="users-total">—</div></div>
+            <div class="card"><div class="card-label">Free Tier</div><div class="card-value" id="users-free">—</div></div>
+            <div class="card"><div class="card-label">Standard</div><div class="card-value accent" id="users-standard">—</div></div>
+            <div class="card"><div class="card-label">Premium</div><div class="card-value purple" id="users-premium">—</div></div>
+        </div>
+        <div class="section-card">
+            <div class="section-header">
+                <h3>Users Database</h3>
+                <div class="section-tools">
+                    <select id="users-tier-filter" onchange="loadUsers()">
+                        <option value="">All Tiers</option>
+                        <option value="free">Free</option>
+                        <option value="standard">Standard</option>
+                        <option value="premium">Premium</option>
+                    </select>
+                    <button class="btn btn-outline" onclick="exportUsersCSV()">⬇ Export CSV</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Registered</th>
+                            <th>Tier</th>
+                            <th>Expires</th>
+                            <th>Q Today</th>
+                            <th>Total Q</th>
+                            <th>Last Active</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body"></tbody>
+                </table>
+            </div>
+            <div class="pagination" id="users-pagination"></div>
+        </div>
+    </div>
+
+    <div id="tab-subscriptions" class="tab-panel">
+        <div class="cards-row" id="subs-cards">
+            <div class="card"><div class="card-label">MRR (USD)</div><div class="card-value success" id="subs-mrr">—</div></div>
+            <div class="card"><div class="card-label">Failed Payments (this month)</div><div class="card-value danger" id="subs-failed">—</div></div>
+            <div class="card"><div class="card-label">Churned (this month)</div><div class="card-value warning" id="subs-churned">—</div></div>
+        </div>
+        <div class="section-card">
+            <div class="section-header">
+                <h3>Subscriptions</h3>
+                <div class="section-tools">
+                    <select id="subs-status-filter" onchange="loadSubscriptions()">
+                        <option value="">All Statuses</option>
+                        <option value="success">Success</option>
+                        <option value="pending">Pending</option>
+                        <option value="failed">Failed</option>
+                        <option value="refunded">Refunded</option>
+                    </select>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Plan</th>
+                            <th>Billing Cycle</th>
+                            <th>Amount</th>
+                            <th>Payment Status</th>
+                            <th>Started</th>
+                            <th>Expires</th>
+                            <th>Order ID</th>
+                        </tr>
+                    </thead>
+                    <tbody id="subs-body"></tbody>
+                </table>
+            </div>
+            <div class="pagination" id="subs-pagination"></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+        <h3 id="modal-title">Generated Answer</h3>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="hideModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const ADMIN_KEY = 'GradusAdmin_2026';
+const HEADERS = { 'X-Admin-Key': ADMIN_KEY, 'Content-Type': 'application/json' };
+
+let currentTab = 'analytics';
+let usersPage = 1;
+let subsPage = 1;
+let topQChart = null;
+let dailyChart = null;
+let allUsersData = [];
+
+function formatDate(str) {
+    if (!str || str === 'None') return '—';
+    try {
+        const d = new Date(str);
+        if (isNaN(d.getTime())) return '—';
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    } catch { return '—'; }
+}
+
+function formatDateTime(str) {
+    if (!str || str === 'None') return '—';
+    try {
+        const d = new Date(str);
+        if (isNaN(d.getTime())) return '—';
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' +
+               d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    } catch { return '—'; }
+}
+
+function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach((b, i) => {
+        b.classList.toggle('active', ['analytics','presets','users','subscriptions'][i] === tab);
+    });
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    refreshCurrentTab();
+}
+
+function refreshCurrentTab() {
+    if (currentTab === 'analytics') loadAnalytics();
+    else if (currentTab === 'presets') loadPresets();
+    else if (currentTab === 'users') loadUsers();
+    else if (currentTab === 'subscriptions') loadSubscriptions();
+}
+
+function showToast(msg, type = 'success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast toast-' + type + ' show';
+    setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function showModal(title, html) {
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-body').innerHTML = html;
+    document.getElementById('modal-overlay').classList.add('show');
+}
+
+function hideModal() { document.getElementById('modal-overlay').classList.remove('show'); }
+function closeModal(e) { if (e.target === document.getElementById('modal-overlay')) hideModal(); }
+
+async function api(url, opts = {}) {
+    const res = await fetch(url, { headers: HEADERS, ...opts });
+    if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err);
+    }
+    return res.json();
+}
+
+async function loadAnalytics() {
+    try {
+        const d = await api('/api/admin/analytics/overview');
+        document.getElementById('stat-total-users').textContent = d.total_users.toLocaleString();
+        document.getElementById('stat-active-subs').textContent = d.active_subscriptions.toLocaleString();
+        document.getElementById('stat-total-questions').textContent = d.total_questions.toLocaleString();
+        document.getElementById('stat-questions-today').textContent = d.questions_today.toLocaleString();
+        document.getElementById('stat-preset-hit').textContent = d.preset_hit_rate_pct + '%';
+        document.getElementById('stat-avg-time').textContent = d.avg_response_time_ms + ' ms';
+
+        renderTopQuestionsChart(d.top_questions || []);
+        renderDailyChart(d.questions_per_day || []);
+    } catch (e) {
+        showToast('Failed to load analytics: ' + e.message, 'error');
+    }
+}
+
+function renderTopQuestionsChart(data) {
+    const ctx = document.getElementById('chart-top-questions');
+    if (topQChart) topQChart.destroy();
+    topQChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: data.map(q => q.text.length > 40 ? q.text.slice(0, 40) + '…' : q.text),
+            datasets: [{
+                label: 'Count',
+                data: data.map(q => q.count),
+                backgroundColor: 'rgba(56,189,248,.5)',
+                borderColor: '#38bdf8',
+                borderWidth: 1,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,.3)' } },
+                y: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { display: false } }
+            }
+        }
+    });
+}
+
+function renderDailyChart(data) {
+    const ctx = document.getElementById('chart-questions-daily');
+    if (dailyChart) dailyChart.destroy();
+    dailyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.map(d => { const dt = new Date(d.date); return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); }),
+            datasets: [{
+                label: 'Questions',
+                data: data.map(d => d.count),
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56,189,248,.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: '#38bdf8'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: '#94a3b8', maxRotation: 45 }, grid: { color: 'rgba(51,65,85,.3)' } },
+                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,.3)' }, beginAtZero: true }
+            }
+        }
+    });
+}
+
+async function loadPresets() {
+    try {
+        const [candRes, presetRes] = await Promise.all([
+            api('/api/admin/alex/preset-candidates'),
+            api('/api/admin/alex/presets')
+        ]);
+
+        const cb = document.getElementById('candidates-body');
+        if (!candRes.candidates || candRes.candidates.length === 0) {
+            cb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">No preset candidates found</td></tr>';
+        } else {
+            cb.innerHTML = candRes.candidates.map(c => {
+                const statusClass = c.status === 'candidate' ? 'badge-candidate' : c.status === 'promoted' ? 'badge-promoted' : 'badge-dismissed';
+                const rowClass = c.status === 'dismissed' ? 'dismissed' : '';
+                const actions = c.status === 'candidate' ? `
+                    <button class="btn btn-accent" onclick="generateAnswer(${c.id})">Generate</button>
+                    <button class="btn btn-success" onclick="togglePromoteForm(${c.id})">Promote</button>
+                    <button class="btn btn-ghost" onclick="dismissCandidate(${c.id})">Dismiss</button>
+                ` : '';
+                return `<tr class="${rowClass}">
+                    <td style="max-width:300px;word-break:break-word">${escHtml(c.question_text)}
+                        <div class="promote-form" id="promote-form-${c.id}">
+                            <label>Answer Text</label>
+                            <textarea id="promote-answer-${c.id}">${escHtml(c.sample_claude_answer || '')}</textarea>
+                            <label>Category</label>
+                            <select id="promote-cat-${c.id}">
+                                <option value="general">General</option>
+                                <option value="product">Product</option>
+                                <option value="pricing">Pricing</option>
+                                <option value="distribution">Distribution</option>
+                                <option value="horeca">HoReCa</option>
+                                <option value="marketing">Marketing</option>
+                            </select>
+                            <label>Priority (1-10)</label>
+                            <input type="number" id="promote-pri-${c.id}" min="1" max="10" value="5">
+                            <div class="form-actions">
+                                <button class="btn btn-success" onclick="promoteCandidate(${c.id})">Confirm Promote</button>
+                                <button class="btn btn-ghost" onclick="togglePromoteForm(${c.id})">Cancel</button>
+                            </div>
+                        </div>
+                    </td>
+                    <td>${c.frequency}</td>
+                    <td>${formatDate(c.first_seen_at)}</td>
+                    <td>${formatDate(c.last_seen_at)}</td>
+                    <td>${c.avg_response_time_ms ? c.avg_response_time_ms + ' ms' : '—'}</td>
+                    <td><span class="badge ${statusClass}">${c.status}</span></td>
+                    <td>${actions}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        const pb = document.getElementById('presets-body');
+        if (!presetRes.presets || presetRes.presets.length === 0) {
+            pb.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted)">No presets found</td></tr>';
+        } else {
+            pb.innerHTML = presetRes.presets.map(p => `<tr>
+                <td style="max-width:300px;word-break:break-word">${escHtml(p.question_pattern)}</td>
+                <td>${escHtml(p.category || '—')}</td>
+                <td>${p.usage_count}</td>
+                <td>${formatDate(p.last_used_at)}</td>
+                <td>${p.priority}</td>
+                <td>
+                    <label class="toggle">
+                        <input type="checkbox" ${p.is_active ? 'checked' : ''} onchange="togglePreset(${p.id}, this.checked)">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                </td>
+            </tr>`).join('');
+        }
+    } catch (e) {
+        showToast('Failed to load presets: ' + e.message, 'error');
+    }
+}
+
+function togglePromoteForm(id) {
+    const form = document.getElementById('promote-form-' + id);
+    form.classList.toggle('show');
+}
+
+async function generateAnswer(id) {
+    showModal('Generating Answer…', '<div class="loading"><div class="spinner"></div><p style="margin-top:1rem">Calling Claude AI…</p></div>');
+    try {
+        const res = await api('/api/admin/alex/preset-candidates/' + id + '/generate-answer', { method: 'POST' });
+        showModal('Generated Answer', '<pre>' + escHtml(res.answer) + '</pre>');
+        showToast('Answer generated');
+        loadPresets();
+    } catch (e) {
+        showModal('Error', '<p style="color:var(--danger)">' + escHtml(e.message) + '</p>');
+    }
+}
+
+async function promoteCandidate(id) {
+    const answer = document.getElementById('promote-answer-' + id).value;
+    const category = document.getElementById('promote-cat-' + id).value;
+    const priority = parseInt(document.getElementById('promote-pri-' + id).value) || 5;
+    try {
+        await api('/api/admin/alex/preset-candidates/' + id + '/promote', {
+            method: 'POST',
+            body: JSON.stringify({ answer_text: answer, category, priority })
+        });
+        showToast('Candidate promoted to preset');
+        loadPresets();
+    } catch (e) {
+        showToast('Promote failed: ' + e.message, 'error');
+    }
+}
+
+async function dismissCandidate(id) {
+    try {
+        await api('/api/admin/alex/preset-candidates/' + id + '/dismiss', { method: 'POST' });
+        showToast('Candidate dismissed');
+        loadPresets();
+    } catch (e) {
+        showToast('Dismiss failed: ' + e.message, 'error');
+    }
+}
+
+async function togglePreset(id, active) {
+    try {
+        await api('/api/admin/alex/presets/' + id, {
+            method: 'PUT',
+            body: JSON.stringify({ is_active: active })
+        });
+        showToast('Preset ' + (active ? 'activated' : 'deactivated'));
+    } catch (e) {
+        showToast('Toggle failed: ' + e.message, 'error');
+    }
+}
+
+async function loadUsers() {
+    const tier = document.getElementById('users-tier-filter').value;
+    try {
+        const params = new URLSearchParams({ page: usersPage, limit: 50 });
+        if (tier) params.set('tier', tier);
+        const d = await api('/api/admin/users?' + params);
+        allUsersData = d.users || [];
+
+        let free = 0, std = 0, prem = 0;
+        allUsersData.forEach(u => {
+            if (u.tier === 'premium') prem++;
+            else if (u.tier === 'standard') std++;
+            else free++;
+        });
+        if (!tier) {
+            document.getElementById('users-total').textContent = d.total;
+            document.getElementById('users-free').textContent = d.total - std - prem;
+            document.getElementById('users-standard').textContent = std;
+            document.getElementById('users-premium').textContent = prem;
+        }
+
+        const tb = document.getElementById('users-body');
+        if (allUsersData.length === 0) {
+            tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text-muted)">No users found</td></tr>';
+        } else {
+            tb.innerHTML = allUsersData.map(u => {
+                const tierClass = u.tier === 'premium' ? 'badge-premium' : u.tier === 'standard' ? 'badge-standard' : 'badge-free';
+                return `<tr>
+                    <td>${escHtml(u.name || '—')}</td>
+                    <td>${escHtml(u.email)}</td>
+                    <td>${formatDate(u.registered_at)}</td>
+                    <td><span class="badge ${tierClass}">${u.tier || 'free'}</span></td>
+                    <td>${formatDate(u.expires_at)}</td>
+                    <td>${u.questions_today}</td>
+                    <td>${u.total_questions}</td>
+                    <td>${formatDateTime(u.last_active)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        const totalPages = Math.ceil(d.total / d.limit) || 1;
+        document.getElementById('users-pagination').innerHTML = `
+            <button class="btn btn-ghost" ${usersPage <= 1 ? 'disabled' : ''} onclick="usersPage--;loadUsers()">← Prev</button>
+            <span>Page ${d.page} of ${totalPages}</span>
+            <button class="btn btn-ghost" ${usersPage >= totalPages ? 'disabled' : ''} onclick="usersPage++;loadUsers()">Next →</button>
+        `;
+    } catch (e) {
+        showToast('Failed to load users: ' + e.message, 'error');
+    }
+}
+
+function exportUsersCSV() {
+    if (!allUsersData.length) { showToast('No data to export', 'error'); return; }
+    const headers = ['Name','Email','Registered','Tier','Expires','Questions Today','Total Questions','Last Active'];
+    const rows = allUsersData.map(u => [
+        u.name || '', u.email, u.registered_at || '', u.tier || 'free',
+        u.expires_at || '', u.questions_today, u.total_questions, u.last_active || ''
+    ]);
+    let csv = headers.join(',') + '\n';
+    rows.forEach(r => { csv += r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'gradus_users_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.click();
+    showToast('CSV exported');
+}
+
+async function loadSubscriptions() {
+    const status = document.getElementById('subs-status-filter').value;
+    try {
+        const params = new URLSearchParams({ page: subsPage, limit: 50 });
+        if (status) params.set('status', status);
+        const d = await api('/api/admin/subscriptions?' + params);
+
+        document.getElementById('subs-mrr').textContent = '$' + (d.mrr_usd || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
+        document.getElementById('subs-failed').textContent = d.failed_this_month || 0;
+        document.getElementById('subs-churned').textContent = d.churned_this_month || 0;
+
+        const tb = document.getElementById('subs-body');
+        const subs = d.subscriptions || [];
+        if (subs.length === 0) {
+            tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text-muted)">No subscriptions found</td></tr>';
+        } else {
+            tb.innerHTML = subs.map(s => {
+                const planClass = s.tier === 'premium' ? 'badge-premium' : s.tier === 'standard' ? 'badge-standard' : 'badge-free';
+                const payClass = s.payment_status === 'success' ? 'badge-success' : s.payment_status === 'pending' ? 'badge-pending' : s.payment_status === 'failed' ? 'badge-failed' : 'badge-refunded';
+                return `<tr>
+                    <td>${escHtml(s.email)}</td>
+                    <td><span class="badge ${planClass}">${s.tier || '—'}</span></td>
+                    <td>${s.billing_cycle || '—'}</td>
+                    <td>${s.amount} ${s.currency || 'UAH'}</td>
+                    <td><span class="badge ${payClass}">${s.payment_status || '—'}</span></td>
+                    <td>${formatDate(s.started_at)}</td>
+                    <td>${formatDate(s.expires_at)}</td>
+                    <td style="font-size:0.75rem;color:var(--text-muted)">${escHtml(s.order_id || '—')}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        const totalPages = Math.ceil(d.total / d.limit) || 1;
+        document.getElementById('subs-pagination').innerHTML = `
+            <button class="btn btn-ghost" ${subsPage <= 1 ? 'disabled' : ''} onclick="subsPage--;loadSubscriptions()">← Prev</button>
+            <span>Page ${d.page} of ${totalPages}</span>
+            <button class="btn btn-ghost" ${subsPage >= totalPages ? 'disabled' : ''} onclick="subsPage++;loadSubscriptions()">Next →</button>
+        `;
+    } catch (e) {
+        showToast('Failed to load subscriptions: ' + e.message, 'error');
+    }
+}
+
+function escHtml(s) {
+    if (!s) return '';
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+loadAnalytics();
+</script>
+</body>
+</html>

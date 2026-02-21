@@ -3,6 +3,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime, date
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import os
 import logging
 import time
@@ -13,6 +14,42 @@ from routes.chat_endpoints import chat_with_avatars, ChatRequest as ChatEndpoint
 from services.preset_service import preset_service
 
 logger = logging.getLogger(__name__)
+
+TREND_KEYWORDS = [
+    'тренд', 'trend', 'популярн', 'зараз', 'сезон', 'мода',
+    'що зараз', 'актуальн', 'цього року', '2026', 'новин'
+]
+
+
+def _is_trend_question(message: str) -> bool:
+    msg_lower = message.lower()
+    return any(kw in msg_lower for kw in TREND_KEYWORDS)
+
+
+def _get_fresh_trends(db: Session) -> str:
+    try:
+        result = db.execute(text("""
+            SELECT translated_title, LEFT(translated_text, 400) 
+            FROM content_queue 
+            WHERE category = 'trends' 
+              AND status IN ('approved', 'posted', 'pending_approval')
+              AND translated_title IS NOT NULL
+            ORDER BY created_at DESC 
+            LIMIT 5
+        """))
+        rows = result.fetchall()
+        if not rows:
+            return ""
+        
+        context = "СВІЖІ ТРЕНДИ З БАЗИ GRADUS MEDIA (актуальні статті):\n\n"
+        for i, row in enumerate(rows, 1):
+            title = row[0] or ''
+            excerpt = row[1] or ''
+            context += f"{i}. **{title}**\n{excerpt}...\n\n"
+        return context
+    except Exception as e:
+        logger.error(f"Error fetching trends: {e}")
+        return ""
 
 router = APIRouter(prefix="/api/maya", tags=["alex"])
 
@@ -114,9 +151,16 @@ async def chat_with_alex(request: ChatRequest, db: Session = Depends(get_db)):
             reply = preset_answer
             logger.info(f"[PRESET] Served instant answer for: {request.message[:50]}...")
         else:
+            message_to_send = request.message
+            if _is_trend_question(request.message):
+                trend_context = _get_fresh_trends(db)
+                if trend_context:
+                    message_to_send = f"{trend_context}\n\nПитання користувача: {request.message}"
+                    logger.info(f"[TRENDS] Injected {trend_context.count('**')} trend articles into context")
+
             logger.info(f"[API] Calling Claude for: {request.message[:50]}...")
             chat_req = ChatEndpointRequest(
-                message=request.message,
+                message=message_to_send,
                 avatar="alex",
                 conversation_history=[],
             )

@@ -236,6 +236,8 @@ from routes.hr_admin import router as hr_admin_router
 app.include_router(hr_admin_router)
 from routes.payment_routes import router as payment_router
 app.include_router(payment_router)
+from routes.admin_routes import router as admin_router
+app.include_router(admin_router)
 
 class ChatRequest(BaseModel):
     message: str

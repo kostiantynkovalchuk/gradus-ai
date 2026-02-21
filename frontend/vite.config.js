@@ -14,6 +14,14 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true
+      },
+      '/admin': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/hr': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
       }
     }
   },

@@ -414,6 +414,104 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
     
+    def aggregate_alex_candidates_task(self):
+        """
+        Task: Aggregate frequent Alex questions into preset candidates
+        Runs at: 03:00 AM daily (UTC)
+        Groups similar questions from last 7 days, inserts candidates with freq >= 3
+        """
+        logger.info("[SCHEDULER] Starting Alex preset candidate aggregation...")
+        try:
+            from fuzzywuzzy import fuzz
+            from sqlalchemy import text
+
+            db = self._get_db_session()
+            try:
+                result = db.execute(text("""
+                    SELECT query_text, COUNT(*) as freq, 
+                           AVG(response_time_ms)::INTEGER as avg_ms
+                    FROM maya_query_log 
+                    WHERE created_at >= NOW() - INTERVAL '7 days'
+                    GROUP BY query_text 
+                    HAVING COUNT(*) >= 2
+                    ORDER BY freq DESC
+                    LIMIT 100
+                """))
+                raw_questions = [(r[0], r[1], r[2]) for r in result]
+
+                if not raw_questions:
+                    logger.info("[SCHEDULER] No frequent Alex questions found")
+                    return
+
+                existing_presets = db.execute(text(
+                    "SELECT question_pattern FROM alex_preset_answers WHERE is_active = TRUE"
+                ))
+                preset_patterns = [r[0].lower() for r in existing_presets]
+
+                existing_candidates = db.execute(text(
+                    "SELECT question_text FROM alex_preset_candidates WHERE status = 'candidate'"
+                ))
+                candidate_texts = [r[0].lower() for r in existing_candidates]
+
+                groups = []
+                used = set()
+
+                for i, (q1, f1, ms1) in enumerate(raw_questions):
+                    if i in used:
+                        continue
+                    group = [(q1, f1, ms1)]
+                    used.add(i)
+                    for j, (q2, f2, ms2) in enumerate(raw_questions):
+                        if j in used:
+                            continue
+                        if fuzz.ratio(q1.lower(), q2.lower()) >= 80:
+                            group.append((q2, f2, ms2))
+                            used.add(j)
+                    groups.append(group)
+
+                inserted = 0
+                for group in groups:
+                    total_freq = sum(f for _, f, _ in group)
+                    if total_freq < 3:
+                        continue
+
+                    representative = max(group, key=lambda x: x[1])[0]
+                    avg_ms = int(sum(ms or 0 for _, _, ms in group) / len(group))
+
+                    matches_preset = any(
+                        fuzz.ratio(representative.lower(), p) >= 85 for p in preset_patterns
+                    )
+                    if matches_preset:
+                        continue
+
+                    matching_candidate = None
+                    for c in candidate_texts:
+                        if fuzz.ratio(representative.lower(), c) >= 85:
+                            matching_candidate = c
+                            break
+
+                    if matching_candidate:
+                        db.execute(text("""
+                            UPDATE alex_preset_candidates 
+                            SET frequency = :freq, avg_response_time_ms = :avg_ms,
+                                last_seen_at = NOW()
+                            WHERE LOWER(question_text) = LOWER(:q) AND status = 'candidate'
+                        """), {'freq': total_freq, 'avg_ms': avg_ms, 'q': matching_candidate})
+                    else:
+                        db.execute(text("""
+                            INSERT INTO alex_preset_candidates 
+                                (question_text, frequency, avg_response_time_ms)
+                            VALUES (:q, :freq, :avg_ms)
+                        """), {'q': representative, 'freq': total_freq, 'avg_ms': avg_ms})
+                        inserted += 1
+
+                db.commit()
+                logger.info(f"[SCHEDULER] Alex candidates: {inserted} new, {len(groups)} groups analyzed")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Alex candidate aggregation failed: {e}")
+
     def check_expired_subscriptions_task(self):
         """
         Task: Expire subscriptions past their expiry date
@@ -1065,6 +1163,14 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        self.scheduler.add_job(
+            self.aggregate_alex_candidates_task,
+            CronTrigger(hour=3, minute=30),
+            id='aggregate_alex_candidates',
+            name='Aggregate Alex preset candidates',
+            replace_existing=True
+        )
+        
         self.scheduler.start()
         
         logger.info("=" * 60)
@@ -1099,6 +1205,7 @@ class ContentScheduler:
         logger.info("   • Cleanup: Daily 3:00 AM")
         logger.info("   • Subscription expiry: Daily 4:00 AM")
         logger.info("   • Knowledge gap detection: Daily 7:00 AM")
+        logger.info("   • Alex candidate aggregation: Daily 3:30 AM")
         logger.info("")
         logger.info("=" * 60)
         logger.info("🚀 System ready! Waiting for next scheduled task...")
