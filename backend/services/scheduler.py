@@ -429,7 +429,8 @@ class ContentScheduler:
             try:
                 result = db.execute(text("""
                     SELECT query_text, COUNT(*) as freq, 
-                           AVG(response_time_ms)::INTEGER as avg_ms
+                           AVG(response_time_ms)::INTEGER as avg_ms,
+                           MODE() WITHIN GROUP (ORDER BY COALESCE(user_tier, 'free')) as dominant_tier
                     FROM maya_query_log 
                     WHERE created_at >= NOW() - INTERVAL '7 days'
                     GROUP BY query_text 
@@ -437,7 +438,7 @@ class ContentScheduler:
                     ORDER BY freq DESC
                     LIMIT 100
                 """))
-                raw_questions = [(r[0], r[1], r[2]) for r in result]
+                raw_questions = [(r[0], r[1], r[2], r[3] or 'free') for r in result]
 
                 if not raw_questions:
                     logger.info("[SCHEDULER] No frequent Alex questions found")
@@ -456,27 +457,31 @@ class ContentScheduler:
                 groups = []
                 used = set()
 
-                for i, (q1, f1, ms1) in enumerate(raw_questions):
+                for i, (q1, f1, ms1, t1) in enumerate(raw_questions):
                     if i in used:
                         continue
-                    group = [(q1, f1, ms1)]
+                    group = [(q1, f1, ms1, t1)]
                     used.add(i)
-                    for j, (q2, f2, ms2) in enumerate(raw_questions):
+                    for j, (q2, f2, ms2, t2) in enumerate(raw_questions):
                         if j in used:
                             continue
                         if fuzz.ratio(q1.lower(), q2.lower()) >= 80:
-                            group.append((q2, f2, ms2))
+                            group.append((q2, f2, ms2, t2))
                             used.add(j)
                     groups.append(group)
 
                 inserted = 0
                 for group in groups:
-                    total_freq = sum(f for _, f, _ in group)
+                    total_freq = sum(f for _, f, _, _ in group)
                     if total_freq < 3:
                         continue
 
                     representative = max(group, key=lambda x: x[1])[0]
-                    avg_ms = int(sum(ms or 0 for _, _, ms in group) / len(group))
+                    avg_ms = int(sum(ms or 0 for _, _, ms, _ in group) / len(group))
+
+                    from collections import Counter
+                    tier_counts = Counter(t for _, _, _, t in group)
+                    dominant_tier = tier_counts.most_common(1)[0][0] if tier_counts else 'free'
 
                     matches_preset = any(
                         fuzz.ratio(representative.lower(), p) >= 85 for p in preset_patterns
@@ -494,15 +499,15 @@ class ContentScheduler:
                         db.execute(text("""
                             UPDATE alex_preset_candidates 
                             SET frequency = :freq, avg_response_time_ms = :avg_ms,
-                                last_seen_at = NOW()
+                                last_seen_at = NOW(), dominant_tier = :dtier
                             WHERE LOWER(question_text) = LOWER(:q) AND status = 'candidate'
-                        """), {'freq': total_freq, 'avg_ms': avg_ms, 'q': matching_candidate})
+                        """), {'freq': total_freq, 'avg_ms': avg_ms, 'q': matching_candidate, 'dtier': dominant_tier})
                     else:
                         db.execute(text("""
                             INSERT INTO alex_preset_candidates 
-                                (question_text, frequency, avg_response_time_ms)
-                            VALUES (:q, :freq, :avg_ms)
-                        """), {'q': representative, 'freq': total_freq, 'avg_ms': avg_ms})
+                                (question_text, frequency, avg_response_time_ms, dominant_tier)
+                            VALUES (:q, :freq, :avg_ms, :dtier)
+                        """), {'q': representative, 'freq': total_freq, 'avg_ms': avg_ms, 'dtier': dominant_tier})
                         inserted += 1
 
                 db.commit()

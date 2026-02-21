@@ -253,6 +253,12 @@
         .badge-free { background: rgba(100,116,139,.2); color: var(--slate); }
         .badge-standard { background: rgba(59,130,246,.15); color: var(--blue); }
         .badge-premium { background: rgba(167,139,250,.15); color: var(--purple); }
+        .badge-paid { background: rgba(251,146,60,.15); color: var(--orange); border: 1px solid var(--orange); }
+        tr.paid-candidate { border-left: 3px solid var(--orange); }
+        .tier-mini { display: inline-block; font-size: .7rem; padding: .1rem .35rem; border-radius: 4px; font-weight: 600; margin-right: .25rem; }
+        .tier-mini-free { background: rgba(100,116,139,.2); color: var(--slate); }
+        .tier-mini-standard { background: rgba(251,146,60,.15); color: var(--orange); }
+        .tier-mini-premium { background: rgba(255,215,0,.15); color: #fbbf24; }
         .badge-success { background: rgba(34,197,94,.15); color: var(--success); }
         .badge-pending { background: rgba(245,158,11,.15); color: var(--warning); }
         .badge-failed { background: rgba(239,68,68,.15); color: var(--danger); }
@@ -407,14 +413,38 @@
         <div class="cards-row" id="analytics-cards">
             <div class="card"><div class="card-label">Total Users</div><div class="card-value" id="stat-total-users">—</div></div>
             <div class="card"><div class="card-label">Active Subscriptions</div><div class="card-value accent" id="stat-active-subs">—</div></div>
-            <div class="card"><div class="card-label">Total Questions</div><div class="card-value" id="stat-total-questions">—</div></div>
-            <div class="card"><div class="card-label">Questions Today</div><div class="card-value success" id="stat-questions-today">—</div></div>
-            <div class="card"><div class="card-label">Preset Hit Rate</div><div class="card-value warning" id="stat-preset-hit">—</div></div>
-            <div class="card"><div class="card-label">Avg Response Time</div><div class="card-value purple" id="stat-avg-time">—</div></div>
+            <div class="card">
+                <div class="card-label">Total Questions</div>
+                <div class="card-value" id="stat-total-questions">—</div>
+                <div class="tier-breakdown" id="tier-total" style="margin-top:.4rem;font-size:.75rem;color:var(--text-muted)"></div>
+            </div>
+            <div class="card">
+                <div class="card-label">Questions Today</div>
+                <div class="card-value success" id="stat-questions-today">—</div>
+                <div class="tier-breakdown" id="tier-today" style="margin-top:.4rem;font-size:.75rem;color:var(--text-muted)"></div>
+            </div>
+            <div class="card">
+                <div class="card-label">Preset Hit Rate</div>
+                <div class="card-value warning" id="stat-preset-hit">—</div>
+                <div class="tier-breakdown" id="tier-preset" style="margin-top:.4rem;font-size:.75rem;color:var(--text-muted)"></div>
+            </div>
+            <div class="card">
+                <div class="card-label">Avg Response Time</div>
+                <div class="card-value purple" id="stat-avg-time">—</div>
+                <div class="tier-breakdown" id="tier-avgtime" style="margin-top:.4rem;font-size:.75rem;color:var(--text-muted)"></div>
+            </div>
         </div>
         <div class="chart-row">
             <div class="chart-card">
-                <h3>Top 10 Most Asked Questions</h3>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                    <h3 style="margin:0">Top 10 Most Asked Questions</h3>
+                    <select id="top-q-tier-filter" onchange="applyTopQFilter()" style="padding:.35rem .6rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:.8rem">
+                        <option value="all">All Tiers</option>
+                        <option value="free">Free</option>
+                        <option value="standard">Standard</option>
+                        <option value="premium">Premium</option>
+                    </select>
+                </div>
                 <canvas id="chart-top-questions"></canvas>
             </div>
             <div class="chart-card">
@@ -435,6 +465,7 @@
                         <tr>
                             <th>Question</th>
                             <th>Freq</th>
+                            <th>Tier</th>
                             <th>First Seen</th>
                             <th>Last Seen</th>
                             <th>Avg Time</th>
@@ -573,6 +604,7 @@ let subsPage = 1;
 let topQChart = null;
 let dailyChart = null;
 let allUsersData = [];
+let analyticsData = null;
 
 function formatDate(str) {
     if (!str || str === 'None') return '—';
@@ -635,9 +667,31 @@ async function api(url, opts = {}) {
     return res.json();
 }
 
+function tierBadges(obj) {
+    if (!obj) return '';
+    return `<span class="tier-mini tier-mini-free">Free: ${(obj.free||0).toLocaleString()}</span>`
+         + `<span class="tier-mini tier-mini-standard">Std: ${(obj.standard||0).toLocaleString()}</span>`
+         + `<span class="tier-mini tier-mini-premium">Prem: ${(obj.premium||0).toLocaleString()}</span>`;
+}
+
+function tierBadgesPct(obj) {
+    if (!obj) return '';
+    return `<span class="tier-mini tier-mini-free">Free: ${obj.free||0}%</span>`
+         + `<span class="tier-mini tier-mini-standard">Std: ${obj.standard||0}%</span>`
+         + `<span class="tier-mini tier-mini-premium">Prem: ${obj.premium||0}%</span>`;
+}
+
+function tierBadgesMs(obj) {
+    if (!obj) return '';
+    return `<span class="tier-mini tier-mini-free">Free: ${obj.free||0}ms</span>`
+         + `<span class="tier-mini tier-mini-standard">Std: ${obj.standard||0}ms</span>`
+         + `<span class="tier-mini tier-mini-premium">Prem: ${obj.premium||0}ms</span>`;
+}
+
 async function loadAnalytics() {
     try {
         const d = await api('/api/admin/analytics/overview');
+        analyticsData = d;
         document.getElementById('stat-total-users').textContent = d.total_users.toLocaleString();
         document.getElementById('stat-active-subs').textContent = d.active_subscriptions.toLocaleString();
         document.getElementById('stat-total-questions').textContent = d.total_questions.toLocaleString();
@@ -645,10 +699,26 @@ async function loadAnalytics() {
         document.getElementById('stat-preset-hit').textContent = d.preset_hit_rate_pct + '%';
         document.getElementById('stat-avg-time').textContent = d.avg_response_time_ms + ' ms';
 
+        document.getElementById('tier-total').innerHTML = tierBadges(d.questions_by_tier);
+        document.getElementById('tier-today').innerHTML = tierBadges(d.questions_today_by_tier);
+        document.getElementById('tier-preset').innerHTML = tierBadgesPct(d.preset_hit_rate_by_tier);
+        document.getElementById('tier-avgtime').innerHTML = tierBadgesMs(d.avg_response_time_by_tier);
+
         renderTopQuestionsChart(d.top_questions || []);
         renderDailyChart(d.questions_per_day || []);
     } catch (e) {
         showToast('Failed to load analytics: ' + e.message, 'error');
+    }
+}
+
+function applyTopQFilter() {
+    if (!analyticsData) return;
+    const tier = document.getElementById('top-q-tier-filter').value;
+    if (tier === 'all') {
+        renderTopQuestionsChart(analyticsData.top_questions || []);
+    } else {
+        const byTier = analyticsData.top_questions_by_tier || {};
+        renderTopQuestionsChart(byTier[tier] || []);
     }
 }
 
@@ -683,27 +753,53 @@ function renderTopQuestionsChart(data) {
 function renderDailyChart(data) {
     const ctx = document.getElementById('chart-questions-daily');
     if (dailyChart) dailyChart.destroy();
+    const labels = data.map(d => { const dt = new Date(d.date); return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); });
     dailyChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: data.map(d => { const dt = new Date(d.date); return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); }),
-            datasets: [{
-                label: 'Questions',
-                data: data.map(d => d.count),
-                borderColor: '#38bdf8',
-                backgroundColor: 'rgba(56,189,248,.1)',
-                fill: true,
-                tension: 0.3,
-                pointRadius: 3,
-                pointBackgroundColor: '#38bdf8'
-            }]
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Free',
+                    data: data.map(d => d.free || 0),
+                    borderColor: '#64748b',
+                    backgroundColor: 'rgba(100,116,139,.08)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointBackgroundColor: '#64748b',
+                    borderWidth: 2
+                },
+                {
+                    label: 'Standard',
+                    data: data.map(d => d.standard || 0),
+                    borderColor: '#fb923c',
+                    backgroundColor: 'rgba(251,146,60,.08)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointBackgroundColor: '#fb923c',
+                    borderWidth: 2
+                },
+                {
+                    label: 'Premium',
+                    data: data.map(d => d.premium || 0),
+                    borderColor: '#fbbf24',
+                    backgroundColor: 'rgba(251,191,36,.08)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointBackgroundColor: '#fbbf24',
+                    borderWidth: 2
+                }
+            ]
         },
         options: {
             responsive: true,
-            plugins: { legend: { display: false } },
+            plugins: { legend: { display: true, labels: { color: '#94a3b8', usePointStyle: true, pointStyle: 'circle' } } },
             scales: {
                 x: { ticks: { color: '#94a3b8', maxRotation: 45 }, grid: { color: 'rgba(51,65,85,.3)' } },
-                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,.3)' }, beginAtZero: true }
+                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,.3)' }, beginAtZero: true, stacked: false }
             }
         }
     });
@@ -718,11 +814,15 @@ async function loadPresets() {
 
         const cb = document.getElementById('candidates-body');
         if (!candRes.candidates || candRes.candidates.length === 0) {
-            cb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">No preset candidates found</td></tr>';
+            cb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text-muted)">No preset candidates found</td></tr>';
         } else {
             cb.innerHTML = candRes.candidates.map(c => {
                 const statusClass = c.status === 'candidate' ? 'badge-candidate' : c.status === 'promoted' ? 'badge-promoted' : 'badge-dismissed';
-                const rowClass = c.status === 'dismissed' ? 'dismissed' : '';
+                const isPaid = c.dominant_tier === 'standard' || c.dominant_tier === 'premium';
+                const rowClass = (c.status === 'dismissed' ? 'dismissed' : '') + (isPaid ? ' paid-candidate' : '');
+                const tierBadge = isPaid
+                    ? `<span class="badge badge-paid">\u{1F48E} ${c.dominant_tier}</span>`
+                    : `<span class="badge badge-free">${c.dominant_tier || 'free'}</span>`;
                 const actions = c.status === 'candidate' ? `
                     <button class="btn btn-accent" onclick="generateAnswer(${c.id})">Generate</button>
                     <button class="btn btn-success" onclick="togglePromoteForm(${c.id})">Promote</button>
@@ -751,6 +851,7 @@ async function loadPresets() {
                         </div>
                     </td>
                     <td>${c.frequency}</td>
+                    <td>${tierBadge}</td>
                     <td>${formatDate(c.first_seen_at)}</td>
                     <td>${formatDate(c.last_seen_at)}</td>
                     <td>${c.avg_response_time_ms ? c.avg_response_time_ms + ' ms' : '—'}</td>

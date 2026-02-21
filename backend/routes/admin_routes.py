@@ -93,11 +93,59 @@ async def analytics_overview(request: Request):
             "SELECT COALESCE(AVG(response_time_ms)::INTEGER, 0) FROM maya_query_log"
         )).scalar() or 0
 
+        tier_counts = db.execute(text(
+            "SELECT COALESCE(user_tier, 'free'), COUNT(*) FROM maya_query_log GROUP BY COALESCE(user_tier, 'free')"
+        ))
+        questions_by_tier = {"free": 0, "standard": 0, "premium": 0}
+        for r in tier_counts:
+            t = r[0] if r[0] in questions_by_tier else 'free'
+            questions_by_tier[t] += r[1]
+
+        today_tier = db.execute(text(
+            "SELECT COALESCE(user_tier, 'free'), COUNT(*) FROM maya_query_log WHERE created_at::date = CURRENT_DATE GROUP BY COALESCE(user_tier, 'free')"
+        ))
+        questions_today_by_tier = {"free": 0, "standard": 0, "premium": 0}
+        for r in today_tier:
+            t = r[0] if r[0] in questions_today_by_tier else 'free'
+            questions_today_by_tier[t] += r[1]
+
+        avg_tier = db.execute(text(
+            "SELECT COALESCE(user_tier, 'free'), COALESCE(AVG(response_time_ms)::INTEGER, 0) FROM maya_query_log GROUP BY COALESCE(user_tier, 'free')"
+        ))
+        avg_response_time_by_tier = {"free": 0, "standard": 0, "premium": 0}
+        for r in avg_tier:
+            t = r[0] if r[0] in avg_response_time_by_tier else 'free'
+            avg_response_time_by_tier[t] = r[1]
+
         preset_total = db.execute(text("SELECT COUNT(*) FROM alex_preset_answers WHERE is_active = TRUE")).scalar() or 0
         preset_used = db.execute(text(
             "SELECT SUM(usage_count) FROM alex_preset_answers WHERE is_active = TRUE"
         )).scalar() or 0
         preset_hit_pct = round((preset_used / total_q * 100) if total_q > 0 and preset_used else 0, 1)
+
+        preset_patterns_list = db.execute(text(
+            "SELECT question_pattern FROM alex_preset_answers WHERE is_active = TRUE"
+        ))
+        p_patterns = [r[0].lower() for r in preset_patterns_list]
+        preset_hit_rate_by_tier = {}
+        if p_patterns:
+            from fuzzywuzzy import fuzz
+            tier_logs = db.execute(text("""
+                SELECT query_text, COALESCE(user_tier, 'free')
+                FROM maya_query_log
+                WHERE created_at >= NOW() - INTERVAL '30 days'
+            """))
+            tier_hits = {"free": 0, "standard": 0, "premium": 0}
+            for r in tier_logs:
+                qt = r[0].lower() if r[0] else ''
+                ut = r[1] if r[1] in tier_hits else 'free'
+                if any(fuzz.ratio(qt, p) >= 85 for p in p_patterns):
+                    tier_hits[ut] += 1
+            for t in ["free", "standard", "premium"]:
+                tier_total = questions_by_tier.get(t, 0)
+                preset_hit_rate_by_tier[t] = round((tier_hits[t] / tier_total * 100) if tier_total > 0 else 0, 1)
+        else:
+            preset_hit_rate_by_tier = {"free": 0, "standard": 0, "premium": 0}
 
         top_q = db.execute(text("""
             SELECT query_text, COUNT(*) as cnt 
@@ -107,13 +155,27 @@ async def analytics_overview(request: Request):
         """))
         top_questions = [{"text": r[0][:80], "count": r[1]} for r in top_q]
 
+        top_by_tier = {}
+        for t in ["free", "standard", "premium"]:
+            rows = db.execute(text("""
+                SELECT query_text, COUNT(*) as cnt 
+                FROM maya_query_log 
+                WHERE COALESCE(user_tier, 'free') = :tier
+                GROUP BY query_text 
+                ORDER BY cnt DESC LIMIT 10
+            """), {"tier": t})
+            top_by_tier[t] = [{"text": r[0][:80], "count": r[1]} for r in rows]
+
         daily = db.execute(text("""
-            SELECT created_at::date as d, COUNT(*) 
+            SELECT created_at::date as d, 
+                   COUNT(*) FILTER (WHERE COALESCE(user_tier, 'free') = 'free') as free_cnt,
+                   COUNT(*) FILTER (WHERE user_tier = 'standard') as standard_cnt,
+                   COUNT(*) FILTER (WHERE user_tier = 'premium') as premium_cnt
             FROM maya_query_log 
             WHERE created_at >= NOW() - INTERVAL '30 days'
             GROUP BY d ORDER BY d
         """))
-        questions_per_day = [{"date": str(r[0]), "count": r[1]} for r in daily]
+        questions_per_day = [{"date": str(r[0]), "free": r[1], "standard": r[2], "premium": r[3]} for r in daily]
 
         return {
             "total_users": users,
@@ -122,9 +184,14 @@ async def analytics_overview(request: Request):
             "questions_today": today_q,
             "questions_this_week": week_q,
             "questions_this_month": month_q,
+            "questions_by_tier": questions_by_tier,
+            "questions_today_by_tier": questions_today_by_tier,
             "preset_hit_rate_pct": preset_hit_pct,
+            "preset_hit_rate_by_tier": preset_hit_rate_by_tier,
             "avg_response_time_ms": avg_ms,
+            "avg_response_time_by_tier": avg_response_time_by_tier,
             "top_questions": top_questions,
+            "top_questions_by_tier": top_by_tier,
             "questions_per_day": questions_per_day,
         }
     finally:
@@ -317,7 +384,8 @@ async def list_candidates(request: Request):
     try:
         rows = db.execute(text("""
             SELECT id, question_text, frequency, avg_response_time_ms,
-                   first_seen_at, last_seen_at, status, sample_claude_answer
+                   first_seen_at, last_seen_at, status, sample_claude_answer,
+                   COALESCE(dominant_tier, 'free') as dominant_tier
             FROM alex_preset_candidates
             ORDER BY 
                 CASE WHEN status = 'candidate' THEN 0 WHEN status = 'promoted' THEN 1 ELSE 2 END,
@@ -332,6 +400,7 @@ async def list_candidates(request: Request):
                 "last_seen_at": str(r[5]) if r[5] else None,
                 "status": r[6],
                 "sample_claude_answer": r[7],
+                "dominant_tier": r[8],
             })
         return {"candidates": candidates}
     finally:
