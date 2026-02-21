@@ -115,7 +115,8 @@ async def chat_with_avatars(request: ChatRequest):
     else:
         avatar_role = detect_avatar_role(message, history)
     
-    system_prompt = get_avatar_personality(avatar_role)
+    is_first_message = len(history) == 0
+    system_prompt = get_avatar_personality(avatar_role, is_first_message=is_first_message)
     
     rag_context = ""
     sources = []
@@ -136,7 +137,7 @@ async def chat_with_avatars(request: ChatRequest):
         
         response = chat_claude.messages.create(
             model=model_to_use,
-            max_tokens=1500,
+            max_tokens=3000,
             system=system_prompt,
             messages=messages
         )
