@@ -1,0 +1,71 @@
+CRITICAL FIX: Production database is missing tables that the code expects.
+
+Render logs show these errors:
+- relation "alex_preset_answers" does not exist
+- relation "alex_preset_candidates" does not exist
+
+The tables were created in Replit's local DB but never in production Neon.
+
+STEP 1 - CREATE TABLES DIRECTLY IN PRODUCTION NEON:
+Use the NEON_DATABASE_URL secret (already stored from previous session)
+to run the following SQL against production:
+
+  CREATE TABLE IF NOT EXISTS alex_preset_answers (
+    id SERIAL PRIMARY KEY,
+    question_pattern VARCHAR(500) NOT NULL,
+    answer_text TEXT NOT NULL,
+    category VARCHAR(50) DEFAULT 'general',
+    priority INTEGER DEFAULT 5,
+    usage_count INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_alex_preset_category 
+    ON alex_preset_answers(category);
+  CREATE INDEX IF NOT EXISTS idx_alex_preset_active 
+    ON alex_preset_answers(is_active);
+
+  CREATE TABLE IF NOT EXISTS alex_preset_candidates (
+    id SERIAL PRIMARY KEY,
+    question_text TEXT NOT NULL,
+    frequency INTEGER DEFAULT 1,
+    avg_response_time_ms INTEGER,
+    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(20) DEFAULT 'candidate',
+    promoted_preset_id INTEGER REFERENCES alex_preset_answers(id),
+    sample_claude_answer TEXT,
+    dominant_tier VARCHAR(20) DEFAULT 'free'
+  );
+
+STEP 2 - MIGRATE PRESETS TO PRODUCTION:
+After creating the tables, read the existing presets from 
+backend/data/preset_answers.json and INSERT all of them into 
+alex_preset_answers in the production Neon DB via NEON_DATABASE_URL.
+
+STEP 3 - ALSO CHECK FOR MISSING position COLUMN:
+While connected to production Neon, check if maya_users has position column:
+
+  SELECT column_name FROM information_schema.columns 
+  WHERE table_name = 'maya_users' AND column_name = 'position';
+
+If missing, add it:
+  ALTER TABLE maya_users ADD COLUMN IF NOT EXISTS position VARCHAR(100);
+
+STEP 4 - VERIFY:
+Run against production Neon:
+  SELECT COUNT(*) FROM alex_preset_answers;   -- should show 6+
+  SELECT COUNT(*) FROM alex_preset_candidates; -- should show 0 (empty, fine)
+  
+  SELECT column_name FROM information_schema.columns 
+  WHERE table_name = 'maya_users' ORDER BY ordinal_position;
+
+STEP 5 - TRIGGER RENDER REDEPLOY:
+After DB is fixed, the existing code will work without any changes.
+Confirm all 3 endpoints return 200 (not 500):
+  GET /api/admin/analytics/overview
+  GET /api/admin/alex/presets
+  GET /api/admin/alex/preset-candidates
