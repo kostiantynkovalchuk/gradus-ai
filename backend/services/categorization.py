@@ -14,20 +14,73 @@ def categorize_article(title: str, content: str) -> str:
     
     title_lower = (title or "").lower()
     content_lower = (content or "").lower()
-    
-    trend_keywords = ['2025', '2026', 'forecast', 'trend', 'future', 'prediction', 'outlook', 'next year', 'прогноз', 'тренд', 'майбутн']
-    review_keywords = ['review', 'tasting', 'award', 'rating', 'flavor', 'taste', 'recommend', 'best', 'огляд', 'дегустац', 'нагород', 'смак']
-    news_keywords = ['announces', 'launches', 'acquires', 'invests', 'opens', 'expands', 'partnership', 'оголош', 'запуск', 'придба', 'інвест', 'відкри', 'розшир']
-    
-    trend_score = sum(1 for kw in trend_keywords if kw in title_lower or kw in content_lower)
-    review_score = sum(1 for kw in review_keywords if kw in title_lower or kw in content_lower)
-    news_score = sum(1 for kw in news_keywords if kw in title_lower or kw in content_lower)
+
+    trend_keywords = [
+        'forecast', 'trend', 'prediction', 'outlook', 'next year',
+        'consumer behavior', 'market shift', 'industry direction',
+        'what to expect', 'year ahead', 'looking ahead', 'on the rise',
+        'set to grow', 'poised to', 'projected',
+        'тренд', 'прогноз', 'майбутнє', 'перспектив',
+        'тенденці', 'розвиток ринку', 'очікуван'
+    ]
+
+    trend_title_keywords = [
+        '2025', '2026', '2027', 'future', 'emerging',
+        'зростання', 'напрямок'
+    ]
+
+    review_keywords = [
+        'review', 'tasting', 'award', 'rating', 'flavor', 'palate', 'aroma',
+        'distillery visit', 'blind tasting', 'nose', 'sip',
+        'medal', 'gold medal', 'silver medal', 'bronze medal', 'winner', 'competition',
+        'огляд', 'дегустація', 'нагорода', 'рейтинг', 'аромат',
+        'рекомендуємо', 'переможець', 'медаль'
+    ]
+
+    review_title_keywords = [
+        'review', 'tasting', 'award', 'rated', 'ranked',
+        'огляд', 'дегустація', 'нагорода'
+    ]
+
+    news_keywords = [
+        'announces', 'launches', 'acquires', 'invests', 'opens', 'expands',
+        'partnership', 'deal', 'merger', 'acquisition', 'appointed', 'ceo',
+        'revenue', 'profit', 'sales', 'quarterly', 'fiscal',
+        'оголош', 'запуск', 'придба', 'інвест', 'відкри', 'розшир',
+        'угода', 'призначен', 'виручка', 'прибуток'
+    ]
+
+    title_weight = 3
+    content_weight = 1
+
+    def score_category(keywords, title_only_keywords, text_title, text_content):
+        score = 0
+        for kw in keywords:
+            if kw in text_title:
+                score += title_weight
+            elif kw in text_content:
+                score += content_weight
+        for kw in title_only_keywords:
+            if kw in text_title:
+                score += title_weight
+        return score
+
+    trend_score = score_category(trend_keywords, trend_title_keywords, title_lower, content_lower)
+    review_score = score_category(review_keywords, review_title_keywords, title_lower, content_lower)
+    news_score = score_category(news_keywords, [], title_lower, content_lower)
     
     scores = {'trends': trend_score, 'reviews': review_score, 'news': news_score}
     
     max_category = max(scores, key=scores.get)
-    if scores[max_category] >= 2:
+    max_score = scores[max_category]
+
+    if max_score >= 2:
         return max_category
+    
+    if max_score == 1 and max_category != 'news':
+        second_best = sorted(scores.values(), reverse=True)[1]
+        if second_best == 0:
+            return max_category
     
     try:
         client = anthropic.Anthropic(api_key=getenv("ANTHROPIC_API_KEY"))
