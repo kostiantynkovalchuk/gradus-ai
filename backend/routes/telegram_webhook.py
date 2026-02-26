@@ -314,18 +314,24 @@ async def process_telegram_message(message: dict):
         finally:
             auth_db.close()
 
+        logger.info(
+            f"MSG_ROUTED: telegram_id={telegram_id}, "
+            f"user={user.full_name}, text='{text[:50]}...'"
+        )
         user_id = message.get("from", {}).get("id", 0)
-        logger.info(f"📋 Routing to hr_rag_service for {chat_id}: {text[:50]}...")
         await handle_hr_question(chat_id, user_id, text)
         
-        logger.info(f"✅ Maya responded to {user_name} on Telegram")
-        
     except Exception as e:
-        logger.error(f"❌ Error processing Telegram message: {e}")
+        logger.error(
+            f"MSG_ERROR: telegram_id={telegram_id}, "
+            f"error={type(e).__name__}: {str(e)[:200]}",
+            exc_info=True
+        )
         try:
             await send_telegram_message(
                 chat_id,
-                "Вибачте, виникла помилка. Спробуйте ще раз! 🙏"
+                "Вибачте, виникла технічна помилка.\n\n"
+                "Спробуйте ще раз через хвилину або зверніться до HR-відділу."
             )
         except:
             pass

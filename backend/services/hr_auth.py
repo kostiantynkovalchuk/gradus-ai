@@ -25,10 +25,35 @@ def is_valid_phone(phone: str) -> bool:
 
 
 def get_user_by_telegram_id(db: Session, telegram_id: int):
-    return db.query(HRUser).filter(
-        HRUser.telegram_id == telegram_id,
-        HRUser.is_active == True
-    ).first()
+    try:
+        user = db.query(HRUser).filter(
+            HRUser.telegram_id == telegram_id
+        ).first()
+        
+        if not user:
+            logger.info(f"AUTH_CHECK: telegram_id={telegram_id} -> NOT_FOUND")
+            return None
+        
+        if not user.is_active:
+            logger.warning(
+                f"AUTH_CHECK: telegram_id={telegram_id} -> INACTIVE "
+                f"(name={user.full_name})"
+            )
+            return None
+        
+        logger.info(
+            f"AUTH_CHECK: telegram_id={telegram_id} -> OK "
+            f"(name={user.full_name}, access={user.access_level})"
+        )
+        return user
+        
+    except Exception as e:
+        logger.error(
+            f"AUTH_CHECK: telegram_id={telegram_id} -> DB_ERROR "
+            f"({type(e).__name__}: {str(e)[:200]})",
+            exc_info=True
+        )
+        return None
 
 
 def get_access_level(db: Session, telegram_id: int) -> str:
@@ -112,7 +137,13 @@ async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: 
 
 async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
                                      user_info: dict, db: Session):
+    logger.info(
+        f"VERIFY_START: telegram_id={telegram_id}, "
+        f"phone={phone[:4]}***{phone[-4:] if len(phone) > 4 else phone}"
+    )
+    
     if not is_valid_phone(phone):
+        logger.info(f"VERIFY_INVALID_FORMAT: telegram_id={telegram_id}, phone={phone}")
         await send_message(
             chat_id,
             "❌ Невірний формат номера.\n\n"
@@ -143,21 +174,35 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
             break
 
     if whitelist_entry:
-        logger.info(f"Whitelist match for {phone_display}: {whitelist_entry.access_level}")
+        logger.info(
+            f"VERIFY_WHITELIST: telegram_id={telegram_id}, "
+            f"phone={phone_display}, access={whitelist_entry.access_level}, "
+            f"name={whitelist_entry.full_name}"
+        )
         await create_whitelisted_user(db, chat_id, telegram_id, phone_normalized, whitelist_entry)
         set_awaiting_phone(telegram_id, False)
         return
 
+    logger.info(f"VERIFY_SED_CALL: telegram_id={telegram_id}, phone={phone_display}")
     await send_message(chat_id, f"🔍 Перевіряю номер {phone_display} в базі співробітників...")
 
     result = await sed_service.verify_employee(phone_normalized)
 
     if result["verified"]:
-        logger.info(f"SED verification success for {phone_display}")
-        await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, result["employee"])
+        employee = result["employee"]
+        logger.info(
+            f"VERIFY_SUCCESS: telegram_id={telegram_id}, "
+            f"phone={phone_display}, name={employee.get('full_name', 'N/A')}, "
+            f"position={employee.get('position', 'N/A')}, "
+            f"department={employee.get('department', 'N/A')}"
+        )
+        await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, employee)
         set_awaiting_phone(telegram_id, False)
     else:
-        logger.warning(f"Verification failed for {phone_display}: {result.get('error')}")
+        logger.warning(
+            f"VERIFY_FAILED: telegram_id={telegram_id}, "
+            f"phone={phone_display}, error={result.get('error')}"
+        )
         await handle_verification_failure(db, chat_id, telegram_id, phone_normalized, result, user_info)
         set_awaiting_phone(telegram_id, False)
 
