@@ -1,0 +1,265 @@
+# Investigation: Authentication Persistence & Session Management
+
+## OBJECTIVE
+Understand Maya HR Bot's authentication lifecycle to diagnose why users lose authenticated status and have to re-verify.
+
+## CONTEXT
+Vasile was previously authenticated but lost his session. Need to investigate:
+1. How long does authentication stay valid?
+2. What triggers re-authentication?
+3. Are there silent failures?
+
+## INVESTIGATION TASKS
+
+### Task 1: Find Authentication Storage
+
+**Search for where user verification status is stored:**
+```bash
+# Find database schema for users
+grep -rn "verified\|authenticated\|session" backend/models/ backend/services/
+
+# Find user storage tables
+grep -rn "CREATE TABLE.*user\|hr_user" backend/
+
+# Check if there's a session expiry field
+grep -rn "expires\|expiry\|valid_until" backend/models/ backend/services/
+```
+
+**Questions to answer:**
+- Where is `verified=True` stored? (Database? Memory? Cache?)
+- Is there a `verified_at` timestamp?
+- Is there a `session_expires_at` field?
+- Is authentication tied to telegram_id only?
+
+### Task 2: Check User Lookup Logic
+
+**Find where user authentication is checked:**
+```bash
+# Find the get_user_from_db function
+grep -rn "get_user_from_db\|fetch.*user\|SELECT.*verified" backend/routes/ backend/services/
+
+# Check authentication verification
+grep -rn "verified.*True\|is_verified\|check.*auth" backend/routes/telegram_webhook.py
+```
+
+**Examine:**
+```python
+# In telegram_webhook.py, find this logic:
+user_data = await get_user_from_db(telegram_id)
+
+if not user_data or not user_data.get('verified'):
+    # User not authenticated
+```
+
+**Questions:**
+- What does `get_user_from_db` actually return?
+- What conditions make `user_data` None?
+- What conditions make `verified` False?
+- Is there any TTL (time-to-live) check?
+
+### Task 3: Trace Successful Verification Flow
+
+**Find where users are marked as verified:**
+```bash
+# Find save_verified_user or similar
+grep -rn "save.*verified\|verified.*True\|INSERT.*verified" backend/
+
+# Find the verification success handler
+grep -rn "Successfully verified\|авторизовані\|authentication success" backend/
+```
+
+**Check:**
+```python
+# Should be something like:
+await save_verified_user(telegram_id, employee_data)
+# or
+await db.execute("""
+    UPDATE hr_users 
+    SET verified = TRUE, verified_at = NOW()
+    WHERE telegram_id = $1
+""", telegram_id)
+```
+
+**Questions:**
+- Does it set a timestamp when verified?
+- Does it set an expiry time?
+- Is verification permanent or temporary?
+
+### Task 4: Check for Silent Failures
+
+**Search for error handling in auth flow:**
+```bash
+# Find error handling in verification
+grep -rn "except.*verification\|try:.*verify\|error.*auth" backend/routes/ backend/services/
+
+# Check for silent failures (no error message)
+grep -rn "pass$\|except:$\|return None" backend/routes/telegram_webhook.py backend/services/hr_auth.py
+```
+
+**Look for patterns like:**
+```python
+# SILENT FAILURE (bad):
+try:
+    user = await get_user_from_db(telegram_id)
+except:
+    user = None  # Silent failure!
+
+# LOGGED FAILURE (good):
+try:
+    user = await get_user_from_db(telegram_id)
+except Exception as e:
+    logger.error(f"Auth check failed: {e}")
+    user = None
+```
+
+**Questions:**
+- Are database errors logged?
+- Are failed auth checks logged?
+- Does user see an error message?
+
+### Task 5: Check Database Schema
+
+**Examine the actual user table:**
+```sql
+-- Run this query to see the schema:
+\d hr_users
+
+-- Or via Python:
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'hr_users'
+ORDER BY ordinal_position;
+```
+
+**Look for:**
+- `verified BOOLEAN`
+- `verified_at TIMESTAMP`
+- `session_expires_at TIMESTAMP`
+- `last_activity_at TIMESTAMP`
+
+### Task 6: Check for Session Cleanup Jobs
+
+**Search for scheduled tasks that might clear sessions:**
+```bash
+# Find scheduler jobs
+grep -rn "cleanup\|expire\|purge\|delete.*old" backend/services/scheduler.py
+
+# Check for session expiry logic
+grep -rn "session.*expire\|verified.*False\|DELETE.*verified" backend/
+```
+
+**Questions:**
+- Is there a job that clears old sessions?
+- Is there a TTL on verified status?
+- Are inactive users de-authenticated?
+
+### Task 7: Check Telegram Bot Restart Behavior
+
+**Investigate if bot restarts affect auth:**
+```bash
+# Check for in-memory storage
+grep -rn "PENDING_VERIFICATIONS\|user_sessions\|active_users" backend/
+
+# Check if state is only in memory (not persisted)
+grep -rn "dict()\|{}" backend/routes/ backend/services/ | grep -i "session\|user\|auth"
+```
+
+**Questions:**
+- Is PENDING_VERIFICATIONS in-memory only?
+- Does it get cleared on restart?
+- Are verified users stored in database permanently?
+
+## DELIVERABLE
+
+Create a summary report with:
+
+### 1. Authentication Lifecycle
+```
+User verifies → stored in [DATABASE/MEMORY/CACHE]
+Valid for: [PERMANENT/30 days/SESSION/UNCLEAR]
+Expires when: [NEVER/TIMEOUT/RESTART/MANUAL]
+```
+
+### 2. Current State Check
+```sql
+-- Run this to see Vasile's current status:
+SELECT telegram_id, full_name, verified, verified_at, created_at
+FROM hr_users
+WHERE telegram_id = 892547382;  -- Vasile's telegram_id from logs
+```
+
+### 3. Silent Failure Analysis
+```
+✅ Errors are logged: [YES/NO]
+✅ User sees error message: [YES/NO]  
+✅ Failed auth is tracked: [YES/NO]
+❌ Silent failures found: [LIST THEM]
+```
+
+### 4. Re-authentication Triggers
+```
+User must re-verify when:
+- [ ] Bot restarts
+- [ ] Database connection lost
+- [ ] After N days
+- [ ] Session expires
+- [ ] Manual deactivation
+- [ ] Unknown/Silent failure
+```
+
+### 5. Recommendations
+
+**If verification is temporary:**
+- Add `verified_at` timestamp
+- Add clear expiry message
+- Show "Session expires in X days"
+
+**If verification is permanent but fails silently:**
+- Add error logging
+- Add user-facing error messages
+- Add database connection retry
+
+**If state is in-memory only:**
+- Move to persistent database storage
+- Add migration for existing users
+
+## CODE SNIPPETS TO CHECK
+
+### Check user lookup:
+```python
+# File: backend/services/hr_auth.py or similar
+async def get_user_from_db(telegram_id: int):
+    # FIND THIS FUNCTION
+    # Check what it returns
+    # Check error handling
+```
+
+### Check verification save:
+```python
+# File: backend/services/hr_auth.py
+async def save_verified_user(telegram_id: int, employee_data: dict):
+    # FIND THIS FUNCTION
+    # Check if it sets expiry
+    # Check error handling
+```
+
+### Check verification check:
+```python
+# File: backend/routes/telegram_webhook.py
+user_data = await get_user_from_db(telegram_id)
+
+if not user_data or not user_data.get('verified'):
+    # WHEN DOES THIS HAPPEN?
+    # Log the exact reason
+```
+
+## SUCCESS CRITERIA
+
+After investigation, we should know:
+- ✅ Exact authentication lifetime
+- ✅ All re-authentication triggers
+- ✅ All silent failure points
+- ✅ Database schema for users
+- ✅ Whether Vasile's data exists in DB
+
+Then we can fix the root cause!
