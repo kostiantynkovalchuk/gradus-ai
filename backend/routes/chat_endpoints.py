@@ -143,6 +143,12 @@ async def chat_with_avatars(request: ChatRequest):
         )
         
         assistant_message = response.content[0].text
+
+        from config.agent_personas import validate_gender
+        if avatar_role == "maya":
+            validate_gender("maya_hr", assistant_message)
+        elif avatar_role == "alex":
+            validate_gender("alex_gradus", assistant_message)
         
         return ChatResponse(
             response=assistant_message,

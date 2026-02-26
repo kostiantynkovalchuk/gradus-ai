@@ -1,0 +1,377 @@
+# Implement Gender-Specific Personas for Maya HR and Alex Gradus
+
+## OBJECTIVE
+Ensure consistent grammatical gender across two AI agents:
+- **Maya HR** (Telegram): Female persona
+- **Alex Gradus** (Web/Future Telegram): Male persona
+
+Ukrainian grammar requires gender agreement in verbs, adjectives, and participles.
+
+## ARCHITECTURE
+
+Both agents use Claude API but need different system prompts and response templates.
+
+### Current State
+- Maya HR: Lives in `backend/routes/telegram_webhook.py` and `backend/services/hr_rag_service.py`
+- Alex Gradus: Lives in `backend/routes/alex_routes.py` (web) and future Telegram integration
+
+## IMPLEMENTATION
+
+### Step 1: Create Gender Configuration
+
+**File:** `backend/config/agent_personas.py` (NEW)
+```python
+"""
+Agent persona configurations.
+Defines gender-specific language patterns for Ukrainian responses.
+"""
+
+MAYA_PERSONA = {
+    "name": "Maya",
+    "gender": "female",
+    "platform": "telegram_hr",
+    "language": "ukrainian",
+    
+    # Ukrainian feminine forms
+    "grammar": {
+        # Present tense (I am...)
+        "glad": "рада",           # Я рада (not рад)
+        "ready": "готова",        # Я готова (not готовий)
+        "happy": "щаслива",       # Я щаслива
+        
+        # Past tense (I was...)
+        "was": "була",            # Я була (not був)
+        "helped": "допомогла",    # Я допомогла
+        
+        # Adjectives
+        "available": "доступна",  # Я доступна
+        "busy": "зайнята",        # Я зайнята
+    },
+    
+    # Common phrases
+    "greetings": {
+        "welcome": "Привіт! 👋 Рада познайомитись!",
+        "return": "Рада знову тебе бачити!",
+        "help": "Чим можу допомогти?"
+    },
+    
+    # System prompt
+    "system_context": """Ти — Maya, HR-асистент компанії TD AV.
+Ти — жінка, тому використовуй жіночі граматичні форми в українській мові:
+- "Рада допомогти" (не "Рад")
+- "Я готова" (не "Я готовий")
+- "Я була" (не "Я був")
+
+Твій стиль: дружній, професійний, турботливий."""
+}
+
+ALEX_PERSONA = {
+    "name": "Alex Gradus",
+    "gender": "male",
+    "platform": "web_consultant",
+    "language": "ukrainian",
+    
+    # Ukrainian masculine forms
+    "grammar": {
+        # Present tense
+        "glad": "рад",
+        "ready": "готовий",
+        "happy": "щасливий",
+        
+        # Past tense
+        "was": "був",
+        "helped": "допоміг",
+        
+        # Adjectives
+        "available": "доступний",
+        "busy": "зайнятий",
+    },
+    
+    # Common phrases
+    "greetings": {
+        "welcome": "Привіт! 👋 Рад познайомитись!",
+        "return": "Рад знову тебе бачити!",
+        "help": "Чим можу допомогти?"
+    },
+    
+    # System prompt
+    "system_context": """Ти — Alex Gradus, експерт з маркетингу та консалтингу в HoReCa.
+Ти — чоловік, тому використовуй чоловічі граматичні форми в українській мові:
+- "Рад допомогти" (не "Рада")
+- "Я готовий" (не "Я готова")
+- "Я був" (не "Я була")
+
+Твій стиль: професійний, впевнений, експертний."""
+}
+
+def get_persona(agent_type: str) -> dict:
+    """Get persona configuration by agent type."""
+    if agent_type == "maya_hr":
+        return MAYA_PERSONA
+    elif agent_type == "alex_gradus":
+        return ALEX_PERSONA
+    else:
+        raise ValueError(f"Unknown agent type: {agent_type}")
+```
+
+### Step 2: Update Maya HR System Prompt
+
+**File:** `backend/services/hr_rag_service.py`
+
+Find where Claude API is called and update system prompt:
+```python
+from config.agent_personas import MAYA_PERSONA
+
+class HRRagService:
+    
+    async def call_claude_with_context(
+        self,
+        query: str,
+        context: str,
+        user_context: dict
+    ) -> str:
+        """Call Claude with Maya's female persona."""
+        
+        # Build system prompt with gender context
+        system_prompt = f"""{MAYA_PERSONA['system_context']}
+
+Контекст користувача:
+- Ім'я: {user_context.get('full_name', 'Користувач')}
+- Посада: {user_context.get('position', 'N/A')}
+
+База знань:
+{context}
+
+Відповідай природно українською мовою, використовуючи жіночі граматичні форми.
+"""
+        
+        # Call Claude
+        response = await self.anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=system_prompt,
+            messages=[{
+                "role": "user",
+                "content": query
+            }]
+        )
+        
+        answer = response.content[0].text
+        
+        # Validate gender (optional check)
+        if self._contains_masculine_forms(answer):
+            logger.warning(
+                f"⚠️ GENDER_ERROR: Maya used masculine forms in answer: "
+                f"'{answer[:100]}...'"
+            )
+        
+        return answer
+    
+    def _contains_masculine_forms(self, text: str) -> bool:
+        """Check if text contains masculine Ukrainian forms."""
+        masculine_patterns = [
+            r'\bрад\b',      # not рада
+            r'\bготовий\b',  # not готова
+            r'\bбув\b',      # not була
+        ]
+        
+        import re
+        for pattern in masculine_patterns:
+            if re.search(pattern, text.lower()):
+                return True
+        return False
+```
+
+### Step 3: Update Maya's Hardcoded Messages
+
+**File:** `backend/routes/telegram_webhook.py`
+
+Replace ALL hardcoded messages with gender-correct versions:
+```python
+from config.agent_personas import MAYA_PERSONA
+
+# Import helper
+def maya_greeting(first_name: str, returning: bool = False) -> str:
+    """Generate Maya's greeting with correct grammar."""
+    if returning:
+        return (
+            f"Привіт, {first_name}! 👋\n\n"
+            f"{MAYA_PERSONA['greetings']['return']} "
+            f"{MAYA_PERSONA['greetings']['help']}"
+        )
+    else:
+        return (
+            f"Привіт, {first_name}! 👋\n\n"
+            f"{MAYA_PERSONA['greetings']['welcome']} "
+            f"{MAYA_PERSONA['greetings']['help']}"
+        )
+
+# Find and replace all greetings:
+
+# Example 1: /start command
+@router.command("start")
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_data = await get_user_by_telegram_id(db, user.id)
+    
+    if user_data:
+        # Returning user
+        message = maya_greeting(user.first_name, returning=True)
+    else:
+        # New user
+        message = (
+            f"Привіт, {user.first_name}! 👋\n\n"
+            f"Я — Maya, твій HR-асистент у TD AV.\n\n"
+            f"{MAYA_PERSONA['grammar']['glad']} познайомитись! "  # "Рада"
+            f"Надішли свій робочий номер телефону для верифікації."
+        )
+    
+    await update.message.reply_text(message)
+
+# Example 2: After verification
+await send_message(
+    chat_id,
+    f"✅ Вітаю, {employee['full_name']}!\n\n"
+    f"Ви успішно авторизовані.\n\n"
+    f"Тепер {MAYA_PERSONA['grammar']['ready']} допомогти "  # "готова"
+    f"з будь-якими HR-питаннями! 💬"
+)
+
+# Example 3: Authenticated user sends phone
+await update.message.reply_text(
+    f"✅ Ви вже авторизовані як {user_data['full_name']}\n\n"
+    f"Я {MAYA_PERSONA['grammar']['ready']} допомогти з HR-питаннями.\n\n"  # "готова"
+    f"Або можете перевірити інший номер:",
+    reply_markup=keyboard
+)
+```
+
+### Step 4: Update Alex Gradus System Prompt
+
+**File:** `backend/routes/alex_routes.py`
+
+Find where Alex's responses are generated:
+```python
+from config.agent_personas import ALEX_PERSONA
+
+@router.post("/api/alex/ask")
+async def alex_ask(request: AlexQueryRequest):
+    """Alex Gradus consultation endpoint."""
+    
+    # Build system prompt with gender context
+    system_prompt = f"""{ALEX_PERSONA['system_context']}
+
+База знань:
+{context}
+
+Відповідай природно українською мовою, використовуючи чоловічі граматичні форми.
+"""
+    
+    # Call Claude
+    response = await anthropic.messages.create(
+        model="claude-sonnet-4-20250514",
+        system=system_prompt,
+        messages=[{
+            "role": "user",
+            "content": request.query
+        }]
+    )
+    
+    return {"answer": response.content[0].text}
+```
+
+### Step 5: Add Gender Validation Tests
+
+**File:** `backend/tests/test_personas.py` (NEW)
+```python
+import pytest
+from config.agent_personas import MAYA_PERSONA, ALEX_PERSONA
+
+def test_maya_uses_feminine_forms():
+    """Ensure Maya's config has feminine Ukrainian grammar."""
+    assert MAYA_PERSONA['grammar']['glad'] == 'рада'
+    assert MAYA_PERSONA['grammar']['ready'] == 'готова'
+    assert MAYA_PERSONA['grammar']['was'] == 'була'
+    assert MAYA_PERSONA['gender'] == 'female'
+
+def test_alex_uses_masculine_forms():
+    """Ensure Alex's config has masculine Ukrainian grammar."""
+    assert ALEX_PERSONA['grammar']['glad'] == 'рад'
+    assert ALEX_PERSONA['grammar']['ready'] == 'готовий'
+    assert ALEX_PERSONA['grammar']['was'] == 'був'
+    assert ALEX_PERSONA['gender'] == 'male'
+
+def test_maya_greeting_feminine():
+    """Maya's greetings use feminine forms."""
+    greeting = MAYA_PERSONA['greetings']['welcome']
+    assert 'рада' in greeting.lower() or 'Рада' in greeting
+    assert 'рад' not in greeting.lower()  # No masculine
+
+def test_alex_greeting_masculine():
+    """Alex's greetings use masculine forms."""
+    greeting = ALEX_PERSONA['greetings']['welcome']
+    assert 'рад' in greeting.lower() or 'Рад' in greeting
+    assert 'рада' not in greeting.lower()  # No feminine
+```
+
+### Step 6: Search and Replace All Instances
+
+Run these searches to find remaining issues:
+```bash
+# Find potential masculine forms in Maya's code
+grep -rn "Радий\|радий\|Готовий\|готовий\|Був\|був" backend/routes/telegram_webhook.py backend/services/hr_rag_service.py
+
+# Find potential feminine forms in Alex's code
+grep -rn "Рада\|рада\|Готова\|готова\|Була\|була" backend/routes/alex_routes.py
+
+# List all Ukrainian greeting patterns
+grep -rn "Привіт.*допомогти\|Вітаю.*допомогти" backend/
+```
+
+## TESTING CHECKLIST
+
+### Maya HR (Telegram)
+- [ ] `/start` → "Рада познайомитись"
+- [ ] After verification → "готова допомогти"
+- [ ] Authenticated greeting → "Рада знову тебе бачити"
+- [ ] Claude responses → Check for "рада", "готова" (not "рад", "готовий")
+
+### Alex Gradus (Web)
+- [ ] Initial greeting → "Рад познайомитись"
+- [ ] Consultation responses → "готовий допомогти"
+- [ ] Claude responses → Check for "рад", "готовий" (not "рада", "готова")
+
+## MONITORING
+
+Add logging to catch gender errors:
+```python
+# In both agents, after Claude response:
+def validate_gender(agent_type: str, response_text: str):
+    """Log if agent uses wrong gender."""
+    
+    if agent_type == "maya_hr":
+        # Should be feminine
+        wrong_patterns = ['\\bрад\\b', '\\bготовий\\b', '\\bбув\\b']
+        correct = "feminine"
+    else:
+        # Should be masculine
+        wrong_patterns = ['\\bрада\\b', '\\bготова\\b', '\\bбула\\b']
+        correct = "masculine"
+    
+    import re
+    for pattern in wrong_patterns:
+        if re.search(pattern, response_text, re.IGNORECASE):
+            logger.warning(
+                f"⚠️ GENDER_ERROR: {agent_type} used wrong gender. "
+                f"Expected {correct}, found: '{response_text[:100]}...'"
+            )
+            break
+```
+
+## SUCCESS CRITERIA
+- ✅ Maya always uses feminine forms (рада, готова, була)
+- ✅ Alex always uses masculine forms (рад, готовий, був)
+- ✅ System prompts enforce correct gender
+- ✅ Hardcoded messages use correct gender
+- ✅ Tests validate gender configuration
+- ✅ Monitoring logs gender mismatches

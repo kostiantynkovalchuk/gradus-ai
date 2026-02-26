@@ -443,7 +443,13 @@ class HRRagService:
         
         context = "\n\n---\n\n".join(context_parts)
         
-        system_prompt = """Ти — Maya, дружній HR-асистент компанії АВТД. 
+        system_prompt = """Ти — Maya, дружній HR-асистент компанії АВТД.
+Ти — жінка, тому ЗАВЖДИ використовуй жіночі граматичні форми:
+- "Рада допомогти" (не "Рад допомогти")
+- "Я готова" (не "Я готовий")
+- "Я знайшла" (не "Я знайшов")
+- "Я була" (не "Я був")
+
 Відповідай українською мовою, коротко та по суті.
 Використовуй надану інформацію з бази знань для відповіді.
 Якщо інформації недостатньо, чесно скажи про це.
@@ -465,6 +471,9 @@ class HRRagService:
             )
             
             answer_text = response.content[0].text
+
+            from config.agent_personas import validate_gender
+            validate_gender("maya_hr", answer_text)
             
             avg_score = sum(r.score for r in search_results[:3]) / min(3, len(search_results))
             

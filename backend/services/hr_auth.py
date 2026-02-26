@@ -112,12 +112,12 @@ async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: 
             greeting = (
                 f"⚙️ *HR Admin Panel Available*\n\n"
                 f"Привіт, {user.first_name or user_first_name}! 👋\n\n"
-                f"Готова до роботи!"
+                f"Готова допомогти!"
             )
         else:
             greeting = (
                 f"Привіт, {user.first_name or user_first_name}! 👋\n\n"
-                f"Радий знову тебе бачити! Чим можу допомогти?"
+                f"Рада знову тебе бачити! Чим можу допомогти?"
             )
 
         await send_message_with_keyboard(chat_id, greeting, keyboard)
@@ -253,7 +253,7 @@ async def create_whitelisted_user(db: Session, chat_id: int, telegram_id: int,
             f"✅ /adduser - Додати користувача\n"
             f"✅ /logs - Журнал верифікацій\n"
             f"✅ /stats - Статистика\n\n"
-            f"Готовий до роботи!"
+            f"Готова допомогти!"
         )
     elif whitelist_entry.access_level == "admin_hr":
         message = (
