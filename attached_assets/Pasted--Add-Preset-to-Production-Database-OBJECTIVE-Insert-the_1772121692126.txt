@@ -1,0 +1,155 @@
+# Add "Хто ти?" Preset to Production Database
+
+## OBJECTIVE
+Insert the "Хто ти?" (Who are you?) preset into the PRODUCTION Neon database (not local Replit database).
+
+## CONTEXT
+The preset was previously added to Replit's local database, but production (Render) uses a separate Neon database. The production database is missing this preset, which is why it's not working in production.
+
+## TASK
+
+Connect to the production PostgreSQL database using the `DATABASE_URL` environment variable and insert the preset.
+
+### SQL to Execute:
+```sql
+INSERT INTO hr_preset_answers (
+    question,
+    answer,
+    category,
+    search_patterns,
+    priority,
+    usage_count,
+    created_at,
+    updated_at
+) VALUES (
+    'Хто ти?',
+    'Привіт! Я Maya — твій HR-асистент у Торговому Домі АВ! 💃
+
+Рада допомогти тобі з:
+- Відпустками та зарплатою 💰
+- Техпідтримкою (Бліц, УРС, доступи) 🔧
+- Документами та процедурами 📋
+- Контактами спеціалістів 📞
+
+Просто напиши своє питання, і я з радістю допоможу! 💬',
+    'general',
+    'хто ти|who are you|представся|розкажи про себе|про тебе|що ти вмієш|what can you do|майя хто ти',
+    10,
+    0,
+    NOW(),
+    NOW()
+)
+ON CONFLICT (question) DO UPDATE 
+SET answer = EXCLUDED.answer,
+    search_patterns = EXCLUDED.search_patterns,
+    updated_at = NOW();
+```
+
+### Python Implementation:
+```python
+import os
+import psycopg2
+
+# Get production database URL
+database_url = os.getenv("DATABASE_URL")
+
+if not database_url:
+    print("ERROR: DATABASE_URL not found in environment variables")
+    exit(1)
+
+# Connect to production database
+conn = psycopg2.connect(database_url)
+cursor = conn.cursor()
+
+# Insert preset
+preset_sql = """
+INSERT INTO hr_preset_answers (
+    question,
+    answer,
+    category,
+    search_patterns,
+    priority,
+    usage_count,
+    created_at,
+    updated_at
+) VALUES (
+    %s, %s, %s, %s, %s, %s, NOW(), NOW()
+)
+ON CONFLICT (question) DO UPDATE 
+SET answer = EXCLUDED.answer,
+    search_patterns = EXCLUDED.search_patterns,
+    updated_at = NOW()
+RETURNING id;
+"""
+
+question = 'Хто ти?'
+answer = '''Привіт! Я Maya — твій HR-асистент у Торговому Домі АВ! 💃
+
+Рада допомогти тобі з:
+- Відпустками та зарплатою 💰
+- Техпідтримкою (Бліц, УРС, доступи) 🔧
+- Документами та процедурами 📋
+- Контактами спеціалістів 📞
+
+Просто напиши своє питання, і я з радістю допоможу! 💬'''
+category = 'general'
+search_patterns = 'хто ти|who are you|представся|розкажи про себе|про тебе|що ти вмієш|what can you do|майя хто ти'
+priority = 10
+usage_count = 0
+
+cursor.execute(preset_sql, (question, answer, category, search_patterns, priority, usage_count))
+preset_id = cursor.fetchone()[0]
+
+conn.commit()
+
+print(f"✅ Preset added/updated successfully!")
+print(f"   ID: {preset_id}")
+print(f"   Question: {question}")
+print(f"   Category: {category}")
+print(f"   Patterns: {search_patterns}")
+
+# Verify it was inserted
+cursor.execute("SELECT COUNT(*) FROM hr_preset_answers WHERE question = %s", (question,))
+count = cursor.fetchone()[0]
+print(f"   Verification: {count} preset(s) found with this question")
+
+cursor.close()
+conn.close()
+```
+
+## VERIFICATION
+
+After inserting, verify the preset exists in production:
+```python
+# Count total presets
+cursor.execute("SELECT COUNT(*) FROM hr_preset_answers WHERE is_active = true")
+total = cursor.fetchone()[0]
+print(f"Total active presets in production: {total}")
+
+# Show the new preset
+cursor.execute("SELECT id, question, category FROM hr_preset_answers WHERE question = 'Хто ти?'")
+result = cursor.fetchone()
+if result:
+    print(f"Found preset: ID={result[0]}, Question={result[1]}, Category={result[2]}")
+```
+
+## IMPORTANT NOTES
+
+1. **Use DATABASE_URL from environment** - This points to production Neon database
+2. **ON CONFLICT** clause - Updates if preset already exists (idempotent)
+3. **After insertion** - Backend needs restart to reload cache (or wait for next query if cache auto-refreshes)
+
+## SUCCESS CRITERIA
+
+✅ Script connects to production database successfully
+✅ Preset inserted/updated without errors
+✅ Verification query shows preset exists
+✅ Total preset count increases (or stays same if updating existing)
+
+## NEXT STEPS
+
+After running this script:
+1. Restart Render backend to reload preset cache
+2. Test in production Telegram: Send "Хто ти?" to Maya
+3. Should see instant response (~75ms) with correct introduction
+4. Logs should show: `✅ PRESET HIT` instead of `❌ NO PRESET`
