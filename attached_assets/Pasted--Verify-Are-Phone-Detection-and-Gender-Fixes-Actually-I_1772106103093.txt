@@ -1,0 +1,92 @@
+# Verify: Are Phone Detection and Gender Fixes Actually Implemented?
+
+## CHECK 1: Phone Detection for Authenticated Users
+
+Search for the phone detection logic in telegram_webhook.py:
+```bash
+# Look for phone detection BEFORE HR RAG routing:
+grep -A 20 "is_valid_phone\|is_phone_number" backend/routes/telegram_webhook.py
+
+# Look for AUTH_USER_SENT_PHONE log:
+grep "AUTH_USER_SENT_PHONE\|AUTH_USER_PHONE" backend/routes/telegram_webhook.py
+
+# Look for reverify callback:
+grep "hr_reverify" backend/routes/telegram_webhook.py
+```
+
+**Expected to find:**
+- `if is_phone_number(message_text):` check for authenticated users
+- Log message with "AUTH_USER_SENT_PHONE"
+- Callback handler for "hr_reverify:confirm"
+
+**If NOT found:** The fix was NOT implemented.
+
+---
+
+## CHECK 2: Gender Forms in Messages
+
+Search for greetings and verify feminine forms:
+```bash
+# Check /start greeting:
+grep -n "Радий\|Рада" backend/routes/telegram_webhook.py backend/services/hr_auth.py
+
+# Check verification success:
+grep -n "готовий\|готова" backend/routes/telegram_webhook.py backend/services/hr_auth.py
+
+# Check system prompt:
+grep -A 10 "system.*prompt\|ВАЖЛИВО.*жінка" backend/services/hr_rag_service.py
+```
+
+**Expected to find:**
+- "Рада" (not "Радий")
+- "готова" (not "готовий")
+- System prompt with gender instruction
+
+**If found "Радий" or "готовий":** The fix was NOT implemented.
+
+---
+
+## CHECK 3: Look at Actual Code
+
+Read the relevant sections:
+```bash
+# Show the authenticated user message handler:
+cat backend/routes/telegram_webhook.py | grep -A 50 "AUTH_CHECK.*OK"
+
+# Show the /start handler:
+cat backend/routes/telegram_webhook.py | grep -A 30 "command.*start\|handle_start"
+
+# Show Claude system prompt:
+cat backend/services/hr_rag_service.py | grep -A 20 "system.*prompt"
+```
+
+---
+
+## REPORT FINDINGS
+
+After running these checks, report:
+
+1. **Phone Detection:**
+   - [ ] Found `is_phone_number` check for authenticated users
+   - [ ] Found "AUTH_USER_SENT_PHONE" log
+   - [ ] Found "hr_reverify" callback handler
+   - **Status:** IMPLEMENTED / NOT IMPLEMENTED
+
+2. **Gender Fix:**
+   - [ ] All greetings use "Рада" (feminine)
+   - [ ] No instances of "Радий" (masculine)
+   - [ ] System prompt enforces feminine grammar
+   - **Status:** IMPLEMENTED / NOT IMPLEMENTED
+
+3. **Conclusion:**
+   - If BOTH NOT IMPLEMENTED → Agent didn't do the work
+   - If PARTIALLY IMPLEMENTED → Agent started but didn't finish
+   - If IMPLEMENTED but not working → Deployment issue
+
+---
+
+## NEXT STEPS
+
+Based on findings:
+- If NOT IMPLEMENTED → Provide actual implementation prompt
+- If IMPLEMENTED → Check if code was pushed to GitHub and deployed to Render
