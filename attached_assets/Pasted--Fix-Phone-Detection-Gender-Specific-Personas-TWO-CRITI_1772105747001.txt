@@ -1,0 +1,296 @@
+# Fix: Phone Detection + Gender-Specific Personas
+
+## TWO CRITICAL ISSUES
+
+### Issue 1: Authenticated users sending phone numbers get "not found"
+- User is verified → sends phone number → routed to HR RAG → confusing error
+- Need to detect phone numbers and show helpful message
+
+### Issue 2: Maya uses wrong grammatical gender
+- Maya is female but uses masculine Ukrainian forms
+- "Радий" (masculine) should be "Рада" (feminine)
+
+## SOLUTION: Implement Both Fixes
+
+---
+
+## PART 1: Add Phone Detection for Authenticated Users
+
+### File: `backend/routes/telegram_webhook.py`
+
+Find the section where authenticated users' messages are routed to HR RAG service.
+
+Look for code like:
+```python
+# USER IS AUTHENTICATED
+user_data = await get_user_by_telegram_id(db, telegram_id)
+
+if user_data and user_data.get('is_active'):
+    # Route to HR RAG
+    logger.info(f"MSG_ROUTED: telegram_id={telegram_id}...")
+```
+
+**Add phone detection BEFORE routing to HR RAG:**
+```python
+# USER IS AUTHENTICATED
+user_data = await get_user_by_telegram_id(db, telegram_id)
+
+if user_data and user_data.get('is_active'):
+    logger.info(
+        f"✅ Authenticated: telegram_id={telegram_id}, "
+        f"user={user_data['full_name']}"
+    )
+    
+    # CHECK IF MESSAGE IS A PHONE NUMBER
+    if is_phone_number(message_text):
+        logger.info(
+            f"📱 AUTH_USER_SENT_PHONE: telegram_id={telegram_id}, "
+            f"current_user={user_data['full_name']}, "
+            f"phone={message_text[:7]}***"
+        )
+        
+        # Show helpful message instead of treating as HR question
+        keyboard = [
+            [InlineKeyboardButton(
+                text="🔄 Перевірити цей номер",
+                callback_data="hr_reverify:confirm"
+            )],
+            [InlineKeyboardButton(
+                text="📋 HR меню",
+                callback_data="hr_menu:main"
+            )]
+        ]
+        
+        # Store phone for potential reverification
+        context.user_data['reverify_phone'] = message_text
+        
+        await update.message.reply_text(
+            f"✅ Ви вже авторизовані як *{user_data['full_name']}*\n"
+            f"📋 {user_data.get('position', 'N/A')}\n\n"
+            f"📱 Ви надіслали номер: `{message_text}`\n\n"
+            f"Що ви хочете зробити?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+        return  # IMPORTANT: Don't route to HR RAG!
+    
+    # Not a phone number - continue to HR RAG
+    logger.info(f"MSG_ROUTED: telegram_id={telegram_id}, text='{message_text[:50]}...'")
+    
+    # ... existing HR RAG routing code ...
+```
+
+### Add reverification callback handler
+
+In the callback query handler, add support for `hr_reverify:confirm`:
+```python
+@router.callback_query()
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button clicks."""
+    
+    query = update.callback_query
+    await query.answer()
+    
+    callback_data = query.data
+    telegram_id = query.from_user.id
+    
+    # ... existing handlers ...
+    
+    # REVERIFICATION HANDLER (NEW)
+    if callback_data == "hr_reverify:confirm":
+        phone = context.user_data.get('reverify_phone')
+        
+        if not phone:
+            await query.answer(
+                "❌ Сесія застаріла. Надішліть номер ще раз.",
+                show_alert=True
+            )
+            return
+        
+        # Get current user
+        current_user = await get_user_by_telegram_id(db, telegram_id)
+        
+        # Show loading message
+        await query.message.edit_text(
+            f"🔍 Перевіряю номер {phone}...\n\n"
+            f"⚠️ Поточна авторизація:\n"
+            f"• {current_user['full_name']}\n"
+            f"• {current_user.get('position', 'N/A')}"
+        )
+        
+        try:
+            # Verify phone with SED
+            from services.hr_sed_service import verify_employee_in_sed
+            
+            employee = await verify_employee_in_sed(phone)
+            
+            if employee:
+                # Check if same person
+                if employee.get('employee_id') == current_user.get('employee_id'):
+                    # Same person
+                    await query.message.edit_text(
+                        f"✅ Підтверджено!\n\n"
+                        f"Це ваш поточний номер:\n"
+                        f"• {employee['full_name']}\n"
+                        f"• {employee.get('position', 'N/A')}\n\n"
+                        f"Все залишається без змін.",
+                        reply_markup=get_hr_main_menu_keyboard()
+                    )
+                else:
+                    # Different person - switch account
+                    from services.hr_auth import save_verified_user
+                    await save_verified_user(telegram_id, employee)
+                    
+                    logger.info(
+                        f"🔄 ACCOUNT_SWITCH: telegram_id={telegram_id}, "
+                        f"from={current_user['full_name']}, "
+                        f"to={employee['full_name']}"
+                    )
+                    
+                    await query.message.edit_text(
+                        f"🔄 Акаунт оновлено!\n\n"
+                        f"Тепер ви авторизовані як:\n"
+                        f"• {employee['full_name']}\n"
+                        f"• {employee.get('position', 'N/A')}\n"
+                        f"• {employee.get('department', 'N/A')}\n\n"
+                        f"Попередній акаунт: {current_user['full_name']}",
+                        reply_markup=get_hr_main_menu_keyboard()
+                    )
+            else:
+                # Not found
+                await query.message.edit_text(
+                    f"❌ Номер {phone} не знайдено в базі TD AV.\n\n"
+                    f"Ви залишаєтесь авторизовані як:\n"
+                    f"• {current_user['full_name']}\n"
+                    f"• {current_user.get('position', 'N/A')}",
+                    reply_markup=get_hr_main_menu_keyboard()
+                )
+            
+        except Exception as e:
+            logger.error(f"Reverification error: {e}", exc_info=True)
+            
+            await query.message.edit_text(
+                f"❌ Виникла помилка при перевірці.\n\n"
+                f"Ви залишаєтесь авторизовані як {current_user['full_name']}.",
+                reply_markup=get_hr_main_menu_keyboard()
+            )
+        
+        # Clear stored phone
+        context.user_data.pop('reverify_phone', None)
+        
+        return
+    
+    # ... rest of existing handlers ...
+```
+
+---
+
+## PART 2: Fix Maya's Grammatical Gender
+
+### Step 1: Find and fix /start greeting
+
+In `telegram_webhook.py` or `hr_auth.py`, find the `/start` command handler:
+```python
+# FIND THIS (wrong - masculine):
+"Радий знову тебе бачити! Чим можу допомогти?"
+
+# REPLACE WITH (correct - feminine):
+"Рада знову тебе бачити! Чим можу допомогти?"
+```
+
+### Step 2: Find and fix verification success message
+```python
+# FIND patterns like:
+"готовий допомогти"
+"Радий бачити"
+
+# REPLACE WITH:
+"готова допомогти"
+"Рада бачити"
+```
+
+### Step 3: Update Claude system prompt
+
+In `hr_rag_service.py`, find where Claude API is called:
+```python
+# Find the system prompt and ADD this gender instruction:
+
+system_prompt = """Ти — Maya, HR-асистент компанії TD AV.
+
+ВАЖЛИВО: Ти — жінка, тому завжди використовуй жіночі граматичні форми:
+- "Рада допомогти" (НЕ "Рад")
+- "Я готова" (НЕ "Я готовий")  
+- "Я була" (НЕ "Я був")
+
+{existing_prompt_content}
+"""
+```
+
+### Step 4: Search for all instances
+
+Run these replacements across the codebase:
+```python
+# In all files related to Maya (telegram_webhook.py, hr_auth.py, hr_rag_service.py):
+
+# Replace:
+"Радий" → "Рада"
+"радий" → "рада"
+"готовий" → "готова"
+"Готовий" → "Готова"
+"був" → "була"
+"Був" → "Була"
+```
+
+Use this search pattern to find remaining issues:
+```bash
+grep -rn "Радий\|радий\|Готовий\|готовий" backend/routes/telegram_webhook.py backend/services/hr_*.py
+```
+
+---
+
+## TESTING
+
+### Test 1: Phone Detection
+```
+1. User (authenticated): +380501234567
+2. Expected: "✅ Ви вже авторизовані як..."
+           [🔄 Перевірити цей номер]
+           [📋 HR меню]
+3. NOT expected: "На жаль, я не знайшов інформації..."
+```
+
+### Test 2: Gender Forms
+```
+1. User: /start
+2. Expected: "Рада знову тебе бачити!" (feminine)
+3. NOT expected: "Радий знову тебе бачити!" (masculine)
+```
+
+### Test 3: Claude Responses
+```
+1. User: Any HR question
+2. Check Claude's response for feminine forms
+3. Should contain: "рада", "готова"
+4. Should NOT contain: "рад", "готовий"
+```
+
+---
+
+## SUCCESS CRITERIA
+
+✅ Authenticated users sending phone numbers see confirmation buttons
+✅ No more "not found" errors for phone numbers
+✅ /start greeting uses "Рада" not "Радий"
+✅ All hardcoded messages use feminine forms
+✅ Claude system prompt enforces feminine grammar
+✅ No masculine forms in Maya's responses
+
+---
+
+## NOTES
+
+- The `is_phone_number` function should already exist from previous work
+- The `get_hr_main_menu_keyboard` function should exist
+- If any imports are missing, add them at the top of the file
+- Test thoroughly with both Ukrainian and international phone formats
