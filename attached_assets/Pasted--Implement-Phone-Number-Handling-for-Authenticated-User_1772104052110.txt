@@ -1,0 +1,107 @@
+# Implement Phone Number Handling for Authenticated Users
+
+## PROBLEM
+When authenticated users send phone numbers, Maya treats them as HR questions instead of detecting they're already verified.
+
+Example from logs:
+```
+User (authenticated): +80503343534
+System: Routes to HR RAG ❌
+Maya: "Not found in knowledge base" (confusing!)
+```
+
+## SOLUTION
+Add phone number detection BEFORE routing to HR RAG service.
+
+## IMPLEMENTATION
+
+In `backend/routes/telegram_webhook.py`, find the authenticated user message handler and add phone detection:
+```python
+# Find this section (around where authenticated users are handled):
+
+# USER IS AUTHENTICATED
+user_data = await get_user_by_telegram_id(db, telegram_id)
+
+if user_data and user_data.get('is_active'):
+    # Authenticated user
+    
+    # CHECK IF THEY SENT A PHONE NUMBER (add this!)
+    if is_phone_number(message_text):
+        logger.info(
+            f"📱 AUTH_USER_PHONE: telegram_id={telegram_id}, "
+            f"current_user={user_data['full_name']}, "
+            f"phone_sent={message_text[:4]}***"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton(
+                text="🔄 Перевірити цей номер",
+                callback_data="hr_reverify:confirm"
+            )],
+            [InlineKeyboardButton(
+                text="📋 HR меню",
+                callback_data="hr_menu:main"
+            )]
+        ]
+        
+        # Store phone for reverification
+        context.user_data['reverify_phone'] = message_text
+        
+        await update.message.reply_text(
+            f"✅ Ви вже авторизовані як *{user_data['full_name']}*\n\n"
+            f"📱 Ви надіслали номер: `{message_text}`\n\n"
+            f"Що ви хочете зробити?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+        return  # Don't route to HR RAG!
+    
+    # Not a phone - route to HR RAG service
+    logger.info(f"📋 Routing to HR service: {message_text[:50]}")
+    # ... existing HR RAG logic ...
+```
+
+Add the reverification callback handler:
+```python
+# In callback handler, add this case:
+if callback_data == "hr_reverify:confirm":
+    phone = context.user_data.get('reverify_phone')
+    
+    if not phone:
+        await query.answer("Сесія застаріла. Надішліть номер ще раз.", show_alert=True)
+        return
+    
+    # Get current user
+    current_user = await get_user_by_telegram_id(db, telegram_id)
+    
+    await query.message.edit_text(
+        f"🔍 Перевіряю номер {phone}..."
+    )
+    
+    # Verify with SED
+    from services.hr_sed_service import verify_employee_in_sed
+    
+    employee = await verify_employee_in_sed(phone)
+    
+    if employee:
+        # Update account
+        await save_verified_user(telegram_id, employee)
+        
+        await query.message.edit_text(
+            f"✅ Оновлено!\n\n"
+            f"Тепер ви авторизовані як:\n"
+            f"• {employee['full_name']}\n"
+            f"• {employee.get('position', 'N/A')}",
+            reply_markup=get_hr_main_menu_keyboard()
+        )
+    else:
+        await query.message.edit_text(
+            f"❌ Номер не знайдено.\n\n"
+            f"Ви залишаєтесь як {current_user['full_name']}.",
+            reply_markup=get_hr_main_menu_keyboard()
+        )
+    
+    # Clear stored phone
+    context.user_data.pop('reverify_phone', None)
+```

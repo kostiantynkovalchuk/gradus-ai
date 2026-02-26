@@ -314,6 +314,28 @@ async def process_telegram_message(message: dict):
         finally:
             auth_db.close()
 
+        if is_valid_phone(text):
+            logger.info(
+                f"AUTH_USER_PHONE: telegram_id={telegram_id}, "
+                f"user={user.full_name}, phone_sent={text[:4]}***"
+            )
+            phone_display = format_for_display(normalize_phone(text) if is_valid_phone(text) else text)
+            already_auth_keyboard = {
+                "inline_keyboard": [
+                    [{"text": "📋 HR меню", "callback_data": "hr_menu:main"}],
+                    [{"text": "💬 Задати питання", "callback_data": "hr_ask"}]
+                ]
+            }
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                f"✅ Ви вже авторизовані як *{user.full_name}*\n\n"
+                f"📋 Посада: {user.position or 'N/A'}\n"
+                f"🏢 Відділ: {user.department or 'N/A'}\n\n"
+                f"Можете ставити будь-які HR-питання або скористатись меню:",
+                already_auth_keyboard
+            )
+            return
+
         logger.info(
             f"MSG_ROUTED: telegram_id={telegram_id}, "
             f"user={user.full_name}, text='{text[:50]}...'"
