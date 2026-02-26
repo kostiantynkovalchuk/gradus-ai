@@ -321,19 +321,33 @@ class HRRagService:
                 HRPresetAnswer.is_active == True
             ).order_by(HRPresetAnswer.priority.desc()).all()
             
-            self._presets_cache = [
-                {
-                    'id': p.id,
-                    'pattern': p.question_pattern,
-                    'answer': p.answer_text,
-                    'content_ids': p.content_ids or []
-                }
-                for p in presets
-            ]
+            logger.info(f"📊 DB query returned {len(presets)} active presets")
+            query_ids = [p.id for p in presets]
+            logger.info(f"📋 Query IDs: {sorted(query_ids)}")
             
-            logger.info(f"Loaded {len(self._presets_cache)} preset answers")
+            self._presets_cache = []
+            for p in presets:
+                try:
+                    self._presets_cache.append({
+                        'id': p.id,
+                        'pattern': p.question_pattern,
+                        'answer': p.answer_text,
+                        'content_ids': p.content_ids or []
+                    })
+                except Exception as preset_err:
+                    logger.error(
+                        f"❌ Failed to process preset ID {p.id}: {preset_err}. "
+                        f"Pattern: {getattr(p, 'question_pattern', 'N/A')[:50]}"
+                    )
+            
+            cached_ids = [p['id'] for p in self._presets_cache]
+            logger.info(f"✅ Loaded {len(self._presets_cache)} preset answers into cache")
+            
+            missing = set(query_ids) - set(cached_ids)
+            if missing:
+                logger.error(f"⚠️ MISSING PRESETS: IDs {sorted(missing)} queried but not cached!")
         except Exception as e:
-            logger.error(f"Failed to load presets: {e}")
+            logger.error(f"Failed to load presets: {e}", exc_info=True)
             self._presets_cache = []
     
     async def _increment_preset_usage(self, preset_id: int):
