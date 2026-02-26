@@ -17,11 +17,10 @@ PENDING_VERIFICATIONS = {}
 
 
 def is_valid_phone(phone: str) -> bool:
-    try:
-        normalized = normalize_phone(phone)
-        return len(normalized) == 12
-    except ValueError:
+    if not phone or not isinstance(phone, str):
         return False
+    digits = re.sub(r'\D', '', phone.strip())
+    return 10 <= len(digits) <= 15
 
 
 def get_user_by_telegram_id(db: Session, telegram_id: int):

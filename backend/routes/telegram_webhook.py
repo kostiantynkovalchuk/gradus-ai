@@ -319,7 +319,6 @@ async def process_telegram_message(message: dict):
                 f"AUTH_USER_PHONE: telegram_id={telegram_id}, "
                 f"user={user.full_name}, phone_sent={text[:4]}***"
             )
-            phone_display = format_for_display(normalize_phone(text) if is_valid_phone(text) else text)
             already_auth_keyboard = {
                 "inline_keyboard": [
                     [{"text": "📋 HR меню", "callback_data": "hr_menu:main"}],
