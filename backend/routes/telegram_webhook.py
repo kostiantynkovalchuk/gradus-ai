@@ -23,10 +23,13 @@ from services.hr_keyboards import (
 from services.maya_hr_content import get_direct_content, has_direct_content
 from services.hr_auth import (
     handle_start_command, handle_phone_verification,
-    is_awaiting_phone, get_user_by_telegram_id, get_access_level,
+    is_awaiting_phone, is_valid_phone, set_awaiting_phone,
+    set_pending_phone, get_pending_phone, clear_pending_state,
+    get_user_by_telegram_id, get_access_level,
     handle_admin_command, handle_adduser_command, handle_logs_command,
     handle_stats_command, handle_listusers_command
 )
+from utils.phone_normalizer import normalize_phone, format_for_display
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -194,12 +197,38 @@ async def process_telegram_message(message: dict):
         
         try:
             if is_awaiting_phone(telegram_id) and not text.startswith("/"):
-                user_info = {
-                    "first_name": message.get("from", {}).get("first_name", ""),
-                    "last_name": message.get("from", {}).get("last_name", ""),
-                    "username": message.get("from", {}).get("username"),
-                }
-                await handle_phone_verification(chat_id, telegram_id, text.strip(), user_info, db)
+                phone_raw = text.strip()
+                if is_valid_phone(phone_raw):
+                    try:
+                        phone_normalized = normalize_phone(phone_raw)
+                    except ValueError:
+                        phone_normalized = phone_raw
+                    phone_display = format_for_display(phone_normalized)
+                    
+                    set_pending_phone(telegram_id, phone_normalized)
+                    
+                    confirm_keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "✅ Підтвердити і верифікуватись", "callback_data": "hr_verify_phone:confirm"}],
+                            [{"text": "✏️ Ввести інший номер", "callback_data": "hr_verify_phone:retry"}]
+                        ]
+                    }
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        f"📱 Номер отримано: `{phone_display}`\n\n"
+                        f"Натисніть кнопку для верифікації:",
+                        confirm_keyboard
+                    )
+                else:
+                    await send_telegram_message(
+                        chat_id,
+                        "❌ Невірний формат номера.\n\n"
+                        "📱 Введіть український номер у будь-якому форматі:\n"
+                        "✅ +380671234567\n"
+                        "✅ 0671234567\n"
+                        "✅ 380671234567\n\n"
+                        "Спробуйте ще раз:"
+                    )
                 return
 
             if text.startswith("/"):
@@ -822,6 +851,50 @@ async def handle_hr_callback(callback_query: dict):
         
         elif callback_data == 'hr_ask':
             await send_telegram_message(chat_id, "Напишіть своє питання, і я постараюся допомогти! 💬")
+        
+        elif callback_data.startswith('hr_verify_phone:'):
+            action = callback_data.replace('hr_verify_phone:', '', 1)
+            telegram_id = callback_query.get('from', {}).get('id')
+            
+            if action == 'retry':
+                clear_pending_state(telegram_id)
+                set_awaiting_phone(telegram_id, True)
+                await edit_telegram_message(
+                    chat_id, message_id,
+                    "📱 Введіть свій робочий номер телефону:\n\n"
+                    "Формат: `+380501234567` або `0501234567`"
+                )
+            elif action == 'confirm':
+                phone_normalized = get_pending_phone(telegram_id)
+                if not phone_normalized:
+                    await edit_telegram_message(
+                        chat_id, message_id,
+                        "⚠️ Сесія верифікації закінчилась.\n\n"
+                        "Натисніть /start щоб почати знову."
+                    )
+                    return {"ok": True}
+                
+                clear_pending_state(telegram_id)
+                phone_display = format_for_display(phone_normalized)
+                
+                await edit_telegram_message(
+                    chat_id, message_id,
+                    f"🔍 Перевіряю номер `{phone_display}`...\n"
+                    f"Зачекайте кілька секунд."
+                )
+                
+                from models import get_db as _get_db
+                db_gen = _get_db()
+                db = next(db_gen)
+                try:
+                    user_info = {
+                        "first_name": callback_query.get('from', {}).get('first_name', ''),
+                        "last_name": callback_query.get('from', {}).get('last_name', ''),
+                        "username": callback_query.get('from', {}).get('username'),
+                    }
+                    await handle_phone_verification(chat_id, telegram_id, phone_normalized, user_info, db)
+                finally:
+                    db.close()
         
         return {"ok": True}
     

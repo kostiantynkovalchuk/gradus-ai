@@ -37,7 +37,12 @@ def get_access_level(db: Session, telegram_id: int) -> str:
 
 
 def is_awaiting_phone(telegram_id: int) -> bool:
-    return PENDING_VERIFICATIONS.get(telegram_id) == 'awaiting_phone'
+    entry = PENDING_VERIFICATIONS.get(telegram_id)
+    if entry == 'awaiting_phone':
+        return True
+    if isinstance(entry, dict) and entry.get('state') == 'confirming_phone':
+        return True
+    return False
 
 
 def set_awaiting_phone(telegram_id: int, state: bool):
@@ -45,6 +50,21 @@ def set_awaiting_phone(telegram_id: int, state: bool):
         PENDING_VERIFICATIONS[telegram_id] = 'awaiting_phone'
     else:
         PENDING_VERIFICATIONS.pop(telegram_id, None)
+
+
+def set_pending_phone(telegram_id: int, phone: str):
+    PENDING_VERIFICATIONS[telegram_id] = {'state': 'confirming_phone', 'phone': phone}
+
+
+def get_pending_phone(telegram_id: int) -> str:
+    entry = PENDING_VERIFICATIONS.get(telegram_id)
+    if isinstance(entry, dict) and entry.get('state') == 'confirming_phone':
+        return entry.get('phone')
+    return None
+
+
+def clear_pending_state(telegram_id: int):
+    PENDING_VERIFICATIONS.pop(telegram_id, None)
 
 
 async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: str, db: Session):
