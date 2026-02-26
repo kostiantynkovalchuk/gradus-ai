@@ -1,0 +1,237 @@
+# Implement Share Contact-Only Authentication
+
+## OBJECTIVE
+Remove manual phone entry option. Force users to share their Telegram contact for security and UX benefits.
+
+## CHANGES NEEDED
+
+### 1. Update /start Welcome Message
+
+**File:** `backend/routes/telegram_webhook.py` or `backend/services/hr_auth.py`
+
+Find the welcome message for new users and update to:
+```python
+async def send_welcome_and_auth(chat_id: int, user_first_name: str):
+    """Send welcome message with Share Contact button only."""
+    
+    welcome_text = (
+        f"👋 Привіт, {user_first_name}! Я Maya — твій HR-асистент у Торговому Домі АВ.\n\n"
+        f"🎯 Допоможу з:\n"
+        f"• Відпустками та зарплатою 💰\n"
+        f"• Техпідтримкою (Бліц, УРС, доступи) 🔧\n"
+        f"• Документами та процедурами 📋\n"
+        f"• Контактами спеціалістів 📞\n\n"
+        f"Для початку роботи підтверди свій робочий номер телефону ⚡"
+    )
+    
+    # Share Contact button (native Telegram request)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton("📱 Поділитися номером телефону", request_contact=True)]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    
+    await send_telegram_message(chat_id, welcome_text, reply_markup=keyboard)
+```
+
+### 2. Handle Contact Sharing
+
+**File:** `backend/routes/telegram_webhook.py`
+
+Add handler for when user shares contact:
+```python
+@router.message(F.contact)
+async def handle_contact_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle when user shares their Telegram contact.
+    Triggered by Share Contact button.
+    """
+    
+    contact = update.message.contact
+    telegram_id = update.effective_user.id
+    user_first_name = update.effective_user.first_name
+    
+    # Verify it's their own contact (security check)
+    if contact.user_id != telegram_id:
+        await update.message.reply_text(
+            "❌ Будь ласка, поділіться своїм власним номером, а не контактом іншої особи.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+    
+    phone = contact.phone_number
+    
+    logger.info(
+        f"VERIFY_CONTACT_SHARED: telegram_id={telegram_id}, "
+        f"phone={phone[:4]}***{phone[-4:]}"
+    )
+    
+    # Show loading message
+    await update.message.reply_text(
+        f"🔍 Перевіряю номер {phone}...",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    try:
+        # Verify with SED
+        from services.hr_sed_service import sed_service
+        
+        result = await sed_service.verify_employee(phone)
+        
+        if result['verified']:
+            employee = result['employee']
+            
+            # Save to database
+            from services.hr_auth import save_verified_user
+            await save_verified_user(telegram_id, employee)
+            
+            logger.info(
+                f"VERIFY_SUCCESS: telegram_id={telegram_id}, "
+                f"name={employee['full_name']}, "
+                f"position={employee.get('position', 'N/A')}"
+            )
+            
+            # Success message with main menu
+            success_text = (
+                f"✅ Вітаю, {employee['full_name']}!\n\n"
+                f"Ви успішно авторизовані.\n"
+                f"📋 Посада: {employee.get('position', 'N/A')}\n"
+                f"🏢 Відділ: {employee.get('department', 'N/A')}\n\n"
+                f"Готова допомогти з HR-питаннями! 💬"
+            )
+            
+            await update.message.reply_text(
+                success_text,
+                reply_markup=get_main_menu_keyboard()
+            )
+            
+        else:
+            # Not found in SED
+            logger.warning(
+                f"VERIFY_FAILED: telegram_id={telegram_id}, "
+                f"phone={phone}, error=not_found"
+            )
+            
+            await update.message.reply_text(
+                f"❌ Номер {phone} не знайдено в базі TD AV.\n\n"
+                f"Можливі причини:\n"
+                f"• Номер не співпадає з робочим телефоном\n"
+                f"• Ви ще не додані в систему\n\n"
+                f"Зверніться до HR-відділу:\n"
+                f"📧 hr@vinkom.net\n"
+                f"☎️ Наталія Решетілова"
+            )
+            
+            # Notify HR admins
+            from services.hr_auth import notify_hr_admins_about_failed_verification
+            await notify_hr_admins_about_failed_verification(
+                telegram_id,
+                user_first_name,
+                phone
+            )
+            
+    except Exception as e:
+        logger.error(f"Contact verification error: {e}", exc_info=True)
+        
+        await update.message.reply_text(
+            "❌ Виникла помилка при верифікації.\n\n"
+            "Спробуйте ще раз або зверніться до HR-відділу."
+        )
+```
+
+### 3. Remove Manual Entry Code
+
+**Remove these handlers/functions:**
+- Phone number text detection for unverified users
+- Phone confirmation buttons (hr_verify_phone:confirm)
+- Manual phone input prompts
+- `PENDING_VERIFICATIONS` dictionary (no longer needed)
+
+**Keep:**
+- Phone detection for VERIFIED users (authenticated user sending phone scenario)
+
+### 4. Update Unverified User Message Handler
+
+**File:** `backend/routes/telegram_webhook.py`
+
+Update the handler for messages from unverified users:
+```python
+@router.message(F.text & ~F.command())
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route user messages."""
+    
+    telegram_id = update.effective_user.id
+    user = await get_user_by_telegram_id(db, telegram_id)
+    
+    if not user or not user.get('is_active'):
+        # Unverified user → trigger auth flow
+        logger.info(f"🚫 Unverified user sent message: telegram_id={telegram_id}")
+        
+        await send_welcome_and_auth(
+            update.message.chat_id,
+            update.effective_user.first_name
+        )
+        return
+    
+    # Verified user → continue with normal flow
+    # ... existing HR question handling ...
+```
+
+### 5. Security: Prevent Contact Spoofing
+
+The check `if contact.user_id != telegram_id` ensures users can only share THEIR OWN contact, not someone else's from their contact list.
+
+## TESTING
+
+After implementation, test these scenarios:
+
+**Test 1: Normal flow (happy path)**
+```
+1. New user taps /start
+2. Sees welcome + [Поділитися номером] button
+3. Taps button → Telegram dialog appears
+4. Confirms → Phone sent to bot
+5. Verified successfully
+```
+
+**Test 2: Wrong contact shared**
+```
+1. User shares contact of colleague from contact list
+2. Bot detects: contact.user_id ≠ telegram_id
+3. Shows error: "Поділіться своїм власним номером"
+```
+
+**Test 3: Phone not in SED**
+```
+1. User shares their contact
+2. Phone not found in SED database
+3. Shows helpful error + HR contacts
+4. HR admins notified automatically
+```
+
+**Test 4: Unverified user sends message**
+```
+1. Unverified user types "Привіт"
+2. Bot shows welcome + auth button
+3. User must verify before continuing
+```
+
+## SUCCESS CRITERIA
+
+✅ Manual entry option completely removed
+✅ Only Share Contact button shown
+✅ Native Telegram contact dialog works
+✅ Spoofing prevention (can't share others' contacts)
+✅ Error handling for failed verification
+✅ HR admins notified of failures
+✅ Verified users get main menu
+
+## SECURITY BENEFITS
+
+✅ Users MUST share their actual Telegram phone
+✅ Can't type colleague's number
+✅ Can't test random numbers
+✅ Can't brute force database
+✅ Enforces "Telegram phone = Work phone" policy

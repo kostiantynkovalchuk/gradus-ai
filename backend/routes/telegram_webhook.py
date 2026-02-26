@@ -161,6 +161,11 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             message = data["message"]
             text = message.get("text", "")
 
+            if message.get("contact"):
+                logger.info(f"📱 Contact shared by user")
+                await handle_contact_shared(message, db)
+                return {"ok": True}
+
             if message.get("document") and not text:
                 logger.info(f"📎 Document received: {message['document'].get('file_name', 'unknown')}")
                 await handle_document_upload(message, db)
@@ -180,6 +185,69 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
         return {"ok": False, "error": str(e)}
 
 
+async def handle_contact_shared(message: dict, db: Session):
+    """Handle when user shares their Telegram contact via Share Contact button."""
+    chat_id = message.get("chat", {}).get("id")
+    telegram_id = message.get("from", {}).get("id")
+    user_first_name = message.get("from", {}).get("first_name", "")
+    contact = message.get("contact", {})
+
+    contact_user_id = contact.get("user_id")
+    phone = contact.get("phone_number", "")
+
+    if not contact_user_id or contact_user_id != telegram_id:
+        logger.warning(
+            f"VERIFY_CONTACT_SPOOFING: telegram_id={telegram_id}, "
+            f"contact_user_id={contact_user_id}"
+        )
+        await send_telegram_message(
+            chat_id,
+            "❌ Будь ласка, поділіться *своїм* номером через кнопку нижче, "
+            "а не контактом іншої особи."
+        )
+        return
+
+    if not phone:
+        await send_telegram_message(chat_id, "❌ Не вдалося отримати номер телефону.")
+        return
+
+    if not phone.startswith("+"):
+        phone = "+" + phone
+
+    logger.info(
+        f"VERIFY_CONTACT_SHARED: telegram_id={telegram_id}, "
+        f"phone={phone[:4]}***{phone[-4:] if len(phone) > 4 else ''}"
+    )
+
+    user = get_user_by_telegram_id(db, telegram_id)
+    if user:
+        logger.info(f"VERIFY_CONTACT_ALREADY_AUTH: telegram_id={telegram_id}, user={user.full_name}")
+        from services.hr_keyboards import get_inline_menu_for_access_level
+        keyboard = get_inline_menu_for_access_level(user.access_level)
+        await send_telegram_message_with_keyboard(
+            chat_id,
+            f"✅ Ви вже авторизовані як *{user.full_name}*\n\n"
+            f"📋 Посада: {user.position or 'N/A'}\n"
+            f"🏢 Відділ: {user.department or 'N/A'}\n\n"
+            f"Рада знову тебе бачити! Чим можу допомогти?",
+            keyboard
+        )
+        return
+
+    await send_telegram_message(
+        chat_id,
+        f"🔍 Перевіряю номер {phone[:4]}***{phone[-4:] if len(phone) > 4 else ''}...\n"
+        f"Зачекайте кілька секунд."
+    )
+
+    user_info = {
+        "first_name": user_first_name,
+        "last_name": message.get("from", {}).get("last_name", ""),
+        "username": message.get("from", {}).get("username"),
+    }
+    await handle_phone_verification(chat_id, telegram_id, phone, user_info, db)
+
+
 async def process_telegram_message(message: dict):
     """Process Maya bot chat messages with auth"""
     try:
@@ -196,41 +264,6 @@ async def process_telegram_message(message: dict):
         db = next(db_gen)
         
         try:
-            if is_awaiting_phone(telegram_id) and not text.startswith("/"):
-                phone_raw = text.strip()
-                if is_valid_phone(phone_raw):
-                    try:
-                        phone_normalized = normalize_phone(phone_raw)
-                    except ValueError:
-                        phone_normalized = phone_raw
-                    phone_display = format_for_display(phone_normalized)
-                    
-                    set_pending_phone(telegram_id, phone_normalized)
-                    
-                    confirm_keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "✅ Підтвердити і верифікуватись", "callback_data": "hr_verify_phone:confirm"}],
-                            [{"text": "✏️ Ввести інший номер", "callback_data": "hr_verify_phone:retry"}]
-                        ]
-                    }
-                    await send_telegram_message_with_keyboard(
-                        chat_id,
-                        f"📱 Номер отримано: `{phone_display}`\n\n"
-                        f"Натисніть кнопку для верифікації:",
-                        confirm_keyboard
-                    )
-                else:
-                    await send_telegram_message(
-                        chat_id,
-                        "❌ Невірний формат номера.\n\n"
-                        "📱 Введіть український номер у будь-якому форматі:\n"
-                        "✅ +380671234567\n"
-                        "✅ 0671234567\n"
-                        "✅ 380671234567\n\n"
-                        "Спробуйте ще раз:"
-                    )
-                return
-
             if text.startswith("/"):
                 if text == "/start":
                     await handle_start_command(chat_id, telegram_id, user_name, db)
@@ -305,10 +338,18 @@ async def process_telegram_message(message: dict):
         try:
             user = get_user_by_telegram_id(auth_db, telegram_id)
             if not user:
-                await send_telegram_message(
+                share_contact_keyboard = {
+                    "keyboard": [
+                        [{"text": "📱 Поділитися номером телефону", "request_contact": True}]
+                    ],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True
+                }
+                await send_telegram_message_with_keyboard(
                     chat_id,
                     "Для доступу до бота потрібно пройти верифікацію.\n\n"
-                    "Натисни /start щоб розпочати."
+                    "Натисни кнопку нижче, щоб поділитися номером телефону 👇",
+                    share_contact_keyboard
                 )
                 return
         finally:

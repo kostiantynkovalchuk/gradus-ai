@@ -122,15 +122,23 @@ async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: 
         await send_message_with_keyboard(chat_id, greeting, keyboard)
         return True
 
-    set_awaiting_phone(telegram_id, True)
-    await send_message(
-        chat_id,
-        "👋 Привіт! Я Maya, HR-асистент Торгового Дому АВ.\n\n"
-        "Для доступу до бота підтвердь, що ти співробітник компанії.\n\n"
-        "📱 Введи свій номер телефону у форматі:\n"
-        "+380XXXXXXXXX\n\n"
-        "Наприклад: +380671234567"
+    welcome_text = (
+        f"👋 Привіт, {user_first_name}! Я Maya — твій HR-асистент у Торговому Домі АВ.\n\n"
+        f"🎯 Допоможу з:\n"
+        f"• Відпустками та зарплатою 💰\n"
+        f"• Техпідтримкою (Бліц, УРС, доступи) 🔧\n"
+        f"• Документами та процедурами 📋\n"
+        f"• Контактами спеціалістів 📞\n\n"
+        f"Для початку роботи натисни кнопку нижче, щоб поділитися своїм номером телефону ⚡"
     )
+    share_contact_keyboard = {
+        "keyboard": [
+            [{"text": "📱 Поділитися номером телефону", "request_contact": True}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+    await send_message_with_keyboard(chat_id, welcome_text, share_contact_keyboard)
     return True
 
 
@@ -143,14 +151,18 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
     
     if not is_valid_phone(phone):
         logger.info(f"VERIFY_INVALID_FORMAT: telegram_id={telegram_id}, phone={phone}")
-        await send_message(
+        share_contact_keyboard = {
+            "keyboard": [
+                [{"text": "📱 Поділитися номером телефону", "request_contact": True}]
+            ],
+            "resize_keyboard": True,
+            "one_time_keyboard": True
+        }
+        await send_message_with_keyboard(
             chat_id,
-            "❌ Невірний формат номера.\n\n"
-            "📱 Введіть український номер у будь-якому форматі:\n"
-            "✅ +380671234567\n"
-            "✅ 0671234567\n"
-            "✅ 380671234567\n\n"
-            "Спробуйте ще раз:"
+            "❌ Не вдалося перевірити номер.\n\n"
+            "Натисніть кнопку нижче, щоб поділитися номером телефону 👇",
+            share_contact_keyboard
         )
         return
 
