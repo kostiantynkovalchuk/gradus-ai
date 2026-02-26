@@ -1,0 +1,195 @@
+{
+  "generated_at": "2026-02-26T22:37:53.079Z",
+  "summary": {
+    "total_presets": 32,
+    "total_knowledge_articles": 43,
+    "total_smart_link_documents": 7,
+    "total_embeddings": 39,
+    "total_queries_logged": 22,
+    "total_feedback": 7,
+    "registered_users": 5,
+    "whitelisted_users": 3
+  },
+  "presets": {
+    "total": 32,
+    "by_category": {
+      "uncategorized": 6,
+      "tech_support": 6,
+      "onboarding": 3,
+      "about": 2,
+      "salary": 2,
+      "crm": 2,
+      "vacation": 2,
+      "hr": 2,
+      "contacts": 1,
+      "schedule": 1,
+      "business_trip": 1,
+      "sick_leave": 1,
+      "general": 1,
+      "supplies": 1,
+      "remote_work": 1
+    },
+    "top_used": [
+      { "id": 8, "pattern": "відпустка|скільки днів відпустки|оформити відпустку", "usage": 9, "category": "vacation" },
+      { "id": 13, "pattern": "доступ сед бліц|sed blitz|як зайти в бліц...", "usage": 9, "category": "tech_support" },
+      { "id": 20, "pattern": "контакти|до кого звертатись|хто відповідає", "usage": 4, "category": "contacts" },
+      { "id": 7, "pattern": "зарплата|виплата|коли платять|строки|аванс", "usage": 2, "category": "salary" },
+      { "id": 14, "pattern": "корп доступ|корпоративний обліковий запис", "usage": 2, "category": "onboarding" },
+      { "id": 23, "pattern": "звільнення|хочу звільнитись|як звільнитись", "usage": 2, "category": "hr" }
+    ],
+    "unused_count": 23,
+    "unused": [
+      { "id": 10, "category": "sick_leave", "pattern": "лікарняний|захворів" },
+      { "id": 12, "category": "tech_support", "pattern": "урс не працює|remote desktop" },
+      { "id": 9, "category": "vacation", "pattern": "залишок відпустки" },
+      { "id": 11, "category": "remote_work", "pattern": "віддалена робота|удаленка" },
+      { "id": 15, "category": "supplies", "pattern": "канцтовари|замовити" },
+      { "id": 16, "category": "business_trip", "pattern": "командировка|відрядження" },
+      { "id": 17, "category": "tech_support", "pattern": "не працює комп|зламався пк" },
+      { "id": 18, "category": "tech_support", "pattern": "кпк не працює|планшет" },
+      { "id": 19, "category": "salary", "pattern": "питання по зарплаті|нарахування" },
+      { "id": 22, "category": "onboarding", "pattern": "документи для працевлаштування" },
+      { "id": 24, "category": "about", "pattern": "структура компанії" },
+      { "id": 25, "category": "about", "pattern": "про компанію|історія" },
+      { "id": 26, "category": "schedule", "pattern": "графік роботи|робочий день" },
+      { "id": 27, "category": "tech_support", "pattern": "технічна підтримка|it support" },
+      { "id": 28, "category": "crm", "pattern": "завести клієнта|новий клієнт" },
+      { "id": 29, "category": "crm", "pattern": "ліміт клієнта|кредитний ліміт" },
+      { "id": 30, "category": null, "pattern": "зарплата|виплата|коли платять|аванс" },
+      { "id": 31, "category": null, "pattern": "відпустка|скільки днів|відпочинок" },
+      { "id": 32, "category": null, "pattern": "лікарняний|хворий|захворів" },
+      { "id": 33, "category": null, "pattern": "документи|працевлаштування|що потрібно" },
+      { "id": 34, "category": null, "pattern": "графік|робочий день|час роботи" },
+      { "id": 35, "category": null, "pattern": "техпідтримка|технічна|ноутбук|комп'ютер" },
+      { "id": 36, "category": "onboarding", "pattern": "перші кроки|перший день" },
+      { "id": 37, "category": "tech_support", "pattern": "технічні проблеми|it підтримка" }
+    ],
+    "potential_duplicates": [
+      { "ids": [7, 30], "topic": "salary/зарплата" },
+      { "ids": [8, 31], "topic": "vacation/відпустка" },
+      { "ids": [10, 32], "topic": "sick_leave/лікарняний" },
+      { "ids": [22, 33], "topic": "onboarding/документи" },
+      { "ids": [26, 34], "topic": "schedule/графік" },
+      { "ids": [27, 35, 37], "topic": "tech_support" }
+    ]
+  },
+  "knowledge_base": {
+    "total_articles": 43,
+    "by_category": {
+      "general": 11,
+      "tech_support": 6,
+      "about": 5,
+      "onboarding": 4,
+      "contacts": 3,
+      "hr": 2,
+      "schedule": 2,
+      "salary": 2,
+      "bonuses": 1,
+      "supplies": 1,
+      "business_trip": 1,
+      "training": 1,
+      "remote_work": 1,
+      "legal": 1,
+      "vacation": 1,
+      "sick_leave": 1
+    },
+    "topics_covered": [
+      "Company overview & history",
+      "Employment documents & onboarding",
+      "Work schedule & remote work",
+      "SED Blitz access & setup",
+      "Vacation (days, application, balance)",
+      "Sick leave procedures",
+      "Salary & bonuses",
+      "Technical support (PC, URS, KPK)",
+      "Corporate account access",
+      "Office supplies ordering",
+      "Business trips & travel",
+      "Client registration & limits (CRM)",
+      "Conflict resolution",
+      "Resignation process",
+      "Furniture & equipment procurement",
+      "Room booking",
+      "Employment contracts & probation",
+      "Personal data changes",
+      "Contact directory"
+    ]
+  },
+  "smart_link_documents": {
+    "total": 7,
+    "documents": [
+      { "id": 2, "title": "Додаток №33 - Інструкція з роботи в СЕД Бліц / УРС", "category": "tech_support" },
+      { "id": 4, "title": "Додаток №42.1 - Навчальні матеріали / Прийом на роботу", "category": "onboarding" },
+      { "id": 8, "title": "Додаток №12 - Таблиця рангів посад для відряджень", "category": "business_travel" },
+      { "id": 9, "title": "Додаток №12.1 - Норми витрат на відрядження", "category": "business_travel" },
+      { "id": 10, "title": "Додаток №21 - Бізнес-процес закупівлі меблів", "category": "procurement" },
+      { "id": 11, "title": "Додаток №21.1 - Бізнес-процес закупівлі комп'ютерної техніки", "category": "procurement" },
+      { "id": 12, "title": "Додаток №22 - Контакти центрального офісу", "category": "contacts" }
+    ]
+  },
+  "vectors": {
+    "total_embeddings": 39,
+    "pinecone_namespace": "hr_docs",
+    "content_ids_mapped": 39,
+    "note": "39 embeddings from 43 content entries - 4 newer entries (IDs 194-198) may lack embeddings"
+  },
+  "query_analytics": {
+    "total_queries": 22,
+    "routing": {
+      "preset_hits": 13,
+      "rag_searches": 6,
+      "fallback_no_match": 3
+    },
+    "preset_hit_rate": "59%",
+    "avg_preset_response_ms": "~170ms",
+    "avg_rag_response_ms": "~2400ms",
+    "satisfaction": {
+      "helpful": 3,
+      "not_helpful": 4,
+      "rate": "43%"
+    },
+    "most_queried_topics": [
+      "Як працювати в бліц? (6 times)",
+      "Як замовити стілець? (5 times)",
+      "Відпустка (3 times)"
+    ]
+  },
+  "gaps": {
+    "missing_topics": [
+      "Brand information (DOVBUSH, ADJARI, GREEN DAY, etc.)",
+      "Product catalog / portfolio details",
+      "Price lists and pricing policies",
+      "Delivery / logistics procedures for employees",
+      "Employee benefits beyond bonuses (insurance, gym, etc.)",
+      "Performance review / KPI evaluation process",
+      "Training & development programs",
+      "Internal transfer / promotion procedures",
+      "Parental leave / maternity policies",
+      "Safety & workplace regulations",
+      "Corporate events / team building",
+      "Expense reimbursement procedures",
+      "Company car / vehicle policies",
+      "Data protection / GDPR / confidentiality policies",
+      "Whistleblower / ethics reporting",
+      "Emergency contacts / crisis procedures"
+    ],
+    "structural_issues": [
+      "6 presets have no category assigned (IDs 30-35)",
+      "6 potential duplicate preset pairs with overlapping patterns",
+      "4 content entries (IDs 194-198) may lack vector embeddings",
+      "43% satisfaction rate - 4 of 7 feedback entries are negative",
+      "Only 5 registered users - limited adoption data",
+      "Preset IDs 30-35 appear to be simplified duplicates of earlier presets (7-27)"
+    ],
+    "recommendations": [
+      "Deduplicate presets: Merge IDs 30-35 into existing presets or remove them",
+      "Add category to uncategorized presets (IDs 30-35)",
+      "Add brand/product knowledge base (DOVBUSH, ADJARI, etc.)",
+      "Re-embed content entries 194-198 to ensure vector coverage",
+      "Add more search patterns to low-usage presets to improve hit rate",
+      "Consider adding presets for recurring RAG queries (стілець = furniture procurement)",
+      "Investigate 4 negative feedback entries and create presets for those queries",
+      "Expand legal contracts coverage in presets"
+    ]
+  }
+}
