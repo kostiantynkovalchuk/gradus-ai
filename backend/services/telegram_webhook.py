@@ -85,7 +85,10 @@ class TelegramWebhookHandler:
                 return {"status": "error", "message": "Article not found"}
             
             if article.status != 'pending_approval':
+                logger.warning(f"Stale approve button clicked for article {content_id} (status: {article.status})")
                 self._answer_callback_query(callback_id, f"⚠️ Already {article.status}")
+                if message:
+                    self._update_message_caption(message, f"⚠️ Article #{content_id} already <b>{article.status}</b>", remove_keyboard=True)
                 return {"status": "error", "message": f"Article already {article.status}"}
             
             article.status = 'approved'
@@ -166,7 +169,10 @@ class TelegramWebhookHandler:
                 return {"status": "error", "message": "Article not found"}
             
             if article.status != 'pending_approval':
+                logger.warning(f"Stale reject button clicked for article {content_id} (status: {article.status})")
                 self._answer_callback_query(callback_id, f"⚠️ Already {article.status}")
+                if message:
+                    self._update_message_caption(message, f"⚠️ Article #{content_id} already <b>{article.status}</b>", remove_keyboard=True)
                 return {"status": "error", "message": f"Article already {article.status}"}
             
             article.status = 'rejected'
@@ -298,21 +304,20 @@ class TelegramWebhookHandler:
             logger.error(f"Error sending text message: {e}")
             return False
     
-    def _update_message_caption(self, message: Dict, new_caption: str) -> bool:
+    def _update_message_caption(self, message: Dict, new_caption: str, remove_keyboard: bool = True) -> bool:
         """
-        Update Telegram message caption or text
+        Update Telegram message caption or text.
         
-        Automatically uses editMessageCaption for photo messages (with caption)
-        or editMessageText for text-only messages
-        
-        Returns:
-            True if message updated successfully, False otherwise
+        When remove_keyboard=True (default), removes inline buttons to prevent
+        duplicate actions on already-processed articles.
         """
         try:
             chat_id = message['chat']['id']
             message_id = message['message_id']
             
             has_photo = 'photo' in message
+            
+            empty_keyboard = {"inline_keyboard": []} if remove_keyboard else None
             
             if has_photo:
                 url = f"{self.base_url}/editMessageCaption"
@@ -330,6 +335,9 @@ class TelegramWebhookHandler:
                     "text": new_caption,
                     "parse_mode": "HTML"
                 }
+            
+            if empty_keyboard:
+                payload["reply_markup"] = empty_keyboard
             
             response = requests.post(url, json=payload, timeout=10)
             result = response.json()
