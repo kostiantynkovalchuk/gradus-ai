@@ -271,15 +271,36 @@ class TelegramWebhookHandler:
             
             logger.info(f"New image fetched for article {content_id}: {result['image_photographer']} (Tier {result.get('last_tier_used')})")
             
-            notification_service.send_approval_notification({
-                'id': article.id,
-                'translated_title': article.translated_title,
-                'translated_text': article.translated_text or '',
-                'image_url': article.image_url,
-                'local_image_path': None,
-                'source': article.source or 'GradusMedia',
-                'created_at': article.created_at.strftime('%H:%M, %d %b %Y') if article.created_at else ''
-            })
+            chat_id = message['chat']['id']
+            title = article.translated_title or 'Без заголовка'
+            preview_text = (article.translated_text or '')[:150]
+            if len(article.translated_text or '') > 150:
+                preview_text += "..."
+            
+            new_caption = f"""🆕 <b>Новий контент для перевірки</b>
+
+📰 <b>{title}</b>
+
+{preview_text}
+
+📰 {article.source or 'GradusMedia'}
+🔗 ID: {content_id}
+📸 {article.image_photographer or 'Unsplash'} (Tier {result.get('last_tier_used', '?')})"""
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Approve & Post", "callback_data": f"approve_{content_id}"},
+                        {"text": "❌ Reject", "callback_data": f"reject_{content_id}"}
+                    ],
+                    [
+                        {"text": "🔄 New Image", "callback_data": f"regenerate_{content_id}"}
+                    ]
+                ]
+            }
+            
+            image_url = result.get('image_url')
+            self._send_photo_or_update(chat_id, image_url, new_caption, keyboard, message)
             
             return {"status": "success", "message": "New image fetched", "content_id": content_id}
             
@@ -288,6 +309,51 @@ class TelegramWebhookHandler:
             db.rollback()
             self._send_text_message(message['chat']['id'], f"❌ Error fetching new image: {str(e)[:100]}")
             return {"status": "error", "message": str(e)}
+    
+    def _send_photo_or_update(self, chat_id: int, image_url: str, caption: str, keyboard: Dict, old_message: Dict) -> bool:
+        """
+        Send new photo message and delete the old one to avoid duplicates.
+        Telegram doesn't support changing the photo in editMessageCaption,
+        so we delete + resend for image changes.
+        """
+        import json
+        try:
+            old_message_id = old_message.get('message_id')
+            if old_message_id:
+                delete_url = f"{self.base_url}/deleteMessage"
+                requests.post(delete_url, json={
+                    "chat_id": chat_id,
+                    "message_id": old_message_id
+                }, timeout=5)
+            
+            url = f"{self.base_url}/sendPhoto"
+            payload = {
+                "chat_id": chat_id,
+                "photo": image_url,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "reply_markup": keyboard
+            }
+            response = requests.post(url, json=payload, timeout=15)
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info(f"Sent updated photo message to chat {chat_id}")
+                return True
+            else:
+                logger.warning(f"Photo send failed, trying text-only: {result.get('description')}")
+                text_url = f"{self.base_url}/sendMessage"
+                text_payload = {
+                    "chat_id": chat_id,
+                    "text": caption,
+                    "parse_mode": "HTML",
+                    "reply_markup": keyboard
+                }
+                requests.post(text_url, json=text_payload, timeout=10)
+                return True
+        except Exception as e:
+            logger.error(f"Error in _send_photo_or_update: {e}")
+            return False
     
     def _send_text_message(self, chat_id: int, text: str) -> bool:
         """Send a simple text message"""
