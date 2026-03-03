@@ -319,6 +319,22 @@ MIGRATIONS = [
     {
         "version": "010_unique_source_url",
         "statements": [
+            """DELETE FROM content_queue WHERE id IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (PARTITION BY source_url ORDER BY
+                        CASE status
+                            WHEN 'posted' THEN 1
+                            WHEN 'approved' THEN 2
+                            WHEN 'pending_approval' THEN 3
+                            WHEN 'draft' THEN 4
+                            WHEN 'rejected' THEN 5
+                            ELSE 6
+                        END, id ASC
+                    ) as rn
+                    FROM content_queue
+                    WHERE source_url IS NOT NULL AND source_url != ''
+                ) sub WHERE rn > 1
+            )""",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_queue_source_url ON content_queue (source_url) WHERE source_url IS NOT NULL AND source_url != ''",
         ]
     },
