@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, HTMLResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc
 from pydantic import BaseModel
 from typing import List, Optional
@@ -806,8 +807,16 @@ async def run_scraper(limit: int = 5, db: Session = Depends(get_db)):
                     }
                 )
                 
-                db.add(content_entry)
-                created_count += 1
+                try:
+                    nested = db.begin_nested()
+                    db.add(content_entry)
+                    db.flush()
+                    nested.commit()
+                    created_count += 1
+                except IntegrityError:
+                    nested.rollback()
+                    logger.info(f"DB duplicate skipped: {article.get('title', '')[:50]}...")
+                    continue
                 
             except Exception as e:
                 logger.error(f"Error saving article: {str(e)}")

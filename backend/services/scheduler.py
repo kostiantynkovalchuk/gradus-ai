@@ -3,6 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
 import logging
 import os
+from sqlalchemy.exc import IntegrityError
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
 from models.content import ContentQueue
@@ -96,14 +97,20 @@ class ContentScheduler:
                                     'scraped_at': datetime.utcnow().isoformat()
                                 }
                             )
-                            db.add(new_article)
-                            total_new += 1
-                            
-                            existing_urls.add(article.url)
-                            existing_hashes.add(content_hash)
-                            
-                            lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
-                            logger.info(f"    ✅ {lang_emoji} {article.title[:50]}...")
+                            try:
+                                nested = db.begin_nested()
+                                db.add(new_article)
+                                db.flush()
+                                nested.commit()
+                                total_new += 1
+                                existing_urls.add(article.url)
+                                existing_hashes.add(content_hash)
+                                lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
+                                logger.info(f"    ✅ {lang_emoji} {article.title[:50]}...")
+                            except IntegrityError:
+                                nested.rollback()
+                                logger.info(f"    ⏭️  DB duplicate skipped: {article.title[:50]}...")
+                                continue
                     
                     except Exception as e:
                         logger.error(f"  ❌ {source_name} failed: {e}")
@@ -180,14 +187,20 @@ class ContentScheduler:
                                     'scraped_at': datetime.utcnow().isoformat()
                                 }
                             )
-                            db.add(new_article)
-                            total_new += 1
-                            
-                            existing_urls.add(article.url)
-                            existing_hashes.add(content_hash)
-                            
-                            lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
-                            logger.info(f"    ✅ {lang_emoji} {article.title[:50]}...")
+                            try:
+                                nested = db.begin_nested()
+                                db.add(new_article)
+                                db.flush()
+                                nested.commit()
+                                total_new += 1
+                                existing_urls.add(article.url)
+                                existing_hashes.add(content_hash)
+                                lang_emoji = "🇺🇦" if article.language == 'uk' else "🇬🇧"
+                                logger.info(f"    ✅ {lang_emoji} {article.title[:50]}...")
+                            except IntegrityError:
+                                nested.rollback()
+                                logger.info(f"    ⏭️  DB duplicate skipped: {article.title[:50]}...")
+                                continue
                     
                     except Exception as e:
                         logger.error(f"  ❌ {source_name} failed: {e}")

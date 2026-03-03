@@ -316,6 +316,12 @@ MIGRATIONS = [
             "ALTER TABLE maya_users ADD COLUMN IF NOT EXISTS position VARCHAR(100)",
         ]
     },
+    {
+        "version": "010_unique_source_url",
+        "statements": [
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_queue_source_url ON content_queue (source_url) WHERE source_url IS NOT NULL AND source_url != ''",
+        ]
+    },
 ]
 
 
