@@ -1127,7 +1127,8 @@ async def generate_images_for_pending(limit: int = 10, db: Session = Depends(get
     try:
         articles_without_images = db.query(ContentQueue).filter(
             ContentQueue.status == 'pending_approval',
-            ContentQueue.image_url == None
+            ContentQueue.image_url == None,
+            ContentQueue.notification_sent == False
         ).limit(limit).all()
         
         if not articles_without_images:
@@ -1169,6 +1170,8 @@ async def generate_images_for_pending(limit: int = 10, db: Session = Depends(get
                         'source': article.source or 'The Spirits Business',
                         'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
                     }
+                    
+                    article.notification_sent = True
                     
                     try:
                         notification_service.send_approval_notification(notification_data)
