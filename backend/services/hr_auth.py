@@ -197,55 +197,6 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
         set_awaiting_phone(telegram_id, False)
         return
 
-    logger.info(f"VERIFY_CACHE_CHECK: telegram_id={telegram_id}, phone={phone_display}")
-
-    from services.hr_phone_cache_service import find_employee_by_phone_sync
-    cache_hit = find_employee_by_phone_sync(phone_normalized, db)
-
-    if cache_hit:
-        logger.info(
-            f"AUTH_SUCCESS | tg_id={telegram_id} | "
-            f"input_phone={phone_display} | "
-            f"matched_via=cache_{cache_hit.get('matched_via', 'unknown')} | "
-            f"employee={cache_hit.get('full_name', 'N/A')}"
-        )
-        cache_employee = {
-            "full_name": cache_hit["full_name"],
-            "first_name": cache_hit["full_name"].split()[0] if cache_hit.get("full_name") else "",
-            "last_name": cache_hit["full_name"].split()[-1] if cache_hit.get("full_name") else "",
-        }
-        await send_message(chat_id, f"🔍 Перевіряю номер {phone_display} в базі співробітників...")
-
-        sed_result = await sed_service.verify_employee(phone_normalized)
-        if sed_result["verified"]:
-            merged = {**cache_employee, **sed_result["employee"]}
-            await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, merged)
-        else:
-            work_phone = cache_hit.get("phone_work")
-            if work_phone and work_phone != phone_normalized:
-                logger.info(f"VERIFY_CACHE_CROSSCHECK: trying work phone {work_phone}")
-                sed_result2 = await sed_service.verify_employee(work_phone)
-                if sed_result2["verified"]:
-                    merged = {**cache_employee, **sed_result2["employee"]}
-                    await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, merged)
-                    set_awaiting_phone(telegram_id, False)
-                    return
-
-            mobile_phone = cache_hit.get("phone_mobile")
-            if mobile_phone and mobile_phone != phone_normalized and mobile_phone != work_phone:
-                logger.info(f"VERIFY_CACHE_CROSSCHECK: trying mobile phone {mobile_phone}")
-                sed_result3 = await sed_service.verify_employee(mobile_phone)
-                if sed_result3["verified"]:
-                    merged = {**cache_employee, **sed_result3["employee"]}
-                    await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, merged)
-                    set_awaiting_phone(telegram_id, False)
-                    return
-
-            await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, cache_employee)
-
-        set_awaiting_phone(telegram_id, False)
-        return
-
     logger.info(f"VERIFY_SED_CALL: telegram_id={telegram_id}, phone={phone_display}")
     await send_message(chat_id, f"🔍 Перевіряю номер {phone_display} в базі співробітників...")
 
