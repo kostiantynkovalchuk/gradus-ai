@@ -171,7 +171,8 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             chat_id = message.get("chat", {}).get("id")
             text = message.get("text", "")
 
-            if HUNT_SUPERGROUP_ID and chat_id == HUNT_SUPERGROUP_ID:
+            logger.info(f"🔍 HUNT CHECK: chat_id={chat_id} (type={type(chat_id).__name__}) vs HUNT_ID={HUNT_SUPERGROUP_ID} (type={type(HUNT_SUPERGROUP_ID).__name__})")
+            if HUNT_SUPERGROUP_ID and int(chat_id) == HUNT_SUPERGROUP_ID:
                 from_bot = message.get("from", {}).get("is_bot", False)
                 if not from_bot and message.get("text"):
                     asyncio.create_task(_handle_hunt_vacancy(message, db))
