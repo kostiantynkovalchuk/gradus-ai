@@ -6,7 +6,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 
 
 async def _send_message(chat_id: int, text: str, thread_id: int = None, reply_markup: dict = None) -> dict:
