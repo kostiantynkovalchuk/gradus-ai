@@ -1,7 +1,7 @@
 # Gradus Media AI Agent
 
 ## Overview
-This project is an intelligent content management system for Gradus Media, automating social media content creation, translation, image sourcing, and publishing. It integrates Claude AI for content and translation, and Unsplash for authentic photography. Key features include a React dashboard for human-in-the-loop content review, a PostgreSQL database, and integrations with Facebook, LinkedIn, and Telegram. The system aims to ensure high-quality content delivery across social platforms through efficient workflow automation and human oversight, focusing on business vision, market potential, and project ambitions to deliver high-quality, automated content.
+This project is an intelligent content management system for Gradus Media, automating social media content creation, translation, image sourcing, and publishing. It integrates Claude AI for content and translation, and Unsplash for authentic photography. The system aims to ensure high-quality content delivery across social platforms through efficient workflow automation and human oversight, focusing on business vision, market potential, and project ambitions to deliver high-quality, automated content.
 
 ## User Preferences
 - Language: Ukrainian for content output
@@ -15,65 +15,52 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 **UI/UX Decisions:**
 - **Frontend:** React with Vite and Tailwind CSS for a modern, responsive dashboard.
 - **Dashboard:** Centralized interface for statistics, AI chat, and content approval.
+- **GradusMedia Admin Dashboard:** Full admin panel at `/admin` with analytics, preset candidates, user database, and subscriptions.
+- **HR Admin Dashboard:** Analytics dashboard at `/hr` for monitoring HR bot performance.
 
 **Technical Implementations:**
 - **Backend:** FastAPI for high-performance, asynchronous API operations.
 - **Database:** PostgreSQL with SQLAlchemy ORM.
 - **Human-in-the-loop Workflow:** Essential for content quality control, enabling review and approval before publishing.
 - **Service-Oriented Architecture:** Modular design for extensibility and maintainability.
-- **Multi-Source Scraping Architecture:** Modular scraper system with `ScraperManager` coordinating 7 active sources (5 English, 2 Ukrainian). English sources require translation, Ukrainian do not. Playwright is used for JavaScript-rendered sites. Deduplication via UNIQUE partial index on `source_url` + in-memory URL/hash sets + savepoint-based IntegrityError handling per insert.
-- **Automated Content Pipeline:** 24/7 automation via APScheduler, with platform-optimized scheduling for scraping (LinkedIn: Mon/Wed/Fri; Facebook: Daily), AI translation (3x/day for English sources), and image generation (3x/day for both languages). Includes startup catch-up for missed scrapes and daily cleanup of rejected content.
-- **Telegram Quick Approval:** Enables one-click content approval/rejection directly from Telegram with image previews. Includes inline "New Image" button for fetching alternative images from Unsplash without leaving Telegram, with tier advancement on each click.
-- **Image Integration (Unsplash) with Tier Rotation:** Articles use authentic photography from Unsplash API with a 4-tier intelligent search system and round-robin rotation for visual diversity. Tier 0: Geographical, Tier 1: Context-based, Tier 2: HoReCa/Cocktail, Tier 3: Abstract. Starting tier rotates based on `article_id % 4` to ensure ~25% distribution across tiers. "New Image" button advances to next tier. Tracks `last_tier_used` and `tier_attempts` in database. Includes proper attribution ("Photo by {name} on Unsplash") per API Terms Section 9, persistent duplicate prevention via `unsplash_image_id`, and manual "Fetch Image" button in Article Manager.
-- **Scheduled Posting:** Approved content is automatically posted at optimal engagement times (Facebook: Daily 18:00; LinkedIn: Mon/Wed/Fri 09:00).
-- **Duplicate Post Prevention:** Implements database row locking, intermediate posting states, and idempotency checks to prevent duplicate posts in multi-container environments.
-- **LinkedIn Integration:** Supports organization page posting with robust asset upload and graceful degradation.
+- **Multi-Source Scraping Architecture:** Modular scraper system coordinating 7 active sources (5 English, 2 Ukrainian) with deduplication.
+- **Automated Content Pipeline:** 24/7 automation via APScheduler for scraping, AI translation, and image generation.
+- **Telegram Quick Approval:** Enables one-click content approval/rejection directly from Telegram with image previews and "New Image" fetching.
+- **Image Integration (Unsplash) with Tier Rotation:** Uses a 4-tier intelligent search system and round-robin rotation for visual diversity, including proper attribution and duplicate prevention.
+- **Scheduled Posting:** Approved content is automatically posted at optimal engagement times for Facebook and LinkedIn.
+- **Duplicate Post Prevention:** Implements database row locking and idempotency checks.
+- **LinkedIn Integration:** Supports organization page posting with asset upload.
 - **API Monitoring:** Daily health checks for external services with Telegram alerts.
-
-**Feature Specifications:**
-- **Content Management:** API for managing pending, approved, and rejected content with editing and history.
-- **Article Manager (Admin Dashboard):** Full-featured interface at `/articles` for paginated listing, search, filters, bulk deletion, CSV export, and real-time statistics. Clickable status cards with URL sync for deep linking (e.g., `/articles?status=approved`).
-- **Article Categorization:** AI-powered classification (News, Reviews, Trends) using keyword matching and Claude AI fallback.
+- **Content Management:** API for managing content with editing and history.
+- **Article Manager:** Full-featured interface for content listing, search, filters, bulk deletion, CSV export, and real-time statistics.
+- **Article Categorization:** AI-powered classification using keyword matching and Claude AI fallback.
 - **AI Services:** Endpoints for Claude AI chat and English-to-Ukrainian translation.
-- **AI Avatar System (Maya & Alex Gradus):**
-    - **Maya:** Marketing & trends expert, handles grammatical gender rules.
-    - **Alex Gradus:** Premium Bar Operations Consultant, focuses on P&L optimization, product selection, and operations, with a business-first, anti-hallucination approach.
-- **Preset Answer Service (Cost Optimization):** Database-backed preset answers (table: `alex_preset_answers`) with 3-tier matching: exact → fuzzy (85%) → keyword → Claude API fallback. Tracks usage_count and last_used_at per preset. Hot-reload via `/api/maya/reload-presets`.
-- **Alex Learning System:** Automated query pattern detection via `alex_preset_candidates` table. Daily aggregation task (3:30 AM UTC) groups similar questions from `maya_query_log` (7-day window, fuzzy 80% threshold, freq >= 3). Admin can generate AI answers, promote to presets, or dismiss. Trend questions auto-inject fresh articles from `content_queue` (category='trends') into Claude context.
-- **GradusMedia Admin Dashboard:** Full admin panel at `/admin` (password: GradusAdmin_2026) with 4 tabs: Analytics (summary cards, top questions bar chart, daily questions line chart), Preset Candidates (generate/promote/dismiss workflow), Users Database (tier filtering, CSV export), Subscriptions (MRR, payment status tracking). Uses Chart.js for visualizations.
-- **Direct Content Mapping (Button Optimization):** Button clicks use in-memory content lookup via `maya_hr_content.py` instead of API/database calls, reducing response time from 2-3s to <50ms and saving ~$16/month in API costs. Free text queries still use preset→RAG flow.
-- **HR Bot RAG System:** Employee onboarding and support knowledge base using PostgreSQL for content (43 entries including training manuals), Pinecone for vector search (namespace: hr_docs), and OpenAI embeddings. Features include preset answers, semantic and hybrid search, Telegram integration with interactive menus, smart back navigation, and feedback mechanisms. **Unified query routing:** ALL authenticated employee messages route through hr_rag_service pipeline (no bypass to chat_endpoints). **Cost-optimized query flow:** Preset ($0) → Keyword with stop-word filtering ($0) → RAG semantic search (~$0.0001), saving ~90% on API costs. **Enhanced preset matching:** Meta-instruction detection (rejects system/search commands), Ukrainian morphology normalization (word root mapping), multi-signal fuzzy scoring (rapidfuzz: direct, normalized, token_set, partial ratios), threshold 0.75. **Confidence-based responses:** High (>0.45) normal answer, Medium (0.35-0.45) answer + disclaimer, Low (<0.35) honest "not found". Domain mismatch detection prevents cross-topic hallucinations (e.g., стул/furniture vs стіл/desktop). **Learning system:** Feedback buttons on every RAG answer, negative feedback creates preset candidates, nightly gap detection (7:00 AM) sends admin reports via Telegram. **Telegram document upload:** HR admins can upload .txt/.pdf/.docx/.md files directly via Telegram for auto-ingestion into the knowledge base (text extraction + embedding + Pinecone). **Video-only responses:** Queries about company values, history, or overview automatically send video content (no text) with fallback to RAG if video unavailable.
-- **HR Admin Dashboard:** Analytics dashboard at `/hr` (HTTP Basic Auth: admin / Maya_2026) for monitoring HR bot performance, including query stats, satisfaction analysis, preset candidates, and recent activity.
-- **News Scraper:** Extracts clean content and metadata, with year-agnostic URL matching, duplicate detection, and Playwright support for JavaScript-rendered sites.
-- **Notifications:** Telegram notifications for content status, approval, and rejection.
-- **Торговий Дім АВ Video Feature:** Sends vertical 9:16 video presentations in multiple languages when users query "Торговий Дім АВ", with file_id caching for efficiency.
-- **Query Expansion for RAG:** Automatically expands brand name queries with relevant category keywords for improved retrieval in RAG systems (e.g., "greenday" → "greenday vodka горілка").
-- **Smart Document Linking:** Automatically attaches relevant Google Doc links to Maya's answers. Uses `DocumentService` with regex-based document number extraction (№XX, шаблон XX, додаток XX) and PostgreSQL array overlap for topic matching. Returns up to 3 documents per answer, formatted as clickable links. Works universally across preset, keyword, and RAG answer paths. Table: `hr_documents` with topics/keywords arrays and GIN index. Initial seed: 7 documents (templates №69, №33, №63, №114, №83; appendices №42.1, №42.2).
-- **Legal Contracts Library:** Interactive menu in HR Bot providing access to 44 legal contract templates across 3 company entities: Бест Брендс (19 contracts), Торговий Дім АВ (19 contracts), and Світ Бейкерс (6 contracts). Organized by category (Marketing, Logistics, Distribution, Supply/Procurement, Additional Agreements). Documents served via `/static/legal_contracts/` endpoint and delivered directly to users via Telegram sendDocument API.
-- **Multi-Tier Authentication System:** Phone-based verification for HR Bot access with 4 access levels (employee, contractor, admin_hr, developer). Flow: /start → phone input → whitelist check → phone cache (dual-phone) → SED API verification → access granted or HR admin notification. Whitelist bypass for developers/contractors. Admin commands: /admin (panel), /adduser (whitelist), /logs (verification journal), /stats (detailed stats), /listusers (developer only). Failed registrations auto-notify HR admins via Telegram. 7-day SED data sync. Tables: `hr_users`, `hr_whitelist`, `verification_log`.
-- **Blitz Phone Cache (Dual-Phone Auth):** Local DB cache of employee work (р) and mobile (л) phones from Blitz xlsx export. Auth checks BOTH phone fields, solving mismatches where Telegram number ≠ SED-stored phone. Phase 1: manual xlsx seed via `POST /api/admin/hr/seed-phones`. Phase 2: nightly SED API sync (pending IT). Stats: 807 employees cached, 31 with work phone, 787 with mobile. Auth flow: whitelist → cache → live SED. Tables: `hr_employee_phone_cache`, `hr_phone_import_log`. Service: `backend/services/hr_phone_cache_service.py`. Migration: 012.
-- **Backend Monetization System:** Email-based user management with subscription tiers (free: 5 questions/day, standard: $7/mo, premium: $10/mo). DB-backed rate limiting via `maya_users` table. WayForPay payment integration (UAH via live NBU exchange rate) for checkout and webhooks with HMAC_MD5 signature verification. Daily subscription expiry checker at 4:00 AM. Tables: `maya_users`, `maya_subscriptions`, `maya_query_log`.
-- **Maya Hunt Recruitment Module:** Telegram supergroup-based candidate sourcing. Vacancies posted in a designated supergroup (`HUNT_TG_SUPERGROUP_ID`) are auto-parsed by Claude Haiku into structured data (position, city, requirements, keywords). Orchestrator scrapes candidate sources (Telegram channels via Telethon, Work.ua placeholder), scores candidates with Claude Haiku (0-100), formats candidate cards, and sends to the supergroup thread with approve/reject/save inline buttons. Env vars: `HUNT_TG_SUPERGROUP_ID`, `TELETHON_API_ID`, `TELETHON_API_HASH`, `TELETHON_SESSION`. Tables: `hunt_vacancies`, `hunt_candidates`, `hunt_sources`. Files: `backend/services/hunt_service.py` (orchestrator), `hunt_vacancy_parser.py`, `hunt_scorer.py`, `hunt_card_formatter.py`, `hunt_tg_scraper.py`, `hunt_workua_scraper.py`. Endpoints: `POST /hunt/test` (vacancy parsing test), `GET /api/hr/hunt` (stats). Migration: 011.
-- **Database Schema:** `ContentQueue`, `ApprovalLog`, `MediaFile`, `HRUser`, `HRWhitelist`, `VerificationLog`, `MayaUser`, `MayaSubscription`, `MayaQueryLog`, `HuntVacancy`, `HuntCandidate`, `HuntSource` tables manage content, auth, monetization, recruitment, and Telegram file_id caching respectively.
+- **AI Avatar System:** Features Maya (marketing/trends expert) and Alex Gradus (premium bar operations consultant).
+- **Preset Answer Service (Cost Optimization):** Database-backed preset answers with 3-tier matching and Claude API fallback.
+- **Alex Learning System:** Automated query pattern detection and admin workflow for generating and promoting AI answers.
+- **Direct Content Mapping:** In-memory content lookup for button clicks to reduce response time and API costs.
+- **HR Bot RAG System:** Employee onboarding and support knowledge base using PostgreSQL, Pinecone, and OpenAI embeddings, with cost-optimized query flow, enhanced preset matching, confidence-based responses, domain mismatch detection, and a learning system.
+- **Telegram Document Upload:** HR admins can upload documents directly via Telegram for auto-ingestion into the knowledge base.
+- **Video-only responses:** Specific queries trigger video content delivery.
+- **News Scraper:** Extracts clean content and metadata with Playwright support.
+- **Notifications:** Telegram notifications for content status.
+- **Торговий Дім АВ Video Feature:** Sends vertical video presentations for specific queries.
+- **Query Expansion for RAG:** Automatically expands brand name queries for improved retrieval.
+- **Smart Document Linking:** Automatically attaches relevant Google Doc links to Maya's answers.
+- **Legal Contracts Library:** Interactive menu in HR Bot providing access to 44 legal contract templates.
+- **Multi-Tier Authentication System:** Phone-based verification for HR Bot access with 4 access levels.
+- **Blitz Phone Cache:** Local DB cache of employee phones from Blitz xlsx export for future features.
+- **Backend Monetization System:** Email-based user management with subscription tiers, DB-backed rate limiting, and WayForPay integration.
+- **Maya Hunt Recruitment Module:** Telegram supergroup-based candidate sourcing with interactive UX, vacancy parsing, candidate scoring, and auto-posting.
 
 ## External Dependencies
 - **Claude AI (Anthropic):** Content generation, English-to-Ukrainian translation.
-- **Unsplash API:** Authentic stock photography for article images with proper attribution.
+- **Unsplash API:** Authentic stock photography.
 - **PostgreSQL:** Primary database.
 - **Telegram Bot API:** Notifications, quick approval, webhook callbacks.
 - **Facebook Graph API:** Authentication and scheduled posting to Facebook Pages.
 - **LinkedIn API v2:** OAuth 2.0 authentication and scheduled posting to LinkedIn organization pages.
-- **WayForPay:** Ukrainian payment gateway with UAH pricing, HMAC-MD5 signature verification, and pay-widget.js checkout.
-- **NBU API:** National Bank of Ukraine exchange rates for real-time USD→UAH conversion.
-- **Telethon:** Telegram client library for scraping candidate channels (Maya Hunt module).
+- **WayForPay:** Ukrainian payment gateway for monetization.
+- **NBU API:** National Bank of Ukraine exchange rates.
+- **Telethon:** Telegram client library for scraping candidate channels.
 - **Trafilatura:** Clean content extraction for the news scraper.
-
-## Adding New Tables or Columns
-
-NEVER run raw SQL directly against the DB for schema changes. Instead:
-1. Add a new entry to `MIGRATIONS` list in `backend/db_migrations.py`
-2. Use a sequential version number: `"010_your_feature_name"`
-3. Use `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE ADD COLUMN IF NOT EXISTS`
-4. Push to GitHub → Render auto-deploys → migrations run on startup
-5. Migrations are tracked in `schema_migrations` table — safe to run many times
-6. Each migration runs inside a transaction; if it fails, startup halts with a clear error

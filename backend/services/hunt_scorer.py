@@ -84,6 +84,37 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
         return _fallback(candidate, str(e))
 
 
+async def extract_salary_data(candidate: dict, vacancy: dict, vacancy_id: int):
+    salary = candidate.get("salary_expectation")
+    if not salary or not isinstance(salary, (int, float)):
+        return
+    salary = int(salary)
+    try:
+        import models
+        if models.SessionLocal is None:
+            models.init_db()
+        db = models.SessionLocal()
+        try:
+            from models.hunt_models import HuntSalaryData
+            entry = HuntSalaryData(
+                vacancy_id=vacancy_id,
+                source=candidate.get("source", "unknown"),
+                data_type="candidate",
+                position=vacancy.get("position", ""),
+                city=candidate.get("city") or vacancy.get("city"),
+                salary_median=salary,
+                currency="USD",
+                skills=candidate.get("skills", ""),
+                source_url=candidate.get("profile_url", ""),
+            )
+            db.add(entry)
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Salary data extraction error: {e}")
+
+
 def _fallback(candidate: dict, error: str) -> dict:
     return {
         "score": 0,

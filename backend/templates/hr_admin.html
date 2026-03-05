@@ -691,7 +691,48 @@
                 min-height: 60px;
             }
         }
+        .nav-tabs {
+            display: flex;
+            gap: 0;
+            background: white;
+            border-bottom: 2px solid var(--gray-200);
+            padding: 0 var(--space-xl);
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .nav-tab {
+            padding: var(--space-md) var(--space-xl);
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--gray-500);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: color 0.2s, border-color 0.2s;
+            white-space: nowrap;
+        }
+        .nav-tab:hover { color: var(--primary); }
+        .nav-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .page-content { display: none; }
+        .page-content.active { display: block; }
+        .hunt-stat-card { background: white; border-radius: var(--radius-lg); padding: var(--space-lg); box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); text-align: center; }
+        .hunt-stat-value { font-size: 2rem; font-weight: 700; color: var(--primary); }
+        .hunt-stat-label { font-size: 0.875rem; color: var(--gray-500); margin-top: var(--space-xs); }
+        .chart-container { background: white; border-radius: var(--radius-lg); padding: var(--space-lg); box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); margin-bottom: var(--space-xl); }
+        .chart-container h3 { margin-bottom: var(--space-md); color: var(--gray-800); }
+        .hunt-empty { text-align: center; padding: var(--space-2xl); color: var(--gray-400); font-size: 1.1rem; }
+        .status-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 500; }
+        .status-badge.searching { background: #dbeafe; color: #1e40af; }
+        .status-badge.completed { background: #d1fae5; color: #059669; }
+        .status-badge.posted { background: #fef3c7; color: #d97706; }
+        .status-badge.new { background: #e0e7ff; color: #4338ca; }
+        .status-badge.pending { background: #f3f4f6; color: #6b7280; }
+        .status-badge.no_results { background: #f3f4f6; color: #9ca3af; }
+        @media (max-width: 768px) {
+            .nav-tabs { overflow-x: auto; padding: 0 var(--space-md); }
+            .nav-tab { padding: var(--space-sm) var(--space-md); font-size: 0.875rem; }
+        }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="header">
@@ -719,8 +760,13 @@
                 </button>
             </div>
         </div>
+        <div class="nav-tabs">
+            <div class="nav-tab active" onclick="switchPage('analytics', event)" data-i18n="navAnalytics">📊 Аналітика</div>
+            <div class="nav-tab" onclick="switchPage('hunt', event)" data-i18n="navHunt">🔍 Maya Hunt</div>
+        </div>
     </div>
 
+    <div class="page-content active" id="page-analytics">
     <div class="container">
         <div class="stats-grid">
             <div class="stat-card">
@@ -878,6 +924,68 @@
             </div>
         </div>
     </div>
+    </div>
+
+    <div class="page-content" id="page-hunt">
+    <div class="container">
+        <div class="stats-grid" id="huntStatsGrid">
+            <div class="hunt-stat-card">
+                <div class="hunt-stat-value" id="huntVacancies">0</div>
+                <div class="hunt-stat-label" data-i18n="huntVacancies">Вакансій оброблено</div>
+            </div>
+            <div class="hunt-stat-card">
+                <div class="hunt-stat-value" id="huntCandidates">0</div>
+                <div class="hunt-stat-label" data-i18n="huntCandidates">Кандидатів знайдено</div>
+            </div>
+            <div class="hunt-stat-card">
+                <div class="hunt-stat-value" id="huntPosted">0</div>
+                <div class="hunt-stat-label" data-i18n="huntPosted">Розміщено в каналах</div>
+            </div>
+            <div class="hunt-stat-card">
+                <div class="hunt-stat-value" id="huntApproved">0</div>
+                <div class="hunt-stat-label" data-i18n="huntApproved">Прийнято HR</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h3 data-i18n="huntSalaryTitle">Медіанна зарплата: очікування кандидатів vs пропозиції роботодавців</h3>
+            <div id="salaryChartEmpty" class="hunt-empty" style="display:none;" data-i18n="huntEmptyData">📊 Дані з'являться після першого пошуку кандидатів</div>
+            <canvas id="salaryChart" height="300"></canvas>
+        </div>
+
+        <div class="chart-container">
+            <h3 data-i18n="huntSkillsTitle">Найзатребуваніші навички</h3>
+            <div id="skillsChartEmpty" class="hunt-empty" style="display:none;" data-i18n="huntEmptyData">📊 Дані з'являться після першого пошуку кандидатів</div>
+            <canvas id="skillsChart" height="300"></canvas>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title" data-i18n="huntRecentTitle">Останні вакансії</h2>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="huntRecentEmpty" class="hunt-empty" style="display:none;" data-i18n="huntEmptyData">📊 Дані з'являться після першого пошуку кандидатів</div>
+                <div class="table-container">
+                    <table class="table" id="huntRecentTable" style="display:none;">
+                        <thead>
+                            <tr>
+                                <th data-i18n="huntColVacancy">Вакансія</th>
+                                <th data-i18n="huntColCity">Місто</th>
+                                <th style="text-align:center;" data-i18n="huntColStatus">Статус</th>
+                                <th style="text-align:center;" data-i18n="huntColChannels">Каналів</th>
+                                <th style="text-align:center;" data-i18n="huntColCandidates">Кандидатів</th>
+                                <th data-i18n="huntColDate">Дата</th>
+                            </tr>
+                        </thead>
+                        <tbody id="huntRecentBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
 
     <script>
         let currentPeriod = 7;
@@ -934,7 +1042,25 @@
                 no: 'Ні',
                 contentItems: 'елементів контенту',
                 activePresets: 'активних пресетів',
-                embeddings: 'векторів'
+                embeddings: 'векторів',
+                navAnalytics: '📊 Аналітика',
+                navHunt: '🔍 Maya Hunt',
+                huntVacancies: 'Вакансій оброблено',
+                huntCandidates: 'Кандидатів знайдено',
+                huntPosted: 'Розміщено в каналах',
+                huntApproved: 'Прийнято HR',
+                huntSalaryTitle: 'Медіанна зарплата: очікування кандидатів vs пропозиції роботодавців',
+                huntSkillsTitle: 'Найзатребуваніші навички',
+                huntRecentTitle: 'Останні вакансії',
+                huntEmptyData: '📊 Дані з\'являться після першого пошуку кандидатів',
+                huntColVacancy: 'Вакансія',
+                huntColCity: 'Місто',
+                huntColStatus: 'Статус',
+                huntColChannels: 'Каналів',
+                huntColCandidates: 'Кандидатів',
+                huntColDate: 'Дата',
+                huntCandidateLabel: 'Кандидати',
+                huntEmployerLabel: 'Роботодавці'
             },
             en: {
                 subtitle: 'Admin Analytics & Management',
@@ -986,7 +1112,25 @@
                 no: 'No',
                 contentItems: 'content items',
                 activePresets: 'active presets',
-                embeddings: 'embeddings'
+                embeddings: 'embeddings',
+                navAnalytics: '📊 Analytics',
+                navHunt: '🔍 Maya Hunt',
+                huntVacancies: 'Vacancies Processed',
+                huntCandidates: 'Candidates Found',
+                huntPosted: 'Posted to Channels',
+                huntApproved: 'Approved by HR',
+                huntSalaryTitle: 'Median Salary: Candidate Expectations vs Employer Offers',
+                huntSkillsTitle: 'Most In-Demand Skills',
+                huntRecentTitle: 'Recent Vacancies',
+                huntEmptyData: '📊 Data will appear after the first candidate search',
+                huntColVacancy: 'Vacancy',
+                huntColCity: 'City',
+                huntColStatus: 'Status',
+                huntColChannels: 'Channels',
+                huntColCandidates: 'Candidates',
+                huntColDate: 'Date',
+                huntCandidateLabel: 'Candidates',
+                huntEmployerLabel: 'Employers'
             }
         };
 
@@ -1008,6 +1152,20 @@
                 }
             });
             loadDashboard();
+        }
+
+        let currentPage = 'analytics';
+        let salaryChartInstance = null;
+        let skillsChartInstance = null;
+
+        function switchPage(page, evt) {
+            currentPage = page;
+            document.querySelectorAll('.page-content').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById('page-' + page).classList.add('active');
+            if (evt && evt.target) evt.target.classList.add('active');
+            else document.querySelector(`.nav-tab[onclick*="${page}"]`).classList.add('active');
+            if (page === 'hunt') loadHuntAnalytics();
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -1261,6 +1419,172 @@
             
             event.target.classList.add('active');
             document.getElementById(tabName + 'Content').classList.add('active');
+        }
+
+        async function loadHuntAnalytics() {
+            try {
+                const response = await fetch('/hr/api/hunt-analytics');
+                const data = await response.json();
+
+                const hs = data.hunt_stats;
+                document.getElementById('huntVacancies').textContent = hs.total_vacancies;
+                document.getElementById('huntCandidates').textContent = hs.total_candidates_found;
+                document.getElementById('huntPosted').textContent = hs.total_posted;
+                document.getElementById('huntApproved').textContent = hs.decisions.approved;
+
+                renderSalaryChart(data.salary_by_city);
+                renderSkillsChart(data.top_skills);
+                renderHuntRecentTable(data.recent_postings);
+
+            } catch (error) {
+                console.error('Error loading hunt analytics:', error);
+            }
+        }
+
+        function renderSalaryChart(salaryData) {
+            const canvas = document.getElementById('salaryChart');
+            const emptyEl = document.getElementById('salaryChartEmpty');
+
+            if (!salaryData || salaryData.length === 0) {
+                canvas.style.display = 'none';
+                emptyEl.style.display = 'block';
+                return;
+            }
+            canvas.style.display = 'block';
+            emptyEl.style.display = 'none';
+
+            const labels = salaryData.map(d => d.city + (d.position ? ' (' + d.position.substring(0, 20) + ')' : ''));
+            const candidateData = salaryData.map(d => d.candidate_median);
+            const employerData = salaryData.map(d => d.employer_median);
+
+            if (salaryChartInstance) salaryChartInstance.destroy();
+
+            salaryChartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: t('huntCandidateLabel'),
+                            data: candidateData,
+                            backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            borderWidth: 1,
+                        },
+                        {
+                            label: t('huntEmployerLabel'),
+                            data: employerData,
+                            backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                            borderColor: 'rgba(249, 115, 22, 1)',
+                            borderWidth: 1,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                afterBody: function(context) {
+                                    const idx = context[0].dataIndex;
+                                    const d = salaryData[idx];
+                                    return 'Sample: ' + d.sample_size + '\nSources: ' + (d.sources || []).join(', ');
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, title: { display: true, text: 'USD' } }
+                    }
+                }
+            });
+        }
+
+        function renderSkillsChart(skillsData) {
+            const canvas = document.getElementById('skillsChart');
+            const emptyEl = document.getElementById('skillsChartEmpty');
+
+            if (!skillsData || skillsData.length === 0) {
+                canvas.style.display = 'none';
+                emptyEl.style.display = 'block';
+                return;
+            }
+            canvas.style.display = 'block';
+            emptyEl.style.display = 'none';
+
+            const labels = skillsData.map(d => d.skill);
+            const counts = skillsData.map(d => d.count);
+            const maxSalary = Math.max(...skillsData.map(d => d.avg_salary || 0), 1);
+            const colors = skillsData.map(d => {
+                const intensity = Math.min((d.avg_salary || 0) / maxSalary, 1);
+                return `rgba(30, 64, 175, ${0.3 + intensity * 0.7})`;
+            });
+
+            if (skillsChartInstance) skillsChartInstance.destroy();
+
+            skillsChartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: colors,
+                        borderWidth: 0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                afterBody: function(context) {
+                                    const idx = context[0].dataIndex;
+                                    return 'Avg salary: $' + (skillsData[idx].avg_salary || 0);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        function renderHuntRecentTable(postings) {
+            const table = document.getElementById('huntRecentTable');
+            const tbody = document.getElementById('huntRecentBody');
+            const emptyEl = document.getElementById('huntRecentEmpty');
+
+            if (!postings || postings.length === 0) {
+                table.style.display = 'none';
+                emptyEl.style.display = 'block';
+                return;
+            }
+            table.style.display = 'table';
+            emptyEl.style.display = 'none';
+
+            tbody.innerHTML = '';
+            postings.forEach(p => {
+                const row = document.createElement('tr');
+                const statusLabel = {
+                    'searching': 'Пошук', 'completed': 'Завершено', 'posted': 'Розміщено',
+                    'new': 'Нова', 'pending': 'Очікує', 'no_results': 'Без результатів'
+                };
+                row.innerHTML = `
+                    <td>${p.vacancy || '—'}</td>
+                    <td>${p.city || '—'}</td>
+                    <td style="text-align:center;"><span class="status-badge ${p.status}">${statusLabel[p.status] || p.status}</span></td>
+                    <td style="text-align:center;">${p.channels_posted}</td>
+                    <td style="text-align:center;">${p.candidates_found}</td>
+                    <td>${p.date || '—'}</td>
+                `;
+                tbody.appendChild(row);
+            });
         }
     </script>
 </body>

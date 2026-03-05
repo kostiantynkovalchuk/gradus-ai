@@ -308,6 +308,159 @@ async def get_recent_queries(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/hunt-analytics")
+async def get_hunt_analytics(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    db_session = next(get_db())
+
+    try:
+        stats_result = db_session.execute(text("""
+            SELECT
+                (SELECT COUNT(*) FROM hunt_vacancies) as total_vacancies,
+                (SELECT COUNT(*) FROM hunt_candidates) as total_candidates,
+                (SELECT COUNT(*) FROM hunt_postings WHERE status = 'posted') as total_posted,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'approved') as approved,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'rejected') as rejected,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'saved') as saved,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'pending') as pending
+        """))
+        s = stats_result.fetchone()
+        hunt_stats = {
+            "total_vacancies": s[0] or 0,
+            "total_candidates_found": s[1] or 0,
+            "total_posted": s[2] or 0,
+            "decisions": {
+                "approved": s[3] or 0,
+                "rejected": s[4] or 0,
+                "saved": s[5] or 0,
+                "pending": s[6] or 0,
+            }
+        }
+
+        salary_result = db_session.execute(text("""
+            SELECT
+                city,
+                position,
+                data_type,
+                COALESCE(AVG(salary_median), 0)::INTEGER as median_salary,
+                COUNT(*) as sample_size,
+                STRING_AGG(DISTINCT source, ', ') as sources
+            FROM hunt_salary_data
+            WHERE city IS NOT NULL AND salary_median IS NOT NULL
+            GROUP BY city, position, data_type
+            ORDER BY city, position
+        """))
+        salary_rows = salary_result.fetchall()
+
+        city_map = {}
+        for row in salary_rows:
+            key = f"{row[0]}|{row[1]}"
+            if key not in city_map:
+                city_map[key] = {
+                    "city": row[0],
+                    "position": row[1],
+                    "candidate_median": 0,
+                    "employer_median": 0,
+                    "gap": 0,
+                    "sample_size": 0,
+                    "sources": [],
+                }
+            entry = city_map[key]
+            if row[2] == "candidate":
+                entry["candidate_median"] = row[3]
+            else:
+                entry["employer_median"] = row[3]
+            entry["sample_size"] += row[4]
+            for src in (row[5] or "").split(", "):
+                if src and src not in entry["sources"]:
+                    entry["sources"].append(src)
+
+        for entry in city_map.values():
+            entry["gap"] = entry["candidate_median"] - entry["employer_median"]
+
+        salary_by_city = list(city_map.values())
+
+        skills_result = db_session.execute(text("""
+            SELECT
+                TRIM(skill) as skill,
+                COUNT(*) as cnt,
+                COALESCE(AVG(salary_median), 0)::INTEGER as avg_salary
+            FROM hunt_salary_data,
+                 LATERAL unnest(string_to_array(skills, ',')) AS skill
+            WHERE skills IS NOT NULL AND skills != ''
+            GROUP BY TRIM(skill)
+            ORDER BY cnt DESC
+            LIMIT 10
+        """))
+        top_skills = [
+            {"skill": r[0], "count": r[1], "avg_salary": r[2]}
+            for r in skills_result.fetchall()
+        ]
+
+        trends_result = db_session.execute(text("""
+            SELECT
+                TO_CHAR(collected_at, 'YYYY-MM') as month,
+                data_type,
+                COALESCE(AVG(salary_median), 0)::INTEGER as median
+            FROM hunt_salary_data
+            WHERE salary_median IS NOT NULL
+            GROUP BY TO_CHAR(collected_at, 'YYYY-MM'), data_type
+            ORDER BY month
+        """))
+        trends_map = {}
+        for row in trends_result.fetchall():
+            if row[0] not in trends_map:
+                trends_map[row[0]] = {"month": row[0], "candidate_median": 0, "employer_median": 0}
+            if row[1] == "candidate":
+                trends_map[row[0]]["candidate_median"] = row[2]
+            else:
+                trends_map[row[0]]["employer_median"] = row[2]
+        salary_trends = list(trends_map.values())
+
+        recent_result = db_session.execute(text("""
+            SELECT
+                v.position,
+                v.city,
+                v.status,
+                (SELECT COUNT(*) FROM hunt_postings p WHERE p.vacancy_id = v.id AND p.status = 'posted') as channels_posted,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE c.vacancy_id = v.id) as candidates_found,
+                v.created_at
+            FROM hunt_vacancies v
+            ORDER BY v.created_at DESC
+            LIMIT 10
+        """))
+        recent_postings = [
+            {
+                "vacancy": r[0] or "—",
+                "city": r[1] or "—",
+                "status": r[2] or "new",
+                "channels_posted": r[3] or 0,
+                "candidates_found": r[4] or 0,
+                "date": r[5].strftime("%Y-%m-%d") if r[5] else None,
+            }
+            for r in recent_result.fetchall()
+        ]
+
+        return {
+            "hunt_stats": hunt_stats,
+            "salary_by_city": salary_by_city,
+            "top_skills": top_skills,
+            "salary_trends": salary_trends,
+            "recent_postings": recent_postings,
+        }
+
+    except Exception as e:
+        logger.error(f"Hunt analytics error: {e}", exc_info=True)
+        return {
+            "hunt_stats": {"total_vacancies": 0, "total_candidates_found": 0, "total_posted": 0, "decisions": {"approved": 0, "rejected": 0, "saved": 0, "pending": 0}},
+            "salary_by_city": [],
+            "top_skills": [],
+            "salary_trends": [],
+            "recent_postings": [],
+        }
+
+
 @router.get("/api/system-info")
 async def get_system_info(
     credentials: HTTPBasicCredentials = Depends(verify_admin)

@@ -144,7 +144,12 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             callback_data = data['callback_query'].get('data', '')
             logger.info(f"🔘 Callback query: {callback_data}")
             
-            if callback_data.startswith('hunt_'):
+            if callback_data.startswith('hunt_action_'):
+                from services.hunt_service import handle_hunt_action
+                await handle_hunt_action(data['callback_query'])
+                logger.info(f"✓ Hunt action callback processed: {callback_data}")
+                return {"ok": True}
+            elif callback_data.startswith('hunt_'):
                 from services.hunt_service import handle_hunt_decision
                 result = await handle_hunt_decision(data['callback_query'], db)
                 logger.info(f"✓ Hunt callback processed: {callback_data}")
@@ -1414,6 +1419,7 @@ async def _handle_hunt_vacancy(message: dict, db: Session):
 
     try:
         from models.hunt_models import HuntVacancy
+        from services.hunt_vacancy_parser import parse_vacancy
         import models
         if models.SessionLocal is None:
             models.init_db()
@@ -1425,17 +1431,53 @@ async def _handle_hunt_vacancy(message: dict, db: Session):
                 tg_thread_id=thread_id,
                 tg_chat_id=chat_id,
                 raw_text=text,
-                status='searching',
+                status='new',
             )
             hunt_db.add(vacancy)
             hunt_db.commit()
             vacancy_id = vacancy.id
             logger.info(f"Hunt vacancy #{vacancy_id} saved")
+
+            parsed = await parse_vacancy(text)
+            vacancy.position = parsed.get("position", "")[:200]
+            vacancy.city = parsed.get("city")
+            vacancy.requirements = json.dumps(parsed.get("requirements", []), ensure_ascii=False)
+            vacancy.salary_max = parsed.get("salary_max")
+            hunt_db.commit()
+
+            position = parsed.get("position", "Вакансія")
+            city = parsed.get("city", "")
+            city_text = f", {city}" if city else ""
+
+            action_keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔍 Шукати кандидатів", "callback_data": f"hunt_action_search_{vacancy_id}"},
+                        {"text": "📢 Розмістити вакансію", "callback_data": f"hunt_action_post_{vacancy_id}"},
+                    ],
+                    [
+                        {"text": "🔍+📢 Обидва варіанти", "callback_data": f"hunt_action_both_{vacancy_id}"},
+                        {"text": "⏸ Зберегти на потім", "callback_data": f"hunt_action_skip_{vacancy_id}"},
+                    ],
+                ]
+            }
+
+            import httpx
+            bot_token = os.getenv("TELEGRAM_MAYA_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+            if bot_token:
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": f"✅ Вакансію збережено: {position}{city_text}\n\nЩо робимо далі?",
+                    "reply_markup": action_keyboard,
+                }
+                if thread_id:
+                    payload["message_thread_id"] = thread_id
+                async with httpx.AsyncClient() as client:
+                    await client.post(url, json=payload, timeout=15.0)
+
         finally:
             hunt_db.close()
-
-        from services.hunt_service import run_hunt
-        await run_hunt(vacancy_id, text, thread_id, chat_id)
 
     except Exception as e:
         logger.error(f"Hunt vacancy handler error: {e}", exc_info=True)

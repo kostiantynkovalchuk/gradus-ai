@@ -417,6 +417,34 @@ MIGRATIONS = [
             )""",
         ]
     },
+    {
+        "version": "013_hunt_posting_salary",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS hunt_postings (
+                id SERIAL PRIMARY KEY,
+                vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+                channel VARCHAR(100),
+                status VARCHAR(20),
+                error_message TEXT,
+                posted_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS hunt_salary_data (
+                id SERIAL PRIMARY KEY,
+                vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+                source VARCHAR(50),
+                data_type VARCHAR(20),
+                position VARCHAR(200),
+                city VARCHAR(100),
+                salary_min INTEGER,
+                salary_max INTEGER,
+                salary_median INTEGER,
+                currency VARCHAR(10) DEFAULT 'UAH',
+                skills TEXT,
+                source_url TEXT,
+                collected_at TIMESTAMP DEFAULT NOW()
+            )""",
+        ]
+    },
 ]
 
 

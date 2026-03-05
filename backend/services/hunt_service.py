@@ -102,7 +102,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         from services.hunt_vacancy_parser import parse_vacancy
         from services.hunt_tg_scraper import scrape_telegram_channels as search_tg_channels
         from services.hunt_workua_scraper import search_workua
-        from services.hunt_scorer import score_candidate
+        from services.hunt_scorer import score_candidate, extract_salary_data
         from services.hunt_card_formatter import format_candidate_card
 
         logger.info(f"🔍 Hunt started for vacancy #{vacancy_id}")
@@ -195,6 +195,12 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         scored_candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
 
         for sc in scored_candidates:
+            try:
+                await extract_salary_data(sc, parsed, vacancy_id)
+            except Exception as sal_err:
+                logger.warning(f"Salary extraction skipped: {sal_err}")
+
+        for sc in scored_candidates:
             candidate = HuntCandidate(
                 vacancy_id=vacancy_id,
                 source=sc.get("source", "unknown"),
@@ -267,6 +273,81 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
             )
         except Exception:
             pass
+    finally:
+        db.close()
+
+
+async def handle_hunt_action(callback_query: dict):
+    callback_data = callback_query.get("data", "")
+    callback_id = callback_query.get("id")
+    message = callback_query.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+    thread_id = message.get("message_thread_id")
+
+    parts = callback_data.split("_")
+    if len(parts) < 4:
+        await _answer_callback(callback_id, "Невірна команда")
+        return
+
+    action = parts[2]
+    try:
+        vacancy_id = int(parts[3])
+    except (ValueError, IndexError):
+        await _answer_callback(callback_id, "Невірний ID")
+        return
+
+    await _answer_callback(callback_id, "Прийнято!")
+
+    import models
+    if models.SessionLocal is None:
+        models.init_db()
+    db = models.SessionLocal()
+
+    try:
+        from models.hunt_models import HuntVacancy
+        vacancy = db.query(HuntVacancy).filter(HuntVacancy.id == vacancy_id).first()
+
+        if not vacancy:
+            await _edit_message(chat_id, message_id, f"❌ Вакансію #{vacancy_id} не знайдено")
+            return
+
+        vacancy_text = vacancy.raw_text or ""
+
+        if action == "search":
+            vacancy.status = 'searching'
+            db.commit()
+            await _edit_message(chat_id, message_id, f"🔍 Шукаю кандидатів для вакансії #{vacancy_id}...")
+            import asyncio
+            asyncio.create_task(run_hunt(vacancy_id, vacancy_text, thread_id, chat_id))
+
+        elif action == "post":
+            vacancy.status = 'posting'
+            db.commit()
+            await _edit_message(chat_id, message_id, f"📢 Розміщую вакансію #{vacancy_id} в каналах...")
+            import asyncio
+            from services.hunt_poster import run_vacancy_posting
+            asyncio.create_task(run_vacancy_posting(vacancy_id, chat_id, thread_id))
+
+        elif action == "both":
+            vacancy.status = 'searching'
+            db.commit()
+            await _edit_message(chat_id, message_id, f"🔍+📢 Шукаю кандидатів і розміщую вакансію #{vacancy_id}...")
+            import asyncio
+            from services.hunt_poster import run_vacancy_posting
+            asyncio.create_task(run_hunt(vacancy_id, vacancy_text, thread_id, chat_id))
+            asyncio.create_task(run_vacancy_posting(vacancy_id, chat_id, thread_id))
+
+        elif action == "skip":
+            vacancy.status = 'pending'
+            db.commit()
+            await _edit_message(chat_id, message_id, f"⏸ Збережено. Вакансія #{vacancy_id} чекає на обробку.")
+
+        else:
+            await _edit_message(chat_id, message_id, "❓ Невідома дія")
+
+    except Exception as e:
+        logger.error(f"Hunt action error: {e}", exc_info=True)
     finally:
         db.close()
 

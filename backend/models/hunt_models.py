@@ -50,3 +50,32 @@ class HuntSource(Base):
     tg_channel = Column(String(100))
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class HuntPosting(Base):
+    __tablename__ = "hunt_postings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    vacancy_id = Column(Integer, ForeignKey("hunt_vacancies.id"))
+    channel = Column(String(100))
+    status = Column(String(20))
+    error_message = Column(Text)
+    posted_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class HuntSalaryData(Base):
+    __tablename__ = "hunt_salary_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    vacancy_id = Column(Integer, ForeignKey("hunt_vacancies.id"))
+    source = Column(String(50))
+    data_type = Column(String(20))
+    position = Column(String(200))
+    city = Column(String(100))
+    salary_min = Column(Integer)
+    salary_max = Column(Integer)
+    salary_median = Column(Integer)
+    currency = Column(String(10), default='UAH')
+    skills = Column(Text)
+    source_url = Column(Text)
+    collected_at = Column(TIMESTAMP, server_default=func.now())
