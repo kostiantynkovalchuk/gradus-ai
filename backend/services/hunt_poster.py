@@ -48,19 +48,10 @@ async def run_vacancy_posting(vacancy_id: int, chat_id: int, thread_id: int):
             f"#вакансія #{position_tag} #{city_tag}"
         )
 
-        import psycopg2
-
-        try:
-            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-            cur = conn.cursor()
-            cur.execute("SELECT tg_channel FROM hunt_sources WHERE is_active = TRUE")
-            rows = cur.fetchall()
-            channels = [row[0] for row in rows]
-            conn.close()
-            logger.info(f"Poster loaded {len(channels)} channels from DB")
-        except Exception as e:
-            logger.warning(f"DB channel load failed: {e}, using defaults")
-            channels = []
+        from models.hunt_models import HuntSource
+        sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
+        channels = [s.tg_channel for s in sources if s.tg_channel]
+        logger.info(f"Poster loaded {len(channels)} channels via SQLAlchemy")
 
         if not channels:
             channels = [
