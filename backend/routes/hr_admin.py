@@ -318,36 +318,128 @@ async def get_hunt_analytics(
         stats_result = db_session.execute(text("""
             SELECT
                 (SELECT COUNT(*) FROM hunt_vacancies) as total_vacancies,
+                (SELECT COUNT(*) FROM hunt_vacancies WHERE status = 'filled') as total_filled,
                 (SELECT COUNT(*) FROM hunt_candidates) as total_candidates,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'hired') as total_hires,
                 (SELECT COUNT(*) FROM hunt_postings WHERE status = 'posted') as total_posted,
                 (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'approved') as approved,
                 (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'rejected') as rejected,
                 (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'saved') as saved,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'pending') as pending
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'pending') as pending,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE created_at >= CURRENT_DATE) as candidates_today,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') as candidates_week,
+                (SELECT COUNT(DISTINCT channel) FROM hunt_postings WHERE status = 'posted') as total_channels,
+                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision NOT IN ('pending')) as reviewed
         """))
         s = stats_result.fetchone()
-        hunt_stats = {
-            "total_vacancies": s[0] or 0,
-            "total_candidates_found": s[1] or 0,
-            "total_posted": s[2] or 0,
+        total_vacancies = s[0] or 0
+        total_filled = s[1] or 0
+        total_candidates = s[2] or 0
+        total_hires = s[3] or 0
+        total_posted = s[4] or 0
+        approved = s[5] or 0
+        rejected = s[6] or 0
+        saved = s[7] or 0
+        pending = s[8] or 0
+        candidates_today = s[9] or 0
+        candidates_week = s[10] or 0
+        total_channels = s[11] or 0
+        reviewed = s[12] or 0
+
+        shown = approved + rejected + saved + total_hires
+        acceptance_rate = round((approved + total_hires) / shown * 100, 1) if shown > 0 else 0
+        avg_per_vacancy = round(total_candidates / total_vacancies, 1) if total_vacancies > 0 else 0
+        estimated_reach = total_posted * 5000
+        cost_saved_usd = total_hires * 385
+        hours_saved = round(total_vacancies * 2.67, 1)
+        cost_per_hire_maya = round(total_vacancies * 0.15 / max(total_hires, 1), 2)
+
+        kpi = {
+            "total_vacancies": total_vacancies,
+            "total_filled": total_filled,
+            "total_hires": total_hires,
+            "total_candidates_processed": total_candidates,
+            "candidates_today": candidates_today,
+            "candidates_this_week": candidates_week,
+            "acceptance_rate": acceptance_rate,
+            "avg_candidates_per_vacancy": avg_per_vacancy,
+            "total_channels_posted": total_channels,
+            "estimated_reach": estimated_reach,
+            "cost_saved_usd": cost_saved_usd,
+            "hours_saved": hours_saved,
+            "cost_per_hire_maya": cost_per_hire_maya,
+            "traditional_cost_per_hire": 400,
             "decisions": {
-                "approved": s[3] or 0,
-                "rejected": s[4] or 0,
-                "saved": s[5] or 0,
-                "pending": s[6] or 0,
+                "approved": approved,
+                "rejected": rejected,
+                "saved": saved,
+                "pending": pending,
+                "hired": total_hires,
             }
         }
+
+        hire_funnel = {
+            "found": total_candidates,
+            "reviewed": reviewed,
+            "approved": approved,
+            "saved": saved,
+            "hired": total_hires,
+        }
+
+        source_result = db_session.execute(text("""
+            SELECT
+                c.source,
+                COUNT(*) as candidates_found,
+                COUNT(*) FILTER (WHERE c.hr_decision = 'approved') as approved,
+                COUNT(*) FILTER (WHERE c.hr_decision = 'hired') as hired
+            FROM hunt_candidates c
+            GROUP BY c.source
+            ORDER BY candidates_found DESC
+        """))
+        source_performance = []
+        for r in source_result.fetchall():
+            found = r[1] or 0
+            appr = r[2] or 0
+            hired = r[3] or 0
+            rate = round(appr / found * 100, 1) if found > 0 else 0
+            source_performance.append({
+                "source": r[0] or "unknown",
+                "candidates_found": found,
+                "approved": appr,
+                "hired": hired,
+                "approval_rate": rate,
+            })
+
+        posting_result = db_session.execute(text("""
+            SELECT
+                channel,
+                COUNT(*) as total_posted,
+                MAX(posted_at) as last_posted
+            FROM hunt_postings
+            WHERE status = 'posted'
+            GROUP BY channel
+            ORDER BY total_posted DESC
+        """))
+        posting_performance = [
+            {
+                "channel": r[0],
+                "total_posted": r[1],
+                "last_posted": r[2].strftime("%Y-%m-%d %H:%M") if r[2] else None,
+            }
+            for r in posting_result.fetchall()
+        ]
 
         salary_result = db_session.execute(text("""
             SELECT
                 city,
                 position,
                 data_type,
-                COALESCE(AVG(salary_median), 0)::INTEGER as median_salary,
+                COALESCE(AVG(COALESCE(salary_median_usd, salary_median)), 0)::INTEGER as median_usd,
+                COALESCE(AVG(salary_median_uah), 0)::INTEGER as median_uah,
                 COUNT(*) as sample_size,
                 STRING_AGG(DISTINCT source, ', ') as sources
             FROM hunt_salary_data
-            WHERE city IS NOT NULL AND salary_median IS NOT NULL
+            WHERE city IS NOT NULL AND (salary_median IS NOT NULL OR salary_median_usd IS NOT NULL)
             GROUP BY city, position, data_type
             ORDER BY city, position
         """))
@@ -362,6 +454,8 @@ async def get_hunt_analytics(
                     "position": row[1],
                     "candidate_median": 0,
                     "employer_median": 0,
+                    "candidate_median_uah": 0,
+                    "employer_median_uah": 0,
                     "gap": 0,
                     "sample_size": 0,
                     "sources": [],
@@ -369,10 +463,12 @@ async def get_hunt_analytics(
             entry = city_map[key]
             if row[2] == "candidate":
                 entry["candidate_median"] = row[3]
+                entry["candidate_median_uah"] = row[4]
             else:
                 entry["employer_median"] = row[3]
-            entry["sample_size"] += row[4]
-            for src in (row[5] or "").split(", "):
+                entry["employer_median_uah"] = row[4]
+            entry["sample_size"] += row[5]
+            for src in (row[6] or "").split(", "):
                 if src and src not in entry["sources"]:
                     entry["sources"].append(src)
 
@@ -385,7 +481,8 @@ async def get_hunt_analytics(
             SELECT
                 TRIM(skill) as skill,
                 COUNT(*) as cnt,
-                COALESCE(AVG(salary_median), 0)::INTEGER as avg_salary
+                COALESCE(AVG(COALESCE(salary_median_usd, salary_median)), 0)::INTEGER as avg_salary_usd,
+                COALESCE(AVG(salary_median_uah), 0)::INTEGER as avg_salary_uah
             FROM hunt_salary_data,
                  LATERAL unnest(string_to_array(skills, ',')) AS skill
             WHERE skills IS NOT NULL AND skills != ''
@@ -394,7 +491,7 @@ async def get_hunt_analytics(
             LIMIT 10
         """))
         top_skills = [
-            {"skill": r[0], "count": r[1], "avg_salary": r[2]}
+            {"skill": r[0], "count": r[1], "avg_salary": r[2], "avg_salary_uah": r[3]}
             for r in skills_result.fetchall()
         ]
 
@@ -402,62 +499,94 @@ async def get_hunt_analytics(
             SELECT
                 TO_CHAR(collected_at, 'YYYY-MM') as month,
                 data_type,
-                COALESCE(AVG(salary_median), 0)::INTEGER as median
+                COALESCE(AVG(COALESCE(salary_median_usd, salary_median)), 0)::INTEGER as median_usd,
+                COALESCE(AVG(salary_median_uah), 0)::INTEGER as median_uah
             FROM hunt_salary_data
-            WHERE salary_median IS NOT NULL
+            WHERE salary_median IS NOT NULL OR salary_median_usd IS NOT NULL
             GROUP BY TO_CHAR(collected_at, 'YYYY-MM'), data_type
             ORDER BY month
         """))
         trends_map = {}
         for row in trends_result.fetchall():
             if row[0] not in trends_map:
-                trends_map[row[0]] = {"month": row[0], "candidate_median": 0, "employer_median": 0}
+                trends_map[row[0]] = {
+                    "month": row[0],
+                    "candidate_median": 0, "employer_median": 0,
+                    "candidate_median_uah": 0, "employer_median_uah": 0,
+                }
             if row[1] == "candidate":
                 trends_map[row[0]]["candidate_median"] = row[2]
+                trends_map[row[0]]["candidate_median_uah"] = row[3]
             else:
                 trends_map[row[0]]["employer_median"] = row[2]
+                trends_map[row[0]]["employer_median_uah"] = row[3]
         salary_trends = list(trends_map.values())
 
         recent_result = db_session.execute(text("""
             SELECT
+                v.id,
                 v.position,
                 v.city,
                 v.status,
                 (SELECT COUNT(*) FROM hunt_postings p WHERE p.vacancy_id = v.id AND p.status = 'posted') as channels_posted,
                 (SELECT COUNT(*) FROM hunt_candidates c WHERE c.vacancy_id = v.id) as candidates_found,
+                (SELECT COUNT(*) > 0 FROM hunt_candidates c WHERE c.vacancy_id = v.id AND c.hr_decision = 'hired') as has_hire,
                 v.created_at
             FROM hunt_vacancies v
             ORDER BY v.created_at DESC
             LIMIT 10
         """))
-        recent_postings = [
+        recent_vacancies = [
             {
-                "vacancy": r[0] or "—",
-                "city": r[1] or "—",
-                "status": r[2] or "new",
-                "channels_posted": r[3] or 0,
-                "candidates_found": r[4] or 0,
-                "date": r[5].strftime("%Y-%m-%d") if r[5] else None,
+                "id": r[0],
+                "position": r[1] or "—",
+                "city": r[2] or "—",
+                "status": r[3] or "new",
+                "channels_posted": r[4] or 0,
+                "candidates_found": r[5] or 0,
+                "hired": bool(r[6]),
+                "created_at": r[7].strftime("%Y-%m-%d") if r[7] else None,
             }
             for r in recent_result.fetchall()
         ]
 
+        source_count_result = db_session.execute(text("""
+            SELECT COUNT(*) FROM hunt_sources WHERE is_active = TRUE
+        """))
+        active_sources = source_count_result.scalar() or 0
+
         return {
-            "hunt_stats": hunt_stats,
+            "kpi": kpi,
+            "hire_funnel": hire_funnel,
+            "source_performance": source_performance,
+            "posting_performance": posting_performance,
             "salary_by_city": salary_by_city,
             "top_skills": top_skills,
             "salary_trends": salary_trends,
-            "recent_postings": recent_postings,
+            "recent_vacancies": recent_vacancies,
+            "active_sources": active_sources,
         }
 
     except Exception as e:
         logger.error(f"Hunt analytics error: {e}", exc_info=True)
         return {
-            "hunt_stats": {"total_vacancies": 0, "total_candidates_found": 0, "total_posted": 0, "decisions": {"approved": 0, "rejected": 0, "saved": 0, "pending": 0}},
+            "kpi": {
+                "total_vacancies": 0, "total_filled": 0, "total_hires": 0,
+                "total_candidates_processed": 0, "candidates_today": 0,
+                "candidates_this_week": 0, "acceptance_rate": 0,
+                "avg_candidates_per_vacancy": 0, "total_channels_posted": 0,
+                "estimated_reach": 0, "cost_saved_usd": 0, "hours_saved": 0,
+                "cost_per_hire_maya": 0, "traditional_cost_per_hire": 400,
+                "decisions": {"approved": 0, "rejected": 0, "saved": 0, "pending": 0, "hired": 0},
+            },
+            "hire_funnel": {"found": 0, "reviewed": 0, "approved": 0, "saved": 0, "hired": 0},
+            "source_performance": [],
+            "posting_performance": [],
             "salary_by_city": [],
             "top_skills": [],
             "salary_trends": [],
-            "recent_postings": [],
+            "recent_vacancies": [],
+            "active_sources": 0,
         }
 
 

@@ -236,11 +236,16 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
             card_text = format_candidate_card(sc, idx)
             cand_id = sc.get("db_id")
             keyboard = {
-                "inline_keyboard": [[
-                    {"text": "✅ В роботу", "callback_data": f"hunt_approve_{cand_id}"},
-                    {"text": "❌ Пропустити", "callback_data": f"hunt_reject_{cand_id}"},
-                    {"text": "💾 Зберегти", "callback_data": f"hunt_save_{cand_id}"},
-                ]]
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ В роботу", "callback_data": f"hunt_approve_{cand_id}"},
+                        {"text": "❌ Пропустити", "callback_data": f"hunt_reject_{cand_id}"},
+                    ],
+                    [
+                        {"text": "💾 Зберегти", "callback_data": f"hunt_save_{cand_id}"},
+                        {"text": "🎯 Найняти", "callback_data": f"hunt_hire_{cand_id}"},
+                    ],
+                ]
             }
             resp = await _send_message(chat_id, card_text, thread_id=thread_id, reply_markup=keyboard)
             msg_id = resp.get("result", {}).get("message_id")
@@ -377,6 +382,7 @@ async def handle_hunt_decision(callback_query: dict, db):
         "approve": ("approved", "✅ Взято в роботу"),
         "reject": ("rejected", "❌ Відхилено"),
         "save": ("saved", "💾 Збережено"),
+        "hire": ("hired", "🎯 Найнято через Maya Hunt!"),
     }
 
     if decision not in decision_map:
@@ -387,7 +393,16 @@ async def handle_hunt_decision(callback_query: dict, db):
 
     candidate = db.query(HuntCandidate).filter(HuntCandidate.id == candidate_id).first()
     if candidate:
+        if decision == "hire" and candidate.hr_decision == "hired":
+            await _answer_callback(callback_id, "🎯 Вже найнято раніше")
+            return
         candidate.hr_decision = status
+        if decision == "hire":
+            from datetime import datetime as dt
+            candidate.hired_at = dt.now()
+            vacancy = db.query(HuntVacancy).filter(HuntVacancy.id == candidate.vacancy_id).first()
+            if vacancy and vacancy.status != "filled":
+                vacancy.status = "filled"
         db.commit()
         logger.info(f"Hunt candidate #{candidate_id} → {status}")
     else:

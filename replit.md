@@ -51,7 +51,9 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **Multi-Tier Authentication System:** Phone-based verification for HR Bot access with 4 access levels.
 - **Blitz Phone Cache:** Local DB cache of employee phones from Blitz xlsx export for future features.
 - **Backend Monetization System:** Email-based user management with subscription tiers, DB-backed rate limiting, and WayForPay integration.
-- **Maya Hunt Recruitment Module:** Telegram supergroup-based candidate sourcing with interactive UX, vacancy parsing, candidate scoring, and auto-posting.
+- **Maya Hunt Recruitment Module:** Telegram supergroup-based candidate sourcing with interactive UX (2x2 action menu), vacancy parsing, candidate scoring, auto-posting to channels, hire tracking (🎯 Найняти button with filled status), and full 8-section ROI analytics dashboard.
+- **Salary Normalization Engine:** Dual-currency (UAH/USD) parser for Ukrainian job market salary formats with automatic conversion, confidence scoring, and currency toggle in dashboard.
+- **Hunt Analytics Dashboard:** ROI banner, 6 KPI cards, hire funnel chart, source performance chart, salary intelligence with currency toggle, skills chart, salary trends, recent vacancies table, data sources panel, efficiency comparison table.
 
 ## External Dependencies
 - **Claude AI (Anthropic):** Content generation, English-to-Ukrainian translation.

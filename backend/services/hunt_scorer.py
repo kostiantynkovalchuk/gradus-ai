@@ -40,6 +40,10 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
                 '  "current_role": "extracted role or null",\n'
                 '  "skills": "comma separated skills",\n'
                 '  "salary_expectation": integer or null,\n'
+                '  "salary_expectation_raw": "original text like 25000 грн or $600",\n'
+                '  "salary_expectation_usd": integer or null,\n'
+                '  "salary_expectation_uah": integer or null,\n'
+                '  "currency_detected": "UAH" or "USD" or "unknown",\n'
                 '  "contact": "phone or @username",\n'
                 '  "summary": "2 sentence summary in Ukrainian",\n'
                 '  "strengths": ["strength 1", "strength 2"],\n'
@@ -65,6 +69,19 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
         scored.setdefault("current_role", None)
         scored.setdefault("skills", "")
         scored.setdefault("salary_expectation", None)
+        scored.setdefault("salary_expectation_raw", "")
+        scored.setdefault("salary_expectation_usd", None)
+        scored.setdefault("salary_expectation_uah", None)
+        scored.setdefault("currency_detected", "unknown")
+
+        if scored.get("salary_expectation_raw") and (not scored.get("salary_expectation_usd") or not scored.get("salary_expectation_uah")):
+            from services.salary_normalizer import extract_salary
+            parsed = extract_salary(scored["salary_expectation_raw"])
+            if parsed["salary_median_usd"]:
+                scored["salary_expectation_usd"] = scored.get("salary_expectation_usd") or parsed["salary_median_usd"]
+                scored["salary_expectation_uah"] = scored.get("salary_expectation_uah") or parsed["salary_median_uah"]
+                scored["currency_detected"] = parsed["currency_detected"]
+
         scored.setdefault("contact", candidate.get("contact", ""))
         scored.setdefault("summary", "")
         scored.setdefault("strengths", [])
@@ -85,10 +102,25 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
 
 
 async def extract_salary_data(candidate: dict, vacancy: dict, vacancy_id: int):
-    salary = candidate.get("salary_expectation")
-    if not salary or not isinstance(salary, (int, float)):
+    from services.salary_normalizer import extract_salary, USD_TO_UAH_RATE
+
+    salary_raw = candidate.get("salary_expectation_raw", "")
+    salary_usd = candidate.get("salary_expectation_usd")
+    salary_uah = candidate.get("salary_expectation_uah")
+    currency_detected = candidate.get("currency_detected", "unknown")
+
+    if not salary_usd and not salary_uah:
+        salary = candidate.get("salary_expectation")
+        if not salary or not isinstance(salary, (int, float)):
+            return
+        salary = int(salary)
+        salary_usd = salary
+        salary_uah = int(salary * USD_TO_UAH_RATE)
+        currency_detected = "USD"
+
+    if not salary_usd and not salary_uah:
         return
-    salary = int(salary)
+
     try:
         import models
         if models.SessionLocal is None:
@@ -102,8 +134,16 @@ async def extract_salary_data(candidate: dict, vacancy: dict, vacancy_id: int):
                 data_type="candidate",
                 position=vacancy.get("position", ""),
                 city=candidate.get("city") or vacancy.get("city"),
-                salary_median=salary,
+                salary_median=salary_usd or (int(salary_uah / USD_TO_UAH_RATE) if salary_uah else None),
+                salary_min_usd=salary_usd,
+                salary_max_usd=salary_usd,
+                salary_median_usd=salary_usd,
+                salary_min_uah=salary_uah,
+                salary_max_uah=salary_uah,
+                salary_median_uah=salary_uah,
                 currency="USD",
+                currency_detected=currency_detected,
+                usd_rate_at_collection=USD_TO_UAH_RATE,
                 skills=candidate.get("skills", ""),
                 source_url=candidate.get("profile_url", ""),
             )
