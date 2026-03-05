@@ -221,8 +221,27 @@ def create_category_keyboard(category: str) -> Dict:
     }
     
     items = SUBMENUS.get(category, [])
-    buttons = [[{"text": text, "callback_data": data}] for text, data in items]
-    
+    if not items:
+        return {"inline_keyboard": []}
+
+    back_btn = None
+    content_items = []
+    for text, data in items:
+        if text.startswith('🔙'):
+            back_btn = {"text": text, "callback_data": data}
+        else:
+            content_items.append({"text": text, "callback_data": data})
+
+    buttons = []
+    for i in range(0, len(content_items), 2):
+        if i + 1 < len(content_items):
+            buttons.append([content_items[i], content_items[i + 1]])
+        else:
+            buttons.append([content_items[i]])
+
+    if back_btn:
+        buttons.append([back_btn])
+
     return {"inline_keyboard": buttons}
 
 
