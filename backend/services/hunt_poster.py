@@ -12,7 +12,7 @@ async def run_vacancy_posting(vacancy_id: int, chat_id: int, thread_id: int):
     db = models.SessionLocal()
 
     try:
-        from models.hunt_models import HuntVacancy, HuntSource, HuntPosting
+        from models.hunt_models import HuntVacancy, HuntPosting
         import json
 
         vacancy = db.query(HuntVacancy).filter(HuntVacancy.id == vacancy_id).first()
@@ -48,12 +48,27 @@ async def run_vacancy_posting(vacancy_id: int, chat_id: int, thread_id: int):
             f"#вакансія #{position_tag} #{city_tag}"
         )
 
-        sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
-        channels = [s.tg_channel for s in sources if s.tg_channel]
+        import psycopg2
+
+        try:
+            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+            cur = conn.cursor()
+            cur.execute("SELECT tg_channel FROM hunt_sources WHERE is_active = TRUE")
+            rows = cur.fetchall()
+            channels = [row[0] for row in rows]
+            conn.close()
+            logger.info(f"Poster loaded {len(channels)} channels from DB")
+        except Exception as e:
+            logger.warning(f"DB channel load failed: {e}, using defaults")
+            channels = []
 
         if not channels:
-            await _send_tg_message(chat_id, thread_id, "⚠️ Немає активних каналів для розміщення.")
-            return
+            channels = [
+                "DniproVakansiiq", "kharkiv_robota1", "works_dnepr",
+                "robota_kharkiv", "kieve_rabota", "Kiev_rabota_vakansii",
+                "v_odesse5", "kh_robota", "rabota_robota_dnepr_dnipro",
+                "rabota_kieve", "ukrjob", "jobforukrainians"
+            ]
 
         session_string = os.getenv("HR_TELETHON_SESSION") or os.getenv("TELETHON_SESSION")
         api_id_str = os.getenv("TELETHON_API_ID", "0")
