@@ -125,10 +125,17 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         )
         status_msg_id = status_resp.get("result", {}).get("message_id")
 
-        sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
-        logger.info(f"Sources from DB: {sources}")
-        channels = [s.tg_channel for s in sources if s.tg_channel]
-        logger.info(f"Channels to search: {channels}")
+        try:
+            sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
+            channels = [s.tg_channel for s in sources]
+            logger.info(f"Channels from DB: {channels}")
+        except Exception as e:
+            logger.warning(f"Could not fetch sources from DB: {e}, using defaults")
+            channels = []
+
+        if not channels:
+            channels = ["ua_jobs", "robota_ua", "kyiv_jobs", "ua_work", "jobs_ukraine"]
+            logger.info(f"Using default channels: {channels}")
 
         keywords = parsed.get("keywords", [])
         if not keywords and parsed.get("position"):
