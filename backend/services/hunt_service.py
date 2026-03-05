@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import httpx
+import psycopg2
 
 logger = logging.getLogger(__name__)
 
@@ -126,15 +127,21 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         status_msg_id = status_resp.get("result", {}).get("message_id")
 
         try:
-            sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
-            channels = [s.tg_channel for s in sources]
-            logger.info(f"Channels from DB: {channels}")
+            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+            cur = conn.cursor()
+            cur.execute("SELECT tg_channel FROM hunt_sources WHERE is_active = TRUE")
+            rows = cur.fetchall()
+            channels = [row[0] for row in rows]
+            conn.close()
+            logger.info(f"Channels from DB (raw): {channels}")
         except Exception as e:
-            logger.warning(f"Could not fetch sources from DB: {e}, using defaults")
+            logger.warning(f"Raw DB query failed: {e}, using defaults")
             channels = []
 
         if not channels:
-            channels = ["ua_jobs", "robota_ua", "kyiv_jobs", "ua_work", "jobs_ukraine"]
+            channels = ["DniproVakansiiq", "kharkiv_robota1", "works_dnepr",
+                        "robota_kharkiv", "kieve_rabota", "Kiev_rabota_vakansii",
+                        "ukrjob", "jobforukrainians"]
             logger.info(f"Using default channels: {channels}")
 
         keywords = parsed.get("keywords", [])
