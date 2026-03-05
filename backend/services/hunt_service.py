@@ -126,7 +126,9 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         status_msg_id = status_resp.get("result", {}).get("message_id")
 
         sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
+        logger.info(f"Sources from DB: {sources}")
         channels = [s.tg_channel for s in sources if s.tg_channel]
+        logger.info(f"Channels to search: {channels}")
 
         keywords = parsed.get("keywords", [])
         if not keywords and parsed.get("position"):
