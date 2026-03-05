@@ -753,6 +753,24 @@ async def get_stats(db: Session = Depends(get_db)):
         logger.error(f"Error fetching stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/hunt/test")
+async def test_hunt_parse(request: Request):
+    """Test vacancy parsing without scraping"""
+    try:
+        body = await request.json()
+        text = body.get("text", "")
+        if not text:
+            raise HTTPException(status_code=400, detail="text field required")
+        from services.hunt_vacancy_parser import parse_vacancy
+        parsed = await parse_vacancy(text)
+        return {"success": True, "parsed": parsed}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Hunt test error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/scraper/test")
 async def test_scraper():
     """Test the news scraper with 1 article"""

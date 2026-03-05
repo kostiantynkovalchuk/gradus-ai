@@ -338,6 +338,58 @@ MIGRATIONS = [
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_queue_source_url ON content_queue (source_url) WHERE source_url IS NOT NULL AND source_url != ''",
         ]
     },
+    {
+        "version": "011_hunt_tables",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS hunt_vacancies (
+                id SERIAL PRIMARY KEY,
+                tg_message_id BIGINT,
+                tg_thread_id BIGINT,
+                tg_chat_id BIGINT,
+                raw_text TEXT NOT NULL,
+                position VARCHAR(200),
+                city VARCHAR(100),
+                requirements TEXT,
+                salary_max INTEGER,
+                status VARCHAR(50) DEFAULT 'searching',
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS hunt_candidates (
+                id SERIAL PRIMARY KEY,
+                vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+                source VARCHAR(50),
+                full_name VARCHAR(200),
+                age INTEGER,
+                city VARCHAR(100),
+                experience_years FLOAT,
+                "current_role" VARCHAR(200),
+                skills TEXT,
+                salary_expectation INTEGER,
+                contact VARCHAR(200),
+                profile_url TEXT,
+                raw_text TEXT,
+                ai_score INTEGER,
+                ai_summary TEXT,
+                hr_decision VARCHAR(20) DEFAULT 'pending',
+                telegram_message_id BIGINT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS hunt_sources (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100),
+                tg_channel VARCHAR(100),
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """INSERT INTO hunt_sources (name, tg_channel) VALUES
+                ('UA Jobs', '@ua_jobs'),
+                ('Robota UA', '@robota_ua'),
+                ('Kyiv Jobs', '@kyiv_jobs'),
+                ('UA Work', '@ua_work'),
+                ('Jobs Ukraine', '@jobs_ukraine')
+            ON CONFLICT DO NOTHING""",
+        ]
+    },
 ]
 
 

@@ -9,6 +9,7 @@ Handles:
 from fastapi import APIRouter, Request, Depends
 from sqlalchemy.orm import Session
 import os
+import asyncio
 import httpx
 import logging
 import json
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
+HUNT_SUPERGROUP_ID = int(os.getenv("HUNT_TG_SUPERGROUP_ID", "0"))
 API_BASE_URL = os.getenv("APP_URL", "http://localhost:8000")
 
 HR_KEYWORDS = [
@@ -141,7 +143,12 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             callback_data = data['callback_query'].get('data', '')
             logger.info(f"🔘 Callback query: {callback_data}")
             
-            if callback_data.startswith('admin_cmd:'):
+            if callback_data.startswith('hunt_'):
+                from services.hunt_service import handle_hunt_decision
+                result = await handle_hunt_decision(data['callback_query'], db)
+                logger.info(f"✓ Hunt callback processed: {callback_data}")
+                return {"ok": True}
+            elif callback_data.startswith('admin_cmd:'):
                 result = await handle_admin_button_callback(data['callback_query'], db)
                 logger.info(f"✓ Admin button callback processed")
                 return result
@@ -160,7 +167,14 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
         elif "message" in data:
             message = data["message"]
             logger.info(f"💬 Chat ID: {message.get('chat', {}).get('id')} | Type: {message.get('chat', {}).get('type')} | Text: {message.get('text', '')[:50]}")
+            chat_id = message.get("chat", {}).get("id")
             text = message.get("text", "")
+
+            if HUNT_SUPERGROUP_ID and chat_id == HUNT_SUPERGROUP_ID:
+                from_bot = message.get("from", {}).get("is_bot", False)
+                if not from_bot and text and not text.startswith("/"):
+                    asyncio.create_task(_handle_hunt_vacancy(message, db))
+                return {"ok": True}
 
             if message.get("contact"):
                 logger.info(f"📱 Contact shared by user")
@@ -1383,3 +1397,43 @@ async def handle_document_upload(message: dict, db: Session):
             chat_id,
             "❌ Помилка при обробці документа. Спробуйте ще раз."
         )
+
+
+async def _handle_hunt_vacancy(message: dict, db: Session):
+    text = message.get("text", "")
+    if not text or text.startswith("/"):
+        return
+
+    message_id = message.get("message_id")
+    thread_id = message.get("message_thread_id")
+    chat_id = message.get("chat", {}).get("id")
+
+    logger.info(f"🎯 Hunt vacancy received in supergroup: {text[:80]}...")
+
+    try:
+        from models.hunt_models import HuntVacancy
+        import models
+        if models.SessionLocal is None:
+            models.init_db()
+        hunt_db = models.SessionLocal()
+
+        try:
+            vacancy = HuntVacancy(
+                tg_message_id=message_id,
+                tg_thread_id=thread_id,
+                tg_chat_id=chat_id,
+                raw_text=text,
+                status='searching',
+            )
+            hunt_db.add(vacancy)
+            hunt_db.commit()
+            vacancy_id = vacancy.id
+            logger.info(f"Hunt vacancy #{vacancy_id} saved")
+        finally:
+            hunt_db.close()
+
+        from services.hunt_service import run_hunt
+        await run_hunt(vacancy_id, text, thread_id, chat_id)
+
+    except Exception as e:
+        logger.error(f"Hunt vacancy handler error: {e}", exc_info=True)

@@ -399,3 +399,52 @@ async def get_common_questions(
     except Exception as e:
         logger.error(f"Common questions error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@hr_router.get("/hunt")
+async def get_hunt_stats():
+    """Hunt recruitment module statistics"""
+    try:
+        from sqlalchemy import func
+        from sqlalchemy.orm import Session
+        from models.hunt_models import HuntVacancy, HuntCandidate
+        db_session = next(get_db())
+
+        total_vacancies = db_session.query(func.count(HuntVacancy.id)).scalar() or 0
+        total_candidates = db_session.query(func.count(HuntCandidate.id)).scalar() or 0
+
+        decisions = {}
+        for status in ['approved', 'rejected', 'saved', 'pending']:
+            decisions[status] = db_session.query(func.count(HuntCandidate.id)).filter(
+                HuntCandidate.hr_decision == status
+            ).scalar() or 0
+
+        recent = db_session.query(HuntVacancy).order_by(
+            HuntVacancy.created_at.desc()
+        ).limit(10).all()
+
+        recent_list = []
+        for v in recent:
+            cand_count = db_session.query(func.count(HuntCandidate.id)).filter(
+                HuntCandidate.vacancy_id == v.id
+            ).scalar() or 0
+            recent_list.append({
+                "id": v.id,
+                "position": v.position,
+                "city": v.city,
+                "status": v.status,
+                "candidates_count": cand_count,
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+            })
+
+        db_session.close()
+
+        return {
+            "total_vacancies": total_vacancies,
+            "total_candidates": total_candidates,
+            "decisions": decisions,
+            "recent_vacancies": recent_list,
+        }
+    except Exception as e:
+        logger.error(f"Hunt stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

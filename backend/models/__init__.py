@@ -36,3 +36,4 @@ def get_db():
 
 from .hr_models import HRContent, HRMenuStructure, HREmbedding, HRPresetAnswer, HRDocument
 from .hr_auth_models import HRUser, HRWhitelist, VerificationLog
+from .hunt_models import HuntVacancy, HuntCandidate, HuntSource
