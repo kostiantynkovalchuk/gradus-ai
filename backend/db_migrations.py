@@ -381,12 +381,12 @@ MIGRATIONS = [
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT NOW()
             )""",
-            """INSERT INTO hunt_sources (name, tg_channel) VALUES
-                ('UA Jobs', '@ua_jobs'),
-                ('Robota UA', '@robota_ua'),
-                ('Kyiv Jobs', '@kyiv_jobs'),
-                ('UA Work', '@ua_work'),
-                ('Jobs Ukraine', '@jobs_ukraine')
+            """INSERT INTO hunt_sources (name, tg_channel, is_active) VALUES
+                ('UA Jobs', 'ua_jobs', true),
+                ('Robota UA', 'robota_ua', true),
+                ('Kyiv Jobs', 'kyiv_jobs', true),
+                ('UA Work', 'ua_work', true),
+                ('Jobs Ukraine', 'jobs_ukraine', true)
             ON CONFLICT DO NOTHING""",
         ]
     },
