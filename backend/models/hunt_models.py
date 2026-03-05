@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Text, TIMESTAMP, Boolean, Float, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Text, TIMESTAMP, Boolean, Float, ForeignKey, DateTime
 from sqlalchemy.sql import func
 from . import Base
 
@@ -39,6 +39,7 @@ class HuntCandidate(Base):
     ai_summary = Column(Text)
     hr_decision = Column(String(20), default='pending')
     telegram_message_id = Column(BigInteger)
+    hired_at = Column(DateTime)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
@@ -78,4 +79,12 @@ class HuntSalaryData(Base):
     currency = Column(String(10), default='UAH')
     skills = Column(Text)
     source_url = Column(Text)
+    salary_min_uah = Column(Integer)
+    salary_max_uah = Column(Integer)
+    salary_median_uah = Column(Integer)
+    salary_min_usd = Column(Integer)
+    salary_max_usd = Column(Integer)
+    salary_median_usd = Column(Integer)
+    currency_detected = Column(String(10))
+    usd_rate_at_collection = Column(Float)
     collected_at = Column(TIMESTAMP, server_default=func.now())

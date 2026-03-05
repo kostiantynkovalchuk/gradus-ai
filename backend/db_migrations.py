@@ -445,6 +445,20 @@ MIGRATIONS = [
             )""",
         ]
     },
+    {
+        "version": "014_hunt_hire_salary_ext",
+        "statements": [
+            "ALTER TABLE hunt_candidates ADD COLUMN IF NOT EXISTS hired_at TIMESTAMP",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS salary_min_uah INTEGER",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS salary_max_uah INTEGER",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS salary_median_uah INTEGER",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS salary_min_usd INTEGER",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS salary_max_usd INTEGER",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS salary_median_usd INTEGER",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS currency_detected VARCHAR(10)",
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS usd_rate_at_collection FLOAT",
+        ]
+    },
 ]
 
 
