@@ -14,6 +14,10 @@ USERNAME_PATTERN = re.compile(r'@[A-Za-z0-9_]{5,}')
 
 
 async def scrape_telegram_channels(keywords: list[str], channels: list[str]) -> list[dict]:
+    logger.info(f"TG scraper received {len(channels)} channels: {channels}")
+    if channels:
+        logger.info(f"First channel item type: {type(channels[0])}, value: {channels[0]}")
+
     if not TELETHON_API_ID or not TELETHON_API_HASH or not TELETHON_SESSION:
         logger.warning("Telethon credentials not set (TELETHON_API_ID/TELETHON_API_HASH/TELETHON_SESSION). Skipping TG scraping.")
         return []
