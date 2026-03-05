@@ -1,0 +1,241 @@
+# AUDIT & FIX: Maya HR Auth — Dual-Phone Verification
+
+## CONTEXT
+Maya HR bot authenticates employees via SED API (Blitz).
+Blitz stores TWO phone numbers per employee:
+- (р) = робочий = work/office phone
+- (л) = мобільний = personal mobile
+
+Currently `hr_sed_service.py` only queries ONE phone against SED.
+If an employee's Telegram number matches their (л) mobile but SED
+returns their (р) work phone — auth fails even though they're valid.
+
+## TASK 1: AUDIT CURRENT STATE
+
+Read these files and report exactly what you find:
+- `backend/services/hr_sed_service.py` — full file
+- `backend/services/hr_auth.py` — full file
+- `backend/utils/phone_normalizer.py` — full file (if exists)
+
+Answer these specific questions:
+1. Does `verify_employee_in_sed()` accept one phone or two?
+2. What exact JSON payload is sent to SED API?
+3. Does the SED API response include both (р) and (л) phones?
+4. Is there any existing dual-phone logic anywhere?
+
+## TASK 2: CHECK SED API RESPONSE STRUCTURE
+
+Run this test against SED API to see the full response:
+```bash
+curl -X POST 'https://api-sed.tdav.net.ua/api/employees' \
+  -H 'Authorization: Bearer f10e2b75-2c4c-4e26-be72-98d1a6aafa4c' \
+  -H 'Content-Type: application/json' \
+  -d '{"phone": "380679843397"}'
+```
+
+Log the FULL raw response — we need to know if SED returns
+both phone numbers in the employee object or just one.
+
+## TASK 3: IMPLEMENT DUAL-PHONE AUTH
+
+### 3a. Update `normalize_phone()` in phone_normalizer.py
+```python
+import re
+
+def normalize_phone(phone: str) -> str | None:
+    """
+    Normalize any phone to 380XXXXXXXXX (12 digits).
+    Returns None for invalid/non-normalizable numbers.
+    
+    Handles:
+    - (095)810-00-72  → 380958100072
+    - 067-631-33-99   → 380676313399  
+    - +380956900289   → 380956900289
+    - 0671234567      → 380671234567
+    - 380XXXXXXXXX    → 380XXXXXXXXX (passthrough)
+    - +34692480784    → None (non-UA, handled by whitelist)
+    - (380)987-82-53  → None (only 10 digits after strip, bad data)
+    """
+    if not phone or not isinstance(phone, str):
+        return None
+
+    digits = re.sub(r'\D', '', phone)
+
+    if len(digits) == 10 and digits.startswith('0'):
+        return '380' + digits[1:]         # 0XXXXXXXXX → 380XXXXXXXXX
+    elif len(digits) == 12 and digits.startswith('380'):
+        return digits                      # already correct
+    elif len(digits) == 13 and digits.startswith(('380', '0380')):
+        return digits[-12:]                # strip leading extra digit
+    else:
+        return None                        # invalid — bad data or non-UA
+```
+
+### 3b. Update `verify_employee_in_sed()` in hr_sed_service.py
+
+The goal: try the user's phone against SED, but ALSO check if
+the returned employee has a second phone that matches.
+```python
+async def verify_employee_in_sed(user_phone: str) -> dict | None:
+    """
+    Verify employee by phone against SED API.
+    
+    Strategy:
+    1. Normalize input phone
+    2. Send to SED API
+    3. If not found, try format variations (0XX vs 380XX)
+    4. If found, also check if response contains alternate phone
+    5. Return employee dict or None
+    """
+    normalized = normalize_phone(user_phone)
+    if not normalized:
+        logger.warning(f"Could not normalize phone: {user_phone}")
+        return None
+
+    # Generate format variations to try
+    # SED may store as 0XXXXXXXXX or 380XXXXXXXXX — try both
+    local_format = '0' + normalized[3:]   # 380XXXXXXXXX → 0XXXXXXXXX
+    
+    phones_to_try = list(dict.fromkeys([
+        normalized,     # 380XXXXXXXXX
+        local_format,   # 0XXXXXXXXX
+        f'+{normalized}' # +380XXXXXXXXX
+    ]))
+
+    for phone_attempt in phones_to_try:
+        logger.info(f"SED lookup attempt: {phone_attempt}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{SED_API_URL}/api/employees",
+                    headers={"Authorization": f"Bearer {SED_API_KEY}",
+                             "Content-Type": "application/json"},
+                    json={"phone": phone_attempt}
+                )
+
+                if response.status_code != 200:
+                    logger.warning(f"SED API non-200: {response.status_code}")
+                    continue
+
+                data = response.json()
+                
+                if data.get("status") and data.get("data"):
+                    employee = data["data"]
+                    logger.info(
+                        f"✅ SED match: {phone_attempt} → "
+                        f"{employee.get('full_name')}"
+                    )
+                    
+                    # Log what phone fields SED returns (for audit)
+                    logger.debug(f"SED employee fields: {list(employee.keys())}")
+                    
+                    return {
+                        "verified": True,
+                        "matched_phone": phone_attempt,
+                        "employee": {
+                            "employee_id": employee.get("employee_id"),
+                            "full_name": employee.get("full_name"),
+                            "first_name": employee.get("first_name"),
+                            "last_name": employee.get("last_name"),
+                            "department": employee.get("department"),
+                            "position": employee.get("position"),
+                            "phone": employee.get("phone"),
+                            "phone_work": employee.get("phone_work"),   # (р) if SED returns it
+                            "phone_mobile": employee.get("phone_mobile"), # (л) if SED returns it
+                            "start_date": employee.get("start_date"),
+                            "email": employee.get("email")
+                        }
+                    }
+
+        except httpx.TimeoutException:
+            logger.error(f"SED API timeout for {phone_attempt}")
+        except Exception as e:
+            logger.error(f"SED API error for {phone_attempt}: {e}")
+
+    logger.warning(f"❌ No SED match found for: {user_phone}")
+    return None
+```
+
+### 3c. IF SED API returns both phones in response
+
+If the curl test in Task 2 shows SED returns something like:
+```json
+{
+  "data": {
+    "phone": "0679843397",
+    "phone_work": "0445551234",
+    ...
+  }
+}
+```
+
+Then add a REVERSE LOOKUP — check if user's phone matches
+any phone field in the employee object:
+```python
+async def verify_employee_by_any_phone(user_phone: str) -> dict | None:
+    """
+    Extended verification: if direct lookup fails,
+    try fetching employee by name/ID and checking all their phones.
+    Only needed if SED supports employee search by name.
+    """
+    # Only implement this if direct dual-phone lookup via SED is confirmed
+    # Leave as TODO until SED API capabilities are confirmed
+    pass
+```
+
+## TASK 4: ADD AUTH LOGGING
+
+In the verification handler, log the outcome clearly:
+```python
+# In hr_auth_handlers.py phone_verification_handler:
+
+result = await verify_employee_in_sed(phone)
+
+if result:
+    logger.info(
+        f"AUTH_SUCCESS | tg_id={telegram_id} | "
+        f"input_phone={phone} | "
+        f"matched_as={result['matched_phone']} | "
+        f"employee={result['employee']['full_name']}"
+    )
+else:
+    logger.warning(
+        f"AUTH_FAIL | tg_id={telegram_id} | "
+        f"input_phone={phone} | reason=not_in_sed"
+    )
+```
+
+## TASK 5: TEST SEQUENCE
+
+After implementation, run these tests and show output:
+```bash
+# Test 1: Standard Ukrainian mobile (most common case)
+curl -X POST 'https://api-sed.tdav.net.ua/api/employees' \
+  -H 'Authorization: Bearer f10e2b75-2c4c-4e26-be72-98d1a6aafa4c' \
+  -H 'Content-Type: application/json' \
+  -d '{"phone": "380679843397"}'
+
+# Test 2: Same number in local format
+curl -X POST 'https://api-sed.tdav.net.ua/api/employees' \
+  -H 'Authorization: Bearer f10e2b75-2c4c-4e26-be72-98d1a6aafa4c' \
+  -H 'Content-Type: application/json' \
+  -d '{"phone": "0679843397"}'
+
+# Test 3: International prefix
+curl -X POST 'https://api-sed.tdav.net.ua/api/employees' \
+  -H 'Authorization: Bearer f10e2b75-2c4c-4e26-be72-98d1a6aafa4c' \
+  -H 'Content-Type: application/json' \
+  -d '{"phone": "+380679843397"}'
+```
+
+Report: which format does SED actually accept?
+
+## SUCCESS CRITERIA
+
+✅ normalize_phone() returns None for bad-data numbers (too short)
+✅ Both 380XXXXXXXXX and 0XXXXXXXXX formats tried on every auth
+✅ SED response logged in full for first 10 auths (debug mode)
+✅ Auth logs show matched_phone field for traceability
+✅ Whitelist bypass (for +34 etc.) still works unchanged
+✅ No regression on existing verified employees

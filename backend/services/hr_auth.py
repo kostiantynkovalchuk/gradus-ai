@@ -166,14 +166,17 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
         )
         return
 
-    try:
-        phone_normalized = normalize_phone(phone)
-    except ValueError:
+    phone_normalized = normalize_phone(phone)
+    if not phone_normalized:
         phone_normalized = phone
     phone_display = format_for_display(phone_normalized)
 
     whitelist_entry = None
-    for fmt in [phone, phone_normalized, f"+{phone_normalized}", f"0{phone_normalized[3:]}" if len(phone_normalized) == 12 else None]:
+    formats_to_check = [phone, phone_normalized]
+    if phone_normalized and len(phone_normalized) == 12:
+        formats_to_check.append(f"+{phone_normalized}")
+        formats_to_check.append(f"0{phone_normalized[3:]}")
+    for fmt in formats_to_check:
         if fmt is None:
             continue
         entry = db.query(HRWhitelist).filter(
@@ -202,17 +205,17 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
     if result["verified"]:
         employee = result["employee"]
         logger.info(
-            f"VERIFY_SUCCESS: telegram_id={telegram_id}, "
-            f"phone={phone_display}, name={employee.get('full_name', 'N/A')}, "
-            f"position={employee.get('position', 'N/A')}, "
-            f"department={employee.get('department', 'N/A')}"
+            f"AUTH_SUCCESS | tg_id={telegram_id} | "
+            f"input_phone={phone_display} | "
+            f"matched_as={result.get('matched_phone', 'N/A')} | "
+            f"employee={employee.get('full_name', 'N/A')}"
         )
         await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, employee)
         set_awaiting_phone(telegram_id, False)
     else:
         logger.warning(
-            f"VERIFY_FAILED: telegram_id={telegram_id}, "
-            f"phone={phone_display}, error={result.get('error')}"
+            f"AUTH_FAIL | tg_id={telegram_id} | "
+            f"input_phone={phone_display} | reason={result.get('error', 'unknown')}"
         )
         await handle_verification_failure(db, chat_id, telegram_id, phone_normalized, result, user_info)
         set_awaiting_phone(telegram_id, False)
@@ -554,9 +557,8 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
         )
         return
 
-    try:
-        phone = normalize_phone(phone_raw)
-    except ValueError:
+    phone = normalize_phone(phone_raw)
+    if not phone:
         phone = phone_raw
 
     valid_levels = ["employee", "contractor", "admin_hr", "admin_it", "developer"]

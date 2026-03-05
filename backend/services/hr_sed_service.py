@@ -50,11 +50,14 @@ class SEDService:
             if data.get("status") is True and data.get("data"):
                 emp = data["data"]
                 logger.info(f"SED employee found with format '{phone_format}': {emp.get('full_name')}")
+                logger.debug(f"SED employee fields: {list(emp.keys())}")
                 return {
                     "verified": True,
                     "employee": {
                         "employee_id": emp.get("employee_id"),
                         "phone": emp.get("phone"),
+                        "phone_work": emp.get("phone_work"),
+                        "phone_mobile": emp.get("phone_mobile"),
                         "full_name": emp.get("full_name"),
                         "first_name": emp.get("first_name"),
                         "last_name": emp.get("last_name"),
@@ -64,7 +67,8 @@ class SEDService:
                         "email": emp.get("email")
                     },
                     "error": None,
-                    "phone_format_used": phone_format
+                    "phone_format_used": phone_format,
+                    "matched_phone": phone_format
                 }
             else:
                 return {"verified": False, "employee": None, "error": "not_found"}
@@ -78,19 +82,22 @@ class SEDService:
             logger.error("SED_API_KEY not configured")
             return {"verified": False, "employee": None, "error": "not_configured"}
 
-        try:
-            phone_normalized = normalize_phone(phone)
-        except ValueError:
+        phone_normalized = normalize_phone(phone)
+        if not phone_normalized:
+            logger.warning(f"Could not normalize phone: {phone}")
             phone_normalized = phone
 
-        formats_to_try = generate_format_variations(phone_normalized) if len(phone_normalized) == 12 else [phone]
+        if phone_normalized and len(phone_normalized) == 12:
+            formats_to_try = generate_format_variations(phone_normalized)
+        else:
+            formats_to_try = [phone]
 
         logger.info(f"Verifying employee: {phone} -> {phone_normalized} ({len(formats_to_try)} formats)")
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 for i, fmt in enumerate(formats_to_try, 1):
-                    logger.debug(f"SED attempt {i}/{len(formats_to_try)}: '{fmt}'")
+                    logger.info(f"SED lookup attempt {i}/{len(formats_to_try)}: '{fmt}'")
                     result = await self._try_single_format(client, fmt)
 
                     if result.get("stop"):
