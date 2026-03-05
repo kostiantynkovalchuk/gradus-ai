@@ -159,6 +159,7 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
         
         elif "message" in data:
             message = data["message"]
+            logger.info(f"💬 Chat ID: {message.get('chat', {}).get('id')} | Type: {message.get('chat', {}).get('type')} | Text: {message.get('text', '')[:50]}")
             text = message.get("text", "")
 
             if message.get("contact"):
