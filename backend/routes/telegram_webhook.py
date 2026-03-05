@@ -7,6 +7,7 @@ Handles:
 """
 
 from fastapi import APIRouter, Request, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import os
 import asyncio
@@ -172,9 +173,9 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
 
             if HUNT_SUPERGROUP_ID and chat_id == HUNT_SUPERGROUP_ID:
                 from_bot = message.get("from", {}).get("is_bot", False)
-                if not from_bot and text and not text.startswith("/"):
+                if not from_bot and message.get("text"):
                     asyncio.create_task(_handle_hunt_vacancy(message, db))
-                return {"ok": True}
+                return JSONResponse({"ok": True})
 
             if message.get("contact"):
                 logger.info(f"📱 Contact shared by user")
