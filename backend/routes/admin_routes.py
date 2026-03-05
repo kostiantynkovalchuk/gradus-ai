@@ -3,7 +3,7 @@ Admin Dashboard Routes for GradusMedia
 Protected by X-Admin-Key header or session cookie
 """
 
-from fastapi import APIRouter, HTTPException, Request, Response, Query
+from fastapi import APIRouter, HTTPException, Request, Response, Query, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import text
@@ -528,5 +528,52 @@ async def dismiss_candidate(candidate_id: int, request: Request):
         ), {"id": candidate_id})
         db.commit()
         return {"status": "dismissed"}
+    finally:
+        db.close()
+
+
+@router.post("/api/admin/hr/seed-phones")
+async def seed_phone_cache(request: Request, file: UploadFile = File(...)):
+    verify_admin_header(request)
+    from services.hr_phone_cache_service import seed_from_xlsx_sync
+    db = _get_db()
+    try:
+        contents = await file.read()
+        result = seed_from_xlsx_sync(contents, db)
+        return result
+    except Exception as e:
+        logger.error(f"Phone cache seed error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@router.get("/api/admin/hr/phone-cache-stats")
+async def phone_cache_stats(request: Request):
+    verify_admin_header(request)
+    from services.hr_phone_cache_service import get_cache_stats_sync
+    db = _get_db()
+    try:
+        return get_cache_stats_sync(db)
+    except Exception as e:
+        logger.error(f"Phone cache stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@router.get("/api/admin/hr/phone-cache-lookup")
+async def phone_cache_lookup(request: Request, phone: str = Query(...)):
+    verify_admin_header(request)
+    from services.hr_phone_cache_service import find_employee_by_phone_sync
+    db = _get_db()
+    try:
+        result = find_employee_by_phone_sync(phone, db)
+        if result:
+            return result
+        return {"verified": False, "message": "Not found in phone cache"}
+    except Exception as e:
+        logger.error(f"Phone cache lookup error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()

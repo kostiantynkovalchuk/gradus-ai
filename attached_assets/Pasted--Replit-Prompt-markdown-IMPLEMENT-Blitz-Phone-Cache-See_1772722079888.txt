@@ -1,0 +1,390 @@
+
+
+Replit Prompt
+markdown# IMPLEMENT: Blitz Phone Cache — Seed DB + Future API Hook
+
+## CONTEXT
+Maya HR bot authenticates employees via SED API (POST /api/employees by phone).
+SED only returns one phone field. But employees have two phones in Blitz:
+  (р) = work phone,  (л) = mobile phone
+93.6% of 829 employees have ONLY mobile filled.
+Current auth fails for anyone whose Telegram number ≠ their SED-stored phone.
+
+SOLUTION (Phase 1 — now):
+  Parse sed_phones.xlsx → load both phones per employee into local DB cache
+  Auth checks cache first (both fields), then falls back to live SED
+
+SOLUTION (Phase 2 — when IT delivers):
+  SED API will return phone_work + phone_mobile fields
+  Nightly sync replaces manual xlsx import
+
+## TASK 1: CREATE TABLE
+
+Run this migration:
+```sql
+CREATE TABLE IF NOT EXISTS hr_employee_phone_cache (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(200) NOT NULL,
+    phone_work_raw  VARCHAR(50),
+    phone_mobile_raw VARCHAR(50),
+    phone_work_norm  VARCHAR(15),   -- normalized 380XXXXXXXXX
+    phone_mobile_norm VARCHAR(15),  -- normalized 380XXXXXXXXX
+    source VARCHAR(20) DEFAULT 'blitz_xlsx',
+    imported_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_phone_cache_work
+    ON hr_employee_phone_cache(phone_work_norm);
+CREATE INDEX IF NOT EXISTS idx_phone_cache_mobile
+    ON hr_employee_phone_cache(phone_mobile_norm);
+
+CREATE TABLE IF NOT EXISTS hr_phone_import_log (
+    id SERIAL PRIMARY KEY,
+    source VARCHAR(50),
+    total_rows INTEGER,
+    imported INTEGER,
+    no_phone INTEGER,
+    imported_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+## TASK 2: CREATE PARSER + SEEDER
+
+Create `backend/services/hr_phone_cache_service.py`:
+```python
+"""
+Phone cache service.
+Phase 1: seeded from Blitz xlsx export.
+Phase 2: will be replaced by nightly SED API sync when IT adds list endpoint.
+"""
+import re
+import logging
+import openpyxl
+import httpx
+import os
+from io import BytesIO
+
+logger = logging.getLogger(__name__)
+
+# ── Cyrillic markers used by Blitz export ──────────────────────────────────
+R_MARKER = '(р)'   # work phone  (р = cyrillic, U+0440)
+L_MARKER = '(л)'   # mobile      (л = cyrillic, U+043B)
+EMPTY_PAT = re.compile(r'\(\s+\)\s+-\s+-')  # matches (   )   -  -
+
+
+def normalize_phone(raw: str) -> str | None:
+    """
+    Normalize any Ukrainian phone to 380XXXXXXXXX (12 digits).
+    Returns None if invalid or non-normalizable.
+
+    Handles:
+      (095)810-00-72  → 380958100072
+      067-631-33-99   → 380676313399
+      097 332 11 64   → 380973321164
+      +380956900289   → 380956900289
+      (380)987-82-53  → None  (truncated — only 10 digits)
+    """
+    if not raw:
+        return None
+    digits = re.sub(r'\D', '', str(raw))
+    if len(digits) == 10 and digits.startswith('0'):
+        return '380' + digits[1:]
+    elif len(digits) == 12 and digits.startswith('380'):
+        return digits
+    elif len(digits) == 11 and digits.startswith('80'):
+        return '3' + digits
+    return None  # truncated, non-UA, or invalid
+
+
+def _has_digits(s: str) -> bool:
+    return bool(re.search(r'\d', s))
+
+
+def parse_blitz_phone_field(raw: str) -> tuple[str | None, str | None]:
+    """
+    Parse Blitz phone string into (work_norm, mobile_norm).
+
+    Input formats:
+      (р) (   )   -  -  ;(л) (095)810-00-72;  → (None, '380958100072')
+      (р) (067)357-74-88;(л) (067)357-74-88;  → ('380673577488', '380673577488')
+      (р) (066)263-81-03;(л) (   )   -  -  ;  → ('380662638103', None)
+      (л) (067)575-58-00;                      → (None, '380675755800')
+      067-631-33-99                             → (None, '380676313399')
+    """
+    if not raw:
+        return None, None
+    raw = str(raw).strip()
+    has_r = R_MARKER in raw
+    has_l = L_MARKER in raw
+    work_raw = mobile_raw = None
+
+    if has_r and has_l:
+        idx_l = raw.index(L_MARKER)
+        work_part   = raw[:idx_l].replace(R_MARKER, '').strip().rstrip(';').strip()
+        mobile_part = raw[idx_l:].replace(L_MARKER, '').strip().rstrip(';').strip()
+        if not EMPTY_PAT.search(work_part) and _has_digits(work_part):
+            work_raw = work_part
+        if not EMPTY_PAT.search(mobile_part) and _has_digits(mobile_part):
+            mobile_raw = mobile_part
+    elif has_r:
+        p = raw.replace(R_MARKER, '').strip().rstrip(';').strip()
+        if not EMPTY_PAT.search(p) and _has_digits(p):
+            work_raw = p
+    elif has_l:
+        p = raw.replace(L_MARKER, '').strip().rstrip(';').strip()
+        if _has_digits(p):
+            mobile_raw = p
+    elif _has_digits(raw):
+        mobile_raw = raw
+
+    return normalize_phone(work_raw), normalize_phone(mobile_raw)
+
+
+async def seed_from_xlsx(xlsx_bytes: bytes, db_pool) -> dict:
+    """
+    Phase 1: Parse Blitz xlsx and populate hr_employee_phone_cache.
+    Called once manually (or re-called when HR sends updated export).
+    """
+    wb = openpyxl.load_workbook(BytesIO(xlsx_bytes))
+    ws = wb.active
+
+    imported = no_phone = errors = 0
+    total = 0
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM hr_employee_phone_cache")
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            name_raw, phone_raw = row[0], row[1]
+            if not name_raw or str(name_raw).strip() in ('', 'ФИО'):
+                continue
+            total += 1
+            full_name = str(name_raw).strip()
+
+            work_norm, mobile_norm = parse_blitz_phone_field(phone_raw)
+
+            if not work_norm and not mobile_norm:
+                no_phone += 1
+                logger.debug(f"No phone: {full_name} | raw: {phone_raw}")
+                continue
+
+            try:
+                await conn.execute("""
+                    INSERT INTO hr_employee_phone_cache
+                        (full_name, phone_work_raw, phone_mobile_raw,
+                         phone_work_norm, phone_mobile_norm, source)
+                    VALUES ($1, $2, $3, $4, $5, 'blitz_xlsx')
+                """,
+                    full_name,
+                    str(phone_raw) if phone_raw else None,
+                    str(phone_raw) if phone_raw else None,
+                    work_norm,
+                    mobile_norm,
+                )
+                imported += 1
+            except Exception as e:
+                logger.error(f"Insert error for {full_name}: {e}")
+                errors += 1
+
+        await conn.execute("""
+            INSERT INTO hr_phone_import_log
+                (source, total_rows, imported, no_phone)
+            VALUES ('blitz_xlsx', $1, $2, $3)
+        """, total, imported, no_phone)
+
+    logger.info(
+        f"Seed complete: {imported} imported, "
+        f"{no_phone} no-phone, {errors} errors from {total} rows"
+    )
+    return {
+        "total": total, "imported": imported,
+        "no_phone": no_phone, "errors": errors
+    }
+
+
+async def find_employee_by_phone(phone: str, db_pool) -> dict | None:
+    """
+    Core dual-phone lookup.
+    Checks user's phone against BOTH work and mobile fields.
+    Returns employee dict or None.
+    """
+    normalized = normalize_phone(phone)
+    if not normalized:
+        logger.warning(f"Cannot normalize phone: {phone}")
+        return None
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT full_name, phone_work_norm, phone_mobile_norm, source
+            FROM hr_employee_phone_cache
+            WHERE phone_work_norm = $1 OR phone_mobile_norm = $1
+            LIMIT 1
+        """, normalized)
+
+    if not row:
+        return None
+
+    matched_via = (
+        "work"   if row['phone_work_norm']   == normalized else "mobile"
+    )
+    logger.info(
+        f"✅ Cache match: {normalized} → "
+        f"{row['full_name']} via {matched_via}"
+    )
+    return {
+        "full_name": row['full_name'],
+        "matched_via": matched_via,
+        "source": row['source'],
+        "verified": True,
+    }
+
+
+# ── PHASE 2: SED API SYNC (placeholder — activate when IT delivers) ────────
+
+async def sync_from_sed_api(db_pool) -> dict:
+    """
+    Phase 2: Nightly sync from SED API list endpoint.
+    INACTIVE until IT team adds:
+      GET /api/employees  →  returns all employees with phone_work + phone_mobile
+
+    To activate:
+      1. Confirm endpoint URL with IT
+      2. Replace the raise below with actual implementation
+      3. Schedule via APScheduler at 3:00 AM daily
+      4. Remove seed_from_xlsx dependency
+    """
+    SED_API_URL = os.environ.get("SED_API_URL", "https://api-sed.tdav.net.ua")
+    SED_API_KEY = os.environ.get("SED_API_KEY")
+
+    # TODO: activate when IT delivers the endpoint
+    raise NotImplementedError(
+        "SED list endpoint not yet available. "
+        "Using blitz_xlsx seed instead. "
+        "See IT request: [link to ticket]"
+    )
+
+    # FUTURE IMPLEMENTATION (uncomment when ready):
+    # async with httpx.AsyncClient(timeout=30.0) as client:
+    #     response = await client.get(
+    #         f"{SED_API_URL}/api/employees",
+    #         headers={"Authorization": f"Bearer {SED_API_KEY}"}
+    #     )
+    #     employees = response.json()["data"]
+    #
+    # async with db_pool.acquire() as conn:
+    #     await conn.execute("DELETE FROM hr_employee_phone_cache")
+    #     for emp in employees:
+    #         work_norm   = normalize_phone(emp.get("phone_work"))
+    #         mobile_norm = normalize_phone(emp.get("phone_mobile"))
+    #         await conn.execute("""
+    #             INSERT INTO hr_employee_phone_cache
+    #                 (full_name, phone_work_norm, phone_mobile_norm, source)
+    #             VALUES ($1, $2, $3, 'sed_api')
+    #         """, emp["full_name"], work_norm, mobile_norm)
+```
+
+## TASK 3: ADD SEED ENDPOINT
+
+In `backend/routes/admin_routes.py`:
+```python
+from fastapi import UploadFile, File
+from services.hr_phone_cache_service import seed_from_xlsx, find_employee_by_phone
+from services.hr_phone_cache_service import get_cache_stats
+
+@router.post("/hr/seed-phones")
+async def seed_phone_cache(
+    file: UploadFile = File(...),
+    current_admin = Depends(require_admin),
+    db_pool = Depends(get_db_pool)
+):
+    """Upload sed_phones.xlsx to seed the phone cache."""
+    contents = await file.read()
+    result = await seed_from_xlsx(contents, db_pool)
+    return result
+
+
+@router.get("/hr/phone-cache-stats")
+async def phone_cache_stats(
+    current_admin = Depends(require_admin),
+    db_pool = Depends(get_db_pool)
+):
+    async with db_pool.acquire() as conn:
+        stats = await conn.fetchrow("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(phone_work_norm) as with_work,
+                COUNT(phone_mobile_norm) as with_mobile,
+                MAX(imported_at) as last_import
+            FROM hr_employee_phone_cache
+        """)
+        last_log = await conn.fetchrow("""
+            SELECT source, total_rows, imported, no_phone, imported_at
+            FROM hr_phone_import_log
+            ORDER BY imported_at DESC LIMIT 1
+        """)
+    return {**dict(stats), "last_import_log": dict(last_log) if last_log else None}
+```
+
+## TASK 4: UPDATE AUTH FLOW in hr_auth.py
+```python
+from services.hr_phone_cache_service import find_employee_by_phone
+
+async def verify_employee(phone: str, db_pool) -> dict | None:
+    """
+    Auth priority:
+    1. Whitelist  — non-UA phones, manual overrides (instant)
+    2. Phone cache — dual-phone match against Blitz data (fast, local DB)
+    3. Live SED   — fallback for employees missing from cache
+    """
+    # 1. Whitelist
+    whitelist = await check_whitelist(phone, db_pool)
+    if whitelist:
+        return whitelist
+
+    # 2. Local cache (checks BOTH work and mobile)
+    cache_hit = await find_employee_by_phone(phone, db_pool)
+    if cache_hit:
+        return cache_hit
+
+    # 3. Live SED fallback
+    sed_result = await verify_employee_in_sed(phone)
+    if sed_result:
+        return sed_result
+
+    return None
+```
+
+## TASK 5: SEED THE DB NOW
+
+After deploying, run the seed immediately:
+```bash
+curl -X POST https://YOUR_RENDER_URL/hr/seed-phones \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -F "file=@sed_phones.xlsx"
+```
+
+Or trigger from the /hr admin dashboard upload button.
+
+## TASK 6: ADD CACHE STATUS TO ADMIN DASHBOARD
+
+Add to /hr dashboard:
+```
+📋 Phone Cache
+├── Total employees: 807
+├── With work phone (р): 31
+├── With mobile phone (л): 787
+├── No phone (skipped): 22
+└── Last seeded: 2026-03-05 from blitz_xlsx
+    [📤 Re-seed from new xlsx]
+```
+
+## SUCCESS CRITERIA
+
+✅ hr_employee_phone_cache table created and seeded (807 rows)
+✅ find_employee_by_phone() matches on work OR mobile
+✅ Auth flow: whitelist → cache → SED live
+✅ /hr dashboard shows cache stats + re-seed button
+✅ sync_from_sed_api() stub present, ready to activate
+✅ All existing whitelist/SED logic unchanged
+✅ openpyxl added to requirements.txt
+```

@@ -390,6 +390,33 @@ MIGRATIONS = [
             ON CONFLICT DO NOTHING""",
         ]
     },
+    {
+        "version": "012_phone_cache",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS hr_employee_phone_cache (
+                id SERIAL PRIMARY KEY,
+                full_name VARCHAR(200) NOT NULL,
+                phone_work_raw  VARCHAR(50),
+                phone_mobile_raw VARCHAR(50),
+                phone_work_norm  VARCHAR(15),
+                phone_mobile_norm VARCHAR(15),
+                source VARCHAR(20) DEFAULT 'blitz_xlsx',
+                imported_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_phone_cache_work
+                ON hr_employee_phone_cache(phone_work_norm)""",
+            """CREATE INDEX IF NOT EXISTS idx_phone_cache_mobile
+                ON hr_employee_phone_cache(phone_mobile_norm)""",
+            """CREATE TABLE IF NOT EXISTS hr_phone_import_log (
+                id SERIAL PRIMARY KEY,
+                source VARCHAR(50),
+                total_rows INTEGER,
+                imported INTEGER,
+                no_phone INTEGER,
+                imported_at TIMESTAMP DEFAULT NOW()
+            )""",
+        ]
+    },
 ]
 
 
