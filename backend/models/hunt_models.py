@@ -48,8 +48,9 @@ class HuntSource(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100))
-    tg_channel = Column(String(100))
+    tg_channel = Column(String(100), unique=True)
     is_active = Column(Boolean, default=True)
+    channel_type = Column(String(20), default='scan')
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 

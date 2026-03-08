@@ -158,15 +158,31 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         )
         status_msg_id = status_resp.get("result", {}).get("message_id")
 
-        sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
-        channels = [s.tg_channel for s in sources if s.tg_channel]
-        logger.info(f"Channels from DB: {channels}")
+        import psycopg2
+        try:
+            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT tg_channel FROM hunt_sources "
+                "WHERE is_active = TRUE AND channel_type = 'scan'"
+            )
+            rows = cur.fetchall()
+            channels = [row[0] for row in rows]
+            conn.close()
+        except Exception as e:
+            logger.warning(f"DB channel load failed: {e}, using defaults")
+            channels = []
 
         if not channels:
-            channels = ["DniproVakansiiq", "kharkiv_robota1", "works_dnepr",
-                        "robota_kharkiv", "kieve_rabota", "Kiev_rabota_vakansii",
-                        "ukrjob", "jobforukrainians"]
+            channels = [
+                "kiev_rabota2", "rabota_kieve_ua",
+                "rabota_dnipro_vacancy", "kharkiv_robota1",
+                "odesa_odessa_rabota", "robota_rabota_lviv",
+                "jobforukrainians",
+            ]
             logger.info(f"Using default channels: {channels}")
+        else:
+            logger.info(f"Channels from DB (scan): {channels}")
 
         keywords = parsed.get("keywords", [])
         if not keywords and parsed.get("position"):

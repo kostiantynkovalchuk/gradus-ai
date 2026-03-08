@@ -465,6 +465,29 @@ MIGRATIONS = [
             "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS sample_count INTEGER DEFAULT 0",
         ]
     },
+    {
+        "version": "016_hunt_sources_channel_type",
+        "statements": [
+            "ALTER TABLE hunt_sources ADD COLUMN IF NOT EXISTS channel_type VARCHAR(20) DEFAULT 'scan'",
+            "UPDATE hunt_sources SET channel_type = 'scan' WHERE channel_type IS NULL",
+            """DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'hunt_sources_tg_channel_unique'
+                ) THEN
+                    ALTER TABLE hunt_sources ADD CONSTRAINT hunt_sources_tg_channel_unique UNIQUE (tg_channel);
+                END IF;
+            END $$""",
+            """INSERT INTO hunt_sources (name, tg_channel, is_active, channel_type) VALUES
+                ('KYIV JOBS', 'kiev_rabota2', TRUE, 'scan'),
+                ('Робота Київ 3', 'rabota_kieve_ua', TRUE, 'scan'),
+                ('Робота Дніпро', 'rabota_dnipro_vacancy', TRUE, 'scan'),
+                ('Робота Харків', 'kharkiv_robota1', TRUE, 'scan'),
+                ('Робота Одеса', 'odesa_odessa_rabota', TRUE, 'scan'),
+                ('Робота Львів', 'robota_rabota_lviv', TRUE, 'scan'),
+                ('Jobs for Ukrainians', 'jobforukrainians', TRUE, 'scan')
+            ON CONFLICT (tg_channel) DO NOTHING""",
+        ]
+    },
 ]
 
 

@@ -48,18 +48,29 @@ async def run_vacancy_posting(vacancy_id: int, chat_id: int, thread_id: int):
             f"#вакансія #{position_tag} #{city_tag}"
         )
 
-        from models.hunt_models import HuntSource
-        sources = db.query(HuntSource).filter(HuntSource.is_active == True).all()
-        channels = [s.tg_channel for s in sources if s.tg_channel]
-        logger.info(f"Poster loaded {len(channels)} channels via SQLAlchemy")
+        import psycopg2
+        try:
+            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT tg_channel FROM hunt_sources "
+                "WHERE is_active = TRUE AND channel_type = 'post'"
+            )
+            rows = cur.fetchall()
+            channels = [row[0] for row in rows]
+            conn.close()
+            logger.info(f"Poster loaded {len(channels)} channels (post type)")
+        except Exception as e:
+            logger.warning(f"DB channel load failed: {e}")
+            channels = []
 
         if not channels:
-            channels = [
-                "DniproVakansiiq", "kharkiv_robota1", "works_dnepr",
-                "robota_kharkiv", "kieve_rabota", "Kiev_rabota_vakansii",
-                "v_odesse5", "kh_robota", "rabota_robota_dnepr_dnipro",
-                "rabota_kieve", "ukrjob", "jobforukrainians"
-            ]
+            await _send_tg_message(
+                chat_id, thread_id,
+                "📢 Немає активних каналів для розміщення.\n"
+                "Додайте канали з type='post' до таблиці hunt_sources."
+            )
+            return
 
         session_string = os.getenv("HR_TELETHON_SESSION") or os.getenv("TELETHON_SESSION")
         api_id_str = os.getenv("TELETHON_API_ID", "0")
