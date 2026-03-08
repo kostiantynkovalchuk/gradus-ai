@@ -27,12 +27,23 @@ async def parse_vacancy(text: str) -> dict:
             system=(
                 "You are an HR assistant. Parse this job vacancy text and return JSON only.\n"
                 "No preamble, no markdown, just raw JSON.\n\n"
+                "Зарплата: якщо є знак $ або слово USD/долар — це USD, запиши як є.\n"
+                "Якщо грн/UAH — це гривні.\n"
+                "Якщо просто число без валюти:\n"
+                "  - число < 5000 → USD\n"
+                "  - число >= 5000 → UAH\n\n"
+                "ПРИКЛАДИ:\n"
+                "'до 600$' → salary_max: 600, salary_currency: 'USD'\n"
+                "'до 1000$' → salary_max: 1000, salary_currency: 'USD'\n"
+                "'до 40000 грн' → salary_max: 40000, salary_currency: 'UAH'\n"
+                "'до 800' → salary_max: 800, salary_currency: 'USD'\n\n"
                 "Return:\n"
                 '{\n'
                 '  "position": "job title in Ukrainian",\n'
                 '  "city": "city name or null",\n'
                 '  "requirements": ["requirement 1", "requirement 2"],\n'
                 '  "salary_max": integer or null,\n'
+                '  "salary_currency": "USD" or "UAH" or null,\n'
                 '  "keywords": ["keyword1", "keyword2", "keyword3"]\n'
                 '}'
             ),
@@ -48,13 +59,14 @@ async def parse_vacancy(text: str) -> dict:
         parsed.setdefault("city", None)
         parsed.setdefault("requirements", [])
         parsed.setdefault("salary_max", None)
+        parsed.setdefault("salary_currency", None)
         parsed.setdefault("keywords", [])
-        logger.info(f"Parsed vacancy: {parsed.get('position')}")
+        logger.info(f"Parsed vacancy: {parsed.get('position')}, salary: {parsed.get('salary_max')} {parsed.get('salary_currency')}")
         return parsed
 
     except json.JSONDecodeError as e:
         logger.error(f"Vacancy parse JSON error: {e}")
-        return {"position": text[:100], "city": None, "requirements": [], "salary_max": None, "keywords": []}
+        return {"position": text[:100], "city": None, "requirements": [], "salary_max": None, "salary_currency": None, "keywords": []}
     except Exception as e:
         logger.error(f"Vacancy parse error: {e}")
-        return {"position": text[:100], "city": None, "requirements": [], "salary_max": None, "keywords": []}
+        return {"position": text[:100], "city": None, "requirements": [], "salary_max": None, "salary_currency": None, "keywords": []}

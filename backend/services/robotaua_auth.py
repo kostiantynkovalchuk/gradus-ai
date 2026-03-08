@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 ROBOTAUA_EMAIL = os.getenv("ROBOTAUA_EMAIL", "")
 ROBOTAUA_PASSWORD = os.getenv("ROBOTAUA_PASSWORD", "")
+HARDCODED_JWT = os.getenv("ROBOTAUA_JWT", "")
 
 GRAPHQL_URL = "https://dracula.robota.ua/"
 
@@ -156,6 +157,12 @@ def get_robotaua_token() -> Optional[str]:
             pass
     else:
         logger.error("Robota.ua login failed - no endpoints responded")
+
+    if HARDCODED_JWT:
+        logger.info("Using ROBOTAUA_JWT from environment")
+        _cached_token = HARDCODED_JWT
+        _token_expires_at = time.time() + 86400
+        return HARDCODED_JWT
 
     return None
 

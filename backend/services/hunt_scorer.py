@@ -44,7 +44,12 @@ def safe_parse_json(text: str) -> dict:
 async def score_candidate(candidate: dict, vacancy: dict) -> dict:
     try:
         c = _ensure_client()
-        vacancy_json = json.dumps(vacancy, ensure_ascii=False, default=str)
+        vacancy_with_budget = dict(vacancy)
+        sal_max = vacancy_with_budget.get("salary_max")
+        sal_cur = vacancy_with_budget.get("salary_currency", "")
+        if sal_max and sal_cur:
+            vacancy_with_budget["budget_display"] = f"{sal_max} {sal_cur}"
+        vacancy_json = json.dumps(vacancy_with_budget, ensure_ascii=False, default=str)
         candidate_text = candidate.get("raw_text", "")
 
         response = c.messages.create(

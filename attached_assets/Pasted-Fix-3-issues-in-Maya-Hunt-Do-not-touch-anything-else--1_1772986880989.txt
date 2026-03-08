@@ -1,0 +1,116 @@
+Fix 3 issues in Maya Hunt. Do not touch anything else.
+
+══════════════════════════════════════════════
+FIX 1 — Work.ua: scrape without login
+══════════════════════════════════════════════
+
+In backend/services/hunt_workua_scraper.py:
+
+Work.ua public search works without authentication.
+Remove the login requirement entirely for search results.
+Contact info won't be available but name/age/city/role will.
+
+Replace get_workua_session() call with unauthenticated session:
+
+def get_public_session() -> requests.Session:
+    """
+    Create unauthenticated session for public Work.ua search.
+    Public search results are visible without login.
+    Contact info will be missing — HR clicks profile link.
+    """
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "uk-UA,uk;q=0.9",
+    })
+    return session
+
+In scrape_workua_candidates():
+Replace: session = get_workua_session()
+         if not session: return []
+With:    session = get_public_session()
+
+Keep all other scraping logic the same.
+For contact field when not available:
+candidate["contact"] = "Деталі на Work.ua"
+candidate["profile_url"] = full profile URL
+
+This way HR gets name/age/city/role + a direct link
+to the profile on Work.ua where they see contact info.
+
+══════════════════════════════════════════════
+FIX 2 — Robota.ua: use JWT from cURL
+══════════════════════════════════════════════
+
+In backend/services/robotaua_auth.py:
+
+We already have a working JWT token from the browser session.
+Use it as a hardcoded fallback while we investigate proper login.
+
+Add this constant at the top of the file:
+HARDCODED_JWT = os.getenv("ROBOTAUA_JWT", "")
+
+Update get_robotaua_token():
+
+def get_robotaua_token():
+    global _cached_token, _token_expires_at
+    
+    # If all login attempts fail, try hardcoded JWT from env var
+    # This is a temporary measure until proper auth is solved
+    
+    # ... existing login attempts ...
+    
+    # Fallback to hardcoded JWT
+    if HARDCODED_JWT:
+        logger.info("Using ROBOTAUA_JWT from environment")
+        _cached_token = HARDCODED_JWT
+        _token_expires_at = time.time() + 86400
+        return HARDCODED_JWT
+    
+    return None
+
+Add ROBOTAUA_JWT env var note in the code:
+# To get this token: login to robota.ua in browser,
+# open DevTools → Network → copy Bearer token from 
+# any dracula.robota.ua request header
+
+══════════════════════════════════════════════
+FIX 3 — Salary currency in scorer prompt
+══════════════════════════════════════════════
+
+In backend/services/hunt_vacancy_parser.py:
+
+Find the Claude prompt and update the salary instruction:
+
+Replace whatever salary instruction exists with:
+
+"Зарплата: якщо є знак $ або слово USD/долар — 
+це USD, запиши як є.
+Якщо грн/UAH — це гривні.  
+Якщо просто число без валюти:
+  - число < 5000 → USD
+  - число >= 5000 → UAH
+
+ПРИКЛАДИ:
+'до 600$' → salary_max: 600, salary_currency: 'USD'
+'до 1000$' → salary_max: 1000, salary_currency: 'USD'
+'до 40000 грн' → salary_max: 40000, salary_currency: 'UAH'
+'до 800' → salary_max: 800, salary_currency: 'USD'
+
+Завжди повертай обидва поля:
+salary_max: число
+salary_currency: 'USD' або 'UAH'"
+
+In backend/services/hunt_scorer.py:
+
+Find where vacancy budget is passed to scoring prompt.
+Replace:
+"Бюджет: {salary_max}"
+With:
+"Бюджет: {salary_max} {salary_currency}"
+
+So scorer sees "Бюджет: 1000 USD" not "Бюджет: 1000"
+and stops confusing it with UAH.

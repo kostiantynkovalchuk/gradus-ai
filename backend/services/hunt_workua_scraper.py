@@ -16,6 +16,18 @@ def _rate_limit():
         time.sleep(3.0 - elapsed)
     _last_request_time = time.time()
 
+def _get_public_session():
+    import requests
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "uk-UA,uk;q=0.9",
+    })
+    return session
+
 WORKUA_BASE = "https://www.work.ua"
 WORKUA_RESUMES = "https://www.work.ua/resumes"
 
@@ -181,15 +193,11 @@ def scrape_workua_candidates(
     keywords: List[str],
     max_candidates: int = 20,
 ) -> List[Dict]:
-    from services.workua_auth import get_workua_session
     from services.salary_normalizer import extract_salary
 
     max_candidates = min(max_candidates, 30)
 
-    session = get_workua_session()
-    if not session:
-        logger.warning("Work.ua session unavailable - returning empty")
-        return []
+    session = _get_public_session()
 
     candidates = []
 
@@ -240,7 +248,7 @@ def scrape_workua_candidates(
             candidate.setdefault("current_role", position)
             candidate.setdefault("experience_years", 0)
             candidate.setdefault("skills", "")
-            candidate.setdefault("contact", "")
+            candidate.setdefault("contact", "Деталі на Work.ua")
             candidate.setdefault("raw_text", "")
 
             candidates.append(candidate)
