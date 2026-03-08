@@ -27,23 +27,13 @@ HEADERS = {
 _cached_token: Optional[str] = None
 _token_expires_at: float = 0
 
-LOGIN_ENDPOINTS = [
-    {
-        "url": "https://api.robota.ua/auth/login",
-        "json": lambda email, pwd: {"username": email, "password": pwd},
-    },
-    {
-        "url": "https://robota.ua/auth/login",
-        "json": lambda email, pwd: {"email": email, "password": pwd},
-    },
-    {
-        "url": "https://api.employer.robota.ua/auth/token",
-        "json": lambda email, pwd: {"email": email, "password": pwd},
-    },
-    {
-        "url": "https://employer-api.robota.ua/auth/login",
-        "json": lambda email, pwd: {"username": email, "password": pwd, "rememberMe": True},
-    },
+AUTH_URL = "https://robota.ua/auth/login"
+
+PAYLOADS = [
+    {"email": None, "password": None},
+    {"username": None, "password": None},
+    {"login": None, "password": None, "isEmployer": True},
+    {"email": None, "password": None, "grant_type": "password"},
 ]
 
 
@@ -77,27 +67,38 @@ def get_robotaua_token() -> Optional[str]:
 
     logger.info("Authenticating with Robota.ua...")
 
-    last_resp = None
     req_headers = {
         "User-Agent": HEADERS["User-Agent"],
         "Content-Type": "application/json",
         "Origin": "https://robota.ua",
         "Referer": "https://robota.ua/",
+        "apollographql-client-name": "web-alliance-desktop",
+        "apollographql-client-version": "071f324",
     }
 
-    for endpoint in LOGIN_ENDPOINTS:
-        url = endpoint["url"]
-        body = endpoint["json"](ROBOTAUA_EMAIL, ROBOTAUA_PASSWORD)
+    last_resp = None
+
+    for i, template in enumerate(PAYLOADS, 1):
+        body = {}
+        for k, v in template.items():
+            if v is None:
+                if k in ("email", "login", "username"):
+                    body[k] = ROBOTAUA_EMAIL
+                elif k == "password":
+                    body[k] = ROBOTAUA_PASSWORD
+            else:
+                body[k] = v
 
         try:
             resp = requests.post(
-                url,
+                AUTH_URL,
                 json=body,
                 headers=req_headers,
                 timeout=15,
             )
             last_resp = resp
-            logger.info(f"Trying: {url} → status {resp.status_code}")
+            logger.info(f"Robota.ua payload {i}: status {resp.status_code}")
+            logger.info(f"Response: {resp.text[:300]}")
 
             if resp.status_code == 200:
                 try:
@@ -109,11 +110,42 @@ def get_robotaua_token() -> Optional[str]:
                 if token:
                     _set_token_expiry(token)
                     _cached_token = token
-                    logger.info(f"Robota.ua authentication successful via {url}")
+                    logger.info(f"Robota.ua authentication successful (payload {i})")
                     return token
 
         except Exception as e:
-            logger.warning(f"Robota.ua endpoint {url} error: {e}")
+            logger.warning(f"Robota.ua payload {i} error: {e}")
+            continue
+
+    for alt_url in [
+        "https://api.robota.ua/auth/login",
+        "https://api.employer.robota.ua/auth/token",
+        "https://employer-api.robota.ua/auth/login",
+    ]:
+        try:
+            resp = requests.post(
+                alt_url,
+                json={"username": ROBOTAUA_EMAIL, "password": ROBOTAUA_PASSWORD, "rememberMe": True},
+                headers=req_headers,
+                timeout=15,
+            )
+            last_resp = resp
+            logger.info(f"Trying: {alt_url} → status {resp.status_code}")
+            logger.info(f"Response: {resp.text[:300]}")
+
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    continue
+                token = _extract_token(data)
+                if token:
+                    _set_token_expiry(token)
+                    _cached_token = token
+                    logger.info(f"Robota.ua authentication successful via {alt_url}")
+                    return token
+        except Exception as e:
+            logger.warning(f"Robota.ua endpoint {alt_url} error: {e}")
             continue
 
     if last_resp is not None:

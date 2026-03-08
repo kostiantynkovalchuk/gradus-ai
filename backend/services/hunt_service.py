@@ -8,6 +8,26 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 
+CITY_ALIASES = {
+    "дніпро": ["дніпро", "dnipro", "дніпропетровськ"],
+    "київ": ["київ", "kyiv", "киев"],
+    "харків": ["харків", "kharkiv", "харьков"],
+    "одеса": ["одеса", "odesa", "одесса"],
+    "львів": ["львів", "lviv"],
+}
+
+
+def _cities_match(vacancy_city: str, candidate_city: str) -> bool:
+    if not vacancy_city or not candidate_city:
+        return True
+    v = vacancy_city.lower().strip()
+    c = candidate_city.lower().strip()
+    for aliases in CITY_ALIASES.values():
+        if any(v in a or a in v for a in aliases):
+            if any(c in a or a in c for a in aliases):
+                return True
+    return v in c or c in v
+
 
 async def _send_message(chat_id: int, text: str, thread_id: int = None, reply_markup: dict = None) -> dict:
     if not BOT_TOKEN:
@@ -240,6 +260,16 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
                 continue
             s["raw_text"] = to_score[i].get("raw_text", "")
             scored_candidates.append(s)
+
+        vacancy_city = parsed.get("city", "")
+        for sc in scored_candidates:
+            if not _cities_match(vacancy_city, sc.get("city", "")):
+                old_score = sc.get("score", 0)
+                sc["score"] = min(old_score, 20)
+                logger.info(
+                    f"City mismatch: capped score to 20 "
+                    f"({sc.get('city')} vs {vacancy_city})"
+                )
 
         scored_candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
 

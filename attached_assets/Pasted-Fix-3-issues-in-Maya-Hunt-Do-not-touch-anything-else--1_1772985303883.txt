@@ -1,0 +1,211 @@
+Fix 3 issues in Maya Hunt. Do not touch anything else.
+
+══════════════════════════════════════════════
+FIX 1 — Work.ua check_cookie redirect
+══════════════════════════════════════════════
+
+In backend/services/workua_auth.py:
+
+Work.ua redirects to ?check_cookie=1 for non-browser clients.
+Fix by handling this redirect and retrying with cookies set.
+
+Replace the login logic with:
+
+def get_workua_session():
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    
+    try:
+        # Step 1: GET login page — handle check_cookie redirect
+        resp = session.get(
+            "https://www.work.ua/employer/login/",
+            timeout=15,
+            allow_redirects=True
+        )
+        
+        # If redirected to check_cookie, follow it
+        if "check_cookie" in resp.url:
+            logger.info("Work.ua check_cookie redirect detected")
+            # Set a fake cookie to pass the check
+            session.cookies.set(
+                "check_cookie", "1", 
+                domain=".work.ua"
+            )
+            resp = session.get(
+                "https://www.work.ua/employer/login/",
+                timeout=15,
+                allow_redirects=True
+            )
+        
+        logger.info(f"Login page loaded: {resp.status_code}, {resp.url}")
+        
+        # Step 2: Extract CSRF token
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        csrf_token = None
+        inp = soup.find("input", {"name": "csrfmiddlewaretoken"})
+        if inp:
+            csrf_token = inp.get("value")
+        if not csrf_token:
+            csrf_token = session.cookies.get("csrftoken")
+        
+        logger.info(f"CSRF token found: {bool(csrf_token)}")
+        
+        # Step 3: POST login
+        login_data = {
+            "email": WORKUA_EMAIL,
+            "password": WORKUA_PASSWORD,
+            "next": "/employer/candidates/",
+        }
+        if csrf_token:
+            login_data["csrfmiddlewaretoken"] = csrf_token
+        
+        login_resp = session.post(
+            "https://www.work.ua/employer/login/",
+            data=login_data,
+            timeout=15,
+            allow_redirects=True,
+            headers={
+                **session.headers,
+                "Referer": "https://www.work.ua/employer/login/",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+        )
+        
+        logger.info(
+            f"Login POST: {login_resp.status_code}, "
+            f"URL: {login_resp.url}"
+        )
+        logger.info(f"Response preview: {login_resp.text[:300]}")
+        
+        # Step 4: Verify success
+        success_indicators = [
+            "logout", "cabinet", "Знайти кандидатів",
+            "Вийти", "employer/candidates"
+        ]
+        if any(s in login_resp.text or s in login_resp.url 
+               for s in success_indicators):
+            logger.info("Work.ua login successful")
+            return session
+        
+        logger.error(
+            f"Work.ua login failed. "
+            f"Final URL: {login_resp.url}"
+        )
+        logger.error(f"Response: {login_resp.text[:500]}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Work.ua auth error: {e}")
+        return None
+
+══════════════════════════════════════════════
+FIX 2 — Robota.ua login payload
+══════════════════════════════════════════════
+
+In backend/services/robotaua_auth.py:
+
+robota.ua/auth/login returns 500 — endpoint exists but 
+payload format is wrong.
+
+Try these payload formats in order for that endpoint:
+
+# Attempt 1: email/password JSON
+payload1 = {
+    "email": ROBOTAUA_EMAIL, 
+    "password": ROBOTAUA_PASSWORD
+}
+
+# Attempt 2: username/password JSON  
+payload2 = {
+    "username": ROBOTAUA_EMAIL,
+    "password": ROBOTAUA_PASSWORD
+}
+
+# Attempt 3: nested login object
+payload3 = {
+    "login": ROBOTAUA_EMAIL,
+    "password": ROBOTAUA_PASSWORD,
+    "isEmployer": True
+}
+
+# Attempt 4: with grant_type (OAuth style)
+payload4 = {
+    "email": ROBOTAUA_EMAIL,
+    "password": ROBOTAUA_PASSWORD,
+    "grant_type": "password"
+}
+
+For each attempt log:
+logger.info(f"Robota.ua payload {i}: status {resp.status_code}")
+logger.info(f"Response: {resp.text[:300]}")
+
+Try all 4 against https://robota.ua/auth/login
+Stop at first successful response (status 200 with a token)
+
+Also add these headers specifically for robota.ua auth:
+"apollographql-client-name": "web-alliance-desktop"
+"apollographql-client-version": "071f324"
+
+══════════════════════════════════════════════
+FIX 3 — City filter + salary display
+══════════════════════════════════════════════
+
+In backend/services/hunt_service.py:
+
+After scoring, add hard city filter:
+candidates that don't match vacancy city get score capped at 20.
+
+CITY_ALIASES = {
+    "дніпро": ["дніпро", "dnipro", "дніпропетровськ"],
+    "київ": ["київ", "kyiv", "киев"],
+    "харків": ["харків", "kharkiv", "харьков"],
+    "одеса": ["одеса", "odesa", "одесса"],
+    "львів": ["львів", "lviv"],
+}
+
+def cities_match(vacancy_city: str, candidate_city: str) -> bool:
+    if not vacancy_city or not candidate_city:
+        return True  # Unknown city — don't penalize
+    v = vacancy_city.lower().strip()
+    c = candidate_city.lower().strip()
+    for aliases in CITY_ALIASES.values():
+        if any(v in a or a in v for a in aliases):
+            if any(c in a or a in c for a in aliases):
+                return True
+    return v in c or c in v
+
+After scoring each candidate:
+if not cities_match(vacancy_city, candidate.get("city", "")):
+    candidate["ai_score"] = min(candidate.get("ai_score", 0), 20)
+    logger.info(
+        f"City mismatch: capped score to 20 "
+        f"({candidate.get('city')} vs {vacancy_city})"
+    )
+
+In backend/services/hunt_card_formatter.py:
+
+Fix salary display — currently shows "30000 $/міс" for UAH.
+
+Update salary formatting logic:
+def format_salary(amount, currency="UAH"):
+    if not amount:
+        return "За домовленістю"
+    
+    # Detect if amount is clearly UAH (> 5000)
+    # or USD (< 5000)
+    if isinstance(amount, (int, float)):
+        if amount > 5000:
+            # Almost certainly UAH
+            usd = int(amount / get_usd_uah_rate())
+            return f"{int(amount):,} грн (~${usd})"
+        else:
+            # Almost certainly USD
+            uah = int(amount * get_usd_uah_rate())
+            return f"${int(amount):,} (~{uah:,} грн)"
+    
+    return str(amount)
+
+Replace the salary line in card formatting with:
+💰 {format_salary(candidate.get('salary_expectation'))}

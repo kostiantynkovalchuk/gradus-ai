@@ -9,6 +9,35 @@ SOURCE_EMOJI = {
 }
 
 
+def _format_salary(candidate: dict) -> str:
+    usd = candidate.get("salary_expectation_usd")
+    uah = candidate.get("salary_expectation_uah")
+
+    if usd and uah:
+        return f"${usd:,} (~{uah:,} грн)"
+    if usd:
+        from services.salary_normalizer import get_usd_uah_rate
+        return f"${usd:,} (~{int(usd * get_usd_uah_rate()):,} грн)"
+    if uah:
+        from services.salary_normalizer import get_usd_uah_rate
+        usd_calc = int(uah / get_usd_uah_rate())
+        return f"{uah:,} грн (~${usd_calc:,})"
+
+    amount = candidate.get("salary_expectation")
+    if not amount or not isinstance(amount, (int, float)):
+        return "За домовленістю"
+
+    amount = int(amount)
+    from services.salary_normalizer import get_usd_uah_rate
+    rate = get_usd_uah_rate()
+    if amount > 5000:
+        usd_calc = int(amount / rate)
+        return f"{amount:,} грн (~${usd_calc:,})"
+    else:
+        uah_calc = int(amount * rate)
+        return f"${amount:,} (~{uah_calc:,} грн)"
+
+
 def format_candidate_card(candidate: dict, index: int) -> str:
     try:
         score = candidate.get("score", 0)
@@ -21,7 +50,6 @@ def format_candidate_card(candidate: dict, index: int) -> str:
         current_role = candidate.get("current_role")
         strengths = candidate.get("strengths", [])
         concerns = candidate.get("concerns", [])
-        salary = candidate.get("salary_expectation")
         contact = candidate.get("contact")
         profile_url = candidate.get("profile_url")
         summary = candidate.get("summary", "")
@@ -43,7 +71,7 @@ def format_candidate_card(candidate: dict, index: int) -> str:
         if concerns:
             lines.append(f"⚠️ {' · '.join(concerns)}")
 
-        lines.append(f"💰 {salary or '?'} $/міс")
+        lines.append(f"💰 {_format_salary(candidate)}")
         lines.append(f"📞 {contact or 'Контакт не вказано'}")
 
         if profile_url:
