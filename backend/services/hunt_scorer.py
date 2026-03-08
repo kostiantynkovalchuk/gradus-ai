@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from anthropic import Anthropic
@@ -18,6 +19,28 @@ def _ensure_client():
     return client
 
 
+def safe_parse_json(text: str) -> dict:
+    text = re.sub(r'```json|```', '', text).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        open_braces = text.count('{') - text.count('}')
+        open_brackets = text.count('[') - text.count(']')
+
+        if text.count('"') % 2 != 0:
+            text += '"'
+
+        text += ']' * open_brackets
+        text += '}' * open_braces
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON repair failed: {e}")
+            return {}
+
+
 async def score_candidate(candidate: dict, vacancy: dict) -> dict:
     try:
         c = _ensure_client()
@@ -26,7 +49,7 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
 
         response = c.messages.create(
             model=CLAUDE_MODEL_TELEGRAM,
-            max_tokens=512,
+            max_tokens=2000,
             system=(
                 "You are an HR assistant scoring a candidate for a vacancy.\n"
                 "Return JSON only. No preamble, no markdown.\n\n"
@@ -57,10 +80,11 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
         )
 
         raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        scored = safe_parse_json(raw)
 
-        scored = json.loads(raw)
+        if not scored:
+            return _fallback(candidate, "Empty JSON after parse")
+
         scored.setdefault("score", 0)
         scored.setdefault("full_name", "Невідомо")
         scored.setdefault("age", None)
@@ -102,7 +126,8 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
 
 
 async def extract_salary_data(candidate: dict, vacancy: dict, vacancy_id: int):
-    from services.salary_normalizer import extract_salary, USD_TO_UAH_RATE
+    from services.salary_normalizer import extract_salary, get_usd_uah_rate
+    USD_TO_UAH_RATE = get_usd_uah_rate()
 
     salary_raw = candidate.get("salary_expectation_raw", "")
     salary_usd = candidate.get("salary_expectation_usd")

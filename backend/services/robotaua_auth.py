@@ -27,6 +27,42 @@ HEADERS = {
 _cached_token: Optional[str] = None
 _token_expires_at: float = 0
 
+LOGIN_ENDPOINTS = [
+    {
+        "url": "https://api.robota.ua/auth/login",
+        "json": lambda email, pwd: {"username": email, "password": pwd},
+    },
+    {
+        "url": "https://robota.ua/auth/login",
+        "json": lambda email, pwd: {"email": email, "password": pwd},
+    },
+    {
+        "url": "https://api.employer.robota.ua/auth/token",
+        "json": lambda email, pwd: {"email": email, "password": pwd},
+    },
+    {
+        "url": "https://employer-api.robota.ua/auth/login",
+        "json": lambda email, pwd: {"username": email, "password": pwd, "rememberMe": True},
+    },
+]
+
+
+def _extract_token(data: dict) -> Optional[str]:
+    return data.get("token") or data.get("accessToken") or data.get("jwt")
+
+
+def _set_token_expiry(token: str) -> None:
+    global _token_expires_at
+    import base64
+    import json as json_lib
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        payload = json_lib.loads(base64.b64decode(payload_b64))
+        _token_expires_at = float(payload.get("exp", 0))
+    except Exception:
+        _token_expires_at = time.time() + 86400
+
 
 def get_robotaua_token() -> Optional[str]:
     global _cached_token, _token_expires_at
@@ -41,74 +77,55 @@ def get_robotaua_token() -> Optional[str]:
 
     logger.info("Authenticating with Robota.ua...")
 
-    try:
-        login_resp = requests.post(
-            "https://employer-api.robota.ua/auth/login",
-            json={
-                "username": ROBOTAUA_EMAIL,
-                "password": ROBOTAUA_PASSWORD,
-                "rememberMe": True,
-            },
-            headers={
-                "User-Agent": HEADERS["User-Agent"],
-                "Content-Type": "application/json",
-                "Origin": "https://robota.ua",
-                "Referer": "https://robota.ua/",
-            },
-            timeout=15,
-        )
+    last_resp = None
+    req_headers = {
+        "User-Agent": HEADERS["User-Agent"],
+        "Content-Type": "application/json",
+        "Origin": "https://robota.ua",
+        "Referer": "https://robota.ua/",
+    }
 
-        if login_resp.status_code == 200:
-            data = login_resp.json()
-            token = data.get("token") or data.get("accessToken")
+    for endpoint in LOGIN_ENDPOINTS:
+        url = endpoint["url"]
+        body = endpoint["json"](ROBOTAUA_EMAIL, ROBOTAUA_PASSWORD)
 
-            if token:
-                import base64
-                import json as json_lib
+        try:
+            resp = requests.post(
+                url,
+                json=body,
+                headers=req_headers,
+                timeout=15,
+            )
+            last_resp = resp
+            logger.info(f"Trying: {url} → status {resp.status_code}")
+
+            if resp.status_code == 200:
                 try:
-                    payload_b64 = token.split(".")[1]
-                    payload_b64 += "=" * (4 - len(payload_b64) % 4)
-                    payload = json_lib.loads(base64.b64decode(payload_b64))
-                    _token_expires_at = float(payload.get("exp", 0))
+                    data = resp.json()
                 except Exception:
-                    _token_expires_at = time.time() + 86400
+                    continue
 
-                _cached_token = token
-                logger.info("Robota.ua authentication successful")
-                return token
+                token = _extract_token(data)
+                if token:
+                    _set_token_expiry(token)
+                    _cached_token = token
+                    logger.info(f"Robota.ua authentication successful via {url}")
+                    return token
 
-        logger.warning(
-            f"Primary login failed ({login_resp.status_code}), trying alternative..."
-        )
+        except Exception as e:
+            logger.warning(f"Robota.ua endpoint {url} error: {e}")
+            continue
 
-        alt_resp = requests.post(
-            "https://robota.ua/api/auth/login",
-            json={
-                "email": ROBOTAUA_EMAIL,
-                "password": ROBOTAUA_PASSWORD,
-            },
-            headers={
-                "User-Agent": HEADERS["User-Agent"],
-                "Content-Type": "application/json",
-            },
-            timeout=15,
-        )
+    if last_resp is not None:
+        logger.error(f"Robota.ua login failed. Last status: {last_resp.status_code}")
+        try:
+            logger.error(f"Last response body: {last_resp.text[:200]}")
+        except Exception:
+            pass
+    else:
+        logger.error("Robota.ua login failed - no endpoints responded")
 
-        if alt_resp.status_code == 200:
-            data = alt_resp.json()
-            token = data.get("token") or data.get("accessToken") or data.get("jwt")
-            if token:
-                _cached_token = token
-                _token_expires_at = time.time() + 86400
-                logger.info("Robota.ua authentication successful (alt endpoint)")
-                return token
-
-        logger.error(f"Robota.ua login failed. Status: {alt_resp.status_code}")
-        return None
-
-    except Exception as e:
-        logger.error(f"Robota.ua auth error: {e}")
-        return None
+    return None
 
 
 def get_graphql_headers(token: str) -> dict:

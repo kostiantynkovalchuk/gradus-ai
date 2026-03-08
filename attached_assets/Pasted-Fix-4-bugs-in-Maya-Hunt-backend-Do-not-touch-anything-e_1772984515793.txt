@@ -1,0 +1,119 @@
+Fix 4 bugs in Maya Hunt backend. Do not touch anything else.
+
+══════════════════════════════════════════════
+FIX 1 — USD_TO_UAH_RATE import error
+══════════════════════════════════════════════
+
+In backend/services/hunt_service.py:
+Find all occurrences of:
+from services.salary_normalizer import USD_TO_UAH_RATE
+
+Replace with:
+from services.salary_normalizer import get_usd_uah_rate
+USD_TO_UAH_RATE = get_usd_uah_rate()
+
+Or if USD_TO_UAH_RATE is used inline, replace usage with:
+get_usd_uah_rate()
+
+══════════════════════════════════════════════
+FIX 2 — Scorer JSON truncation
+══════════════════════════════════════════════
+
+In backend/services/hunt_scorer.py:
+
+1. Increase max_tokens for the scoring API call to 2000
+   (currently likely 500-1000, causing truncation)
+
+2. Add JSON repair before parsing — wrap the parse block:
+
+import re
+
+def safe_parse_json(text: str) -> dict:
+    """Parse JSON with repair for common truncation issues"""
+    # Strip markdown fences
+    text = re.sub(r'```json|```', '', text).strip()
+    
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Try to fix truncated JSON by closing open structures
+        # Count unclosed braces and brackets
+        open_braces = text.count('{') - text.count('}')
+        open_brackets = text.count('[') - text.count(']')
+        
+        # Close any open strings first
+        if text.count('"') % 2 != 0:
+            text += '"'
+        
+        # Close brackets then braces
+        text += ']' * open_brackets
+        text += '}' * open_braces
+        
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON repair failed: {e}")
+            return {}
+
+Replace all json.loads() calls in the scorer with 
+safe_parse_json()
+
+══════════════════════════════════════════════
+FIX 3 — Work.ua login URL
+══════════════════════════════════════════════
+
+In backend/services/workua_auth.py:
+
+The login URL https://www.work.ua/login/ returns 404.
+Work.ua uses a different auth flow.
+
+Replace the login logic with session-based approach:
+
+1. Try employer login endpoint:
+   POST https://www.work.ua/employer/login/
+   with form data: email, password, csrfmiddlewaretoken
+
+2. If 404, try:
+   POST https://www.work.ua/api/v2/auth/login/
+   with JSON: {"email": email, "password": password}
+
+3. If both fail, try GET the login page first:
+   GET https://www.work.ua/uk/employer/
+   Check if already redirected to cabinet
+   (sometimes session cookies are enough)
+
+4. Verify login by checking if response contains 
+   "cabinet" or "Знайти кандидатів" or "Вийти"
+
+Add detailed logging for each attempt:
+logger.info(f"Work.ua login attempt: {url} → {resp.status_code}")
+logger.info(f"Response URL after redirect: {resp.url}")
+
+══════════════════════════════════════════════
+FIX 4 — Robota.ua login URL  
+══════════════════════════════════════════════
+
+In backend/services/robotaua_auth.py:
+
+The endpoint https://employer-api.robota.ua/auth/login 
+returns 404.
+
+Try these endpoints in order:
+
+1. POST https://api.robota.ua/auth/login
+   JSON: {"username": email, "password": password}
+
+2. POST https://robota.ua/auth/login  
+   JSON: {"email": email, "password": password}
+
+3. POST https://api.employer.robota.ua/auth/token
+   JSON: {"email": email, "password": password}
+
+For each attempt log:
+logger.info(f"Trying: {url} → status {resp.status_code}")
+
+If all fail, log the response body of the last attempt 
+(first 200 chars only) so we can see what the server returns:
+logger.error(f"Last response body: {resp.text[:200]}")
+
+This will help us find the correct endpoint.
