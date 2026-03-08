@@ -302,13 +302,23 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
             sc["db_id"] = candidate.id
         db.commit()
 
-        top = scored_candidates[:5]
+        quality = [sc for sc in scored_candidates if sc.get("score", 0) >= 35]
         total = len(scored_candidates)
+
+        if not quality:
+            if status_msg_id:
+                await _edit_message(
+                    chat_id, status_msg_id,
+                    f"😔 Якісних кандидатів не знайдено.\nСпробуйте переформулювати вакансію або розширити вимоги.",
+                )
+            return
+
+        top = quality[:5]
 
         if status_msg_id:
             await _edit_message(
                 chat_id, status_msg_id,
-                f"✅ Знайдено {total} кандидатів. Показую топ {min(5, total)}:",
+                f"✅ Знайдено {len(quality)} якісних кандидатів з {total}. Показую топ {min(5, len(quality))}:",
             )
 
         for idx, sc in enumerate(top, 1):
