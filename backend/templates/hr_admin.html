@@ -1025,9 +1025,14 @@
                 <button class="currency-btn active" onclick="setCurrency('USD')" id="btnUSD">USD</button>
                 <button class="currency-btn" onclick="setCurrency('UAH')" id="btnUAH">грн</button>
             </div>
-            <p style="font-size:0.8rem;color:var(--gray-400);margin:4px 0 12px;">Дані зібрані Maya Hunt з відкритих джерел</p>
+            <div style="display:flex;align-items:center;gap:12px;margin:4px 0 8px;flex-wrap:wrap;">
+                <span style="font-size:0.8rem;color:var(--gray-400);">Дані зібрані Maya Hunt з відкритих джерел</span>
+                <span id="robotauaBadge" style="display:none;font-size:0.75rem;background:rgba(239,68,68,0.15);color:#ef4444;padding:2px 8px;border-radius:8px;font-weight:600;"></span>
+            </div>
+            <div id="nbuRateBanner" style="display:none;font-size:0.8rem;color:var(--gray-400);margin-bottom:8px;">💱 Курс НБУ: <span id="nbuRateValue"></span></div>
             <div id="salaryChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів<br>Maya автоматично збирає статистику зарплат під час кожного пошуку.</div>
             <canvas id="salaryChart" height="300"></canvas>
+            <div id="marketIntelligence" style="margin-top:16px;"></div>
         </div>
 
         <div class="charts-row">
@@ -1563,6 +1568,7 @@
                 renderSalaryChart(huntDataCache.salary_by_city);
                 renderSkillsChart(huntDataCache.top_skills);
                 renderTrendsChart(huntDataCache.salary_trends);
+                renderMarketIntelligence(huntDataCache.market_intelligence || []);
             }
         }
 
@@ -1599,6 +1605,22 @@
                 renderHuntRecentTable(data.recent_vacancies);
                 renderEfficiencyTable(kpi);
                 renderSourceCards(data.active_sources, kpi.total_candidates_processed);
+
+                if (data.current_usd_rate) {
+                    const rateBanner = document.getElementById('nbuRateBanner');
+                    document.getElementById('nbuRateValue').textContent = '1 USD = ' + data.current_usd_rate.toFixed(2) + ' грн · оновлено сьогодні';
+                    rateBanner.style.display = 'block';
+                }
+
+                const mi = data.market_intelligence || [];
+                if (mi.length > 0) {
+                    let totalEmp = 0, totalCand = 0;
+                    mi.forEach(m => { totalEmp += (m.employer_count || 0); totalCand += (m.candidate_count || 0); });
+                    const badge = document.getElementById('robotauaBadge');
+                    badge.textContent = '🔴 Robota.ua · ' + totalEmp.toLocaleString() + ' вакансій · ' + totalCand.toLocaleString() + ' кандидатів';
+                    badge.style.display = 'inline-block';
+                }
+                renderMarketIntelligence(mi);
 
             } catch (error) {
                 console.error('Error loading hunt analytics:', error);
@@ -1705,28 +1727,50 @@
             const candidateData = salaryData.map(d => isUSD ? d.candidate_median : (d.candidate_median_uah || 0));
             const employerData = salaryData.map(d => isUSD ? d.employer_median : (d.employer_median_uah || 0));
 
+            const datasets = [
+                {
+                    label: 'Очікування кандидатів',
+                    data: candidateData,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1,
+                },
+                {
+                    label: 'Пропозиції роботодавців',
+                    data: employerData,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 1,
+                }
+            ];
+
+            const mi = (huntDataCache && huntDataCache.market_intelligence) || [];
+            if (mi.length > 0) {
+                const marketData = salaryData.map(d => {
+                    const match = mi.find(m => d.position && m.position && d.position.toLowerCase().includes(m.position.toLowerCase()));
+                    return match ? (isUSD ? match.employer_median_usd : match.employer_median_uah) : null;
+                });
+                if (marketData.some(v => v !== null)) {
+                    datasets.push({
+                        label: 'Ринок (Robota.ua)',
+                        data: marketData,
+                        type: 'line',
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        borderWidth: 2,
+                        borderDash: [6, 3],
+                        pointRadius: 4,
+                        pointBackgroundColor: '#ef4444',
+                        fill: false,
+                        spanGaps: true,
+                    });
+                }
+            }
+
             if (salaryChartInstance) salaryChartInstance.destroy();
             salaryChartInstance = new Chart(canvas.getContext('2d'), {
                 type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: 'Очікування кандидатів',
-                            data: candidateData,
-                            backgroundColor: 'rgba(59, 130, 246, 0.7)',
-                            borderColor: 'rgba(59, 130, 246, 1)',
-                            borderWidth: 1,
-                        },
-                        {
-                            label: 'Пропозиції роботодавців',
-                            data: employerData,
-                            backgroundColor: 'rgba(249, 115, 22, 0.7)',
-                            borderColor: 'rgba(249, 115, 22, 1)',
-                            borderWidth: 1,
-                        }
-                    ]
-                },
+                data: { labels: labels, datasets: datasets },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: {
@@ -1883,6 +1927,42 @@
         function renderSourceCards(activeSources, totalCandidates) {
             const el = document.getElementById('srcTelegram');
             el.textContent = activeSources + ' каналів активно | ' + totalCandidates + ' записів';
+        }
+
+        function renderMarketIntelligence(miData) {
+            const container = document.getElementById('marketIntelligence');
+            if (!miData || miData.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+            const isUSD = huntCurrency === 'USD';
+            let html = '<h4 style="margin:0 0 12px;color:var(--gray-200);font-size:0.95rem;">Ринкова аналітика</h4>';
+            miData.forEach(m => {
+                const empVal = isUSD ? ('$' + (m.employer_median_usd||0).toLocaleString()) : ((m.employer_median_uah||0).toLocaleString() + ' грн');
+                const candVal = isUSD ? ('$' + (m.candidate_median_usd||0).toLocaleString()) : ((m.candidate_median_uah||0).toLocaleString() + ' грн');
+                const gapNum = isUSD ? (m.gap_usd||0) : (m.gap_uah||0);
+                const gapSign = gapNum > 0 ? '+' : '';
+                const gapVal = isUSD ? (gapSign + '$' + gapNum.toLocaleString()) : (gapSign + gapNum.toLocaleString() + ' грн');
+                let gapColor = 'var(--gray-400)';
+                if (gapNum > 0) gapColor = '#22c55e';
+                else if (gapNum < 0) gapColor = '#ef4444';
+                const dateStr = m.collected_at ? new Date(m.collected_at).toLocaleDateString('uk-UA') : '';
+                html += '<div style="background:var(--gray-800);border:1px solid var(--gray-700);border-radius:12px;padding:16px;margin-bottom:12px;">';
+                html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+                html += '<span style="font-weight:600;color:var(--gray-100);font-size:0.95rem;">💼 ' + (m.position||'—') + '</span>';
+                html += '<span style="font-size:0.75rem;color:var(--gray-400);">📅 ' + dateStr + '</span>';
+                html += '</div>';
+                html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">';
+                html += '<div><div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:2px;">Роботодавці пропонують</div><div style="font-size:1.1rem;font-weight:700;color:var(--gray-100);">' + empVal + '</div></div>';
+                html += '<div><div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:2px;">Кандидати очікують</div><div style="font-size:1.1rem;font-weight:700;color:var(--gray-100);">' + candVal + '</div></div>';
+                html += '<div><div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:2px;">Різниця (gap)</div><div style="font-size:1.1rem;font-weight:700;color:' + gapColor + ';">' + gapVal + '</div></div>';
+                html += '</div>';
+                html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;color:var(--gray-400);">';
+                html += '<span>Вибірка: ' + (m.employer_count||0).toLocaleString() + ' вакансій · ' + (m.candidate_count||0).toLocaleString() + ' резюме</span>';
+                html += '<a href="' + (m.source_url||'https://robota.ua/zapros/transparent-salary') + '" target="_blank" style="color:#ef4444;text-decoration:none;">🔗 Robota.ua Прозора робота</a>';
+                html += '</div></div>';
+            });
+            container.innerHTML = html;
         }
     </script>
 </body>

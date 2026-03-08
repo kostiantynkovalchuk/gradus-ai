@@ -1,0 +1,589 @@
+You are adding Robota.ua salary market intelligence to Maya Hunt 
+in the Gradus AI project. Do NOT break any existing functionality.
+
+This adds one new service that:
+1. Authenticates with Robota.ua and gets a fresh JWT token
+2. Calls their GraphQL salary analytics API per vacancy search
+3. Saves aggregated salary data to hunt_salary_data table
+4. Feeds the existing dashboard salary charts automatically
+
+══════════════════════════════════════════════
+PART 1 — ROBOTA.UA AUTH SERVICE
+══════════════════════════════════════════════
+
+## New file: backend/services/robotaua_auth.py
+
+import requests
+import logging
+import os
+import time
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+ROBOTAUA_EMAIL = os.getenv("ROBOTAUA_EMAIL", "")
+ROBOTAUA_PASSWORD = os.getenv("ROBOTAUA_PASSWORD", "")
+
+GRAPHQL_URL = "https://dracula.robota.ua/"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/145.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "uk",
+    "apollographql-client-name": "web-alliance-desktop",
+    "apollographql-client-version": "071f324",
+    "Content-Type": "application/json",
+    "Origin": "https://robota.ua",
+    "Referer": "https://robota.ua/",
+}
+
+# Module-level token cache
+_cached_token: Optional[str] = None
+_token_expires_at: float = 0
+
+
+def get_robotaua_token() -> Optional[str]:
+    """
+    Get valid JWT token for Robota.ua API.
+    Returns cached token if still valid, otherwise re-authenticates.
+    Returns None if credentials not configured or login fails.
+    """
+    global _cached_token, _token_expires_at
+
+    if not ROBOTAUA_EMAIL or not ROBOTAUA_PASSWORD:
+        logger.warning("ROBOTAUA_EMAIL/PASSWORD not configured")
+        return None
+
+    # Return cached token if valid for more than 1 hour
+    if _cached_token and time.time() < (_token_expires_at - 3600):
+        logger.debug("Using cached Robota.ua token")
+        return _cached_token
+
+    logger.info("Authenticating with Robota.ua...")
+
+    try:
+        # Robota.ua login via their REST auth endpoint
+        login_resp = requests.post(
+            "https://employer-api.robota.ua/auth/login",
+            json={
+                "username": ROBOTAUA_EMAIL,
+                "password": ROBOTAUA_PASSWORD,
+                "rememberMe": True
+            },
+            headers={
+                "User-Agent": HEADERS["User-Agent"],
+                "Content-Type": "application/json",
+                "Origin": "https://robota.ua",
+                "Referer": "https://robota.ua/",
+            },
+            timeout=15
+        )
+
+        if login_resp.status_code == 200:
+            data = login_resp.json()
+            token = data.get("token") or data.get("accessToken")
+
+            if token:
+                # Decode expiry from JWT payload (middle segment)
+                import base64, json as json_lib
+                try:
+                    payload_b64 = token.split(".")[1]
+                    # Add padding if needed
+                    payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                    payload = json_lib.loads(
+                        base64.b64decode(payload_b64)
+                    )
+                    _token_expires_at = float(payload.get("exp", 0))
+                except Exception:
+                    # Default: treat as valid for 24 hours
+                    _token_expires_at = time.time() + 86400
+
+                _cached_token = token
+                logger.info("Robota.ua authentication successful")
+                return token
+
+        # Fallback: try alternative login endpoint
+        logger.warning(
+            f"Primary login failed ({login_resp.status_code}), "
+            f"trying alternative..."
+        )
+
+        alt_resp = requests.post(
+            "https://robota.ua/api/auth/login",
+            json={
+                "email": ROBOTAUA_EMAIL,
+                "password": ROBOTAUA_PASSWORD,
+            },
+            headers={
+                "User-Agent": HEADERS["User-Agent"],
+                "Content-Type": "application/json",
+            },
+            timeout=15
+        )
+
+        if alt_resp.status_code == 200:
+            data = alt_resp.json()
+            token = (
+                data.get("token") or
+                data.get("accessToken") or
+                data.get("jwt")
+            )
+            if token:
+                _cached_token = token
+                _token_expires_at = time.time() + 86400
+                logger.info(
+                    "Robota.ua authentication successful (alt endpoint)"
+                )
+                return token
+
+        logger.error(
+            f"Robota.ua login failed. "
+            f"Status: {alt_resp.status_code}"
+        )
+        return None
+
+    except Exception as e:
+        logger.error(f"Robota.ua auth error: {e}")
+        return None
+
+
+def get_graphql_headers(token: str) -> dict:
+    """Build headers for GraphQL API calls"""
+    headers = HEADERS.copy()
+    headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+══════════════════════════════════════════════
+PART 2 — SALARY ANALYTICS SERVICE
+══════════════════════════════════════════════
+
+## New file: backend/services/robotaua_salary.py
+
+import requests
+import logging
+import os
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List
+
+logger = logging.getLogger(__name__)
+
+GRAPHQL_URL = "https://dracula.robota.ua/"
+
+SALARY_QUERY = """
+query gettingStatisticsAverageSalary(
+    $keyword: String!, 
+    $input: StatisticDataCityRubricInput!
+) {
+  keyword(name: $keyword) {
+    name
+    statistic(input: $input) {
+      vacancy {
+        total {
+          count
+          salary
+          salaryMax
+          salaryMin
+        }
+        median {
+          begin
+          end
+          value
+        }
+      }
+      candidate {
+        total {
+          count
+          salary
+          salaryMax
+          salaryMin
+        }
+        median {
+          begin
+          end
+          value
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def fetch_salary_analytics(position: str) -> Optional[Dict]:
+    """
+    Fetch salary analytics from Robota.ua for a given position.
+    Returns structured salary data or None if unavailable.
+    
+    Args:
+        position: Job title e.g. "торговий представник"
+    
+    Returns dict with:
+        employer_median_uah, candidate_median_uah,
+        employer_median_usd, candidate_median_usd,
+        gap_uah, gap_usd,
+        employer_count, candidate_count,
+        timeseries_vacancy, timeseries_candidate,
+        salary_min_uah, salary_max_uah
+    """
+    from services.robotaua_auth import get_robotaua_token, get_graphql_headers
+    from services.salary_normalizer import normalize_to_usd
+
+    USD_RATE = float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+
+    token = get_robotaua_token()
+    if not token:
+        logger.warning("No Robota.ua token - skipping salary analytics")
+        return None
+
+    # Build date range: last 3 months to next month
+    now = datetime.utcnow()
+    date_begin = (now - timedelta(days=90)).strftime(
+        "%Y-%m-%dT00:00:00.000Z"
+    )
+    date_end = (now + timedelta(days=30)).strftime(
+        "%Y-%m-%dT23:59:59.999Z"
+    )
+
+    payload = {
+        "operationName": "gettingStatisticsAverageSalary",
+        "query": SALARY_QUERY,
+        "variables": {
+            "keyword": position,
+            "input": {
+                "keyword": position,
+                "cityId": "1",      # "1" = all Ukraine
+                "rubricId": "0",
+                "range": {
+                    "begin": date_begin,
+                    "end": date_end
+                },
+                "period": "WEEK"
+            }
+        }
+    }
+
+    try:
+        resp = requests.post(
+            GRAPHQL_URL + "?q=gettingStatisticsAverageSalary",
+            json=payload,
+            headers=get_graphql_headers(token),
+            timeout=15
+        )
+        resp.raise_for_status()
+
+        data = resp.json()
+        statistic = (
+            data
+            .get("data", {})
+            .get("keyword", {})
+            .get("statistic", {})
+        )
+
+        if not statistic:
+            logger.warning(
+                f"No salary data for position: {position}"
+            )
+            return None
+
+        vacancy = statistic.get("vacancy", {})
+        candidate = statistic.get("candidate", {})
+
+        vacancy_total = vacancy.get("total", {})
+        candidate_total = candidate.get("total", {})
+
+        employer_median_uah = vacancy_total.get("salary", 0)
+        candidate_median_uah = candidate_total.get("salary", 0)
+
+        # Convert to USD
+        employer_median_usd = int(
+            employer_median_uah / USD_RATE
+        ) if employer_median_uah else 0
+        candidate_median_usd = int(
+            candidate_median_uah / USD_RATE
+        ) if candidate_median_uah else 0
+
+        gap_uah = employer_median_uah - candidate_median_uah
+        gap_usd = employer_median_usd - candidate_median_usd
+
+        # Build timeseries
+        timeseries_vacancy = [
+            {
+                "date": item["begin"][:10],
+                "value_uah": item["value"],
+                "value_usd": int(item["value"] / USD_RATE)
+            }
+            for item in vacancy.get("median", [])
+        ]
+
+        timeseries_candidate = [
+            {
+                "date": item["begin"][:10],
+                "value_uah": item["value"],
+                "value_usd": int(item["value"] / USD_RATE)
+            }
+            for item in candidate.get("median", [])
+        ]
+
+        result = {
+            "position": position,
+            "source": "robota.ua",
+            "employer_median_uah": employer_median_uah,
+            "employer_median_usd": employer_median_usd,
+            "candidate_median_uah": candidate_median_uah,
+            "candidate_median_usd": candidate_median_usd,
+            "gap_uah": gap_uah,
+            "gap_usd": gap_usd,
+            "salary_min_uah": vacancy_total.get("salaryMin", 0),
+            "salary_max_uah": vacancy_total.get("salaryMax", 0),
+            "employer_count": vacancy_total.get("count", 0),
+            "candidate_count": candidate_total.get("count", 0),
+            "timeseries_vacancy": timeseries_vacancy,
+            "timeseries_candidate": timeseries_candidate,
+            "usd_rate": USD_RATE
+        }
+
+        logger.info(
+            f"Salary data for '{position}': "
+            f"employer {employer_median_uah} грн / "
+            f"candidate {candidate_median_uah} грн / "
+            f"gap {gap_uah} грн"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Robota.ua salary fetch error: {e}")
+        return None
+
+
+def save_salary_data(
+    salary_result: Dict,
+    vacancy_id: int,
+    db
+) -> None:
+    """
+    Save salary analytics result to hunt_salary_data table.
+    Saves two rows: one for employer POV, one for candidate POV.
+    """
+    if not salary_result:
+        return
+
+    from models.hunt_models import HuntSalaryData
+    from datetime import datetime
+
+    usd_rate = salary_result.get("usd_rate", 41.0)
+
+    # Row 1: Employer POV (from vacancy postings)
+    employer_row = HuntSalaryData(
+        vacancy_id=vacancy_id,
+        source="robota.ua",
+        data_type="employer",
+        position=salary_result["position"],
+        city="Україна",
+        salary_median=salary_result["employer_median_uah"],
+        salary_median_uah=salary_result["employer_median_uah"],
+        salary_median_usd=salary_result["employer_median_usd"],
+        salary_min=salary_result.get("salary_min_uah", 0),
+        salary_min_uah=salary_result.get("salary_min_uah", 0),
+        salary_max=salary_result.get("salary_max_uah", 0),
+        salary_max_uah=salary_result.get("salary_max_uah", 0),
+        currency="UAH",
+        currency_detected="UAH",
+        usd_rate_at_collection=usd_rate,
+        source_url="https://robota.ua/zapros/transparent-salary",
+        collected_at=datetime.now()
+    )
+
+    # Row 2: Candidate POV (from CV salary expectations)
+    candidate_row = HuntSalaryData(
+        vacancy_id=vacancy_id,
+        source="robota.ua",
+        data_type="candidate",
+        position=salary_result["position"],
+        city="Україна",
+        salary_median=salary_result["candidate_median_uah"],
+        salary_median_uah=salary_result["candidate_median_uah"],
+        salary_median_usd=salary_result["candidate_median_usd"],
+        salary_min_uah=salary_result.get("salary_min_uah", 0),
+        salary_max_uah=salary_result.get("salary_max_uah", 0),
+        currency="UAH",
+        currency_detected="UAH",
+        usd_rate_at_collection=usd_rate,
+        source_url="https://robota.ua/zapros/transparent-salary",
+        collected_at=datetime.now()
+    )
+
+    try:
+        db.add(employer_row)
+        db.add(candidate_row)
+        db.commit()
+        logger.info(
+            f"Saved salary data for '{salary_result['position']}'"
+        )
+    except Exception as e:
+        logger.error(f"Failed to save salary data: {e}")
+        db.rollback()
+
+══════════════════════════════════════════════
+PART 3 — INTEGRATE INTO HUNT PIPELINE
+══════════════════════════════════════════════
+
+## Update backend/services/hunt_service.py
+
+In the run_hunt() function, after vacancy is parsed and 
+BEFORE candidate search starts, add salary analytics fetch:
+
+    # Fetch market salary data in background (non-blocking)
+    asyncio.create_task(
+        _fetch_and_save_salary_analytics(
+            parsed.get("position", ""),
+            vacancy_id,
+            db
+        )
+    )
+
+Add this new async function to hunt_service.py:
+
+async def _fetch_and_save_salary_analytics(
+    position: str,
+    vacancy_id: int,
+    db
+) -> None:
+    """
+    Fetch Robota.ua salary analytics and save to DB.
+    Runs as background task - never blocks main hunt flow.
+    """
+    try:
+        if not position:
+            return
+
+        from services.robotaua_salary import (
+            fetch_salary_analytics,
+            save_salary_data
+        )
+
+        # Run blocking HTTP call in thread pool
+        loop = asyncio.get_event_loop()
+        salary_result = await loop.run_in_executor(
+            None,
+            lambda: fetch_salary_analytics(position)
+        )
+
+        if salary_result:
+            save_salary_data(salary_result, vacancy_id, db)
+            logger.info(
+                f"Salary analytics saved for vacancy #{vacancy_id}"
+            )
+    except Exception as e:
+        logger.error(f"Salary analytics background task failed: {e}")
+
+══════════════════════════════════════════════
+PART 4 — ENHANCE ANALYTICS API ENDPOINT
+══════════════════════════════════════════════
+
+## Update GET /api/hr/hunt/analytics in hr_routes.py
+
+Add to the salary_by_city section of the response.
+Currently it queries hunt_salary_data grouped by city.
+Enhance it to also include timeseries from latest data:
+
+For each unique position in hunt_salary_data,
+find the most recent employer + candidate rows and compute:
+- employer_median_uah, employer_median_usd
+- candidate_median_uah, candidate_median_usd  
+- gap_uah, gap_usd
+- sample_size (employer_count + candidate_count)
+- source_url for reference link
+- data_freshness (collected_at date)
+
+Add new "market_intelligence" key to analytics response:
+{
+  "market_intelligence": [
+    {
+      "position": "торговий представник",
+      "employer_median_uah": 26110,
+      "employer_median_usd": 637,
+      "candidate_median_uah": 24258,
+      "candidate_median_usd": 591,
+      "gap_uah": 1852,
+      "gap_usd": 46,
+      "employer_count": 102434,
+      "candidate_count": 232703,
+      "source": "robota.ua",
+      "source_url": "https://robota.ua/zapros/transparent-salary",
+      "collected_at": "2026-03-08"
+    }
+  ]
+}
+
+══════════════════════════════════════════════
+PART 5 — DASHBOARD UPDATE
+══════════════════════════════════════════════
+
+## Update Maya Hunt tab in /hr admin dashboard
+
+In the Salary Intelligence section (Section 4),
+add a new data source badge next to the chart title:
+
+"📊 Аналіз ринку зарплат"
+Source badge: "🔴 Robota.ua · {employer_count} вакансій · 
+               {candidate_count} кандидатів"
+
+Add market_intelligence data to the salary chart.
+When market_intelligence data exists, show it prominently
+as the primary reference line on the chart with label:
+"Ринок (Robota.ua)"
+
+Add a new "Ринкова аналітика" sub-section below the chart:
+
+For each position in market_intelligence:
+┌─────────────────────────────────────────────┐
+│ 💼 Торговий представник     📅 08.03.2026   │
+│                                             │
+│ Роботодавці пропонують:  26 110 грн / $637  │
+│ Кандидати очікують:      24 258 грн / $591  │
+│ Різниця (gap):           +1 852 грн / +$46  │
+│                                             │
+│ Вибірка: 102 434 вакансій · 232 703 резюме  │
+│ 🔗 Джерело: Robota.ua Прозора робота        │
+└─────────────────────────────────────────────┘
+
+The source link should be clickable and open robota.ua 
+transparent salary page in new tab.
+
+Gap color coding:
+- Gap > 0 (employers offer more) → green text
+- Gap < 0 (candidates expect more) → red text  
+- Gap near 0 → gray text
+
+══════════════════════════════════════════════
+PART 6 — ENV VARS
+══════════════════════════════════════════════
+
+These are already in Render from previous setup:
+ROBOTAUA_EMAIL=michailova@vinkom.net
+ROBOTAUA_PASSWORD=Irina_2017
+USD_TO_UAH_RATE=41.0
+
+No new env vars needed.
+
+══════════════════════════════════════════════
+CRITICAL RULES
+══════════════════════════════════════════════
+- Salary analytics runs as background task — NEVER blocks 
+  candidate search or card delivery
+- If Robota.ua auth fails → log warning → continue hunt 
+  normally without salary data
+- If API returns no data for a position → skip silently
+- Token cached at module level — do not re-authenticate 
+  on every request
+- Rate limit: max 1 salary API call per unique position 
+  per hour (cache by position+hour key)
+- All amounts stored in UAH in DB, converted to USD 
+  for display using USD_TO_UAH_RATE env var
+- Dashboard shows empty state gracefully if no 
+  market_intelligence data yet
+- Never expose JWT token in logs or API responses
+- Keep ALL existing functionality intact

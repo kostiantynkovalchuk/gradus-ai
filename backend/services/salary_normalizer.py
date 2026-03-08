@@ -1,10 +1,46 @@
 import os
 import re
 import logging
+import requests
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
-USD_TO_UAH_RATE = float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+_rate_cache = {"date": None, "rate": 41.0}
+
+
+def get_usd_uah_rate() -> float:
+    today = date.today().isoformat()
+
+    if _rate_cache["date"] == today:
+        return _rate_cache["rate"]
+
+    try:
+        resp = requests.get(
+            "https://bank.gov.ua/NBUStatService/v1/statdirectory/"
+            "exchange?valcode=USD&json",
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rate = float(data[0]["rate"])
+
+        _rate_cache["date"] = today
+        _rate_cache["rate"] = rate
+
+        logger.info(f"NBU USD/UAH rate updated: {rate}")
+        return rate
+
+    except Exception as e:
+        logger.warning(f"NBU rate fetch failed: {e}, using fallback")
+        fallback = float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+        _rate_cache["date"] = today
+        _rate_cache["rate"] = fallback
+        return fallback
+
+
+def _get_rate():
+    return get_usd_uah_rate()
 
 
 def _parse_number(text: str) -> int:
@@ -130,21 +166,22 @@ def extract_salary(text: str) -> dict:
         max_val = min_val
 
     median = (min_val + max_val) // 2
+    rate = _get_rate()
 
     if currency == "USD":
         result["salary_min_usd"] = min_val
         result["salary_max_usd"] = max_val
         result["salary_median_usd"] = median
-        result["salary_min_uah"] = int(min_val * USD_TO_UAH_RATE)
-        result["salary_max_uah"] = int(max_val * USD_TO_UAH_RATE)
-        result["salary_median_uah"] = int(median * USD_TO_UAH_RATE)
+        result["salary_min_uah"] = int(min_val * rate)
+        result["salary_max_uah"] = int(max_val * rate)
+        result["salary_median_uah"] = int(median * rate)
     else:
         result["salary_min_uah"] = min_val
         result["salary_max_uah"] = max_val
         result["salary_median_uah"] = median
-        result["salary_min_usd"] = int(min_val / USD_TO_UAH_RATE)
-        result["salary_max_usd"] = int(max_val / USD_TO_UAH_RATE)
-        result["salary_median_usd"] = int(median / USD_TO_UAH_RATE)
+        result["salary_min_usd"] = int(min_val / rate)
+        result["salary_max_usd"] = int(max_val / rate)
+        result["salary_median_usd"] = int(median / rate)
 
     return result
 
@@ -153,7 +190,7 @@ def normalize_to_usd(amount: float, currency: str) -> float:
     if currency == "USD":
         return amount
     if currency == "UAH":
-        return amount / USD_TO_UAH_RATE
+        return amount / _get_rate()
     return amount
 
 
@@ -161,15 +198,16 @@ def normalize_to_uah(amount: float, currency: str) -> float:
     if currency == "UAH":
         return amount
     if currency == "USD":
-        return amount * USD_TO_UAH_RATE
+        return amount * _get_rate()
     return amount
 
 
 def format_salary_display(usd: int = None, uah: int = None) -> str:
+    rate = _get_rate()
     if usd and uah:
         return f"${usd:,} / {uah:,} грн"
     if usd:
-        return f"${usd:,} (~{int(usd * USD_TO_UAH_RATE):,} грн)"
+        return f"${usd:,} (~{int(usd * rate):,} грн)"
     if uah:
-        return f"{uah:,} грн (~${int(uah / USD_TO_UAH_RATE):,})"
+        return f"{uah:,} грн (~${int(uah / rate):,})"
     return "За домовленістю"

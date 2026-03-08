@@ -1,0 +1,83 @@
+══════════════════════════════════════════════
+PART 7 — LIVE USD/UAH RATE FROM NBU
+══════════════════════════════════════════════
+
+## Update backend/services/salary_normalizer.py
+
+Add at the top of the file with other imports:
+import requests
+from datetime import date
+
+Add this cache dict at module level (after imports):
+_rate_cache = {"date": None, "rate": 41.0}
+
+Add this function:
+
+def get_usd_uah_rate() -> float:
+    """
+    Fetch current USD/UAH rate from National Bank of Ukraine.
+    Cached daily — one API call per day maximum.
+    Falls back to USD_TO_UAH_RATE env var if NBU unavailable.
+    
+    Source: https://bank.gov.ua (official, free, no auth)
+    """
+    today = date.today().isoformat()
+
+    # Return cached rate if already fetched today
+    if _rate_cache["date"] == today:
+        return _rate_cache["rate"]
+
+    try:
+        resp = requests.get(
+            "https://bank.gov.ua/NBUStatService/v1/statdirectory/"
+            "exchange?valcode=USD&json",
+            timeout=5
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rate = float(data[0]["rate"])
+
+        _rate_cache["date"] = today
+        _rate_cache["rate"] = rate
+
+        logger.info(f"NBU USD/UAH rate updated: {rate}")
+        return rate
+
+    except Exception as e:
+        logger.warning(f"NBU rate fetch failed: {e}, using fallback")
+        fallback = float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+        _rate_cache["date"] = today
+        _rate_cache["rate"] = fallback
+        return fallback
+
+## Replace ALL hardcoded rate references across the codebase:
+
+In salary_normalizer.py:
+Replace: float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+With:    get_usd_uah_rate()
+
+In robotaua_salary.py:
+Replace: float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+With:    from services.salary_normalizer import get_usd_uah_rate
+         USD_RATE = get_usd_uah_rate()
+
+In hunt_workua_scraper.py (if rate used there):
+Same replacement.
+
+## Also store live rate in hunt_salary_data rows:
+When saving to hunt_salary_data, always set:
+usd_rate_at_collection = get_usd_uah_rate()
+
+This preserves the exact rate used at collection time
+so historical salary comparisons remain accurate even
+when the rate changes later.
+
+## Dashboard display:
+In Maya Hunt tab, show current rate in the salary section:
+"💱 Курс НБУ: 1 USD = {rate} грн · оновлено сьогодні"
+Fetch this from the analytics endpoint which should
+include current_usd_rate in its response.
+
+Add to GET /api/hr/hunt/analytics response:
+"current_usd_rate": get_usd_uah_rate(),
+"rate_source": "НБУ (Національний банк України)"

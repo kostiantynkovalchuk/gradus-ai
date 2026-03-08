@@ -91,6 +91,32 @@ async def _answer_callback(callback_query_id: str, text: str) -> dict:
         return {}
 
 
+async def _fetch_and_save_salary_analytics(position: str, vacancy_id: int) -> None:
+    try:
+        if not position:
+            return
+
+        from services.robotaua_salary import fetch_salary_analytics, save_salary_data
+
+        loop = asyncio.get_event_loop()
+        salary_result = await loop.run_in_executor(
+            None, lambda: fetch_salary_analytics(position)
+        )
+
+        if salary_result:
+            import models
+            if models.SessionLocal is None:
+                models.init_db()
+            sal_db = models.SessionLocal()
+            try:
+                save_salary_data(salary_result, vacancy_id, sal_db)
+                logger.info(f"Salary analytics saved for vacancy #{vacancy_id}")
+            finally:
+                sal_db.close()
+    except Exception as e:
+        logger.error(f"Salary analytics background task failed: {e}")
+
+
 async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: int):
     import models
     if models.SessionLocal is None:
@@ -117,6 +143,13 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
             vacancy.salary_max = parsed.get("salary_max")
             vacancy.status = 'searching'
             db.commit()
+
+        asyncio.create_task(
+            _fetch_and_save_salary_analytics(
+                parsed.get("position", ""),
+                vacancy_id,
+            )
+        )
 
         status_resp = await _send_message(
             chat_id,

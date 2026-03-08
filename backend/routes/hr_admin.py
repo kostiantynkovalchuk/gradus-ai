@@ -555,6 +555,49 @@ async def get_hunt_analytics(
         """))
         active_sources = source_count_result.scalar() or 0
 
+        mi_result = db_session.execute(text("""
+            SELECT DISTINCT ON (position, data_type)
+                position, data_type, source,
+                salary_median_uah, salary_median_usd,
+                salary_min_uah, salary_max_uah,
+                usd_rate_at_collection, source_url, collected_at,
+                COALESCE(sample_count, 0) as sample_count
+            FROM hunt_salary_data
+            WHERE source = 'robota.ua'
+            ORDER BY position, data_type, collected_at DESC
+        """))
+        mi_rows = mi_result.fetchall()
+        mi_map = {}
+        for r in mi_rows:
+            pos = r[0]
+            if pos not in mi_map:
+                mi_map[pos] = {
+                    "position": pos,
+                    "employer_median_uah": 0, "employer_median_usd": 0,
+                    "candidate_median_uah": 0, "candidate_median_usd": 0,
+                    "gap_uah": 0, "gap_usd": 0,
+                    "employer_count": 0, "candidate_count": 0,
+                    "source": "robota.ua",
+                    "source_url": r[8] or "https://robota.ua/zapros/transparent-salary",
+                    "collected_at": r[9].strftime("%Y-%m-%d") if r[9] else None,
+                }
+            entry = mi_map[pos]
+            if r[1] == "employer":
+                entry["employer_median_uah"] = r[3] or 0
+                entry["employer_median_usd"] = r[4] or 0
+                entry["employer_count"] = r[10] or 0
+            else:
+                entry["candidate_median_uah"] = r[3] or 0
+                entry["candidate_median_usd"] = r[4] or 0
+                entry["candidate_count"] = r[10] or 0
+        for entry in mi_map.values():
+            entry["gap_uah"] = entry["employer_median_uah"] - entry["candidate_median_uah"]
+            entry["gap_usd"] = entry["employer_median_usd"] - entry["candidate_median_usd"]
+        market_intelligence = list(mi_map.values())
+
+        from services.salary_normalizer import get_usd_uah_rate
+        current_rate = get_usd_uah_rate()
+
         return {
             "kpi": kpi,
             "hire_funnel": hire_funnel,
@@ -565,6 +608,9 @@ async def get_hunt_analytics(
             "salary_trends": salary_trends,
             "recent_vacancies": recent_vacancies,
             "active_sources": active_sources,
+            "market_intelligence": market_intelligence,
+            "current_usd_rate": current_rate,
+            "rate_source": "НБУ (Національний банк України)",
         }
 
     except Exception as e:
@@ -587,6 +633,9 @@ async def get_hunt_analytics(
             "salary_trends": [],
             "recent_vacancies": [],
             "active_sources": 0,
+            "market_intelligence": [],
+            "current_usd_rate": 41.0,
+            "rate_source": "НБУ (Національний банк України)",
         }
 
 

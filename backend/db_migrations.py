@@ -459,6 +459,12 @@ MIGRATIONS = [
             "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS usd_rate_at_collection FLOAT",
         ]
     },
+    {
+        "version": "015_salary_sample_count",
+        "statements": [
+            "ALTER TABLE hunt_salary_data ADD COLUMN IF NOT EXISTS sample_count INTEGER DEFAULT 0",
+        ]
+    },
 ]
 
 

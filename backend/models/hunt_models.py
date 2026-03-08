@@ -87,4 +87,5 @@ class HuntSalaryData(Base):
     salary_median_usd = Column(Integer)
     currency_detected = Column(String(10))
     usd_rate_at_collection = Column(Float)
+    sample_count = Column(Integer, default=0)
     collected_at = Column(TIMESTAMP, server_default=func.now())
