@@ -120,7 +120,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
 
         status_resp = await _send_message(
             chat_id,
-            "🔍 Шукаю кандидатів...\n⏳ Це займе 1-2 хвилини",
+            "🔍 Шукаю кандидатів...\n📋 Work.ua + Telegram канали\n⏳ Це займе 1-2 хвилини",
             thread_id=thread_id,
         )
         status_msg_id = status_resp.get("result", {}).get("message_id")

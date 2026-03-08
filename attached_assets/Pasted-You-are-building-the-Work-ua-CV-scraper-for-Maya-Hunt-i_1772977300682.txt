@@ -1,0 +1,545 @@
+You are building the Work.ua CV scraper for Maya Hunt in the Gradus AI project.
+This replaces the existing placeholder in backend/services/hunt_workua_scraper.py.
+Do NOT break any existing functionality.
+
+══════════════════════════════════════════════
+PART 1 — AUTHENTICATION SERVICE
+══════════════════════════════════════════════
+
+## New file: backend/services/workua_auth.py
+
+import requests
+import logging
+import os
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+WORKUA_LOGIN_URL = "https://www.work.ua/login/"
+WORKUA_EMAIL = os.getenv("WORKUA_EMAIL", "")
+WORKUA_PASSWORD = os.getenv("WORKUA_PASSWORD", "")
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+}
+
+def get_workua_session() -> Optional[requests.Session]:
+    """
+    Login to Work.ua and return authenticated session.
+    Session can be reused for multiple CV requests.
+    
+    Returns None if credentials not configured or login fails.
+    """
+    if not WORKUA_EMAIL or not WORKUA_PASSWORD:
+        logger.warning("WORKUA_EMAIL/PASSWORD not configured")
+        return None
+    
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    
+    try:
+        # Step 1: GET login page to get CSRF token
+        resp = session.get(WORKUA_LOGIN_URL, timeout=15)
+        resp.raise_for_status()
+        
+        # Step 2: Extract CSRF token from page
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        csrf_token = None
+        
+        # Try meta tag first
+        meta = soup.find("meta", {"name": "csrftoken"})
+        if meta:
+            csrf_token = meta.get("content")
+        
+        # Try hidden input
+        if not csrf_token:
+            inp = soup.find("input", {"name": "csrfmiddlewaretoken"})
+            if inp:
+                csrf_token = inp.get("value")
+        
+        # Try cookie
+        if not csrf_token:
+            csrf_token = session.cookies.get("csrftoken")
+        
+        if not csrf_token:
+            logger.warning("Could not find CSRF token, attempting login anyway")
+        
+        # Step 3: POST login
+        login_data = {
+            "email": WORKUA_EMAIL,
+            "password": WORKUA_PASSWORD,
+        }
+        if csrf_token:
+            login_data["csrfmiddlewaretoken"] = csrf_token
+        
+        login_resp = session.post(
+            WORKUA_LOGIN_URL,
+            data=login_data,
+            timeout=15,
+            allow_redirects=True
+        )
+        
+        # Step 4: Verify login success
+        # Work.ua redirects to dashboard on success
+        if "logout" in login_resp.text or "cabinet" in login_resp.url:
+            logger.info("Work.ua login successful")
+            return session
+        
+        # Check for employer cabinet indicators
+        if "Знайти кандидатів" in login_resp.text:
+            logger.info("Work.ua login successful (employer cabinet)")
+            return session
+            
+        logger.error(f"Work.ua login failed - unexpected response URL: {login_resp.url}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Work.ua auth error: {e}")
+        return None
+
+══════════════════════════════════════════════
+PART 2 — CV SEARCH SCRAPER
+══════════════════════════════════════════════
+
+## Replace entire content of: backend/services/hunt_workua_scraper.py
+
+import requests
+import logging
+import time
+import random
+import os
+import re
+from typing import List, Dict, Optional
+from bs4 import BeautifulSoup
+from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
+
+WORKUA_BASE = "https://www.work.ua"
+WORKUA_RESUMES = "https://www.work.ua/resumes"
+
+# City slug mapping — Work.ua URL format
+CITY_SLUGS = {
+    "київ": "kyiv",
+    "kyiv": "kyiv",
+    "дніпро": "dnipro",
+    "dnipro": "dnipro",
+    "дніпропетровськ": "dnipro",
+    "харків": "kharkiv",
+    "kharkiv": "kharkiv",
+    "одеса": "odesa",
+    "odesa": "odesa",
+    "львів": "lviv",
+    "lviv": "lviv",
+    "запоріжжя": "zaporizhzhia",
+    "вінниця": "vinnytsia",
+    "полтава": "poltava",
+    "миколаїв": "mykolaiv",
+    "херсон": "kherson",
+    "черкаси": "cherkasy",
+    "суми": "sumy",
+    "житомир": "zhytomyr",
+}
+
+def build_search_url(position: str, city: str, page: int = 1) -> str:
+    """
+    Build Work.ua CV search URL from vacancy parameters.
+    
+    Example:
+    position="торговий представник", city="дніпро"
+    → https://www.work.ua/resumes-dnipro-торговий+представник/
+    """
+    city_lower = city.lower().strip() if city else ""
+    city_slug = CITY_SLUGS.get(city_lower, city_lower)
+    
+    # Clean and encode position keywords
+    keywords = position.strip().replace(" ", "+")
+    
+    if city_slug:
+        url = f"{WORKUA_RESUMES}-{city_slug}-{keywords}/"
+    else:
+        url = f"{WORKUA_RESUMES}-{keywords}/"
+    
+    if page > 1:
+        url += f"?page={page}"
+    
+    return url
+
+
+def parse_resume_card(card, session: requests.Session) -> Optional[Dict]:
+    """
+    Parse a single CV card from search results page.
+    
+    Returns candidate dict or None if parsing fails.
+    """
+    try:
+        candidate = {}
+        
+        # Profile URL
+        link = card.find("a", href=re.compile(r"/resumes/\d+"))
+        if not link:
+            return None
+        
+        profile_path = link.get("href", "")
+        candidate["profile_url"] = f"{WORKUA_BASE}{profile_path}"
+        candidate["source"] = "work.ua"
+        
+        # Position title (from link text or h2)
+        title_el = card.find(["h2", "h3", "strong"])
+        if title_el:
+            candidate["current_role"] = title_el.get_text(strip=True)
+        
+        # Parse meta info line: "Ім'я, вік років, Місто"
+        meta_text = card.get_text(separator=" ", strip=True)
+        
+        # Age extraction
+        age_match = re.search(r'(\d{2})\s*рок', meta_text)
+        if age_match:
+            candidate["age"] = int(age_match.group(1))
+        
+        # City extraction
+        city_match = re.search(
+            r'(Київ|Дніпро|Харків|Одеса|Львів|Запоріжжя|'
+            r'Вінниця|Полтава|Миколаїв|Херсон)', 
+            meta_text
+        )
+        if city_match:
+            candidate["city"] = city_match.group(1)
+        
+        # Last activity (freshness signal)
+        time_el = card.find(class_=re.compile(r'(date|time|ago)'))
+        if time_el:
+            candidate["last_active"] = time_el.get_text(strip=True)
+        
+        # Salary (if visible on card)
+        salary_match = re.search(
+            r'(\d[\d\s,]+)\s*(грн|₴|\$|USD|usd)', 
+            meta_text
+        )
+        if salary_match:
+            candidate["salary_raw"] = salary_match.group(0)
+        
+        return candidate if candidate.get("profile_url") else None
+        
+    except Exception as e:
+        logger.error(f"Card parse error: {e}")
+        return None
+
+
+def fetch_cv_details(profile_url: str, session: requests.Session) -> Dict:
+    """
+    Fetch full CV details from individual profile page.
+    Requires authenticated session for contact info.
+    """
+    details = {}
+    
+    try:
+        time.sleep(random.uniform(3, 6))  # Rate limit
+        
+        resp = session.get(profile_url, timeout=15)
+        resp.raise_for_status()
+        
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Full name
+        name_el = soup.find("h1") or soup.find(class_=re.compile(r'name'))
+        if name_el:
+            details["full_name"] = name_el.get_text(strip=True)
+        
+        # Phone (only visible when logged in as employer)
+        phone_el = soup.find(
+            string=re.compile(r'\+?3?8?0\d{9}')
+        )
+        if phone_el:
+            details["contact"] = phone_el.strip()
+        
+        # Email
+        email_el = soup.find("a", href=re.compile(r'^mailto:'))
+        if email_el:
+            details["email"] = email_el.get_text(strip=True)
+        
+        # Experience years — parse from experience section
+        exp_section = soup.find(
+            class_=re.compile(r'experience|work-history')
+        )
+        if exp_section:
+            exp_text = exp_section.get_text(separator=" ", strip=True)
+            years_match = re.search(r'(\d+)\s*рок', exp_text)
+            months_match = re.search(r'(\d+)\s*міс', exp_text)
+            years = int(years_match.group(1)) if years_match else 0
+            months = int(months_match.group(1)) if months_match else 0
+            details["experience_years"] = round(years + months / 12, 1)
+        
+        # Skills — look for skills/keywords section
+        skills_section = soup.find(
+            class_=re.compile(r'(skill|keyword|tag)')
+        )
+        if skills_section:
+            skills = [
+                s.get_text(strip=True) 
+                for s in skills_section.find_all(["span", "li", "a"])
+                if s.get_text(strip=True)
+            ]
+            details["skills"] = ", ".join(skills[:10])
+        
+        # Salary expectation
+        salary_el = soup.find(
+            string=re.compile(r'(грн|₴|\$)\s*\d|\d+\s*(грн|₴|\$|USD)')
+        )
+        if salary_el:
+            details["salary_raw"] = salary_el.strip()
+        
+        # Education
+        edu_section = soup.find(class_=re.compile(r'education'))
+        if edu_section:
+            details["education"] = edu_section.get_text(
+                separator=" ", strip=True
+            )[:200]
+        
+        # Full text for AI scoring
+        main_content = soup.find("main") or soup.find(
+            class_=re.compile(r'(resume|cv|profile)-content')
+        )
+        if main_content:
+            details["raw_text"] = main_content.get_text(
+                separator="\n", strip=True
+            )[:3000]
+        else:
+            details["raw_text"] = soup.get_text(
+                separator="\n", strip=True
+            )[:3000]
+        
+        logger.info(
+            f"Fetched CV details: {details.get('full_name', 'Unknown')}"
+        )
+        
+    except Exception as e:
+        logger.error(f"CV detail fetch error for {profile_url}: {e}")
+    
+    return details
+
+
+async def scrape_workua_candidates(
+    position: str,
+    city: str,
+    keywords: List[str],
+    max_candidates: int = 20
+) -> List[Dict]:
+    """
+    Main entry point — search Work.ua CVs and return candidate list.
+    
+    Args:
+        position: Job title to search for
+        city: City name in Ukrainian or English
+        keywords: Additional keywords from vacancy
+        max_candidates: Max CVs to return (default 20, max 30)
+    
+    Returns:
+        List of candidate dicts ready for scoring
+    """
+    from services.workua_auth import get_workua_session
+    from services.salary_normalizer import extract_salary
+    
+    max_candidates = min(max_candidates, 30)  # Safety cap
+    
+    # Get authenticated session
+    session = get_workua_session()
+    if not session:
+        logger.warning("Work.ua session unavailable - returning empty")
+        return []
+    
+    candidates = []
+    
+    try:
+        # Build search URL
+        search_url = build_search_url(position, city)
+        logger.info(f"Work.ua search: {search_url}")
+        
+        # Fetch search results page
+        time.sleep(random.uniform(2, 4))
+        resp = session.get(search_url, timeout=15)
+        resp.raise_for_status()
+        
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Find total results count
+        count_el = soup.find(
+            string=re.compile(r'\d+\s+кандидат')
+        )
+        if count_el:
+            logger.info(f"Work.ua found: {count_el.strip()}")
+        
+        # Find CV cards
+        # Work.ua uses article tags or divs with specific classes
+        cards = (
+            soup.find_all("div", class_=re.compile(r'resume-link')) or
+            soup.find_all("article", class_=re.compile(r'resume')) or
+            soup.find_all("div", attrs={"data-id": True}) or
+            # Fallback: find all links to /resumes/
+            [a.parent for a in soup.find_all(
+                "a", href=re.compile(r'/resumes/\d+')
+            )]
+        )
+        
+        logger.info(f"Found {len(cards)} CV cards on page")
+        
+        # Parse each card
+        for card in cards[:max_candidates]:
+            candidate = parse_resume_card(card, session)
+            if not candidate:
+                continue
+            
+            # Fetch full CV details
+            if candidate.get("profile_url"):
+                details = fetch_cv_details(
+                    candidate["profile_url"], session
+                )
+                candidate.update(details)
+            
+            # Normalize salary
+            salary_raw = candidate.pop("salary_raw", None)
+            if salary_raw:
+                salary_data = extract_salary(salary_raw)
+                candidate["salary_expectation_usd"] = (
+                    salary_data.get("salary_median_usd")
+                )
+                candidate["salary_expectation_uah"] = (
+                    salary_data.get("salary_median_uah")
+                )
+                candidate["salary_expectation"] = (
+                    salary_data.get("salary_median_usd")
+                )
+            
+            # Ensure required fields
+            candidate.setdefault("source", "work.ua")
+            candidate.setdefault("full_name", "Кандидат Work.ua")
+            candidate.setdefault("city", city)
+            candidate.setdefault("current_role", position)
+            candidate.setdefault("experience_years", 0)
+            candidate.setdefault("skills", "")
+            candidate.setdefault("contact", "")
+            candidate.setdefault("raw_text", "")
+            
+            candidates.append(candidate)
+            logger.info(
+                f"Parsed: {candidate['full_name']} "
+                f"({candidate.get('city', '?')})"
+            )
+            
+            if len(candidates) >= max_candidates:
+                break
+        
+        logger.info(
+            f"Work.ua scrape complete: {len(candidates)} candidates"
+        )
+        
+    except Exception as e:
+        logger.error(f"Work.ua scrape error: {e}")
+    finally:
+        session.close()
+    
+    return candidates
+
+══════════════════════════════════════════════
+PART 3 — INTEGRATE INTO HUNT PIPELINE
+══════════════════════════════════════════════
+
+## Update backend/services/hunt_service.py
+
+Find where Telegram channel scraping happens (hunt_tg_scraper call).
+Add Work.ua scraping in parallel, merge results:
+
+async def run_hunt(vacancy_id, raw_text, thread_id, chat_id):
+    
+    # ... existing code to load vacancy and parse it ...
+    
+    # Status update
+    await send_tg_message(
+        chat_id, thread_id,
+        "🔍 Шукаю кандидатів...\n"
+        "📋 Work.ua + Telegram канали"
+    )
+    
+    all_candidates = []
+    
+    # Source 1: Work.ua (primary)
+    try:
+        from services.hunt_workua_scraper import scrape_workua_candidates
+        workua_candidates = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: asyncio.run(scrape_workua_candidates(
+                position=parsed.get("position", ""),
+                city=parsed.get("city", ""),
+                keywords=parsed.get("keywords", []),
+                max_candidates=15
+            ))
+        )
+        logger.info(f"Work.ua: {len(workua_candidates)} candidates")
+        all_candidates.extend(workua_candidates)
+    except Exception as e:
+        logger.error(f"Work.ua scrape failed: {e}")
+    
+    # Source 2: Telegram channels (existing)
+    try:
+        tg_candidates = await scrape_tg_candidates(
+            parsed.get("keywords", []),
+            parsed.get("position", ""),
+            parsed.get("city", "")
+        )
+        logger.info(f"Telegram: {len(tg_candidates)} candidates")
+        all_candidates.extend(tg_candidates)
+    except Exception as e:
+        logger.error(f"TG scrape failed: {e}")
+    
+    if not all_candidates:
+        await send_tg_message(
+            chat_id, thread_id,
+            "😔 Кандидатів не знайдено.\n"
+            "Спробуйте змінити вимоги або розширити географію."
+        )
+        return
+    
+    # Score all candidates
+    # ... existing scoring code ...
+    
+    # Send status
+    await send_tg_message(
+        chat_id, thread_id,
+        f"✅ Знайдено {len(all_candidates)} кандидатів\n"
+        f"📋 Work.ua: {len(workua_candidates)}\n"
+        f"📱 Telegram: {len(tg_candidates)}\n"
+        f"🎯 Показую топ-5 за рейтингом..."
+    )
+    
+    # ... rest of existing card sending code ...
+
+══════════════════════════════════════════════
+PART 4 — DEPENDENCIES
+══════════════════════════════════════════════
+
+## Verify these are in requirements.txt (add if missing):
+beautifulsoup4
+requests
+lxml
+
+## Do NOT add Playwright or Selenium — not needed.
+
+══════════════════════════════════════════════
+CRITICAL RULES
+══════════════════════════════════════════════
+- Rate limit: minimum 3 second delay between ALL Work.ua requests
+- Maximum 30 CVs per search session (safety cap — never remove)
+- Always close session in finally block
+- If Work.ua login fails → log warning → return empty list → 
+  pipeline continues with TG results only
+- Never crash the main hunt pipeline if Work.ua fails
+- All errors caught and logged, never raised to webhook handler
+- Do not store raw passwords anywhere in code — only read from env vars

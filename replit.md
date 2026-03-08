@@ -66,3 +66,4 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **NBU API:** National Bank of Ukraine exchange rates.
 - **Telethon:** Telegram client library for scraping candidate channels.
 - **Trafilatura:** Clean content extraction for the news scraper.
+- **Work.ua:** CV search scraper with authenticated session, CSRF handling, and salary normalization for candidate sourcing.
