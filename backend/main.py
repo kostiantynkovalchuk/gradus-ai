@@ -35,6 +35,8 @@ from routes.messenger_webhook import router as messenger_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_solomon_started = False
+
 def log_appendix_mapping_diagnostic():
     """Log appendix mapping for debugging"""
     from services.maya_hr_content import get_direct_content, HR_DIRECT_CONTENT
@@ -102,10 +104,17 @@ async def lifespan(app: FastAPI):
     logger.info("🔍 Checking for missed scraping tasks in background...")
 
     import asyncio
+
+    async def start_solomon_once():
+        global _solomon_started
+        if not _solomon_started:
+            _solomon_started = True
+            from solomon_bot import run_solomon_bot
+            asyncio.create_task(run_solomon_bot())
+            logger.info("⚖️ Solomon bot task created")
+
     try:
-        from solomon_bot import run_solomon_bot
-        asyncio.create_task(run_solomon_bot())
-        logger.info("⚖️ Solomon bot task created")
+        await start_solomon_once()
     except Exception as e:
         logger.error(f"Solomon bot startup failed: {e}")
 

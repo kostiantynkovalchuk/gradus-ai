@@ -102,16 +102,35 @@ def search_decisions(params: dict) -> list:
     )
 
     html = resp.text
-    marker = "window.__INITIAL_STATE__='"
-    start = html.find(marker)
+    logger.info(f"Court response status: {resp.status_code}")
+    logger.info(f"Court response preview: {html[:500]}")
+
+    markers = [
+        ("window.__INITIAL_STATE__='", "'"),
+        ('window.__INITIAL_STATE__="', '"'),
+        ("__INITIAL_STATE__='", "'"),
+        ('__INITIAL_STATE__="', '"'),
+    ]
+
+    start = -1
+    quote_char = "'"
+    used_marker = ""
+    for marker, qc in markers:
+        start = html.find(marker)
+        if start != -1:
+            used_marker = marker
+            quote_char = qc
+            break
+
     if start == -1:
         logger.warning("Solomon: __INITIAL_STATE__ not found in response")
         return []
 
-    json_start = start + len(marker)
-    end = html.find("';</script>", json_start)
+    logger.info(f"Solomon: found marker '{used_marker}' at position {start}")
+    json_start = start + len(used_marker)
+    end = html.find(f"{quote_char};</script>", json_start)
     if end == -1:
-        end = html.find("'</script>", json_start)
+        end = html.find(f"{quote_char}</script>", json_start)
     if end == -1:
         return []
 
