@@ -1,0 +1,103 @@
+Two architectural fixes for Solomon:
+
+═══════════════════════════════
+FIX 1: Switch from polling to webhook (Telegram)
+═══════════════════════════════
+
+Polling causes conflicts on Render zero-downtime deploys.
+Webhook is the correct architecture for production.
+
+In backend/solomon_bot.py:
+
+1. Remove run_solomon_bot() polling function entirely
+
+2. Add webhook setup function:
+async def setup_solomon_webhook(base_url: str):
+    webhook_url = f"{base_url}/law/telegram/webhook"
+    await bot.set_webhook(
+        url=webhook_url,
+        drop_pending_updates=True
+    )
+    logger.info(f"Solomon webhook set: {webhook_url}")
+
+3. Add webhook handler function:
+async def process_solomon_update(update_data: dict):
+    from aiogram.types import Update
+    update = Update(**update_data)
+    await dp.feed_update(bot, update)
+
+In backend/solomon_router.py:
+
+4. Add webhook endpoint:
+from aiogram.types import Update
+from solomon_bot import process_solomon_update, bot, setup_solomon_webhook
+
+@router.post("/telegram/webhook")
+async def solomon_webhook(request: Request):
+    update_data = await request.json()
+    await process_solomon_update(update_data)
+    return {"ok": True}
+
+In backend/main.py:
+
+5. Replace run_solomon_bot() call in lifespan with:
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
+if RENDER_URL and os.getenv("SOLOMON_BOT_TOKEN"):
+    await setup_solomon_webhook(RENDER_URL)
+    logger.info("Solomon webhook registered")
+else:
+    logger.warning("Solomon: RENDER_EXTERNAL_URL not set, webhook skipped")
+
+6. Add to Render environment variables:
+RENDER_EXTERNAL_URL = https://gradus-ai.onrender.com
+
+═══════════════════════════════
+FIX 2: Browser-grade headers for court search
+═══════════════════════════════
+
+court.opendatabot.ua blocks server IPs that don't 
+send proper browser headers. Node.js fetch passed 
+this check, Python requests does not by default.
+
+In backend/solomon_search.py, replace the headers 
+and request with:
+
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+    "Referer": "https://court.opendatabot.ua/",
+})
+
+# First visit homepage to get cookies (Cloudflare)
+try:
+    session.get("https://court.opendatabot.ua", timeout=10)
+except:
+    pass
+
+# Then search
+resp = session.get(
+    "https://court.opendatabot.ua/search",
+    params=query_params,
+    timeout=15
+)
+logger.info(f"Court status: {resp.status_code}")
+logger.info(f"Court URL: {resp.url}")
+logger.info(f"Court preview: {repr(resp.text[:500])}")
+
+═══════════════════════════════
+SUCCESS CRITERIA
+═══════════════════════════════
+1. No TelegramConflictError in logs on deploy
+2. Court search returns status 200 (not 404)
+3. Telegram bot responds to /start
+4. Search query returns results

@@ -285,10 +285,19 @@ async def handle_search(message: Message):
         )
 
 
-async def run_solomon_bot():
+async def setup_solomon_webhook(base_url: str):
     if not SOLOMON_BOT_TOKEN:
-        logger.warning("SOLOMON_BOT_TOKEN not set — Solomon bot disabled")
+        logger.warning("SOLOMON_BOT_TOKEN not set — Solomon webhook skipped")
         return
-    logger.info("Solomon bot starting...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    webhook_url = f"{base_url}/law/telegram/webhook"
+    await bot.set_webhook(
+        url=webhook_url,
+        drop_pending_updates=True
+    )
+    logger.info(f"Solomon webhook set: {webhook_url}")
+
+
+async def process_solomon_update(update_data: dict):
+    from aiogram.types import Update
+    update = Update(**update_data)
+    await dp.feed_update(bot, update)
