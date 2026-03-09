@@ -101,9 +101,10 @@ def search_decisions(params: dict) -> list:
         timeout=15
     )
 
+    logger.info(f"Court status: {resp.status_code}")
+    logger.info(f"Court headers: {dict(resp.headers)}")
+    logger.info(f"Court preview: {repr(resp.text[:800])}")
     html = resp.text
-    logger.info(f"Court response status: {resp.status_code}")
-    logger.info(f"Court response preview: {html[:500]}")
 
     markers = [
         ("window.__INITIAL_STATE__='", "'"),

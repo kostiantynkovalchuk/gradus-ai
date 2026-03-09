@@ -290,4 +290,5 @@ async def run_solomon_bot():
         logger.warning("SOLOMON_BOT_TOKEN not set — Solomon bot disabled")
         return
     logger.info("Solomon bot starting...")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
