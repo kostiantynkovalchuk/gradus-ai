@@ -146,16 +146,20 @@ def search_decisions(params: dict) -> list:
     return results
 
 
-def cap_summary(text: str, limit: int = 200) -> str:
-    text = re.sub(r'^#+\s+[^\n]+\n*', '', text).strip()
-    text = re.sub(r'^(Резюме|Summary|Висновок).*?:\s*', '', text, flags=re.IGNORECASE).strip()
-    if len(text) <= limit:
+def cap_summary(text: str) -> str:
+    text = text.strip()
+    if len(text) <= 250 and text[-1] in '.!?»"':
         return text
-    truncated = text[:limit]
-    last_dot = truncated.rfind('.')
-    if last_dot > limit // 2:
-        return truncated[:last_dot + 1]
-    return truncated.rstrip() + '…'
+    for i in range(len(text) - 1, 79, -1):
+        if text[i] == '.':
+            return text[:i + 1]
+    for i in range(len(text) - 1, 79, -1):
+        if text[i] == ',':
+            return text[:i] + '.'
+    for i in range(len(text) - 1, 79, -1):
+        if text[i] == ' ':
+            return text[:i] + '.'
+    return text
 
 
 def summarize_decision(link: str) -> str:
@@ -188,14 +192,12 @@ def summarize_decision(link: str) -> str:
 
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            system="""Write one plain sentence summary in Ukrainian, maximum 180 characters.
-No markdown, no headers, no bullet points, no "Резюме:" prefix.
-Facts only: who sued whom, what the court decided.""",
-            messages=[{"role": "user", "content": text[:5000]}]
+            max_tokens=90,
+            system='Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.',
+            messages=[{"role": "user", "content": text[:1000]}]
         )
         summary = response.content[0].text.strip()
-        return cap_summary(summary, 200)
+        return cap_summary(summary)
 
     except Exception as e:
         logger.error(f"Solomon summarize error: {e}")
