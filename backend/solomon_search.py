@@ -47,20 +47,6 @@ PARSE_SYSTEM_PROMPT = """Ти помічник юриста України.
   "limit": 5
 }"""
 
-JUSTICE_CODES = {
-    "цивільні": "1",
-    "кримінальні": "2",
-    "господарські": "3",
-    "адміністративні": "4",
-    "всі": "0",
-}
-
-JUDGMENT_CODES = {
-    "постанови": "2",
-    "рішення": "4",
-    "всі": "0",
-}
-
 
 def parse_query(user_text: str) -> dict:
     response = client.messages.create(
@@ -75,94 +61,96 @@ def parse_query(user_text: str) -> dict:
 
 
 def search_decisions(params: dict) -> list:
-    justice_code = JUSTICE_CODES.get(params.get("justice_type", "всі"), "0")
-    judgment_code = JUDGMENT_CODES.get(params.get("judgment_type", "постанови"), "2")
+    JUSTICE_CODES_LOCAL = {
+        "цивільні": 1, "кримінальні": 5,
+        "господарські": 3, "адміністративні": 4, "всі": None,
+    }
+    JUDGMENT_CODES_LOCAL = {
+        "постанови": 2, "рішення": 4, "всі": None,
+    }
+
+    justice_code = JUSTICE_CODES_LOCAL.get(params.get("justice_type", "всі"))
+    judgment_code = JUDGMENT_CODES_LOCAL.get(params.get("judgment_type", "постанови"), 2)
     date_range = params.get("date_range", "2")
     limit = int(params.get("limit", 5))
+    search_text = " ".join(params.get("search_text", "").split()[:5])
 
     query_params = {
-        "text": params.get("search_text", ""),
+        "text": search_text,
+        "stage": "cassation",
     }
-    if justice_code != "0":
-        query_params["justice_code"] = justice_code
-    if judgment_code != "0":
-        query_params["judgment_code"] = judgment_code
-    if date_range != "0":
-        query_params["adjudication_date_year"] = date_range
+    if judgment_code:
+        query_params["justice_code"] = str(judgment_code)
+    if justice_code:
+        query_params["judgment_code"] = str(justice_code)
+    if date_range and date_range != "0":
+        query_params["adjudication_date_year"] = str(date_range)
 
-    logger.info(f"Solomon search params: {query_params}")
-
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0",
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": "https://court.opendatabot.ua/",
-    })
+        "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.8",
+    }
 
-    try:
-        session.get("https://court.opendatabot.ua", timeout=10)
-    except Exception:
-        pass
-
-    resp = session.get(
+    resp = requests.get(
         "https://court.opendatabot.ua/search",
         params=query_params,
-        timeout=15
+        headers=headers,
+        timeout=30,
     )
     logger.info(f"Court status: {resp.status_code}")
     logger.info(f"Court URL: {resp.url}")
-    logger.info(f"Court preview: {repr(resp.text[:500])}")
+
+    if resp.status_code != 200:
+        logger.warning(f"Court error: {resp.text[:200]}")
+        return []
+
     html = resp.text
-
-    markers = [
-        ("window.__INITIAL_STATE__='", "'"),
-        ('window.__INITIAL_STATE__="', '"'),
-        ("__INITIAL_STATE__='", "'"),
-        ('__INITIAL_STATE__="', '"'),
-    ]
-
-    start = -1
-    quote_char = "'"
-    used_marker = ""
-    for marker, qc in markers:
-        start = html.find(marker)
-        if start != -1:
-            used_marker = marker
-            quote_char = qc
-            break
-
-    if start == -1:
+    marker = "window.__INITIAL_STATE__='"
+    idx = html.find(marker)
+    if idx == -1:
         logger.warning("Solomon: __INITIAL_STATE__ not found in response")
+        logger.info(f"Court preview: {html[:300]}")
         return []
 
-    logger.info(f"Solomon: found marker '{used_marker}' at position {start}")
-    json_start = start + len(used_marker)
-    end = html.find(f"{quote_char};</script>", json_start)
+    start = idx + len(marker)
+    end = html.find("';</script>", start)
     if end == -1:
-        end = html.find(f"{quote_char}</script>", json_start)
+        end = html.find("'</script>", start)
     if end == -1:
+        logger.warning("Solomon: could not find end of __INITIAL_STATE__")
         return []
 
-    raw_json = html[json_start:end]
-    raw_json = raw_json.replace('\\"', '"').replace("\\'", "'")
+    raw_json = html[start:end]
+    raw_json = raw_json.replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
 
     try:
         data = json.loads(raw_json)
-        judgments = data.get("pageData", {}).get("judgments", [])
-        logger.info(f"Solomon: found {len(judgments)} judgments")
-        return judgments[:limit]
     except json.JSONDecodeError as e:
-        logger.error(f"Solomon JSON parse error: {e}")
+        logger.error(f"Solomon: JSON parse error: {e}")
+        logger.info(f"Raw JSON preview: {raw_json[:300]}")
         return []
+
+    judgments = data.get("pageData", {}).get("judgments", [])
+    logger.info(f"Solomon: found {len(judgments)} judgments")
+
+    results = []
+    for j in judgments[:limit]:
+        link = j.get("link", "")
+        if link and not link.startswith("http"):
+            link = f"https://court.opendatabot.ua{link}"
+        results.append({
+            "cause_number": j.get("cause_number", "—"),
+            "adjudication_date": j.get("adjudication_date", "")[:10],
+            "judge": j.get("judge", "—"),
+            "court_name": j.get("court_name", ""),
+            "justice_name": j.get("justice_name", ""),
+            "link": link,
+            "doc_id": str(j.get("doc_id", "")),
+        })
+
+    return results
 
 
 def cap_summary(text: str, limit: int = 250) -> str:
