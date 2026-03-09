@@ -82,7 +82,6 @@ def search_decisions(params: dict) -> list:
 
     query_params = {
         "text": params.get("search_text", ""),
-        "stage": "cassation",
     }
     if justice_code != "0":
         query_params["justice_code"] = justice_code
