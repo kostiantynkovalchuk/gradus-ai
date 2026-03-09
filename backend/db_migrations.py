@@ -488,6 +488,39 @@ MIGRATIONS = [
             ON CONFLICT (tg_channel) DO NOTHING""",
         ]
     },
+    {
+        "version": "017_solomon_tables",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS solomon_whitelist (
+                id SERIAL PRIMARY KEY,
+                phone VARCHAR(20) UNIQUE NOT NULL,
+                name VARCHAR(100),
+                added_by VARCHAR(100) DEFAULT 'admin',
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solomon_sessions (
+                id SERIAL PRIMARY KEY,
+                telegram_user_id BIGINT UNIQUE NOT NULL,
+                phone VARCHAR(20),
+                username VARCHAR(100),
+                authorized_at TIMESTAMP DEFAULT NOW(),
+                last_active TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solomon_search_log (
+                id SERIAL PRIMARY KEY,
+                telegram_user_id BIGINT,
+                phone VARCHAR(20),
+                query_text TEXT,
+                search_params JSONB,
+                results_count INTEGER,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """INSERT INTO solomon_whitelist (phone, name, added_by)
+            VALUES ('+34692480784', 'Konstantin', 'admin')
+            ON CONFLICT (phone) DO NOTHING""",
+        ]
+    },
 ]
 
 

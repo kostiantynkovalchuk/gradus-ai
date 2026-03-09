@@ -1,3 +1,4 @@
+aiogram>=3.7.0
 anthropic>=0.72.1
 apscheduler>=3.11.1
 beautifulsoup4>=4.14.2

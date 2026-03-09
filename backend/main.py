@@ -100,7 +100,15 @@ async def lifespan(app: FastAPI):
     check_thread = threading.Thread(target=check_missed_scraping, daemon=True)
     check_thread.start()
     logger.info("🔍 Checking for missed scraping tasks in background...")
-    
+
+    import asyncio
+    try:
+        from solomon_bot import run_solomon_bot
+        asyncio.create_task(run_solomon_bot())
+        logger.info("⚖️ Solomon bot task created")
+    except Exception as e:
+        logger.error(f"Solomon bot startup failed: {e}")
+
     yield
     
     logger.info("Shutting down scheduler...")
@@ -249,6 +257,8 @@ from routes.payment_routes import router as payment_router
 app.include_router(payment_router)
 from routes.admin_routes import router as admin_router
 app.include_router(admin_router)
+from solomon_router import router as solomon_router
+app.include_router(solomon_router)
 
 class ChatRequest(BaseModel):
     message: str
