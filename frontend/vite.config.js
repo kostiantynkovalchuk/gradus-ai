@@ -22,6 +22,10 @@ export default defineConfig({
       '/hr': {
         target: 'http://localhost:8000',
         changeOrigin: true
+      },
+      '/law': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
       }
     }
   },

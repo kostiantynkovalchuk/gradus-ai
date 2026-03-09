@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from solomon_search import parse_query, search_decisions, summarize_decision
+from solomon_ui import get_solomon_html
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,6 +12,11 @@ router = APIRouter(prefix="/law", tags=["solomon"])
 class SearchRequest(BaseModel):
     query: str
     summarize: bool = False
+
+
+@router.get("/", response_class=HTMLResponse)
+async def solomon_page():
+    return get_solomon_html()
 
 
 @router.get("/health")
