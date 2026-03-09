@@ -86,17 +86,10 @@ def search_decisions(params: dict) -> list:
     if date_range and date_range != "0":
         query_params["adjudication_date_year"] = str(date_range)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://court.opendatabot.ua/",
-        "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.8",
-    }
-
     resp = requests.get(
-        "https://court.opendatabot.ua/search",
+        "https://court-search-agent.replit.app/proxy/court",
         params=query_params,
-        headers=headers,
+        headers={"Authorization": "Bearer gradus-court-2026"},
         timeout=30,
     )
     logger.info(f"Court status: {resp.status_code}")
