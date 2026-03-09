@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import logging
@@ -124,9 +125,14 @@ async def handle_contact(message: Message):
         )
         return
 
-    if is_authorized(contact.phone_number):
+    phone = contact.phone_number
+    phone_normalized = re.sub(r'\s+', '', phone)
+    if not phone_normalized.startswith('+'):
+        phone_normalized = '+' + phone_normalized
+
+    if is_authorized(phone_normalized):
         username = message.from_user.username or message.from_user.full_name
-        save_session(message.from_user.id, contact.phone_number, username)
+        save_session(message.from_user.id, phone_normalized, username)
         await message.answer(
             "✅ *Доступ підтверджено!*\n\n"
             "Напишіть запит, наприклад:\n"
