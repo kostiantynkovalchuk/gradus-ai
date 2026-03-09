@@ -101,6 +101,8 @@ async def lifespan(app: FastAPI):
     check_thread.start()
     logger.info("🔍 Checking for missed scraping tasks in background...")
 
+    logger.info(f"RENDER_EXTERNAL_URL={os.environ.get('RENDER_EXTERNAL_URL', 'NOT SET')}")
+    logger.info(f"SOLOMON_BOT_TOKEN={'SET' if os.environ.get('SOLOMON_BOT_TOKEN') else 'NOT SET'}")
     RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
     if RENDER_URL and os.getenv("SOLOMON_BOT_TOKEN"):
         try:
