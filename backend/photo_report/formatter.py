@@ -4,6 +4,8 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
     errors = report.get("errors", [])
     share = report.get("shelf_share", {})
     elite = report.get("elite_shelf_check", {})
+    scored_cats = report.get("scored_categories", ["vodka"])
+    info_cats = report.get("info_only_categories", ["wine", "cognac", "sparkling"])
 
     status_icon = "✅" if passed else "❌"
     status_text = "ПРОЙДЕНО" if passed else "НЕ ПРОЙДЕНО"
@@ -24,17 +26,32 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
         lines.append("")
 
     cat_names = {"vodka": "Горілка", "wine": "Вино", "cognac": "Коньяк", "sparkling": "Ігристе"}
-    share_lines = []
-    for cat, data in share.items():
+
+    scored_lines = []
+    for cat in scored_cats:
+        data = share.get(cat, {})
         if data.get("total_facings", 0) > 0:
             icon = "✅" if data.get("passed") else "❌"
-            share_lines.append(
+            scored_lines.append(
                 f"{icon} {cat_names.get(cat, cat)}: {data.get('percent', 0)}% "
                 f"(норма ≥{data.get('threshold', 0)}%)"
             )
-    if share_lines:
-        lines.append("📈 *Доля полки:*")
-        lines.extend(share_lines)
+    if scored_lines:
+        lines.append("📈 *Доля полки (горілка):*")
+        lines.extend(scored_lines)
+        lines.append("")
+
+    info_lines = []
+    for cat in info_cats:
+        data = share.get(cat, {})
+        if data.get("total_facings", 0) > 0:
+            info_lines.append(
+                f"📊 {cat_names.get(cat, cat)}: {data.get('percent', 0)}% "
+                f"(норма Phase 2 ≥{data.get('threshold', 0)}%)"
+            )
+    if info_lines:
+        lines.append("📋 *Інфо (не впливає на оцінку):*")
+        lines.extend(info_lines)
         lines.append("")
 
     if elite.get("elite_section_exists"):
