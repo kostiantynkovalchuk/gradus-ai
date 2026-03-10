@@ -43,6 +43,7 @@ def parse_query(user_text: str) -> dict:
 
 
 def search_decisions(params: dict) -> list:
+    logger.info(f"Solomon parsed params: {params}")
     limit = int(params.get("limit", 5))
     search_text = " ".join(params.get("search_text", "").split()[:5])
 
@@ -74,6 +75,8 @@ def search_decisions(params: dict) -> list:
         payload["date_from"] = date_from
     if date_to:
         payload["date_to"] = date_to
+
+    logger.info(f"Solomon proxy payload: {payload}")
 
     resp = requests.post(
         "https://court-search-agent.replit.app/proxy/reyestr",
