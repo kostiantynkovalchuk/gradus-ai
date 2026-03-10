@@ -521,6 +521,48 @@ MIGRATIONS = [
             ON CONFLICT (phone) DO NOTHING""",
         ]
     },
+    {
+        "version": "018_photo_report_tables",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS photo_agents (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                full_name VARCHAR(200),
+                region VARCHAR(100),
+                role VARCHAR(20) DEFAULT 'agent' CHECK (role IN ('agent', 'supervisor', 'admin')),
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS photo_reports (
+                id SERIAL PRIMARY KEY,
+                agent_id BIGINT REFERENCES photo_agents(telegram_id),
+                trade_point_name VARCHAR(300),
+                trade_point_type VARCHAR(20) CHECK (trade_point_type IN ('retail', 'horeca', 'unknown')),
+                region VARCHAR(100),
+                score INTEGER,
+                passed BOOLEAN,
+                errors JSONB DEFAULT '[]',
+                shelf_share JSONB DEFAULT '{}',
+                brands_found JSONB DEFAULT '{}',
+                raw_ai_response JSONB,
+                photo_count INTEGER DEFAULT 0,
+                has_gps BOOLEAN DEFAULT false,
+                no_license_comment BOOLEAN DEFAULT false,
+                agent_comment TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS photo_report_images (
+                id SERIAL PRIMARY KEY,
+                report_id INTEGER REFERENCES photo_reports(id) ON DELETE CASCADE,
+                file_id VARCHAR(200),
+                sequence_number INTEGER,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_photo_reports_agent ON photo_reports(agent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_photo_reports_date ON photo_reports(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_photo_reports_passed ON photo_reports(passed)",
+        ]
+    },
 ]
 
 

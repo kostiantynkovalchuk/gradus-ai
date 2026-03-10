@@ -114,6 +114,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Solomon: RENDER_EXTERNAL_URL or SOLOMON_BOT_TOKEN not set, webhook skipped")
 
+    photo_token = os.environ.get("PHOTO_REPORT_BOT_TOKEN")
+    if photo_token and RENDER_URL:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as hclient:
+                resp = await hclient.post(
+                    f"https://api.telegram.org/bot{photo_token}/setWebhook",
+                    json={"url": f"{RENDER_URL}/webhook/photo-report"}
+                )
+                logger.info(f"📸 Photo Report webhook: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Photo Report webhook setup failed: {e}")
+    else:
+        logger.info("Photo Report: PHOTO_REPORT_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
+
     yield
     
     logger.info("Shutting down scheduler...")
@@ -264,6 +279,8 @@ from routes.admin_routes import router as admin_router
 app.include_router(admin_router)
 from solomon_router import router as solomon_router
 app.include_router(solomon_router)
+from routes.photo_report_webhook import router as photo_report_router
+app.include_router(photo_report_router)
 
 class ChatRequest(BaseModel):
     message: str

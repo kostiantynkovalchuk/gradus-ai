@@ -57,6 +57,7 @@ The system utilizes a FastAPI backend and a React frontend to manage a comprehen
 - **NBU Live Exchange Rate:** Daily-cached USD/UAH rate from National Bank of Ukraine API, replacing all hardcoded rates across the codebase.
 - **Hunt Analytics Dashboard:** ROI banner, 6 KPI cards, hire funnel chart, source performance chart, salary intelligence with currency toggle, skills chart, salary trends, recent vacancies table, data sources panel, efficiency comparison table.
 - **Solomon Court Search Bot:** Telegram bot (@solomon_court_ua_bot) for searching Ukrainian Supreme Court cassation decisions via court.opendatabot.ua, with Claude AI query parsing and one-sentence summaries. Phone-based whitelist auth, search history, FastAPI `/law` endpoints. Migration 017.
+- **Alex Photo Report Bot:** Merchandising verification bot for AVTD trade agents. Claude Sonnet vision analyzes shelf photos (up to 5) against AVTD merchandising standards (shelf share, brand placement, POS materials, elite shelf). Conversation flow: point name → photos → AI analysis → formatted report. Webhook at `/webhook/photo-report`, `PHOTO_REPORT_BOT_TOKEN` env var. Module: `backend/photo_report/`. Migration 018 (tables: `photo_agents`, `photo_reports`, `photo_report_images`).
 
 ## External Dependencies
 - **Claude AI (Anthropic):** Content generation, English-to-Ukrainian translation.
