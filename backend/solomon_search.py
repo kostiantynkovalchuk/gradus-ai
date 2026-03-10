@@ -1,7 +1,6 @@
 import json
 import logging
 import requests
-from bs4 import BeautifulSoup
 from anthropic import Anthropic
 import os
 
@@ -93,6 +92,25 @@ def search_decisions(params: dict) -> list:
 
     results = []
     for j in judgments:
+        doc_id = j.get("doc_id", "")
+
+        decision_text = ""
+        if doc_id:
+            try:
+                text_resp = requests.get(
+                    f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
+                    headers={"Authorization": "Bearer gradus-court-2026"},
+                    timeout=20,
+                )
+                if text_resp.status_code == 200:
+                    decision_text = text_resp.json().get("text", "")
+            except Exception as e:
+                logger.warning(f"Failed to fetch text for {doc_id}: {e}")
+
+        summary = ""
+        if decision_text and len(decision_text) > 100:
+            summary = summarize_decision(decision_text)
+
         results.append({
             "cause_number": j.get("cause_number", "—"),
             "adjudication_date": j.get("reg_date", ""),
@@ -100,7 +118,8 @@ def search_decisions(params: dict) -> list:
             "court_name": j.get("court_name", ""),
             "justice_name": j.get("vr_type", ""),
             "link": j.get("link", ""),
-            "doc_id": j.get("doc_id", ""),
+            "doc_id": doc_id,
+            "summary": summary,
         })
 
     return results
@@ -122,43 +141,19 @@ def cap_summary(text: str) -> str:
     return text
 
 
-def summarize_decision(link: str) -> str:
+def summarize_decision(decision_text: str) -> str:
     try:
-        resp = requests.get(
-            link,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10
-        )
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        for tag in soup(["script", "style", "noscript"]):
-            tag.decompose()
-
-        full_text = soup.get_text(separator=" ", strip=True)
-
-        for marker in ["Додайте Опендатабот", "Опендатабот — сервіс"]:
-            idx = full_text.find(marker)
-            if idx > 0:
-                full_text = full_text[:idx]
-
-        js_markers = ["localStorage", "matchMedia", "addEventListener"]
-        if any(m in full_text[:500] for m in js_markers):
-            return "Текст рішення недоступний."
-
-        if len(full_text) > 8000:
-            text = full_text[:1000] + " ...[середина]... " + full_text[-4000:]
-        else:
-            text = full_text
+        text = decision_text[:1000]
 
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=90,
             system='Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.',
-            messages=[{"role": "user", "content": text[:1000]}]
+            messages=[{"role": "user", "content": text}]
         )
         summary = response.content[0].text.strip()
         return cap_summary(summary)
 
     except Exception as e:
         logger.error(f"Solomon summarize error: {e}")
-        return "Текст рішення недоступний."
+        return ""
