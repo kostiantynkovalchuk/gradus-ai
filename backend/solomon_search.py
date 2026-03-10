@@ -7,21 +7,27 @@ import os
 logger = logging.getLogger(__name__)
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-PARSE_SYSTEM_PROMPT = """Ти парсер юридичних запитів. З запиту користувача витягни параметри пошуку та поверни ТІЛЬКИ JSON без пояснень:
+PARSE_SYSTEM_PROMPT = """Ти парсер юридичних запитів. З запиту користувача витягни параметри та поверни ТІЛЬКИ JSON:
 
 {
-  "search_text": "ключові слова для пошуку, макс 5 слів",
-  "vr_type": "Вирок|Постанова|Рішення|Ухвала|" (порожньо = всі),
+  "search_text": "ключові слова, макс 5 слів, без дат і типів документів",
+  "vr_type": "1|2|3|5|" (1=Вирок, 2=Постанова, 3=Рішення, 5=Ухвала, порожньо=всі),
+  "cs_type": "1|2|3|4|" (1=Цивільне, 2=Кримінальне, 3=Господарське, 4=Адміністративне, порожньо=всі),
+  "ins_type": "3" (завжди 3=Касаційна, якщо не вказано інше),
   "date_from": "DD.MM.YYYY або порожньо",
   "date_to": "DD.MM.YYYY або порожньо",
-  "date_range": "1|2|3|0" (років назад, використовувати тільки якщо конкретні дати не вказані, 0=весь час)
+  "date_range": "1|2|3|0" (тільки якщо конкретні дати не вказані: 1=1рік, 2=2роки, 3=3роки, 0=весь час),
+  "judge": "ПІБ судді або порожньо",
+  "case_number": "номер справи або порожньо"
 }
 
 Правила:
-- Якщо вказано конкретні дати — заповни date_from/date_to, date_range залиш порожнім
-- Якщо вказано "за N рік(ів)" або без дат — заповни date_range, date_from/date_to залиш порожніми
-- вирок → vr_type: "Вирок", постанова → "Постанова", рішення → "Рішення", ухвала → "Ухвала"
-- search_text: тільки змістовні ключові слова (без дат, типів документів, назв суду)"""
+- ins_type завжди "3" (касація) якщо явно не вказано "апеляція" або "перша інстанція"
+- вирок → vr_type "1", постанова → "2", рішення → "3", ухвала → "5"
+- кримінальн* → cs_type "2", господарськ* → "3", адміністративн* → "4", цивільн* → "1"
+- Якщо є конкретні дати (формат DD.MM.YYYY або назва дати) → date_from/date_to, date_range порожньо
+- Якщо є "за N рік(ів)" або без дат → date_range, date_from/date_to порожньо
+- search_text: тільки змістовні ключові слова справи"""
 
 
 def parse_query(user_text: str) -> dict:
@@ -51,13 +57,23 @@ def search_decisions(params: dict) -> list:
             past = datetime.now() - timedelta(days=365 * years_back)
             date_from = past.strftime("%d.%m.%Y")
 
-    payload = {"search_text": search_text, "limit": limit}
+    payload = {
+        "search_text": search_text,
+        "limit": limit,
+        "ins_type": params.get("ins_type", "3"),
+    }
+    if params.get("vr_type"):
+        payload["vr_type"] = params["vr_type"]
+    if params.get("cs_type"):
+        payload["cs_type"] = params["cs_type"]
+    if params.get("judge"):
+        payload["judge"] = params["judge"]
+    if params.get("case_number"):
+        payload["case_number"] = params["case_number"]
     if date_from:
         payload["date_from"] = date_from
     if date_to:
         payload["date_to"] = date_to
-    if params.get("vr_type"):
-        payload["vr_type"] = params["vr_type"]
 
     resp = requests.post(
         "https://court-search-agent.replit.app/proxy/reyestr",
