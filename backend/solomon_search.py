@@ -107,7 +107,6 @@ def search_decisions(params: dict) -> list:
     payload = {
         "limit": limit,
         "ins_type": params.get("ins_type", "3"),
-        "court_name": "Верховний Суд",
         "sort": "1",
     }
     if search_text:
