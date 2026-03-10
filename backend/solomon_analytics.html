@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>СОЛОМОН · Аналітика ефективності</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/recharts@2.5.0/umd/Recharts.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet"/>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d1528; color: #f7f3ed; }
+.slider-input { width:100%; appearance:none; background:transparent; outline:none; cursor:pointer; }
+.slider-input::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; background:#b8892a; border-radius:50%; cursor:pointer; }
+.slider-input::-webkit-slider-runnable-track { height:3px; background:#ffffff22; border-radius:2px; }
+.stat-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px #b8892a22; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.6} }
+.pulse { animation: pulse 2s ease-in-out infinite; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
+
+const NAVY = "#0d1528";
+const GOLD = "#b8892a";
+const GOLD_LIGHT = "#d4a845";
+const PARCHMENT = "#f7f3ed";
+const MANUAL_MIN = 47;
+const SOLOMON_MIN = 1.5;
+const SAVED_PER_SEARCH = MANUAL_MIN - SOLOMON_MIN;
+
+function generateData(searches) {
+  return Array.from({ length: searches }, (_, i) => ({
+    search: i + 1,
+    cumulative: Math.round((i + 1) * SAVED_PER_SEARCH),
+    hours: Math.round(((i + 1) * SAVED_PER_SEARCH) / 60 * 10) / 10,
+  }));
+}
+
+const CustomTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: NAVY, border: `1px solid ${GOLD}33`, padding: "12px 16px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>
+      <div style={{ color: GOLD, marginBottom: 4 }}>Пошук #{label}</div>
+      <div style={{ color: PARCHMENT }}>{payload[0]?.value} хв збережено</div>
+      <div style={{ color: "#ffffff88", fontSize: 11 }}>{payload[0]?.payload?.hours} год сукупно</div>
+    </div>
+  );
+};
+
+function App() {
+  const [searchCount, setSearchCount] = useState(0);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [target, setTarget] = useState(120);
+  const intervalRef = useRef(null);
+
+  const runAnimation = (val) => {
+    setSearchCount(0);
+    clearInterval(intervalRef.current);
+    setIsAnimating(true);
+    let count = 0;
+    intervalRef.current = setInterval(() => {
+      count++;
+      setSearchCount(count);
+      if (count >= val) { clearInterval(intervalRef.current); setIsAnimating(false); }
+    }, Math.max(4, Math.floor(1200 / val)));
+  };
+
+  useEffect(() => { const t = setTimeout(() => runAnimation(target), 400); return () => clearTimeout(t); }, []);
+
+  const data = generateData(searchCount);
+  const totalMin = Math.round(searchCount * SAVED_PER_SEARCH);
+  const totalHours = (totalMin / 60).toFixed(1);
+  const totalDays = (totalMin / 60 / 8).toFixed(1);
+  const efficiency = Math.round((SAVED_PER_SEARCH / MANUAL_MIN) * 100);
+  const milestones = [{ searches: 10, label: "10" }, { searches: 60, label: "60" }, { searches: 120, label: "120" }];
+
+  return (
+    <div style={{ background: NAVY, minHeight: "100vh", padding: "48px 32px", backgroundImage: `radial-gradient(ellipse at 20% 20%, #1a2a4a 0%, transparent 50%)` }}>
+      <div style={{ maxWidth: 760, margin: "0 auto" }}>
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: 4, color: GOLD, textTransform: "uppercase", marginBottom: 8 }}>СОЛОМОН · Аналітика ефективності</div>
+        <h1 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 42, fontWeight: 300, marginBottom: 4, letterSpacing: -1 }}>Час — це теж ресурс</h1>
+        <p style={{ color: "#ffffff66", fontSize: 13, fontFamily: "'DM Mono', monospace", marginBottom: 48, fontWeight: 300 }}>Методологія: ABA Legal Tech Survey 2024 · Thomson Reuters Future of Professionals</p>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto 1fr", background: "#ffffff08", border: `1px solid ${GOLD}22`, borderRadius: 8, padding: "20px 24px", marginBottom: 48, alignItems: "center", gap: 0 }}>
+          {[
+            { label: "Ручний пошук", value: `${MANUAL_MIN} хв`, sub: "реєстр → фільтр → читання", color: "#ff6b6b" },
+            { label: "→", value: null },
+            { label: "СОЛОМОН", value: `${SOLOMON_MIN} хв`, sub: "запит → AI резюме → рішення", color: GOLD_LIGHT },
+            { label: "=", value: null },
+            { label: "Збережено", value: `${SAVED_PER_SEARCH} хв`, sub: "на кожен пошук", color: "#4ade80" },
+          ].map((item, i) => (
+            <div key={i} style={{ textAlign: "center" }}>
+              {item.value ? <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, color: item.color, fontWeight: 400 }}>{item.value}</div>
+                : <div style={{ fontSize: 20, color: "#ffffff33" }}>{item.label}</div>}
+              {item.value && <><div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 13, color: PARCHMENT, marginTop: 4 }}>{item.label}</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#ffffff44", marginTop: 2 }}>{item.sub}</div></>}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 48 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 12, background: `${GOLD}11`, border: `1px solid ${GOLD}44`, borderRadius: 40, padding: "8px 20px" }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: GOLD }} className={isAnimating ? "pulse" : ""} />
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, color: GOLD }}>{efficiency}% скорочення часу на юридичний пошук</span>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 48 }}>
+          {[
+            { value: searchCount, unit: "пошуків", label: "виконано", decimals: 0, highlight: false },
+            { value: parseFloat(totalHours), unit: "годин", label: "збережено", decimals: 1, highlight: false },
+            { value: parseFloat(totalDays), unit: "робочих днів", label: "повернуто юристу", decimals: 1, highlight: true },
+          ].map((stat, i) => (
+            <div key={i} className="stat-card" style={{ background: "#ffffff06", border: `1px solid ${GOLD}22`, borderRadius: 8, padding: "24px 20px", textAlign: "center" }}>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 36, color: stat.highlight ? GOLD_LIGHT : PARCHMENT, lineHeight: 1 }}>
+                {stat.decimals === 0 ? stat.value : stat.value.toFixed(1)}
+              </div>
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 13, color: GOLD, marginTop: 6 }}>{stat.unit}</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#ffffff44", marginTop: 4, letterSpacing: 1 }}>{stat.label.toUpperCase()}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: "#ffffff04", border: `1px solid ${GOLD}18`, borderRadius: 8, padding: "32px 24px 24px", marginBottom: 32 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 24 }}>
+            <div>
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18 }}>Накопичена економія часу</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#ffffff44", marginTop: 4 }}>хвилини · кумулятивно</div>
+            </div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: GOLD }}>{totalMin > 0 ? `+${totalMin} хв` : "—"}</div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -8 }}>
+              <defs>
+                <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={GOLD} stopOpacity={0.25}/>
+                  <stop offset="100%" stopColor={GOLD} stopOpacity={0.02}/>
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="search" stroke="#ffffff22" tick={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fill: "#ffffff44" }} tickLine={false} axisLine={false}/>
+              <YAxis stroke="#ffffff22" tick={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fill: "#ffffff44" }} tickLine={false} axisLine={false}/>
+              <Tooltip content={<CustomTooltip/>}/>
+              {milestones.map(m => m.searches <= searchCount && (
+                <ReferenceLine key={m.searches} x={m.searches} stroke={`${GOLD}44`} strokeDasharray="3 3"/>
+              ))}
+              <Area type="monotone" dataKey="cumulative" stroke={GOLD} strokeWidth={2} fill="url(#goldGrad)" dot={false} activeDot={{ r: 4, fill: GOLD, strokeWidth: 0 }}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{ marginBottom: 48 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#ffffff44" }}>КІЛЬКІСТЬ ПОШУКІВ</span>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: GOLD }}>{target}</span>
+          </div>
+          <input type="range" min={5} max={500} value={target} className="slider-input"
+            onChange={e => { const val = parseInt(e.target.value); setTarget(val); runAnimation(val); }}/>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+            {[10, 60, 120, 250, 500].map(n => (
+              <button key={n} onClick={() => { setTarget(n); runAnimation(n); }} style={{ background: target === n ? `${GOLD}22` : "transparent", border: `1px solid ${target === n ? GOLD+"66" : "#ffffff18"}`, color: target === n ? GOLD : "#ffffff44", fontFamily: "'DM Mono', monospace", fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer" }}>{n}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ borderTop: `1px solid ${GOLD}18`, paddingTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#ffffff33", lineHeight: 1.6 }}>
+            Середній час ручного пошуку в судовому реєстрі: 47 хв<br/>
+            Середній час пошуку СОЛОМОН: 1.5 хв · ABA Legal Tech Survey 2024
+          </div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 13, color: `${GOLD}66` }}>СОЛОМОН ⚖</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

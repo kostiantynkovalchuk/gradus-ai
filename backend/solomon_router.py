@@ -44,6 +44,14 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=500, detail="Search processing error")
 
 
+@router.get("/analytics", response_class=HTMLResponse)
+async def solomon_analytics():
+    import os
+    analytics_path = os.path.join(os.path.dirname(__file__), "solomon_analytics.html")
+    with open(analytics_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
 @router.post("/telegram/webhook")
 async def solomon_webhook(request: Request):
     from solomon_bot import process_solomon_update
