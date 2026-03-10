@@ -27,7 +27,9 @@ PARSE_SYSTEM_PROMPT = """Ти парсер юридичних запитів. З
 - кримінальн* → cs_type "2", господарськ* → "3", адміністративн* → "4", цивільн* → "1"
 - Якщо є конкретні дати (формат DD.MM.YYYY або назва дати) → date_from/date_to, date_range порожньо
 - Якщо є "за N рік(ів)" або без дат → date_range, date_from/date_to порожньо
-- search_text: тільки змістовні ключові слова справи"""
+- search_text: тільки змістовні ключові слова справи
+- Якщо запит містить конкретні фільтри (тип документу + форма судочинства + дати), search_text може бути порожнім або містити лише 1-2 найважливіших змістовних слова справи (не назви статей, не слова "кодекс", "стаття")
+- Номери статей (234, 185, тощо) — НЕ включати в search_text, вони не індексуються в повнотекстовому пошуку"""
 
 
 def parse_query(user_text: str) -> dict:
@@ -59,10 +61,11 @@ def search_decisions(params: dict) -> list:
             date_from = past.strftime("%d.%m.%Y")
 
     payload = {
-        "search_text": search_text,
         "limit": limit,
         "ins_type": params.get("ins_type", "3"),
     }
+    if search_text:
+        payload["search_text"] = search_text
     if params.get("vr_type"):
         payload["vr_type"] = params["vr_type"]
     if params.get("cs_type"):
