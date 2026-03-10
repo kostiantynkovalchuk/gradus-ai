@@ -5,8 +5,9 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
-    Message, Contact,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    Message, Contact, CallbackQuery,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
 from aiogram.filters import CommandStart, Command
 from database import get_db_connection
@@ -17,6 +18,15 @@ logger = logging.getLogger(__name__)
 SOLOMON_BOT_TOKEN = os.getenv("SOLOMON_BOT_TOKEN")
 bot = Bot(token=SOLOMON_BOT_TOKEN) if SOLOMON_BOT_TOKEN else None
 dp = Dispatcher()
+
+
+def make_feedback_keyboard(doc_id: str, cause_number: str) -> InlineKeyboardMarkup:
+    safe_case = cause_number.replace("/", "_")[:20]
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👍 Корисно", callback_data=f"sfb_like_{doc_id}_{safe_case}"),
+        InlineKeyboardButton(text="👎 Не те", callback_data=f"sfb_dislike_{doc_id}_{safe_case}"),
+        InlineKeyboardButton(text="🔗 Читати", url=f"https://reyestr.court.gov.ua/Review/{doc_id}"),
+    ]])
 
 
 def normalize_phone(phone: str) -> str:
@@ -227,54 +237,45 @@ async def handle_search(message: Message):
             )
             return
 
-        numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+        numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
         header = (
             f"📋 Знайдено *{len(judgments)}* рішень\n"
             "🏛 Верховний Суд | Касація\n"
-            "━━━━━━━━━━━━━━━━━━\n"
+            "━━━━━━━━━━━━━━━━━━"
         )
 
-        blocks = []
-        for i, j in enumerate(judgments):
+        await processing_msg.edit_text(
+            header,
+            parse_mode="Markdown"
+        )
+
+        for i, j in enumerate(judgments[:10]):
             date = j.get("adjudication_date", "")[:10]
             cause = j.get("cause_number", "")
             judge = j.get("judge", "")
-            link = j.get("link", "")
-            summary = summarize_decision(link) if link else "Недоступно."
+            doc_id = j.get("doc_id", "")
+            summary = j.get("summary", "") or "Недоступно."
 
+            num = numbers[i] if i < len(numbers) else f"*{i+1}.*"
             block = (
-                f"{numbers[i]} *Справа № {cause}* — {date}\n"
+                f"{num} *Справа № {cause}* — {date}\n"
                 f"👨‍⚖️ {judge}\n\n"
                 f"💡 {summary}\n\n"
-                f"🔗 [Читати повністю]({link})\n\n"
-                "━━━━━━━━━━━━━━━━━━\n"
+                "━━━━━━━━━━━━━━━━━━"
             )
-            blocks.append(block)
 
-        footer = f"🔍 _{message.text[:80]}_"
-
-        chunks = []
-        current = header
-        for block in blocks:
-            if len(current) + len(block) > 3800:
-                chunks.append(current)
-                current = "📋 *Продовження...*\n━━━━━━━━━━━━━━━━━━\n" + block
-            else:
-                current += block
-        current += footer
-        chunks.append(current)
-
-        await processing_msg.edit_text(
-            chunks[0],
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
-        for chunk in chunks[1:]:
+            keyboard = make_feedback_keyboard(doc_id, cause) if doc_id else None
             await message.answer(
-                chunk,
+                block,
                 parse_mode="Markdown",
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                reply_markup=keyboard
             )
+
+        await message.answer(
+            f"🔍 _{message.text[:80]}_",
+            parse_mode="Markdown"
+        )
 
         log_search(
             message.from_user.id,
@@ -289,6 +290,62 @@ async def handle_search(message: Message):
         await processing_msg.edit_text(
             "⚠️ Виникла помилка при обробці запиту. Спробуйте ще раз."
         )
+
+
+@dp.callback_query(lambda c: c.data == "sfb_done")
+async def handle_feedback_done(callback: CallbackQuery):
+    await callback.answer("Вже зараховано.")
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("sfb_"))
+async def handle_solomon_feedback(callback: CallbackQuery):
+    parts = callback.data.split("_", 3)
+    if len(parts) < 3:
+        await callback.answer("Помилка даних.")
+        return
+    feedback = parts[1]
+    if feedback not in ("like", "dislike"):
+        await callback.answer("Невідома дія.")
+        return
+    doc_id = parts[2]
+    cause_number = parts[3].replace("_", "/") if len(parts) > 3 else ""
+
+    user_id = callback.from_user.id
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM solomon_sessions WHERE telegram_user_id = %s", (user_id,))
+        session = cur.fetchone()
+        session_id = session[0] if session else None
+
+        cur.execute("""
+            INSERT INTO solomon_feedback (session_id, doc_id, cause_number, feedback)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (session_id, doc_id) DO UPDATE SET feedback = EXCLUDED.feedback
+        """, (session_id, doc_id, cause_number, feedback))
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    if feedback == "like":
+        new_text = "✅ Корисно"
+        reply = "Дякую! Це допоможе покращити пошук."
+    else:
+        new_text = "❌ Не те"
+        reply = "Зрозуміло. Спробуйте уточнити запит."
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=new_text if feedback == "like" else "👍 Корисно", callback_data="sfb_done"),
+            InlineKeyboardButton(text=new_text if feedback == "dislike" else "👎 Не те", callback_data="sfb_done"),
+            InlineKeyboardButton(text="🔗 Читати", url=f"https://reyestr.court.gov.ua/Review/{doc_id}"),
+        ]]))
+    except Exception:
+        pass
+
+    await callback.answer(reply)
 
 
 async def setup_solomon_webhook(base_url: str):

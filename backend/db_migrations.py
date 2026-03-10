@@ -563,6 +563,24 @@ MIGRATIONS = [
             "CREATE INDEX IF NOT EXISTS idx_photo_reports_passed ON photo_reports(passed)",
         ]
     },
+    {
+        "version": "019_solomon_feedback",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS solomon_feedback (
+                id SERIAL PRIMARY KEY,
+                session_id INTEGER REFERENCES solomon_sessions(id),
+                query_text TEXT,
+                parsed_params JSONB,
+                doc_id TEXT,
+                cause_number TEXT,
+                feedback VARCHAR(10) CHECK (feedback IN ('like', 'dislike')),
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_solomon_feedback_doc ON solomon_feedback(doc_id)",
+            "CREATE INDEX IF NOT EXISTS idx_solomon_feedback_session ON solomon_feedback(session_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_solomon_feedback_unique ON solomon_feedback(session_id, doc_id)",
+        ]
+    },
 ]
 
 
