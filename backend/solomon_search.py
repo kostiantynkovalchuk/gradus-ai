@@ -1,4 +1,3 @@
-import re
 import json
 import logging
 import requests
@@ -61,86 +60,47 @@ def parse_query(user_text: str) -> dict:
 
 
 def search_decisions(params: dict) -> list:
-    JUSTICE_CODES_LOCAL = {
-        "цивільні": 1, "кримінальні": 5,
-        "господарські": 3, "адміністративні": 4, "всі": None,
-    }
-    JUDGMENT_CODES_LOCAL = {
-        "постанови": 2, "рішення": 4, "всі": None,
-    }
-
-    justice_code = JUSTICE_CODES_LOCAL.get(params.get("justice_type", "всі"))
-    judgment_code = JUDGMENT_CODES_LOCAL.get(params.get("judgment_type", "постанови"), 2)
     date_range = params.get("date_range", "2")
     limit = int(params.get("limit", 5))
     search_text = " ".join(params.get("search_text", "").split()[:5])
 
-    query_params = {
-        "text": search_text,
-        "stage": "cassation",
-    }
-    if judgment_code:
-        query_params["justice_code"] = str(judgment_code)
-    if justice_code:
-        query_params["judgment_code"] = str(justice_code)
+    date_from = ""
     if date_range and date_range != "0":
-        query_params["adjudication_date_year"] = str(date_range)
+        from datetime import datetime, timedelta
+        years_back = int(date_range)
+        past = datetime.now() - timedelta(days=365 * years_back)
+        date_from = past.strftime("%d.%m.%Y")
 
-    resp = requests.get(
-        "https://court-search-agent.replit.app/proxy/court",
-        params=query_params,
+    payload = {"search_text": search_text, "limit": limit}
+    if date_from:
+        payload["date_from"] = date_from
+
+    resp = requests.post(
+        "https://court-search-agent.replit.app/proxy/reyestr",
+        json=payload,
         headers={"Authorization": "Bearer gradus-court-2026"},
         timeout=30,
     )
-    logger.info(f"Court status: {resp.status_code}")
-    logger.info(f"Court URL: {resp.url}")
+    logger.info(f"Reyestr status: {resp.status_code}")
 
     if resp.status_code != 200:
-        logger.warning(f"Court error: {resp.text[:200]}")
+        logger.warning(f"Reyestr error: {resp.text[:200]}")
         return []
 
-    html = resp.text
-    marker = "window.__INITIAL_STATE__='"
-    idx = html.find(marker)
-    if idx == -1:
-        logger.warning("Solomon: __INITIAL_STATE__ not found in response")
-        logger.info(f"Court preview: {html[:300]}")
-        return []
-
-    start = idx + len(marker)
-    end = html.find("';</script>", start)
-    if end == -1:
-        end = html.find("'</script>", start)
-    if end == -1:
-        logger.warning("Solomon: could not find end of __INITIAL_STATE__")
-        return []
-
-    raw_json = html[start:end]
-    raw_json = raw_json.replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
-
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as e:
-        logger.error(f"Solomon: JSON parse error: {e}")
-        logger.info(f"Raw JSON preview: {raw_json[:300]}")
-        return []
-
-    judgments = data.get("pageData", {}).get("judgments", [])
+    data = resp.json()
+    judgments = data.get("results", [])
     logger.info(f"Solomon: found {len(judgments)} judgments")
 
     results = []
-    for j in judgments[:limit]:
-        link = j.get("link", "")
-        if link and not link.startswith("http"):
-            link = f"https://court.opendatabot.ua{link}"
+    for j in judgments:
         results.append({
             "cause_number": j.get("cause_number", "—"),
-            "adjudication_date": j.get("adjudication_date", "")[:10],
+            "adjudication_date": j.get("reg_date", ""),
             "judge": j.get("judge", "—"),
             "court_name": j.get("court_name", ""),
-            "justice_name": j.get("justice_name", ""),
-            "link": link,
-            "doc_id": str(j.get("doc_id", "")),
+            "justice_name": j.get("vr_type", ""),
+            "link": j.get("link", ""),
+            "doc_id": j.get("doc_id", ""),
         })
 
     return results
