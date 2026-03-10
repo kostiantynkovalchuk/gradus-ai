@@ -7,43 +7,21 @@ import os
 logger = logging.getLogger(__name__)
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-PARSE_SYSTEM_PROMPT = """Ти помічник юриста України.
-Перетвори запит на JSON параметри пошуку.
-Поверни ТІЛЬКИ JSON без markdown або пояснень.
+PARSE_SYSTEM_PROMPT = """Ти парсер юридичних запитів. З запиту користувача витягни параметри пошуку та поверни ТІЛЬКИ JSON без пояснень:
 
-ОБОВ'ЯЗКОВІ ПРАВИЛА:
-
-1. justice_type (тип справи):
-   - ДПС, ППР, податок, перевірка, НДС, митниця → "адміністративні"
-   - Банкрутство, корпоративні спори, АМКУ → "господарські"
-   - Трудові, сімейні, спадщина → "цивільні"
-   - Кримінальне переслідування → "кримінальні"
-   - Незрозуміло → "адміністративні"
-
-2. search_text:
-   - Прості ключові слова через пробіл, максимум 5 слів
-   - НЕ використовуй оператори & або |
-   - Приклад: "податкове повідомлення нереальність маркетинг"
-
-3. date_range:
-   - "2024-2025" або "2 роки" → "2"
-   - "останній рік" або "2025" → "1"
-   - "3 роки" → "3"
-   - не вказано → "2"
-
-4. judgment_type:
-   - За замовчуванням → "постанови"
-   - Тільки якщо явно вказано "рішення" як тип документу → "рішення"
-   - "рішення АМКУ/ДПС/суду" (предмет оскарження) → "постанови"
-
-Формат відповіді:
 {
-  "search_text": "ключові слова",
-  "justice_type": "адміністративні|господарські|цивільні|кримінальні",
-  "judgment_type": "постанови|рішення|всі",
-  "date_range": "1|2|3|0",
-  "limit": 5
-}"""
+  "search_text": "ключові слова для пошуку, макс 5 слів",
+  "vr_type": "Вирок|Постанова|Рішення|Ухвала|" (порожньо = всі),
+  "date_from": "DD.MM.YYYY або порожньо",
+  "date_to": "DD.MM.YYYY або порожньо",
+  "date_range": "1|2|3|0" (років назад, використовувати тільки якщо конкретні дати не вказані, 0=весь час)
+}
+
+Правила:
+- Якщо вказано конкретні дати — заповни date_from/date_to, date_range залиш порожнім
+- Якщо вказано "за N рік(ів)" або без дат — заповни date_range, date_from/date_to залиш порожніми
+- вирок → vr_type: "Вирок", постанова → "Постанова", рішення → "Рішення", ухвала → "Ухвала"
+- search_text: тільки змістовні ключові слова (без дат, типів документів, назв суду)"""
 
 
 def parse_query(user_text: str) -> dict:
@@ -59,20 +37,27 @@ def parse_query(user_text: str) -> dict:
 
 
 def search_decisions(params: dict) -> list:
-    date_range = params.get("date_range", "2")
     limit = int(params.get("limit", 5))
     search_text = " ".join(params.get("search_text", "").split()[:5])
 
-    date_from = ""
-    if date_range and date_range != "0":
-        from datetime import datetime, timedelta
-        years_back = int(date_range)
-        past = datetime.now() - timedelta(days=365 * years_back)
-        date_from = past.strftime("%d.%m.%Y")
+    date_from = params.get("date_from", "")
+    date_to = params.get("date_to", "")
+
+    if not date_from:
+        date_range = params.get("date_range", "2")
+        if date_range and date_range != "0":
+            from datetime import datetime, timedelta
+            years_back = int(date_range)
+            past = datetime.now() - timedelta(days=365 * years_back)
+            date_from = past.strftime("%d.%m.%Y")
 
     payload = {"search_text": search_text, "limit": limit}
     if date_from:
         payload["date_from"] = date_from
+    if date_to:
+        payload["date_to"] = date_to
+    if params.get("vr_type"):
+        payload["vr_type"] = params["vr_type"]
 
     resp = requests.post(
         "https://court-search-agent.replit.app/proxy/reyestr",
