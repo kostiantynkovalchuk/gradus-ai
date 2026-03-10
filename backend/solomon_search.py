@@ -141,7 +141,13 @@ def search_decisions(params: dict) -> list:
     for j in judgments:
         doc_id = j.get("doc_id", "")
         decision_text = texts.get(doc_id, "")
-        summary = summarize_decision(decision_text) if decision_text and len(decision_text) > 100 else ""
+        bad_signals = ["<", "Категорія справи", "відсутній текст", "метадан"]
+        is_bad = (
+            not decision_text
+            or len(decision_text) < 300
+            or any(s in decision_text[:200] for s in bad_signals)
+        )
+        summary = "" if is_bad else summarize_decision(decision_text)
 
         results.append({
             "cause_number": j.get("cause_number", "—"),
@@ -180,7 +186,7 @@ def summarize_decision(decision_text: str) -> str:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=90,
-            system='Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.',
+            system='Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.\n\nВАЖЛИВО: Якщо текст не містить резолютивної частини або є лише метаданими — поверни порожній рядок. Ніяких вибачень, ніяких пояснень.',
             messages=[{"role": "user", "content": text}]
         )
         summary = response.content[0].text.strip()
