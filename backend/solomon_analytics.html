@@ -59,6 +59,14 @@ function App() {
   const [isAnimating, setIsAnimating] = useState(false);
   const [target, setTarget] = useState(120);
   const intervalRef = useRef(null);
+  const [feedbackData, setFeedbackData] = useState(null);
+
+  useEffect(() => {
+    fetch("/law/analytics/data")
+      .then(r => r.json())
+      .then(d => setFeedbackData(d))
+      .catch(() => {});
+  }, []);
 
   const runAnimation = (val) => {
     setSearchCount(0);
@@ -111,6 +119,27 @@ function App() {
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, color: GOLD }}>{efficiency}% скорочення часу на юридичний пошук</span>
           </div>
         </div>
+
+        {feedbackData && feedbackData.last_30_days.total > 0 && (
+          <>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: 4, color: GOLD, textTransform: "uppercase", marginBottom: 16 }}>
+              РЕАЛЬНИЙ ВІДГУК · останні 30 днів
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 48 }}>
+              {[
+                { value: feedbackData.last_30_days.total, label: "оцінок отримано", color: PARCHMENT },
+                { value: `${feedbackData.last_30_days.satisfaction}%`, label: "задоволеність", color: "#4ade80" },
+                { value: feedbackData.last_30_days.likes, label: "👍 корисно", color: GOLD_LIGHT },
+                { value: feedbackData.last_30_days.dislikes, label: "👎 не те", color: "#ff6b6b" },
+              ].map((s, i) => (
+                <div key={i} style={{ background: "#ffffff06", border: `1px solid ${GOLD}18`, borderRadius: 8, padding: "16px", textAlign: "center" }}>
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 28, color: s.color }}>{s.value}</div>
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#ffffff44", marginTop: 6, letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 48 }}>
           {[
