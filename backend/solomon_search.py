@@ -1,6 +1,7 @@
 import json
 import logging
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from anthropic import Anthropic
 import os
 
@@ -24,9 +25,14 @@ PARSE_SYSTEM_PROMPT = """Ти парсер юридичних запитів. З
 Правила:
 - ins_type завжди "3" (касація) якщо явно не вказано "апеляція" або "перша інстанція"
 - вирок → vr_type "1", постанова → "2", рішення → "3", ухвала → "5"
-- кримінальн* → cs_type "2", господарськ* → "3", адміністративн* → "4", цивільн* → "1"
+- податков*/ДПС/перевірка/ППР/нереальність/маркетинг витрати → cs_type "4"
+- вирок/обвинувачення/злочин/КК України → cs_type "2"
+- договір/стягнення/банкрутство/борг → cs_type "3"
+- аліменти/спадщина/нерухомість → cs_type "1"
+- якщо незрозуміло → cs_type порожньо
 - Якщо є конкретні дати (формат DD.MM.YYYY або назва дати) → date_from/date_to, date_range порожньо
 - Якщо є "за N рік(ів)" або без дат → date_range, date_from/date_to порожньо
+- date_range default "2" якщо дати не вказані; "0" тільки якщо явно "весь час"
 - search_text: тільки змістовні ключові слова справи
 - Якщо запит містить конкретні фільтри (тип документу + форма судочинства + дати), search_text може бути порожнім або містити лише 1-2 найважливіших змістовних слова справи (не назви статей, не слова "кодекс", "стаття")
 - Номери статей (234, 185, тощо) — НЕ включати в search_text, вони не індексуються в повнотекстовому пошуку"""
@@ -42,6 +48,44 @@ def parse_query(user_text: str) -> dict:
     raw = response.content[0].text.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
+
+
+def fetch_decision_text(doc_id: str) -> str:
+    try:
+        resp = requests.get(
+            f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("text", "")
+    except Exception as e:
+        logger.warning(f"Failed to fetch text for {doc_id}: {e}")
+    return ""
+
+
+def search_with_fallback(base_payload: dict) -> list:
+    attempts = [
+        base_payload.copy(),
+        {**base_payload, "vr_type": None},
+        {**base_payload, "vr_type": None, "cs_type": None},
+        {**base_payload, "vr_type": None, "cs_type": None, "date_from": None, "date_to": None},
+    ]
+    for i, payload in enumerate(attempts):
+        clean = {k: v for k, v in payload.items() if v is not None and v != ""}
+        resp = requests.post(
+            "https://court-search-agent.replit.app/proxy/reyestr",
+            json=clean,
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                logger.info(f"Solomon: found {len(results)} judgments on attempt {i+1}")
+                return results
+        logger.info(f"Solomon: attempt {i+1} returned 0, relaxing filters")
+    return []
 
 
 def search_decisions(params: dict) -> list:
@@ -63,6 +107,8 @@ def search_decisions(params: dict) -> list:
     payload = {
         "limit": limit,
         "ins_type": params.get("ins_type", "3"),
+        "court_name": "Верховний Суд",
+        "sort": "1",
     }
     if search_text:
         payload["search_text"] = search_text
@@ -81,42 +127,22 @@ def search_decisions(params: dict) -> list:
 
     logger.info(f"Solomon proxy payload: {payload}")
 
-    resp = requests.post(
-        "https://court-search-agent.replit.app/proxy/reyestr",
-        json=payload,
-        headers={"Authorization": "Bearer gradus-court-2026"},
-        timeout=30,
-    )
-    logger.info(f"Reyestr status: {resp.status_code}")
+    judgments = search_with_fallback(payload)
+    logger.info(f"Solomon: total {len(judgments)} judgments after fallback")
 
-    if resp.status_code != 200:
-        logger.warning(f"Reyestr error: {resp.text[:200]}")
-        return []
-
-    data = resp.json()
-    judgments = data.get("results", [])
-    logger.info(f"Solomon: found {len(judgments)} judgments")
+    doc_ids = [j.get("doc_id", "") for j in judgments]
+    texts = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_id = {executor.submit(fetch_decision_text, doc_id): doc_id for doc_id in doc_ids if doc_id}
+        for future in as_completed(future_to_id):
+            doc_id = future_to_id[future]
+            texts[doc_id] = future.result()
 
     results = []
     for j in judgments:
         doc_id = j.get("doc_id", "")
-
-        decision_text = ""
-        if doc_id:
-            try:
-                text_resp = requests.get(
-                    f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
-                    headers={"Authorization": "Bearer gradus-court-2026"},
-                    timeout=20,
-                )
-                if text_resp.status_code == 200:
-                    decision_text = text_resp.json().get("text", "")
-            except Exception as e:
-                logger.warning(f"Failed to fetch text for {doc_id}: {e}")
-
-        summary = ""
-        if decision_text and len(decision_text) > 100:
-            summary = summarize_decision(decision_text)
+        decision_text = texts.get(doc_id, "")
+        summary = summarize_decision(decision_text) if decision_text and len(decision_text) > 100 else ""
 
         results.append({
             "cause_number": j.get("cause_number", "—"),

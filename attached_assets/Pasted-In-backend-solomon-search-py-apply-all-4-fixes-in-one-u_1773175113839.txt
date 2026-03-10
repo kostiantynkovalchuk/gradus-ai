@@ -1,0 +1,75 @@
+In backend/solomon_search.py, apply all 4 fixes in one update:
+Fix 1 — Add Sort and CourtName to payload:
+pythonpayload = {
+    "search_text": search_text if search_text else None,
+    "limit": limit,
+    "ins_type": params.get("ins_type", "3"),
+    "court_name": "Верховний Суд",
+    "sort": "1",  # date descending
+}
+```
+
+**Fix 2 — Better cs_type inference in parser prompt, add these rules:**
+```
+- податков*/ДПС/перевірка/ППР/нереальність/маркетинг витрати → cs_type "4"
+- вирок/обвинувачення/злочин/КК України → cs_type "2"
+- договір/стягнення/банкрутство/борг → cs_type "3"
+- аліменти/спадщина/нерухомість → cs_type "1"
+- якщо незрозуміло → cs_type порожньо
+- date_range default "2" якщо дати не вказані; "0" тільки якщо явно "весь час"
+Fix 3 — Fallback cascade when 0 results:
+pythonasync def search_with_fallback(base_payload: dict) -> list:
+    attempts = [
+        base_payload.copy(),  # attempt 1: full filters
+        {**base_payload, "vr_type": None},  # attempt 2: drop vr_type
+        {**base_payload, "vr_type": None, "cs_type": None},  # attempt 3: drop cs_type
+        {**base_payload, "vr_type": None, "cs_type": None, "date_from": None, "date_to": None},  # attempt 4: drop dates
+    ]
+    for i, payload in enumerate(attempts):
+        clean = {k: v for k, v in payload.items() if v is not None and v != ""}
+        resp = requests.post(
+            "https://court-search-agent.replit.app/proxy/reyestr",
+            json=clean,
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                logger.info(f"Solomon: found {len(results)} judgments on attempt {i+1}")
+                return results
+        logger.info(f"Solomon: attempt {i+1} returned 0, relaxing filters")
+    return []
+Call search_with_fallback(payload) instead of the direct requests.post call.
+Fix 4 — Parallel decision text fetching:
+Replace the sequential for loop that fetches decision texts with parallel fetching using concurrent.futures:
+pythonfrom concurrent.futures import ThreadPoolExecutor, as_completed
+
+def fetch_decision_text(doc_id: str) -> str:
+    try:
+        resp = requests.get(
+            f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("text", "")
+    except Exception as e:
+        logger.warning(f"Failed to fetch text for {doc_id}: {e}")
+    return ""
+
+# In search_decisions(), after getting judgments list:
+doc_ids = [j.get("doc_id", "") for j in judgments]
+texts = {}
+with ThreadPoolExecutor(max_workers=5) as executor:
+    future_to_id = {executor.submit(fetch_decision_text, doc_id): doc_id for doc_id in doc_ids if doc_id}
+    for future in as_completed(future_to_id):
+        doc_id = future_to_id[future]
+        texts[doc_id] = future.result()
+
+# Then build results using texts dict:
+for j in judgments:
+    doc_id = j.get("doc_id", "")
+    decision_text = texts.get(doc_id, "")
+    summary = summarize_decision(decision_text) if decision_text and len(decision_text) > 100 else ""
+    results.append({...})
