@@ -1,14 +1,6 @@
-import json
-import logging
-import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from anthropic import Anthropic
-import os
-
-logger = logging.getLogger(__name__)
-client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-PARSE_SYSTEM_PROMPT = """Ти парсер юридичних запитів. З запиту користувача витягни параметри та поверни ТІЛЬКИ JSON без пояснень:
+Add four new search features to SOLOMON. Changes needed in backend/solomon_search.py and backend/solomon_bot.py.
+CHANGE 1 — Update Claude parser system prompt (replace existing system_prompt string entirely):
+pythonsystem_prompt = """Ти парсер юридичних запитів. З запиту користувача витягни параметри та поверни ТІЛЬКИ JSON без пояснень:
 
 {
   "search_text": "ключові слова, макс 5 слів",
@@ -76,63 +68,13 @@ search_text:
 - Номери статей (234, 185) БЕЗ слова "стаття" — НЕ включати
 - ins_type завжди "3" якщо явно не вказано "апеляція" або "перша інстанція"
 - Зазначений тип документу НЕ включати в search_text"""
-
-
-def parse_query(user_text: str) -> dict:
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=300,
-        system=PARSE_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_text}]
-    )
-    raw = response.content[0].text.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
-
-
-def fetch_decision_text(doc_id: str) -> str:
-    try:
-        resp = requests.get(
-            f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
-            headers={"Authorization": "Bearer gradus-court-2026"},
-            timeout=20,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("text", "")
-    except Exception as e:
-        logger.warning(f"Failed to fetch text for {doc_id}: {e}")
-    return ""
-
-
-def search_with_fallback(base_payload: dict) -> list:
-    attempts = [
-        base_payload.copy(),
-        {**base_payload, "vr_type": None},
-        {**base_payload, "vr_type": None, "cs_type": None},
-        {**base_payload, "vr_type": None, "cs_type": None, "date_from": None, "date_to": None},
-    ]
-    for i, payload in enumerate(attempts):
-        clean = {k: v for k, v in payload.items() if v is not None and v != ""}
-        resp = requests.post(
-            "https://court-search-agent.replit.app/proxy/reyestr",
-            json=clean,
-            headers={"Authorization": "Bearer gradus-court-2026"},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            results = resp.json().get("results", [])
-            if results:
-                logger.info(f"Solomon: found {len(results)} judgments on attempt {i+1}")
-                return results
-        logger.info(f"Solomon: attempt {i+1} returned 0, relaxing filters")
-    return []
-
-
-def search_decisions(params: dict) -> list:
-    logger.info(f"Solomon parsed params: {params}")
+CHANGE 2 — Update search_decisions() function:
+Replace the entire function with this:
+pythondef search_decisions(params: dict) -> list:
     limit = min(int(params.get("limit", 5)), 20)
     search_text = " ".join(params.get("search_text", "").split()[:5])
 
+    # --- Direct case number lookup ---
     if params.get("case_number"):
         payload = {
             "case_number": params["case_number"],
@@ -153,6 +95,7 @@ def search_decisions(params: dict) -> list:
             return _build_results(judgments, limit)
         return []
 
+    # --- Build base payload ---
     base_payload = {
         "limit": limit,
         "ins_type": params.get("ins_type", "3"),
@@ -167,6 +110,7 @@ def search_decisions(params: dict) -> list:
     if params.get("judge"):
         base_payload["judge"] = params["judge"]
 
+    # Date handling
     date_from = params.get("date_from", "")
     date_to = params.get("date_to", "")
     if not date_from:
@@ -182,17 +126,53 @@ def search_decisions(params: dict) -> list:
 
     logger.info(f"Solomon proxy payload: {base_payload}")
 
-    judgments = search_with_fallback(base_payload)
-    logger.info(f"Solomon: total {len(judgments)} judgments after fallback")
+    # --- Fallback cascade ---
+    attempts = [
+        base_payload.copy(),
+        {**base_payload, "vr_type": None},
+        {**base_payload, "vr_type": None, "cs_type": None},
+        {**base_payload, "vr_type": None, "cs_type": None, "date_from": None, "date_to": None},
+    ]
 
-    return _build_results(judgments, limit)
+    for i, payload in enumerate(attempts):
+        clean = {k: v for k, v in payload.items() if v is not None and v != ""}
+        resp = requests.post(
+            "https://court-search-agent.replit.app/proxy/reyestr",
+            json=clean,
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                logger.info(f"Solomon: found {len(results)} judgments on attempt {i+1}")
+                return _build_results(results, limit)
+        logger.info(f"Solomon: attempt {i+1} returned 0, relaxing filters")
+
+    logger.info("Solomon: total 0 judgments after fallback")
+    return []
 
 
 def _build_results(judgments: list, limit: int) -> list:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def fetch_text(doc_id: str) -> str:
+        try:
+            resp = requests.get(
+                f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
+                headers={"Authorization": "Bearer gradus-court-2026"},
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("text", "")
+        except Exception as e:
+            logger.warning(f"Failed to fetch text for {doc_id}: {e}")
+        return ""
+
     doc_ids = [j.get("doc_id", "") for j in judgments[:limit]]
     texts = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_id = {executor.submit(fetch_decision_text, doc_id): doc_id for doc_id in doc_ids if doc_id}
+        future_to_id = {executor.submit(fetch_text, doc_id): doc_id for doc_id in doc_ids if doc_id}
         for future in as_completed(future_to_id):
             texts[future_to_id[future]] = future.result()
 
@@ -223,37 +203,33 @@ def _build_results(judgments: list, limit: int) -> list:
         })
 
     return results
+CHANGE 3 — Update /help command in backend/solomon_bot.py:
+Find the help message text and replace with:
+pythonhelp_text = """🔍 *Як шукати в СОЛОМОН:*
 
+*Звичайний пошук:*
+- скасування ППР нереальність операцій
+- АМКУ антиконкурентні дії господарські
 
-def cap_summary(text: str) -> str:
-    text = text.strip()
-    if len(text) <= 250 and text[-1] in '.!?»"':
-        return text
-    for i in range(len(text) - 1, 79, -1):
-        if text[i] == '.':
-            return text[:i + 1]
-    for i in range(len(text) - 1, 79, -1):
-        if text[i] == ',':
-            return text[:i] + '.'
-    for i in range(len(text) - 1, 79, -1):
-        if text[i] == ' ':
-            return text[:i] + '.'
-    return text
+*З фільтрами часу:*
+- стягнення збитків цивільне за 2025 рік
+- банкрутство господарське 2024-2025
 
+*По статті закону:*
+- стаття 324 КАС порушення процедури
+- ст\. 185 КК України 2025
+- стаття 42 ГК стягнення збитків
 
-def summarize_decision(decision_text: str) -> str:
-    try:
-        text = decision_text[:1000]
+*По судді:*
+- практика судді Блажівської
+- рішення Тітова за 2025 рік
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=90,
-            system='Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.\n\nКРИТИЧНО: Якщо текст не містить чіткої резолютивної частини ("задовольнити", "відмовити", "скасувати", "залишити", "закрити") — поверни ТІЛЬКИ порожній рядок "". Жодних пояснень чому текст неповний. Жодних слів про відсутність резолютивної частини. Або результат, або порожньо.',
-            messages=[{"role": "user", "content": text}]
-        )
-        summary = response.content[0].text.strip()
-        return cap_summary(summary)
+*По номеру справи:*
+- справа 910/12568/24
+- знайди 380/25114/23
 
-    except Exception as e:
-        logger.error(f"Solomon summarize error: {e}")
-        return ""
+*Кількість результатів:*
+- покажи 10 рішень про банкрутство
+- дай 3 приклади оскарження ППР
+
+/history — останні 5 запитів"""
