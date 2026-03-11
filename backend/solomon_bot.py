@@ -254,7 +254,7 @@ async def handle_search(message: Message):
             cause = j.get("cause_number", "")
             judge = j.get("judge", "")
             doc_id = j.get("doc_id", "")
-            summary = j.get("summary", "") or "Недоступно."
+            summary = j.get("summary", "") or "Повний текст рішення відсутній у реєстрі."
 
             num = numbers[i] if i < len(numbers) else f"*{i+1}.*"
             block = (
