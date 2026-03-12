@@ -581,6 +581,14 @@ MIGRATIONS = [
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_solomon_feedback_unique ON solomon_feedback(session_id, doc_id)",
         ]
     },
+    {
+        "version": "020_solomon_feedback_search_link",
+        "statements": [
+            "ALTER TABLE solomon_feedback ADD COLUMN IF NOT EXISTS search_log_id INTEGER REFERENCES solomon_search_log(id)",
+            "ALTER TABLE solomon_feedback ADD COLUMN IF NOT EXISTS query_text TEXT",
+            "ALTER TABLE solomon_feedback ADD COLUMN IF NOT EXISTS search_params JSONB",
+        ]
+    },
 ]
 
 

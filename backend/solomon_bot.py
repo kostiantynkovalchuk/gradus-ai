@@ -334,10 +334,26 @@ async def handle_solomon_feedback(callback: CallbackQuery):
         session_id = session[0] if session else None
 
         cur.execute("""
-            INSERT INTO solomon_feedback (session_id, doc_id, cause_number, feedback)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (session_id, doc_id) DO UPDATE SET feedback = EXCLUDED.feedback
-        """, (session_id, doc_id, cause_number, feedback))
+            SELECT id, query_text, search_params
+            FROM solomon_search_log
+            WHERE telegram_user_id = %s
+            ORDER BY created_at DESC LIMIT 1
+        """, (user_id,))
+        search_log = cur.fetchone()
+        search_log_id = search_log[0] if search_log else None
+        query_text = search_log[1] if search_log else None
+        search_params = json.dumps(search_log[2]) if search_log and search_log[2] else None
+
+        cur.execute("""
+            INSERT INTO solomon_feedback
+            (session_id, doc_id, cause_number, feedback, search_log_id, query_text, search_params)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (session_id, doc_id) DO UPDATE SET
+                feedback = EXCLUDED.feedback,
+                search_log_id = EXCLUDED.search_log_id,
+                query_text = EXCLUDED.query_text,
+                search_params = EXCLUDED.search_params
+        """, (session_id, doc_id, cause_number, feedback, search_log_id, query_text, search_params))
         conn.commit()
         cur.close()
     finally:
