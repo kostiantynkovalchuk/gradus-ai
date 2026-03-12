@@ -210,8 +210,6 @@ def _build_results(judgments: list, limit: int) -> list:
             or any(s in decision_text[:200] for s in bad_signals)
         )
         summary = "" if is_bad else summarize_decision(decision_text)
-        if summary and summary.strip() == "НЕДОСТУПНО":
-            summary = ""
 
         results.append({
             "cause_number": j.get("cause_number", "—"),
@@ -243,19 +241,19 @@ def cap_summary(text: str) -> str:
     return text
 
 
-def summarize_decision(decision_text: str) -> str:
+def summarize_decision(text: str) -> str:
     try:
-        text = decision_text[:1000]
-
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=90,
-            system='Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.\n\nКРИТИЧНО: Якщо текст не містить чіткої резолютивної частини ("задовольнити", "відмовити", "скасувати", "залишити", "закрити") — поверни ТІЛЬКИ порожній рядок "". Жодних пояснень чому текст неповний. Жодних слів про відсутність резолютивної частини. Або результат, або порожньо.',
-            messages=[{"role": "user", "content": text}]
-        )
-        summary = response.content[0].text.strip()
-        return cap_summary(summary)
+            system="""Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.
 
+КРИТИЧНО: Якщо текст не містить чіткої резолютивної частини — поверни порожній рядок.""",
+            messages=[{"role": "user", "content": text[:1000]}],
+        )
+        if not response.content or len(response.content) == 0:
+            return ""
+        return cap_summary(response.content[0].text.strip())
     except Exception as e:
         logger.error(f"Solomon summarize error: {e}")
         return ""
