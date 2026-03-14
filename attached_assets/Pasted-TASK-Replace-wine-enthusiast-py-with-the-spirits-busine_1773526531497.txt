@@ -1,0 +1,141 @@
+TASK: Replace wine_enthusiast.py with the_spirits_business_reviews.py as the Class Magazine replacement
+Context:
+Wine Enthusiast blocks all server IPs via Cloudflare Enterprise — not viable. The Spirits Business (thespiritsbusiness.com) is already scraped successfully in this project for LinkedIn content. We need a second scraper targeting their reviews and tastings section specifically, registered on the Facebook 2:00 AM schedule where wine_enthusiast currently sits.
+
+STEP 1 — Remove Wine Enthusiast
+
+Delete backend/services/scrapers/wine_enthusiast.py
+Remove WineEnthusiastScraper import from backend/services/scrapers/__init__.py
+Remove wine_enthusiast from ScraperManager in manager.py
+In scheduler.py remove wine_enthusiast / 'Wine Enthusiast' from the 2:00 AM Facebook schedule
+Verify clean removal:
+
+bashgrep -r "wine_enthusiast\|WineEnthusiast" backend/
+Expected: zero results
+
+STEP 2 — Check existing Spirits Business scraper
+Before creating anything, read the existing scraper:
+bashcat backend/services/scrapers/the_spirits_business.py
+Note the class name, base class, return format, and which URLs it currently targets. We will create a separate scraper class for the reviews section — do NOT modify the existing one.
+
+STEP 3 — Create the_spirits_business_reviews.py
+File: backend/services/scrapers/the_spirits_business_reviews.py
+Class: TheSpiritsBusinessReviewsScraper
+Target URL: https://www.thespiritsbusiness.com/category/news/spirits-reviews/
+Follow the exact same pattern as the existing TheSpiritsBusinessScraper — same base class, same return format, same DB model fields (title, content, url, source, author, published_date, status='pending').
+Source label: "The Spirits Business Reviews"
+Key difference from the existing scraper: this one targets the /category/news/spirits-reviews/ section only, not the main news feed. Content should be review articles about specific spirits products.
+Apply these scraping techniques:
+pythonimport time, random
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+]
+
+def get_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.thespiritsbusiness.com/",
+    }
+
+def polite_delay():
+    time.sleep(random.uniform(2.0, 4.0))
+```
+
+**Filtering rules:**
+- Skip articles with `content` length < 300 characters
+- Skip duplicate URLs within the same run
+- Limit to **5 articles per run**
+- Skip any article whose title contains: `"Top 10"`, `"Best "`, `"Ranking"`, `"List of"` — these are listicles, not reviews
+
+**Error handling:** wrap each individual article fetch in try/except — log warning and skip on failure, never crash the full run. `timeout=15` on all requests.
+
+---
+
+**STEP 4 — Register and schedule**
+
+1. Add `TheSpiritsBusinessReviewsScraper` import to `__init__.py` and `__all__`
+2. Register in `ScraperManager` as `spirits_business_reviews`
+3. Add to the **2:00 AM Facebook schedule** in the slot previously occupied by `wine_enthusiast`
+
+Final schedule must be:
+```
+Daily 2:00 AM → Delo.ua, HoReCa-Україна, Just Drinks, MRM, Spirits Business Reviews → Facebook
+Mon/Wed/Fri 1:00 AM → The Spirits Business, Drinks International → LinkedIn
+
+STEP 5 — Run all tests in order
+Test 1 — Clean removal of Wine Enthusiast:
+bashgrep -r "wine_enthusiast\|WineEnthusiast" backend/
+Expected: zero results
+Test 2 — Import sanity:
+bashcd backend && python -c "
+from services.scrapers.the_spirits_business_reviews import TheSpiritsBusinessReviewsScraper
+print('✅ Import OK')
+"
+Test 3 — Network check (no parsing):
+bashpython -c "
+import requests, random
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+}
+r = requests.get('https://www.thespiritsbusiness.com/category/news/spirits-reviews/', headers=headers, timeout=15)
+print(f'Status: {r.status_code}')
+print(f'Size: {len(r.text)} chars')
+assert r.status_code == 200
+print('✅ Network test passed')
+"
+Expected: status 200, size > 20,000 chars
+Test 4 — Article link extraction:
+bashpython -c "
+from services.scrapers.the_spirits_business_reviews import TheSpiritsBusinessReviewsScraper
+s = TheSpiritsBusinessReviewsScraper()
+links = s.get_article_links(limit=5)
+print(f'Found {len(links)} links:')
+for l in links: print(f'  {l}')
+assert len(links) > 0
+assert all('thespiritsbusiness.com' in l for l in links)
+print('✅ Link extraction passed')
+"
+Test 5 — Single article fetch:
+bashpython -c "
+from services.scrapers.the_spirits_business_reviews import TheSpiritsBusinessReviewsScraper
+s = TheSpiritsBusinessReviewsScraper()
+links = s.get_article_links(limit=1)
+article = s.fetch_article(links[0])
+print(f'Title: {article[\"title\"]}')
+print(f'Content ({len(article[\"content\"])} chars): {article[\"content\"][:200]}')
+assert len(article['content']) >= 300
+assert article['source'] == 'The Spirits Business Reviews'
+print('✅ Single article fetch passed')
+"
+Test 6 — Full scrape run:
+bashpython -c "
+from services.scrapers.the_spirits_business_reviews import TheSpiritsBusinessReviewsScraper
+s = TheSpiritsBusinessReviewsScraper()
+articles = s.scrape(limit=3)
+print(f'Scraped {len(articles)} articles')
+for a in articles:
+    print(f'  [{a[\"source\"]}] {a[\"title\"]} | {len(a[\"content\"])} chars')
+    assert a['source'] == 'The Spirits Business Reviews'
+    assert len(a['content']) >= 300
+    assert 'thespiritsbusiness.com' in a['url']
+print('✅ Full scrape passed')
+"
+Test 7 — ScraperManager registration:
+bashpython -c "
+from services.scrapers import ScraperManager
+m = ScraperManager()
+sources = m.get_registered_sources()
+print('Sources:', sources)
+assert 'spirits_business_reviews' in sources
+assert 'wine_enthusiast' not in sources
+assert 'class_magazine' not in sources
+print('✅ Registration test passed')
+"
+
+All 7 tests must pass before deploying. Commit message: feat: replace wine_enthusiast with spirits_business_reviews scraper
