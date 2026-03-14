@@ -12,7 +12,7 @@ from .drinks_international import DrinksInternationalScraper
 from .just_drinks import JustDrinksScraper
 from .restorator_ua import RestoratorUaScraper
 from .modern_restaurant_management import ModernRestaurantManagementScraper
-from .class_magazine import ClassMagazineScraper
+from .wine_enthusiast import WineEnthusiastScraper
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class ScraperManager:
             'just_drinks': JustDrinksScraper(),
             'restorator_ua': RestoratorUaScraper(),
             'modern_restaurant_management': ModernRestaurantManagementScraper(),
-            'class_magazine': ClassMagazineScraper()
+            'wine_enthusiast': WineEnthusiastScraper()
         }
         
         logger.info(f"✅ ScraperManager initialized with {len(self.scrapers)} sources")
@@ -126,6 +126,10 @@ class ScraperManager:
     def get_all_sources(self) -> List[str]:
         """Get list of all source names"""
         return list(self.scrapers.keys())
+
+    def get_registered_sources(self) -> List[str]:
+        """Alias for get_all_sources — returns all registered source keys"""
+        return self.get_all_sources()
 
 # Singleton instance
 scraper_manager = ScraperManager()

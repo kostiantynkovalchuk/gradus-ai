@@ -11,7 +11,7 @@ from .just_drinks import JustDrinksScraper
 from .restorator_ua import RestoratorUaScraper
 from .drinks_report import DrinksReportScraper
 from .modern_restaurant_management import ModernRestaurantManagementScraper
-from .class_magazine import ClassMagazineScraper
+from .wine_enthusiast import WineEnthusiastScraper
 from .manager import ScraperManager
 
 __all__ = [
@@ -24,6 +24,6 @@ __all__ = [
     'RestoratorUaScraper',
     'DrinksReportScraper',
     'ModernRestaurantManagementScraper',
-    'ClassMagazineScraper',
+    'WineEnthusiastScraper',
     'ScraperManager'
 ]

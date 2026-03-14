@@ -1,0 +1,191 @@
+TASK: Replace Class Magazine scraper with Wine Enthusiast in GradusMedia backend
+Context:
+GradusMedia backend is at backend/ on Render. Scrapers live in backend/services/scrapers/. Class Magazine (class_magazine.py) is registered in ScraperManager and runs daily at 2:00 AM in the Facebook schedule alongside Delo.ua, HoReCa-Україна, Just Drinks, and MRM. We are replacing it entirely with a Wine Enthusiast scraper targeting alcohol drink reviews.
+
+STEP 1 — REMOVE CLASS MAGAZINE
+
+Delete backend/services/scrapers/class_magazine.py
+Open backend/services/scrapers/__init__.py — remove the ClassMagazineScraper import and registration
+Open ScraperManager (wherever sources are registered) — remove class_magazine from the source list and from the 2:00 AM Facebook schedule slot
+Verify no remaining references to class_magazine or ClassMagazineScraper anywhere in the codebase using: grep -r "class_magazine\|ClassMagazine" backend/
+
+
+STEP 2 — CREATE WINE ENTHUSIAST SCRAPER
+Create backend/services/scrapers/wine_enthusiast.py
+Target URLs (scrape both):
+
+Spirits reviews: https://www.wineenthusiast.com/spirit-ratings/
+Wine/sparkling reviews: https://www.wineenthusiast.com/ratings/
+
+Scraper class: WineEnthusiastScraper
+Follow the exact same pattern as existing scrapers (same base class, same return format, same DB model fields: title, content, url, source, author, published_date, status='pending').
+Scraping techniques to implement — apply all of these:
+pythonimport time
+import random
+from fake_useragent import fake_useragent  # or use a hardcoded rotation list
+
+# 1. USER-AGENT ROTATION — rotate through real browser UAs
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+]
+
+# 2. FULL BROWSER HEADERS — mimic real browser session
+def get_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
+        "Referer": "https://www.google.com/",
+    }
+
+# 3. RATE LIMITING — randomized delay between requests
+def polite_delay():
+    time.sleep(random.uniform(2.5, 5.0))
+
+# 4. SESSION REUSE — use requests.Session for cookie persistence
+import requests
+session = requests.Session()
+Content extraction logic for Wine Enthusiast:
+Spirit reviews page structure:
+
+Article cards: look for article, .review-card, or .rating-item CSS selectors
+Each card contains: product name (title), score (points), tasting notes (content), reviewer name (author), category (spirits/wine)
+Individual review URLs pattern: https://www.wineenthusiast.com/buying-guide/[slug]/
+
+For each article card found on the listing page:
+
+Extract the card-level data (title, score, category)
+Follow the URL to the individual review page to get the full tasting notes
+Build content as: "Score: {score}/100\n\n{full_tasting_notes}"
+Use polite_delay() between every individual page fetch
+
+Filtering rules:
+
+Skip any article where content length < 200 characters
+Skip duplicate URLs (check against already-scraped URLs in current run)
+Skip articles without a score (no score = not a product review)
+Limit to 5 articles per run (to stay polite on server load)
+Source label: "Wine Enthusiast"
+
+Error handling:
+python# Wrap each individual article fetch in try/except
+# If individual article fails → log warning, skip it, continue with next
+# If listing page fails → log error, return empty list (do not crash)
+# Add timeout=15 to all requests calls
+```
+
+---
+
+**STEP 3 — REGISTER WINE ENTHUSIAST**
+
+1. Add `WineEnthusiastScraper` import to `backend/services/scrapers/__init__.py`
+2. Register it in `ScraperManager` with source key `wine_enthusiast`
+3. Add it to the **2:00 AM Facebook schedule** in the same slot that `class_magazine` occupied
+4. Confirm the updated schedule looks like:
+```
+Daily 2:00 AM → Delo.ua, HoReCa-Україна, Just Drinks, MRM, Wine Enthusiast → Facebook
+Mon/Wed/Fri 1:00 AM → The Spirits Business, Drinks International → LinkedIn
+
+STEP 4 — RUN THESE TESTS IN ORDER
+Test 1 — Import sanity:
+bashcd backend
+python -c "from services.scrapers import WineEnthusiastScraper; print('✅ Import OK')"
+Expected: ✅ Import OK — no errors
+Test 2 — Headers and session test (network check):
+bashpython -c "
+import requests, random
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+]
+session = requests.Session()
+session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
+r = session.get('https://www.wineenthusiast.com/spirit-ratings/', timeout=15)
+print(f'Status: {r.status_code}')
+print(f'Content-Type: {r.headers.get(\"Content-Type\")}')
+print(f'Response size: {len(r.text)} chars')
+assert r.status_code == 200, f'Expected 200, got {r.status_code}'
+print('✅ Network test passed')
+"
+Expected: Status: 200, response size > 10,000 chars
+Test 3 — Listing page parsing (no DB, no full fetch):
+bashpython -c "
+from services.scrapers.wine_enthusiast import WineEnthusiastScraper
+scraper = WineEnthusiastScraper()
+links = scraper.get_article_links(limit=5)
+print(f'Found {len(links)} article links:')
+for l in links:
+    print(f'  - {l}')
+assert len(links) > 0, 'No links found — check CSS selectors'
+assert all('wineenthusiast.com' in l for l in links), 'Non-WE URLs found'
+print('✅ Listing parse test passed')
+"
+Expected: 3–5 valid wineenthusiast.com URLs printed
+Test 4 — Single article full fetch:
+bashpython -c "
+from services.scrapers.wine_enthusiast import WineEnthusiastScraper
+import time
+scraper = WineEnthusiastScraper()
+links = scraper.get_article_links(limit=1)
+article = scraper.fetch_article(links[0])
+print(f'Title: {article[\"title\"]}')
+print(f'Author: {article[\"author\"]}')
+print(f'Content preview: {article[\"content\"][:200]}')
+print(f'Content length: {len(article[\"content\"])} chars')
+assert 'Score' in article['content'], 'Score missing from content'
+assert len(article['content']) >= 200, 'Content too short'
+print('✅ Single article fetch test passed')
+"
+Expected: Title printed, content includes Score:, length ≥ 200 chars
+Test 5 — Full scrape run (no DB save):
+bashpython -c "
+from services.scrapers.wine_enthusiast import WineEnthusiastScraper
+scraper = WineEnthusiastScraper()
+articles = scraper.scrape(limit=3)
+print(f'Scraped {len(articles)} articles')
+for a in articles:
+    print(f'  [{a[\"source\"]}] {a[\"title\"]} | {len(a[\"content\"])} chars')
+    assert a['source'] == 'Wine Enthusiast', 'Wrong source label'
+    assert len(a['content']) >= 200, f'Too short: {a[\"title\"]}'
+    assert a['url'].startswith('https://www.wineenthusiast.com'), 'Bad URL'
+print('✅ Full scrape test passed')
+"
+Expected: 2–3 articles printed with correct source, valid URLs, content ≥ 200 chars
+Test 6 — Class Magazine completely removed:
+bashgrep -r "class_magazine\|ClassMagazine\|classbarmag\|classmagazine" backend/
+Expected: zero results — if anything prints here, fix it before deploying
+Test 7 — ScraperManager integration:
+bashpython -c "
+import sys; sys.path.insert(0, '.')
+from services.scrapers import ScraperManager
+manager = ScraperManager()
+sources = manager.get_registered_sources()
+print('Registered sources:', sources)
+assert 'wine_enthusiast' in sources, 'wine_enthusiast not registered'
+assert 'class_magazine' not in sources, 'class_magazine still registered'
+print('✅ ScraperManager integration test passed')
+"
+Expected: wine_enthusiast in list, class_magazine absent
+
+STEP 5 — DEPLOY
+After all 7 tests pass:
+
+Commit with message: feat: replace class_magazine scraper with wine_enthusiast
+Push to GitHub → Render auto-deploys
+Confirm Render build completes without errors
+Report final schedule configuration and all test results
+
+
+DO NOT:
+
+Change any other scrapers or their schedules
+Modify the translation, image generation, or Telegram approval pipeline
+Add new DB migrations (no schema changes needed)
+Use fake_useragent library if it's not already installed — use the hardcoded UA list above instead
