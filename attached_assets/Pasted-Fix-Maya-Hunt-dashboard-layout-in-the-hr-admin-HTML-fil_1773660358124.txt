@@ -1,0 +1,80 @@
+Fix Maya Hunt dashboard layout in the /hr admin HTML file.
+Charts are stretching beyond viewport. Do not change any 
+functionality — CSS/height fixes only.
+
+Find the Maya Hunt tab HTML section in the /hr dashboard template.
+
+══════════════════════════════════════════════
+FIX 1 — Add max-height to all chart containers
+══════════════════════════════════════════════
+
+Find every chart canvas wrapper div and ensure it has
+a fixed height. Replace any unbounded chart container with:
+
+Salary bar chart container:
+style="position: relative; height: 320px; max-height: 320px;"
+
+Funnel chart container:
+style="position: relative; height: 280px; max-height: 280px;"
+
+Source performance chart container:
+style="position: relative; height: 280px; max-height: 280px;"
+
+Top skills chart container:
+style="position: relative; height: 260px; max-height: 260px;"
+
+Salary trends line chart container:
+style="position: relative; height: 260px; max-height: 260px;"
+
+All canvas elements inside these divs must have:
+style="max-height: 100%;"
+
+══════════════════════════════════════════════
+FIX 2 — Limit section widths
+══════════════════════════════════════════════
+
+Find the Maya Hunt tab wrapper div.
+Ensure it has:
+style="max-width: 100%; overflow-x: hidden;"
+
+Find the 2-column grid sections (funnel + source performance,
+top skills + salary trends).
+Ensure each grid has:
+style="display: grid; grid-template-columns: 1fr 1fr; 
+       gap: 20px; max-width: 100%;"
+
+On mobile (max-width: 768px), change to single column:
+Add to CSS: @media (max-width: 768px) { 
+  .hunt-grid-2col { grid-template-columns: 1fr; } 
+}
+
+══════════════════════════════════════════════
+FIX 3 — KPI cards grid overflow
+══════════════════════════════════════════════
+
+The 6 KPI cards row must not overflow horizontally.
+Ensure KPI grid has:
+style="display: grid; 
+       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+       gap: 12px; width: 100%;"
+
+══════════════════════════════════════════════
+FIX 4 — Market intelligence cards
+══════════════════════════════════════════════
+
+Market intelligence cards must have:
+style="max-width: 100%; word-break: break-word; 
+       overflow: hidden;"
+
+══════════════════════════════════════════════
+FIX 5 — Chart.js initialization
+══════════════════════════════════════════════
+
+For every Chart.js chart initialization, ensure options include:
+responsive: true,
+maintainAspectRatio: false,
+
+This is likely already set but verify all charts have both.
+
+Do not change any data fetching, API calls, or logic.
+Only CSS and chart container dimensions.

@@ -733,8 +733,8 @@
         .roi-item { text-align: center; }
         .roi-value { font-size: 2rem; font-weight: 700; }
         .roi-label { font-size: 0.875rem; opacity: 0.85; margin-top: var(--space-xs); }
-        .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-md); margin-bottom: var(--space-xl); }
-        .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xl); margin-bottom: var(--space-xl); }
+        .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; width: 100%; margin-bottom: var(--space-xl); }
+        .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 100%; margin-bottom: var(--space-xl); }
         .currency-toggle { display: inline-flex; border: 1px solid var(--gray-300); border-radius: 6px; overflow: hidden; margin-left: var(--space-md); }
         .currency-btn { padding: 4px 12px; font-size: 0.8rem; cursor: pointer; border: none; background: white; color: var(--gray-600); }
         .currency-btn.active { background: var(--primary); color: white; }
@@ -747,13 +747,13 @@
         .efficiency-table th { background: var(--gray-50); font-weight: 600; font-size: 0.875rem; }
         .efficiency-table .saving { color: #059669; font-weight: 600; }
         .hunt-updated { font-size: 0.75rem; color: var(--gray-400); margin-bottom: var(--space-md); }
+        .market-intel-card { max-width: 100%; word-break: break-word; overflow: hidden; }
         @media (max-width: 1024px) {
             .roi-grid { grid-template-columns: repeat(2, 1fr); }
-            .kpi-grid { grid-template-columns: repeat(3, 1fr); }
             .charts-row { grid-template-columns: 1fr; }
         }
-        @media (max-width: 640px) {
-            .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+        @media (max-width: 768px) {
+            .charts-row { grid-template-columns: 1fr; }
         }
         @media (max-width: 768px) {
             .nav-tabs { overflow-x: auto; padding: 0 var(--space-md); }
@@ -954,7 +954,7 @@
     </div>
     </div>
 
-    <div class="page-content" id="page-hunt">
+    <div class="page-content" id="page-hunt" style="max-width: 100%; overflow-x: hidden;">
     <div class="container">
         <div class="hunt-updated" id="huntUpdatedAt"></div>
 
@@ -1010,12 +1010,16 @@
             <div class="chart-container">
                 <h3>Воронка найму</h3>
                 <div id="funnelChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <canvas id="funnelChart" height="280"></canvas>
+                <div style="position: relative; height: 280px; max-height: 280px;">
+                    <canvas id="funnelChart" style="max-height: 100%;"></canvas>
+                </div>
             </div>
             <div class="chart-container">
                 <h3>Ефективність джерел</h3>
                 <div id="sourceChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <canvas id="sourceChart" height="280"></canvas>
+                <div style="position: relative; height: 280px; max-height: 280px;">
+                    <canvas id="sourceChart" style="max-height: 100%;"></canvas>
+                </div>
             </div>
         </div>
 
@@ -1031,7 +1035,9 @@
             </div>
             <div id="nbuRateBanner" style="display:none;font-size:0.8rem;color:var(--gray-400);margin-bottom:8px;">💱 Курс НБУ: <span id="nbuRateValue"></span></div>
             <div id="salaryChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів<br>Maya автоматично збирає статистику зарплат під час кожного пошуку.</div>
-            <canvas id="salaryChart" height="300"></canvas>
+            <div style="position: relative; height: 320px; max-height: 320px;">
+                <canvas id="salaryChart" style="max-height: 100%;"></canvas>
+            </div>
             <div id="marketIntelligence" style="margin-top:16px;"></div>
         </div>
 
@@ -1039,12 +1045,16 @@
             <div class="chart-container">
                 <h3>Найзатребуваніші навички</h3>
                 <div id="skillsChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <canvas id="skillsChart" height="300"></canvas>
+                <div style="position: relative; height: 260px; max-height: 260px;">
+                    <canvas id="skillsChart" style="max-height: 100%;"></canvas>
+                </div>
             </div>
             <div class="chart-container">
                 <h3>Тренди зарплат</h3>
                 <div id="trendsChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після кількох пошуків</div>
-                <canvas id="trendsChart" height="300"></canvas>
+                <div style="position: relative; height: 260px; max-height: 260px;">
+                    <canvas id="trendsChart" style="max-height: 100%;"></canvas>
+                </div>
             </div>
         </div>
 
@@ -1947,7 +1957,7 @@
                 if (gapNum > 0) gapColor = '#22c55e';
                 else if (gapNum < 0) gapColor = '#ef4444';
                 const dateStr = m.collected_at ? new Date(m.collected_at).toLocaleDateString('uk-UA') : '';
-                html += '<div style="background:var(--gray-800);border:1px solid var(--gray-700);border-radius:12px;padding:16px;margin-bottom:12px;">';
+                html += '<div class="market-intel-card" style="background:var(--gray-800);border:1px solid var(--gray-700);border-radius:12px;padding:16px;margin-bottom:12px;">';
                 html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
                 html += '<span style="font-weight:600;color:var(--gray-100);font-size:0.95rem;">💼 ' + (m.position||'—') + '</span>';
                 html += '<span style="font-size:0.75rem;color:var(--gray-400);">📅 ' + dateStr + '</span>';
