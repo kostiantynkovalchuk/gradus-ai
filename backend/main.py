@@ -101,6 +101,19 @@ async def lifespan(app: FastAPI):
     check_thread.start()
     logger.info("🔍 Checking for missed scraping tasks in background...")
 
+    # Channel posting startup recovery (non-blocking)
+    def channel_recovery():
+        try:
+            from services.channel_poster import run_startup_recovery
+            from models import SessionLocal
+            run_startup_recovery(SessionLocal)
+        except Exception as e:
+            logger.error(f"Channel startup recovery failed: {e}")
+
+    recovery_thread = threading.Thread(target=channel_recovery, daemon=True)
+    recovery_thread.start()
+    logger.info("📢 Channel posting recovery check started in background...")
+
     logger.info(f"RENDER_EXTERNAL_URL={os.environ.get('RENDER_EXTERNAL_URL', 'NOT SET')}")
     logger.info(f"SOLOMON_BOT_TOKEN={'SET' if os.environ.get('SOLOMON_BOT_TOKEN') else 'NOT SET'}")
     RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
@@ -1544,6 +1557,54 @@ async def get_scheduler_status():
         "scheduler_active": content_scheduler.scheduler.running,
         "jobs": jobs,
         "total_jobs": len(jobs)
+    }
+
+@app.get("/api/channel-queue")
+async def get_channel_queue(db: Session = Depends(get_db)):
+    """Return current Telegram channel posting queue and next available slot."""
+    from models.content import ContentQueue
+    from services.channel_poster import get_next_available_slot_utc, KYIV_TZ
+    from datetime import timezone, timedelta, date
+
+    queued = (
+        db.query(ContentQueue)
+        .filter(ContentQueue.channel_status == "queued")
+        .order_by(ContentQueue.channel_scheduled_at)
+        .all()
+    )
+
+    kyiv_tz = timezone(timedelta(hours=2))
+    today_kyiv = date.today()
+
+    posted_today = (
+        db.query(ContentQueue)
+        .filter(
+            ContentQueue.channel_status == "posted",
+            ContentQueue.channel_posted_at >= datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0),
+        )
+        .count()
+    )
+
+    try:
+        next_slot_utc = get_next_available_slot_utc(db)
+        next_slot_str = next_slot_utc.astimezone(kyiv_tz).isoformat()
+    except Exception:
+        next_slot_str = None
+
+    return {
+        "queued": [
+            {
+                "id": a.id,
+                "title": a.translated_title or "",
+                "scheduled_at": (
+                    a.channel_scheduled_at.replace(tzinfo=timezone.utc).astimezone(kyiv_tz).isoformat()
+                    if a.channel_scheduled_at else None
+                ),
+            }
+            for a in queued
+        ],
+        "posted_today": posted_today,
+        "next_slot": next_slot_str,
     }
 
 @app.get("/api/telegram/set-webhook")

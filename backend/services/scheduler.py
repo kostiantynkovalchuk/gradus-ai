@@ -427,6 +427,18 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
     
+    def _process_channel_queue_task(self):
+        """
+        Task: Post queued articles to the Telegram channel.
+        Runs every 5 minutes. Posts any articles where channel_scheduled_at <= NOW().
+        """
+        try:
+            from services.channel_poster import process_channel_queue
+            from models import SessionLocal
+            process_channel_queue(SessionLocal)
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Channel queue task failed: {e}")
+
     def aggregate_alex_candidates_task(self):
         """
         Task: Aggregate frequent Alex questions into preset candidates
@@ -1188,7 +1200,17 @@ class ContentScheduler:
             name='Aggregate Alex preset candidates',
             replace_existing=True
         )
-        
+
+        # Telegram channel queue: every 5 minutes
+        self.scheduler.add_job(
+            self._process_channel_queue_task,
+            'interval',
+            minutes=5,
+            id='process_channel_queue',
+            name='Post queued articles to Telegram channel',
+            replace_existing=True
+        )
+
         self.scheduler.start()
         
         logger.info("=" * 60)

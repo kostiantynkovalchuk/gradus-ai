@@ -121,16 +121,41 @@ class TelegramWebhookHandler:
                 }
             )
             db.add(log_entry)
+
+            # Queue article for Telegram channel posting
+            channel_slot_utc = None
+            try:
+                from services.channel_poster import queue_article_for_channel
+                channel_slot_utc = queue_article_for_channel(article, db)
+                logger.info(f"Article {content_id} queued for channel at {channel_slot_utc}")
+            except Exception as e:
+                logger.warning(f"Could not queue article {content_id} for channel: {e}")
+
             db.commit()
             db.refresh(article)
+
+            # Send channel queue confirmation
+            if channel_slot_utc:
+                try:
+                    from services.channel_poster import send_queue_confirmation
+                    send_queue_confirmation(article, channel_slot_utc)
+                except Exception as e:
+                    logger.warning(f"Could not send channel queue confirmation: {e}")
             
             logger.info(f"Content {content_id} approved via Telegram - scheduled for posting")
             
             title = article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else 'No title')
-            
-            posting_schedule = """📅 <b>Розклад публікації:</b>
+
+            from datetime import timezone, timedelta
+            KYIV_TZ = timezone(timedelta(hours=2))
+            channel_time_str = ""
+            if channel_slot_utc:
+                slot_kyiv = channel_slot_utc.astimezone(KYIV_TZ)
+                channel_time_str = f"\n📢 Канал: {slot_kyiv.strftime('%d.%m.%Y о %H:%M')} за Києвом"
+
+            posting_schedule = f"""📅 <b>Розклад публікації:</b>
 • Facebook: Щодня о 18:00
-• LinkedIn: Пн/Ср/Пт о 9:00
+• LinkedIn: Пн/Ср/Пт о 9:00{channel_time_str}
 
 💡 Система автоматично опублікує контент в оптимальний час для максимальної взаємодії."""
             

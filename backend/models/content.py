@@ -47,6 +47,11 @@ class ContentQueue(Base):
     # Tier rotation for visual diversity
     last_tier_used = Column(Integer, nullable=True, default=None)
     tier_attempts = Column(JSON, nullable=True, default=None)
+
+    # Telegram channel auto-posting
+    channel_status = Column(String(20), nullable=True, default='pending')
+    channel_scheduled_at = Column(TIMESTAMP, nullable=True)
+    channel_posted_at = Column(TIMESTAMP, nullable=True)
     
     __table_args__ = (
         CheckConstraint(

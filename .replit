@@ -68,3 +68,4 @@ build = ["bash", "-c", "cd frontend && npm install && npm run build"]
 
 [userenv.shared]
 SED_API_URL = "https://api-sed.tdav.net.ua"
+GRADUS_CHANNEL_ID = "-1003885641833"

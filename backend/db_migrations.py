@@ -589,6 +589,17 @@ MIGRATIONS = [
             "ALTER TABLE solomon_feedback ADD COLUMN IF NOT EXISTS search_params JSONB",
         ]
     },
+    {
+        "version": "021_channel_posting_queue",
+        "statements": [
+            "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS channel_status VARCHAR(20) DEFAULT 'pending'",
+            "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS channel_scheduled_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS channel_posted_at TIMESTAMP WITH TIME ZONE",
+            """CREATE INDEX IF NOT EXISTS idx_articles_channel_queue
+               ON content_queue(channel_status, channel_scheduled_at)
+               WHERE channel_status = 'queued'""",
+        ]
+    },
 ]
 
 
