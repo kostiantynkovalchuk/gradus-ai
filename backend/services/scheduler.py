@@ -1085,6 +1085,11 @@ class ContentScheduler:
         if self.scheduler.running:
             logger.info("Scheduler already running, skipping start")
             return
+
+        # Safety guard: disable scheduler in development (Replit)
+        if os.getenv("DISABLE_SCHEDULER", "").lower() == "true":
+            logger.info("⚠️ Scheduler DISABLED via DISABLE_SCHEDULER env var")
+            return
         
         try:
             # LinkedIn sources: Mon/Wed/Fri at 1:00 AM
@@ -1270,5 +1275,10 @@ class ContentScheduler:
                 'trigger': str(job.trigger)
             })
         return jobs
+
+        # Safety guard: disable scheduler in development (Replit)
+        if os.getenv("DISABLE_SCHEDULER", "").lower() == "true":
+            logger.info("⚠️ Scheduler DISABLED via DISABLE_SCHEDULER env var")
+            return
 
 content_scheduler = ContentScheduler()
