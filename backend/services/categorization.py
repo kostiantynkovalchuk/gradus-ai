@@ -2,7 +2,7 @@ import anthropic
 from os import getenv
 from config.models import CLAUDE_MODEL_CONTENT
 
-def categorize_article(title: str, content: str) -> str:
+def categorize_article(title: str, content: str, source: str = None) -> str:
     """
     Categorize article into: news, reviews, or trends
     
@@ -11,6 +11,13 @@ def categorize_article(title: str, content: str) -> str:
     - reviews: Product reviews, tastings, awards, ratings, recommendations
     - trends: Industry forecasts, predictions, future outlook, year-ahead analysis
     """
+    
+    # Source-based category override
+    SOURCE_CATEGORY_MAP = {
+        "The Spirits Business Reviews": "reviews",
+    }
+    if source and source in SOURCE_CATEGORY_MAP:
+        return SOURCE_CATEGORY_MAP[source]
     
     title_lower = (title or "").lower()
     content_lower = (content or "").lower()

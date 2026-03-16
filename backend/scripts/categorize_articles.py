@@ -51,7 +51,8 @@ def categorize_all_articles():
             try:
                 category = categorize_article(
                     article.translated_title or article.source_title,
-                    (article.translated_text or article.original_text or "")[:2000]
+                    (article.translated_text or article.original_text or "")[:2000],
+                    source=article.source
                 )
                 
                 article.category = category
