@@ -14,8 +14,31 @@ import threading
 import os
 from pathlib import Path
 
+from time import time
+
 from models import get_db, init_db
 from models.content import ContentQueue, ApprovalLog
+
+# Simple TTL cache for image URL lookups — avoids a DB hit per image request
+_image_url_cache: dict = {}
+IMAGE_CACHE_TTL = 300  # 5 minutes
+
+def _get_cached_image_url(article_id: int):
+    if article_id in _image_url_cache:
+        url, cached_at = _image_url_cache[article_id]
+        if time() - cached_at < IMAGE_CACHE_TTL:
+            return url
+        del _image_url_cache[article_id]
+    return None
+
+def _set_cached_image_url(article_id: int, url: str):
+    _image_url_cache[article_id] = (url, time())
+    if len(_image_url_cache) > 500:
+        cutoff = time() - IMAGE_CACHE_TTL
+        expired = [k for k, (_, t) in _image_url_cache.items() if t < cutoff]
+        for k in expired:
+            del _image_url_cache[k]
+
 from services.claude_service import claude_service
 from services.image_generator import image_generator
 from services.social_poster import social_poster
@@ -1024,20 +1047,32 @@ async def translate_pending_articles(limit: int = 10, db: Session = Depends(get_
 @app.get("/api/images/serve/{article_id}")
 async def serve_article_image(article_id: int, v: int = None, db: Session = Depends(get_db)):
     """
-    Serve image for an article from database binary data or local file.
-    Priority: Database binary → Local file → Original URL redirect
-    
-    v parameter is for cache busting (ignored, just forces browser to reload)
+    Serve image for an article.
+    Priority: Cache → Database binary → Local file → External URL redirect
+
+    v parameter is for cache busting — skips the in-memory cache when present.
     """
     try:
+        from fastapi.responses import RedirectResponse
+
+        # Check in-memory cache first (avoids DB connection for repeated requests)
+        if not v:
+            cached_url = _get_cached_image_url(article_id)
+            if cached_url:
+                return RedirectResponse(
+                    url=cached_url,
+                    headers={"Cache-Control": "public, max-age=3600"}
+                )
+
         article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
-        
+
         if not article:
             raise HTTPException(status_code=404, detail="Article not found")
-        
+
         if not article.image_url and not article.image_data and not article.local_image_path:
             raise HTTPException(status_code=404, detail="No image available for this article")
-        
+
+        # Priority 1: Database binary data
         if article.image_data:
             logger.info(f"Serving image from database for article {article_id}")
             return Response(
@@ -1045,29 +1080,32 @@ async def serve_article_image(article_id: int, v: int = None, db: Session = Depe
                 media_type="image/png",
                 headers={"Cache-Control": "public, max-age=31536000"}
             )
-        
+
+        # Priority 2: Local file
         if article.local_image_path:
             local_path = Path(article.local_image_path)
             if not local_path.is_absolute():
                 backend_dir = Path(__file__).parent
                 local_path = backend_dir / article.local_image_path
             if local_path.exists():
-                suffix = local_path.suffix.lower()
-                media_type = "image/png" if suffix == ".png" else "image/jpeg" if suffix in [".jpg", ".jpeg"] else "image/png"
-                logger.info(f"Serving image from local file for article {article_id}: {local_path}")
-                return FileResponse(
-                    str(local_path),
-                    media_type=media_type,
+                import mimetypes
+                content_type = mimetypes.guess_type(str(local_path))[0] or "image/jpeg"
+                return Response(
+                    content=local_path.read_bytes(),
+                    media_type=content_type,
                     headers={"Cache-Control": "public, max-age=31536000"}
                 )
-        
+
+        # Priority 3: External URL redirect — cache for next time
         if article.image_url:
-            from fastapi.responses import RedirectResponse
-            logger.info(f"Redirecting to original URL for article {article_id}")
-            return RedirectResponse(url=article.image_url)
-        
+            _set_cached_image_url(article_id, article.image_url)
+            return RedirectResponse(
+                url=article.image_url,
+                headers={"Cache-Control": "public, max-age=3600"}
+            )
+
         raise HTTPException(status_code=404, detail="Image not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:

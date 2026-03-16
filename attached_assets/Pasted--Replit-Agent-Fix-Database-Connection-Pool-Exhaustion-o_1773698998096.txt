@@ -1,0 +1,232 @@
+# Replit Agent: Fix Database Connection Pool Exhaustion on Image Serve Endpoint
+
+## Problem
+
+When the `/articles` page loads, it renders 20+ article cards. Each card's image hits `/api/images/serve/{article_id}`, which opens a DB connection to look up the image URL — then usually just redirects to an Unsplash URL. With 20+ simultaneous image requests, all 30 connections in the pool are consumed (size 10 + overflow 20), causing:
+
+```
+QueuePool limit of size 10 overflow 20 reached, connection timed out, timeout 30.00
+```
+
+This blocks ALL database operations — including the approval system, scheduler, and API.
+
+## Root Cause
+
+The image serve endpoint does a full `db.query(ContentQueue)` per image just to read `image_url` and redirect. This is wasteful because:
+1. Most articles have an Unsplash `image_url` — we just need the URL string, not a DB connection
+2. The articles API already has the image URL when building the response — it just throws it away and substitutes `/api/images/serve/{id}`
+
+## Fix Strategy
+
+**Two changes:**
+
+1. **Articles API returns the actual image URL directly** — no more routing through the serve endpoint for listing pages
+2. **Image serve endpoint gets an in-memory cache** — for any remaining direct hits (content approval page, cache busting), cache the URL lookup for 5 minutes to avoid repeated DB queries
+
+---
+
+## Change 1: `backend/routes/articles_api.py`
+
+Return the actual image URL instead of the serve proxy URL. The serve endpoint remains as fallback for articles with binary `image_data` or local files.
+
+### Find all three occurrences of:
+```python
+image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+```
+and:
+```python
+"image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+```
+
+### Replace each with logic that returns the actual URL when available:
+
+**For line ~80** (in the list endpoint, where `article` is an ORM object):
+Replace:
+```python
+image_url=f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+```
+With:
+```python
+image_url=article.image_url if article.image_url else f"/api/images/serve/{article.id}",
+```
+
+**For line ~131** (dict-style response):
+Replace:
+```python
+"image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+```
+With:
+```python
+"image_url": article.image_url if article.image_url else f"/api/images/serve/{article.id}",
+```
+
+**For line ~170** (another dict-style response):
+Replace:
+```python
+"image_url": f"https://gradus-ai.onrender.com/api/images/serve/{article.id}",
+```
+With:
+```python
+"image_url": article.image_url if article.image_url else f"/api/images/serve/{article.id}",
+```
+
+**IMPORTANT:** Remove the hardcoded `https://gradus-ai.onrender.com` domain prefix entirely. Use relative paths for the serve fallback so it works in all environments.
+
+---
+
+## Change 2: Add in-memory cache to image serve endpoint in `backend/main.py`
+
+Add a simple TTL cache at the top of main.py (near the imports):
+
+```python
+from functools import lru_cache
+from time import time
+
+# Simple TTL cache for image URL lookups - avoids DB hit per image request
+_image_url_cache = {}  # {article_id: (url, timestamp)}
+IMAGE_CACHE_TTL = 300  # 5 minutes
+
+def _get_cached_image_url(article_id: int):
+    """Get image URL from cache if not expired"""
+    if article_id in _image_url_cache:
+        url, cached_at = _image_url_cache[article_id]
+        if time() - cached_at < IMAGE_CACHE_TTL:
+            return url
+        del _image_url_cache[article_id]
+    return None
+
+def _set_cached_image_url(article_id: int, url: str):
+    """Store image URL in cache"""
+    _image_url_cache[article_id] = (url, time())
+    # Evict old entries if cache grows too large
+    if len(_image_url_cache) > 500:
+        cutoff = time() - IMAGE_CACHE_TTL
+        expired = [k for k, (_, t) in _image_url_cache.items() if t < cutoff]
+        for k in expired:
+            del _image_url_cache[k]
+```
+
+Then modify the `serve_article_image` endpoint (`@app.get("/api/images/serve/{article_id}")`) to use the cache:
+
+Replace the entire function with:
+
+```python
+@app.get("/api/images/serve/{article_id}")
+async def serve_article_image(article_id: int, v: int = None, db: Session = Depends(get_db)):
+    """
+    Serve image for an article.
+    Priority: Cache → Database binary → Local file → Original URL redirect
+    
+    v parameter is for cache busting (ignored, just forces browser to reload)
+    """
+    try:
+        # Check cache first (avoids DB connection for repeated requests)
+        cached_url = _get_cached_image_url(article_id)
+        if cached_url and not v:  # Skip cache if explicit cache-bust
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(
+                url=cached_url,
+                headers={"Cache-Control": "public, max-age=3600"}
+            )
+        
+        article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+        
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+        
+        if not article.image_url and not article.image_data and not article.local_image_path:
+            raise HTTPException(status_code=404, detail="No image available for this article")
+        
+        # Priority 1: Database binary data
+        if article.image_data:
+            logger.info(f"Serving image from database for article {article_id}")
+            return Response(
+                content=article.image_data,
+                media_type="image/png",
+                headers={"Cache-Control": "public, max-age=31536000"}
+            )
+        
+        # Priority 2: Local file
+        if article.local_image_path:
+            local_path = Path(article.local_image_path)
+            if not local_path.is_absolute():
+                backend_dir = Path(__file__).parent
+                local_path = backend_dir / article.local_image_path
+            if local_path.exists():
+                import mimetypes
+                content_type = mimetypes.guess_type(str(local_path))[0] or "image/jpeg"
+                return Response(
+                    content=local_path.read_bytes(),
+                    media_type=content_type,
+                    headers={"Cache-Control": "public, max-age=31536000"}
+                )
+        
+        # Priority 3: External URL redirect (cache it for next time)
+        if article.image_url:
+            from fastapi.responses import RedirectResponse
+            _set_cached_image_url(article_id, article.image_url)
+            return RedirectResponse(
+                url=article.image_url,
+                headers={"Cache-Control": "public, max-age=3600"}
+            )
+        
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving image for article {article_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+Key changes in this endpoint:
+- Check in-memory cache BEFORE hitting the database
+- Cache external URLs after first lookup (5 min TTL)
+- Add `Cache-Control: max-age=3600` header on redirects so browsers cache too
+- Skip cache when `?v=` cache-bust parameter is present
+- Remove the verbose `logger.info(f"Redirecting to original URL for article {article_id}")` line — it's spamming logs on every page load
+
+---
+
+## Change 3: Frontend content approval page — `frontend/src/pages/ContentApproval.jsx`
+
+Line ~210 already uses the serve endpoint with cache busting:
+```jsx
+src={`/api/images/serve/${content.id}${imageVersions[content.id] ? `?v=${imageVersions[content.id]}` : ''}`}
+```
+
+This is FINE as-is for the approval page — it only shows a few articles at a time, and the serve endpoint now has caching. **Do NOT change this file.**
+
+---
+
+## Verification
+
+After applying changes, test:
+
+1. **Load `/articles` page** — should load fast with no pool errors in Render logs
+2. **Check Render logs** — should NOT see dozens of "Redirecting to original URL" messages
+3. **Check image loading** — articles should still display Unsplash images correctly
+4. **Test image regeneration** — approve page "New Image" button should still work (cache-bust `?v=` parameter bypasses cache)
+5. **Run pool stress test:**
+```python
+import requests
+import concurrent.futures
+
+base = "https://gradus-ai.onrender.com"
+# Simulate 25 concurrent image requests
+ids = list(range(580, 605))
+with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
+    futures = [executor.submit(requests.get, f"{base}/api/images/serve/{i}", timeout=10) for i in ids]
+    results = [f.result().status_code for f in concurrent.futures.as_completed(futures)]
+    print(f"Results: {results.count(200)} ok, {results.count(307)} redirects, {results.count(404)} not found, {results.count(500)} errors")
+```
+
+Should return zero 500 errors.
+
+## DO NOT CHANGE
+
+- Do NOT modify the database schema
+- Do NOT change Telegram webhook handling
+- Do NOT modify the scheduler
+- Do NOT change any environment variables
+- Do NOT remove the `/api/images/serve/{article_id}` endpoint — it's still needed as fallback for binary images and cache-busting
