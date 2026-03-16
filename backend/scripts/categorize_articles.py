@@ -8,7 +8,7 @@ from sqlalchemy import text, create_engine
 from sqlalchemy.orm import Session
 from models.content import ContentQueue
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 def add_category_column():

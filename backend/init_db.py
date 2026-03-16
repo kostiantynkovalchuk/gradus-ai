@@ -70,7 +70,7 @@ def get_connection():
         logger.error("psycopg2 not installed. Run: pip install psycopg2-binary")
         sys.exit(1)
     
-    database_url = os.getenv('DATABASE_URL')
+    database_url = os.getenv('NEON_DATABASE_URL') or os.getenv('DATABASE_URL')
     if not database_url:
         logger.error("DATABASE_URL environment variable not set")
         sys.exit(1)

@@ -10,7 +10,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from services.unsplash_service import UnsplashService
 
-DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_URL = os.getenv('NEON_DATABASE_URL') or os.getenv('DATABASE_URL')
 
 ARTICLE_IDS_TO_REFETCH = [
     325,  # Grey Goose Berry Rouge

@@ -604,7 +604,7 @@ MIGRATIONS = [
 
 
 def run_migrations():
-    db_url = os.getenv("DATABASE_URL")
+    db_url = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not db_url:
         logger.error("DATABASE_URL not set — skipping migrations")
         return

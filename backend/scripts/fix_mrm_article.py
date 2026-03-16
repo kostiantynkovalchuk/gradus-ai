@@ -154,7 +154,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Preview changes without saving')
     args = parser.parse_args()
     
-    database_url = os.environ.get('DATABASE_URL')
+    database_url = os.environ.get('NEON_DATABASE_URL') or os.environ.get('DATABASE_URL')
     if not database_url:
         print("❌ DATABASE_URL environment variable not set")
         sys.exit(1)

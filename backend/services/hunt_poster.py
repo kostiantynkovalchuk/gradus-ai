@@ -50,7 +50,7 @@ async def run_vacancy_posting(vacancy_id: int, chat_id: int, thread_id: int):
 
         import psycopg2
         try:
-            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+            conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL"))
             cur = conn.cursor()
             cur.execute(
                 "SELECT tg_channel FROM hunt_sources "
