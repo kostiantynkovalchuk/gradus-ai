@@ -1,0 +1,240 @@
+# Test SED API Phone Format and Diagnose Elena Verification Issue
+
+## OBJECTIVE
+Execute comprehensive SED API testing to determine why Elena Klochko (phone: 0730221169) fails verification while Yuliya Filipskaya (phone: 0987116568) succeeds. Identify root cause and recommend permanent fix.
+
+## CONTEXT
+**Problem:** Employee Elena Klochko attempted to verify via Maya HR Bot but received 404 from SED API for ALL phone formats:
+- Blitz export (blitz_phones.xlsx) HAS Elena: phone (073)022-11-69
+- SED API returns 404 for: 380730221169, +380730221169, 0730221169, etc.
+- Yuliya Filipskaya successfully verified via SED API before (phone: 0987116568)
+
+**Hypothesis:** SED API database is not synced with Blitz export - missing employees
+
+**Goal:** Test both phones against SED API to prove/disprove sync issue
+
+---
+
+## TASK 1: CREATE TEST SCRIPT
+
+Create file: `/home/claude/test_sed_api.py`
+```python
+#!/usr/bin/env python3
+"""
+SED API Phone Format Investigation
+Tests why Elena fails but Yuliya works
+"""
+
+import requests
+import json
+
+SED_API = "https://api-sed.tdav.net.ua/api/employees"
+
+# Known phones from Blitz export
+YULIYA_PHONE = "0987116568"  # Successfully verified via SED
+ELENA_PHONE = "0730221169"    # Failed verification (404)
+
+def test_phone(name, base_phone, should_work=None):
+    """Test a phone number in multiple formats"""
+    print(f"\n{'='*60}")
+    print(f"TESTING: {name}")
+    print(f"Base phone: {base_phone}")
+    if should_work is not None:
+        print(f"Expected: {'✅ SHOULD WORK' if should_work else '❌ SHOULD FAIL'}")
+    print(f"{'='*60}\n")
+    
+    # Generate test formats
+    formats = [
+        ("Raw from Blitz", base_phone),
+        ("With 380 prefix", f"380{base_phone[1:]}" if base_phone.startswith('0') else f"380{base_phone}"),
+        ("With +380 prefix", f"+380{base_phone[1:]}" if base_phone.startswith('0') else f"+380{base_phone}"),
+        ("With +380 and spaces", f"+380 {base_phone[1:3]} {base_phone[3:6]} {base_phone[6:8]} {base_phone[8:]}" if base_phone.startswith('0') else base_phone),
+    ]
+    
+    results = []
+    
+    for format_name, phone in formats:
+        try:
+            print(f"Format: {format_name}")
+            print(f"  Phone: {phone}")
+            
+            response = requests.post(
+                SED_API,
+                json={"phone": phone},
+                headers={"Content-Type": "application/json"},
+                timeout=5
+            )
+            
+            status = response.status_code
+            print(f"  Status: {status}")
+            
+            if status == 200:
+                try:
+                    data = response.json()
+                    print(f"  ✅ SUCCESS!")
+                    print(f"  Response: {json.dumps(data, indent=2, ensure_ascii=False)[:200]}")
+                    results.append((format_name, phone, status, "SUCCESS", data))
+                except:
+                    print(f"  ✅ SUCCESS (non-JSON response)")
+                    print(f"  Response: {response.text[:200]}")
+                    results.append((format_name, phone, status, "SUCCESS", response.text))
+            elif status == 404:
+                print(f"  ❌ NOT FOUND (404)")
+                results.append((format_name, phone, status, "NOT FOUND", None))
+            else:
+                print(f"  ⚠️ Unexpected status: {status}")
+                print(f"  Response: {response.text[:200]}")
+                results.append((format_name, phone, status, "ERROR", response.text))
+            
+        except requests.Timeout:
+            print(f"  ⏱️ TIMEOUT")
+            results.append((format_name, phone, None, "TIMEOUT", None))
+        except Exception as e:
+            print(f"  ❌ ERROR: {str(e)}")
+            results.append((format_name, phone, None, "ERROR", str(e)))
+        
+        print()
+    
+    return results
+
+def main():
+    print("\n" + "="*60)
+    print("SED API PHONE FORMAT INVESTIGATION")
+    print("="*60)
+    
+    # Test Yuliya (should work - she verified successfully)
+    yuliya_results = test_phone("YULIYA FILIPSKAYA (Филипская Юлия)", YULIYA_PHONE, should_work=True)
+    
+    # Test Elena (fails - 404 on all formats currently)
+    elena_results = test_phone("ELENA KLOCHKO (Клочко Елена)", ELENA_PHONE, should_work=False)
+    
+    # Summary
+    print("\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    
+    print("\n📊 YULIYA (Known working via SED):")
+    working_formats = [r for r in yuliya_results if r[2] == 200]
+    if working_formats:
+        print(f"  ✅ Working formats: {len(working_formats)}/4")
+        for fmt, phone, status, result, _ in working_formats:
+            print(f"    • {fmt}: {phone}")
+    else:
+        print(f"  ❌ NO working formats found! (Unexpected - she verified before)")
+    
+    print("\n📊 ELENA (Currently failing):")
+    elena_working = [r for r in elena_results if r[2] == 200]
+    if elena_working:
+        print(f"  ✅ Working formats: {len(elena_working)}/4")
+        for fmt, phone, status, result, _ in elena_working:
+            print(f"    • {fmt}: {phone}")
+    else:
+        print(f"  ❌ NO working formats (all 404)")
+    
+    # Diagnosis
+    print("\n" + "="*60)
+    print("DIAGNOSIS")
+    print("="*60)
+    
+    if working_formats and not elena_working:
+        print("\n✅ Yuliya works but Elena doesn't")
+        print("   → SED API database does NOT contain all Blitz employees")
+        print("   → Elena is in Blitz export but NOT in SED API")
+        print("   → Database sync issue between systems")
+        print("\n💡 PERMANENT FIX:")
+        print("   1. Ask IT to sync SED API with Blitz database")
+        print("   2. OR: Use Blitz export as fallback when SED fails")
+        print("   3. OR: Rebuild SED API to include all employees")
+    elif not working_formats and not elena_working:
+        print("\n❌ BOTH fail - possible issues:")
+        print("   1. SED API endpoint or authentication changed")
+        print("   2. Network/firewall blocking requests")
+        print("   3. API requires authentication token")
+    else:
+        print("\n✅ BOTH work - phone format is correct!")
+        print("   Elena should verify successfully now.")
+    
+    print("\n" + "="*60)
+    print("INVESTIGATION COMPLETE")
+    print("="*60 + "\n")
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## TASK 2: EXECUTE THE TEST
+
+Run the script:
+```bash
+cd /home/claude
+python3 test_sed_api.py
+```
+
+---
+
+## TASK 3: ANALYZE RESULTS
+
+Based on test output, determine which scenario occurred:
+
+### SCENARIO A: Yuliya works, Elena fails (Expected)
+**Diagnosis:** Database sync issue between SED API and Blitz
+**Evidence:** 
+- Yuliya returns 200 (found in SED API)
+- Elena returns 404 (NOT in SED API despite being in Blitz)
+
+**Permanent Fix Required:**
+1. Contact IT team to sync SED API with complete Blitz employee database
+2. Implement fallback to Blitz cache when SED API returns 404
+
+### SCENARIO B: Both fail
+**Diagnosis:** SED API endpoint or authentication issue
+**Evidence:**
+- Both phones return 404 or errors
+- Despite Yuliya having worked before
+
+**Permanent Fix Required:**
+1. Check with IT if SED API endpoint changed
+2. Verify authentication requirements
+
+### SCENARIO C: Both work
+**Diagnosis:** Elena was added to SED API
+**Evidence:**
+- Both return 200
+
+**Result:** No fix needed, Elena can now verify
+
+---
+
+## TASK 4: GENERATE RECOMMENDATION REPORT
+
+Create file: `/home/claude/sed_api_diagnosis.txt`
+
+Include:
+1. Test results for both phones
+2. Which scenario occurred (A, B, or C)
+3. Root cause analysis
+4. Recommended permanent fix
+5. Implementation steps
+
+---
+
+## SUCCESS CRITERIA
+
+✅ Test script created and executed successfully
+✅ Both Yuliya and Elena phones tested in 4 formats each
+✅ Clear diagnosis of which scenario (A, B, or C)
+✅ Specific permanent fix recommendation
+✅ Report saved to sed_api_diagnosis.txt
+
+## EXPECTED OUTPUT
+
+Console output showing:
+- Test results for each phone format
+- HTTP status codes (200, 404, etc.)
+- Success/failure for each test
+- Summary comparing Yuliya vs Elena
+- Clear diagnosis and fix recommendation
+
+Save full output to /home/claude/sed_api_diagnosis.txt for review.

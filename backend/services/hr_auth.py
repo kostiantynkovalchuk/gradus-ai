@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from models.hr_auth_models import HRUser, HRWhitelist, VerificationLog
 from services.hr_sed_service import sed_service
+from services.hr_phone_cache_service import find_employee_by_phone_sync
 from utils.phone_normalizer import normalize_phone, format_for_display
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,32 @@ async def handle_phone_verification(chat_id: int, telegram_id: int, phone: str,
         )
         await create_sed_verified_user(db, chat_id, telegram_id, phone_normalized, employee)
         set_awaiting_phone(telegram_id, False)
+
+    elif result.get("error") == "not_found":
+        # SED didn't know this employee — try Blitz cache as fallback
+        logger.info(
+            f"SED_NOT_FOUND — trying Blitz cache fallback for {phone_display}"
+        )
+        blitz_employee = find_employee_by_phone_sync(phone_normalized, db)
+        if blitz_employee:
+            logger.info(
+                f"AUTH_SUCCESS_BLITZ | tg_id={telegram_id} | "
+                f"phone={phone_display} | name={blitz_employee.get('full_name', 'N/A')}"
+            )
+            await create_blitz_verified_user(
+                db, chat_id, telegram_id, phone_normalized, blitz_employee
+            )
+            set_awaiting_phone(telegram_id, False)
+        else:
+            logger.warning(
+                f"AUTH_FAIL | tg_id={telegram_id} | "
+                f"input_phone={phone_display} | reason=not_found (SED + Blitz)"
+            )
+            await handle_verification_failure(
+                db, chat_id, telegram_id, phone_normalized, result, user_info
+            )
+            set_awaiting_phone(telegram_id, False)
+
     else:
         logger.warning(
             f"AUTH_FAIL | tg_id={telegram_id} | "
@@ -348,6 +375,56 @@ async def create_sed_verified_user(db: Session, chat_id: int, telegram_id: int,
         f"Привіт, {first_name}! 👋\n\n"
         f"Я бачу, що ти {position} у відділі {department}.\n\n"
         f"Готова допомогти з будь-якими питаннями про роботу в TD AV!",
+        keyboard
+    )
+
+
+async def create_blitz_verified_user(db: Session, chat_id: int, telegram_id: int,
+                                      phone: str, blitz_record: dict):
+    """Create/update user verified through Blitz phone cache (SED fallback)."""
+    full_name = blitz_record.get("full_name", "")
+    name_parts = full_name.split()
+    first_name = name_parts[1] if len(name_parts) >= 2 else name_parts[0] if name_parts else ""
+
+    existing = db.query(HRUser).filter(HRUser.telegram_id == telegram_id).first()
+    if existing:
+        existing.phone = phone
+        existing.full_name = full_name
+        existing.first_name = first_name
+        existing.access_level = 'employee'
+        existing.verification_method = 'blitz_cache'
+        existing.last_sed_sync = datetime.utcnow()
+        existing.sed_sync_status = 'blitz_fallback'
+        existing.is_active = True
+        existing.updated_at = datetime.utcnow()
+    else:
+        user = HRUser(
+            telegram_id=telegram_id,
+            phone=phone,
+            full_name=full_name,
+            first_name=first_name,
+            access_level='employee',
+            verification_method='blitz_cache',
+            last_sed_sync=datetime.utcnow(),
+            sed_sync_status='blitz_fallback',
+            is_active=True,
+        )
+        db.add(user)
+
+    log = VerificationLog(
+        telegram_id=telegram_id, phone=phone,
+        verification_type='blitz_cache', status='success'
+    )
+    db.add(log)
+    db.commit()
+
+    keyboard = get_inline_menu_for_access_level("employee")
+    await send_message_with_keyboard(
+        chat_id,
+        f"✅ Підтверджено!\n\n"
+        f"Привіт, {first_name}! 👋\n\n"
+        f"Раді бачити тебе в системі TD AV.\n\n"
+        f"Готова допомогти з будь-якими питаннями про роботу!",
         keyboard
     )
 
