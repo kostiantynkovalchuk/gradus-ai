@@ -22,7 +22,12 @@ from services.rag_utils import (
     extract_company_name_from_url
 )
 from services.query_expansion import expand_brand_query
-from config.models import CLAUDE_MODEL_TELEGRAM, CLAUDE_MODEL_WEBSITE
+from config.models import CLAUDE_MODEL_TELEGRAM, CLAUDE_MODEL_WEBSITE, ALEX_CHAT_MODEL
+from services.alex_memory import (
+    load_memory_sync, format_memory_context,
+    save_exchange_sync, extract_and_update_profile,
+    PAID_TIERS, PROFILE_TRIGGER_EVERY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +143,8 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[List[dict]] = None
     avatar: Optional[str] = None
     source: Optional[str] = "website"  # "telegram" or "website"
-    user_email: Optional[str] = None   # for lead capture
+    user_email: Optional[str] = None   # for lead capture + memory
+    user_tier: Optional[str] = "free"  # "free" | "standard" | "premium"
 
 class ChatResponse(BaseModel):
     response: str
@@ -205,31 +211,59 @@ async def chat_with_avatars(request: ChatRequest):
             )
 
     system_prompt = get_avatar_personality(avatar_role, history_len=len(history))
-    
+
+    # ── Alex memory: inject past context on new session for paid users ──────
+    is_paid = request.user_tier in PAID_TIERS
+    user_email = request.user_email
+    memory_data = None
+
+    if avatar_role == "alex" and is_paid and user_email and len(history) == 0:
+        try:
+            from models import SessionLocal
+            db = SessionLocal()
+            try:
+                memory_data = load_memory_sync(user_email, db)
+                memory_block = format_memory_context(
+                    memory_data["messages"], memory_data["business_data"]
+                )
+                if memory_block:
+                    system_prompt += f"\n\n{memory_block}"
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Memory load failed for {user_email}: {e}")
+    elif avatar_role == "alex" and not is_paid and user_email:
+        logger.info(f"Memory skipped — free tier: {user_email}")
+
     rag_context = ""
     sources = []
     if PINECONE_AVAILABLE:
         expanded_query = expand_brand_query(message)
         rag_context, sources = await retrieve_context(expanded_query, chat_index)
-        
+
         if rag_context:
             system_prompt += f"\n\n{rag_context}\n\nIMPORTANT: Use the above information when relevant. Mention sources."
-    
+
     messages = history.copy()
     messages.append({"role": "user", "content": message})
-    
+
     try:
-        # Select model based on source channel
-        model_to_use = CLAUDE_MODEL_TELEGRAM if request.source == "telegram" else CLAUDE_MODEL_WEBSITE
-        logger.info(f"Chat using model {model_to_use} for source: {request.source}")
-        
+        # Model selection: Alex always uses ALEX_CHAT_MODEL; others use channel-based
+        if avatar_role == "alex":
+            model_to_use = ALEX_CHAT_MODEL
+        elif request.source == "telegram":
+            model_to_use = CLAUDE_MODEL_TELEGRAM
+        else:
+            model_to_use = CLAUDE_MODEL_WEBSITE
+        logger.info(f"Chat using model {model_to_use} | avatar={avatar_role} | source={request.source}")
+
         response = chat_claude.messages.create(
             model=model_to_use,
             max_tokens=3000,
             system=system_prompt,
             messages=messages
         )
-        
+
         assistant_message = response.content[0].text
 
         from config.agent_personas import validate_gender
@@ -237,14 +271,39 @@ async def chat_with_avatars(request: ChatRequest):
             validate_gender("maya_hr", assistant_message)
         elif avatar_role == "alex":
             validate_gender("alex_gradus", assistant_message)
-        
+
+        # ── Alex memory: save exchange + trigger profile extraction ────────
+        if avatar_role == "alex" and is_paid and user_email:
+            try:
+                from models import SessionLocal
+                import os as _os
+                db = SessionLocal()
+                try:
+                    save_exchange_sync(user_email, message, assistant_message, db)
+                finally:
+                    db.close()
+
+                # Every PROFILE_TRIGGER_EVERY exchanges, extract business profile in background
+                exchange_count = (len(history) // 2) + 1
+                if exchange_count % PROFILE_TRIGGER_EVERY == 0:
+                    all_msgs = list(history) + [
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": assistant_message},
+                    ]
+                    db_url = _os.getenv("NEON_DATABASE_URL") or _os.getenv("DATABASE_URL")
+                    asyncio.create_task(
+                        extract_and_update_profile(user_email, all_msgs, db_url)
+                    )
+            except Exception as e:
+                logger.warning(f"Memory save failed for {user_email}: {e}")
+
         return ChatResponse(
             response=assistant_message,
             type="chat",
             avatar_used=avatar_role,
             sources_used=sources if sources else None
         )
-        
+
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(

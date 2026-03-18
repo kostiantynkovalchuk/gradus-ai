@@ -600,6 +600,26 @@ MIGRATIONS = [
                WHERE channel_status = 'queued'""",
         ]
     },
+    {
+        "version": "022_alex_memory",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS alex_conversations (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                role VARCHAR(20) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_alex_conv_email
+               ON alex_conversations(email, created_at DESC)""",
+            """CREATE TABLE IF NOT EXISTS alex_user_profiles (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                business_data JSONB DEFAULT '{}',
+                updated_at TIMESTAMP DEFAULT NOW()
+            )""",
+        ]
+    },
 ]
 
 

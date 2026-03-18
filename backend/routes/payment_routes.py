@@ -233,3 +233,26 @@ async def wayforpay_webhook(request: Request, db: Session = Depends(get_db)):
         db.rollback()
         logger.error(f"Webhook error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/user/profile")
+async def get_user_profile(email: str, db: Session = Depends(get_db)):
+    """Return Alex business profile for a paid user (debug / future use)."""
+    from sqlalchemy import text
+    user = db.query(MayaUser).filter(MayaUser.email == email).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.subscription_tier not in ("standard", "premium"):
+        raise HTTPException(403, "Profile available for paid users only")
+
+    row = db.execute(
+        text("SELECT business_data, updated_at FROM alex_user_profiles WHERE email = :e"),
+        {"e": email}
+    ).fetchone()
+
+    return {
+        "email": email,
+        "tier": user.subscription_tier,
+        "business_data": row[0] if row else {},
+        "updated_at": row[1].isoformat() if row and row[1] else None,
+    }

@@ -439,6 +439,23 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"[SCHEDULER] Channel queue task failed: {e}")
 
+    def _cleanup_alex_memory_task(self):
+        """
+        Weekly cleanup: keep only last 50 messages per user in alex_conversations.
+        Runs: Sunday 4:30 AM UTC
+        """
+        logger.info("[SCHEDULER] Starting Alex memory cleanup...")
+        try:
+            from services.alex_memory import cleanup_old_conversations_sync
+            db = self._get_db_session()
+            try:
+                deleted = cleanup_old_conversations_sync(db)
+                logger.info(f"[SCHEDULER] Alex memory cleanup complete: {deleted} rows deleted")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Alex memory cleanup failed: {e}")
+
     def aggregate_alex_candidates_task(self):
         """
         Task: Aggregate frequent Alex questions into preset candidates
@@ -1216,6 +1233,15 @@ class ContentScheduler:
             replace_existing=True
         )
 
+        # Alex memory cleanup: weekly on Sunday at 4:30 AM
+        self.scheduler.add_job(
+            self._cleanup_alex_memory_task,
+            CronTrigger(day_of_week='sun', hour=4, minute=30),
+            id='cleanup_alex_memory',
+            name='Cleanup old Alex conversation memory (keep 50/user)',
+            replace_existing=True
+        )
+
         self.scheduler.start()
         
         logger.info("=" * 60)
@@ -1251,6 +1277,7 @@ class ContentScheduler:
         logger.info("   • Subscription expiry: Daily 4:00 AM")
         logger.info("   • Knowledge gap detection: Daily 7:00 AM")
         logger.info("   • Alex candidate aggregation: Daily 3:30 AM")
+        logger.info("   • Alex memory cleanup: Sunday 4:30 AM")
         logger.info("")
         logger.info("=" * 60)
         logger.info("🚀 System ready! Waiting for next scheduled task...")
