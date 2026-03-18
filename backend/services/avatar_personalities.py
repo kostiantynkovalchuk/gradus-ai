@@ -72,7 +72,7 @@ def detect_avatar_role(message: str, history: list = None) -> str:
     else:
         return "general"
 
-def get_avatar_personality(avatar_role: str, is_first_message: bool = True) -> str:
+def get_avatar_personality(avatar_role: str, is_first_message: bool = True, history_len: int = 0) -> str:
     """Get system prompt for avatar personality with dynamic date context"""
     
     current_date = datetime.now()
@@ -164,24 +164,30 @@ Cite sources when using RAG knowledge.
 Завжди пам'ятай: ти внутрішній HR-помічник для команди TD AV, а не зовнішній маркетинг-консультант.\""""
 
     elif avatar_role == "alex":
-        intro_instruction = ""
-        if is_first_message:
-            intro_instruction = """
-**FIRST MESSAGE INTRO (use ONLY for the very first message in a conversation):**
-Start your response with:
-"Привіт! Я Алекс Градус, HoReCa-консультант Gradus Media. Допомагаю барам та ресторанам оптимізувати прибутковість через правильний вибір постачальників та продуктів."
-Then continue with the answer.
-"""
+        if history_len >= 4:
+            closing_section = """**CLOSING SECTION**
+Always end substantive answers with this exact closing:
+"🤝 Хочете, щоб наш HoReCa-менеджер зв'язався з вами особисто та підібрав оптимальний асортимент для вашого закладу?
+
+Просто залиште свій номер телефону — і я передам ваші контакти нашій команді."
+Never truncate this section."""
         else:
-            intro_instruction = """
-**DO NOT include any introductory paragraph.** This is NOT the first message — start directly with the answer.
-"""
+            closing_section = """**CLOSING SECTION**
+End every response with a short, relevant follow-up question that deepens the business conversation.
+Examples:
+- "Скільки позицій зараз у вашій барній карті?"
+- "Яка ваша поточна середня собівартість напою?"
+- "Який формат закладу — ресторан, бар чи готель?"
+- "З якою категорією продукції працюєте зараз — горілка, вино, бренді?"
+Keep it to one focused question. No phone CTA yet."""
 
         return f"""You are Alex Gradus — Premium Bar Operations Consultant & Profitability Expert at Gradus Media.
 
 {date_context}
 
-{intro_instruction}
+**CRITICAL: START EVERY RESPONSE DIRECTLY WITH THE ANSWER**
+Never open with a greeting, self-introduction, or "Привіт" of any kind.
+The user already knows who you are. Jump straight into the substance.
 
 **AVATAR IDENTITY**
 Name: Alex Gradus
@@ -326,12 +332,7 @@ Will Defer: Legal compliance/licensing, construction/bar design, employment law,
 - Provide tiered recommendations (good/better/best)
 - Always include numbers, percentages, concrete ROI calculations
 
-**CLOSING SECTION**
-Always end substantive answers with this exact closing:
-"🤝 Хочете, щоб наш HoReCa-менеджер зв'язався з вами особисто та підібрав оптимальний асортимент для вашого закладу?
-
-Просто залиште свій номер телефону — і я передам ваші контакти нашій команді."
-Never truncate this section."""
+{closing_section}"""
 
     else:
         return f"""You are Gradus AI — assistant for the alcohol industry media platform.

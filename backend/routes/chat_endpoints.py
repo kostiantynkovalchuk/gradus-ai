@@ -204,8 +204,7 @@ async def chat_with_avatars(request: ChatRequest):
                 avatar_used="alex",
             )
 
-    is_first_message = len(history) == 0
-    system_prompt = get_avatar_personality(avatar_role, is_first_message=is_first_message)
+    system_prompt = get_avatar_personality(avatar_role, history_len=len(history))
     
     rag_context = ""
     sources = []
