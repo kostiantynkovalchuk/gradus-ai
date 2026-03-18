@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, Request, APIRouter, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, HTMLResponse
@@ -311,6 +311,36 @@ from routes.hr_admin import router as hr_admin_router
 app.include_router(hr_admin_router)
 from routes.payment_routes import router as payment_router
 app.include_router(payment_router)
+
+@app.get("/api/user/subscription")
+async def get_user_subscription(email: str = Header(None), db: Session = Depends(get_db)):
+    """Return subscription tier and status for the given user email."""
+    from models.maya_models import MayaUser
+    if not email:
+        return {"tier": "free", "status": "none", "expires_at": None}
+
+    user = db.query(MayaUser).filter(MayaUser.email == email).first()
+    if not user:
+        return {"tier": "free", "status": "none", "expires_at": None}
+
+    # Auto-expire if past expiry date
+    if user.subscription_expires_at and user.subscription_expires_at < datetime.utcnow():
+        user.subscription_status = "expired"
+        user.subscription_tier = "free"
+        user.updated_at = datetime.utcnow()
+        db.commit()
+        return {
+            "tier": "free",
+            "status": "expired",
+            "expires_at": user.subscription_expires_at.isoformat(),
+        }
+
+    return {
+        "tier": user.subscription_tier or "free",
+        "status": user.subscription_status or "none",
+        "expires_at": user.subscription_expires_at.isoformat() if user.subscription_expires_at else None,
+    }
+
 from routes.admin_routes import router as admin_router
 app.include_router(admin_router)
 from solomon_router import router as solomon_router
