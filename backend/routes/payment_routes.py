@@ -141,10 +141,25 @@ async def wayforpay_webhook(request: Request, db: Session = Depends(get_db)):
             logger.error("WAYFORPAY_MERCHANT_SECRET not configured")
             raise HTTPException(500, "Payment system not configured")
 
+        # Log every incoming webhook for traceability (no secrets exposed)
+        logger.info(
+            f"WayForPay webhook received — order={data.get('orderReference')} "
+            f"status={data.get('transactionStatus')} amount={data.get('amount')} "
+            f"currency={data.get('currency')} method={data.get('paymentSystem','?')}"
+        )
+
+        # Normalize amount: WayForPay can send it as float or string in JSON
+        raw_amount = data.get('amount', '')
+        if isinstance(raw_amount, float):
+            # Avoid float precision drift: format to 2 decimal places
+            amount_str = f"{raw_amount:.2f}".rstrip('0').rstrip('.')
+        else:
+            amount_str = str(raw_amount)
+
         sig_params = [
             data.get('merchantAccount', ''),
             data.get('orderReference', ''),
-            data.get('amount', ''),
+            amount_str,
             data.get('currency', ''),
             data.get('authCode', ''),
             data.get('cardPan', ''),
@@ -152,8 +167,12 @@ async def wayforpay_webhook(request: Request, db: Session = Depends(get_db)):
             data.get('reasonCode', '')
         ]
         expected = generate_wayforpay_signature(sig_params, secret_key)
-        if data.get('merchantSignature') != expected:
-            logger.error("Invalid WayForPay signature")
+        received_sig = data.get('merchantSignature', '')
+        if received_sig != expected:
+            logger.error(
+                f"WayForPay signature mismatch — order={data.get('orderReference')} "
+                f"sig_fields={sig_params} received_prefix={received_sig[:8]}..."
+            )
             raise HTTPException(401, "Invalid signature")
 
         order_id = data.get('orderReference')

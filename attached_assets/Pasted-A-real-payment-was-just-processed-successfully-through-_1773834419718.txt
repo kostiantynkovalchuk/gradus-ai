@@ -1,0 +1,72 @@
+A real payment was just processed successfully 
+through WayForPay. The user paid but the chat 
+is not unlocked. We need to investigate and fix 
+the complete post-payment user flow.
+
+PAYMENT DETAILS:
+- Order ID: gradus_kokomot_gmail.com_1773832178
+- Email: kokomot@gmail.com
+- Amount: 307.65 UAH
+- Status: Successful (Apple Pay)
+- Date: 18.03.2026 13:13:43
+
+INVESTIGATION STEPS:
+
+1. CHECK IF WEBHOOK WAS RECEIVED:
+Check Render logs for any incoming POST requests 
+to /api/payments/webhook around 13:13 UTC today.
+Look for "WayForPay webhook" log entries.
+
+2. CHECK DATABASE STATE:
+Run these queries on production Neon DB:
+
+SELECT * FROM maya_subscriptions 
+WHERE wayforpay_order_id = 
+'gradus_kokomot_gmail.com_1773832178';
+
+SELECT email, subscription_tier, 
+subscription_status, subscription_expires_at 
+FROM maya_users 
+WHERE email = 'kokomot@gmail.com';
+
+Report exact values for both queries.
+
+3. CHECK WEBHOOK URL:
+Verify that WayForPay dashboard has the correct 
+webhook URL set:
+https://gradus-ai.onrender.com/api/payments/webhook
+
+If webhook was never received — the URL may not 
+be configured in WayForPay dashboard yet.
+
+4. MANUAL ACTIVATION (immediate fix):
+If the subscription is not active in DB,
+manually activate it:
+
+UPDATE maya_subscriptions 
+SET payment_status = 'success',
+    started_at = NOW(),
+    expires_at = NOW() + INTERVAL '30 days',
+    updated_at = NOW()
+WHERE wayforpay_order_id = 
+'gradus_kokomot_gmail.com_1773832178';
+
+UPDATE maya_users 
+SET subscription_tier = 'standard',
+    subscription_status = 'active',
+    subscription_expires_at = NOW() + INTERVAL '30 days',
+    updated_at = NOW()
+WHERE email = 'kokomot@gmail.com';
+
+5. IDENTIFY ROOT CAUSE:
+After manual fix, determine why webhook 
+didn't trigger automatically:
+- Was webhook URL set in WayForPay?
+- Did webhook arrive but fail signature check?
+- Did webhook arrive but DB update failed?
+
+6. FIX WEBHOOK FOR FUTURE PAYMENTS:
+Based on root cause, implement the permanent fix
+so all future payments auto-activate immediately.
+
+Report findings at each step before proceeding.
