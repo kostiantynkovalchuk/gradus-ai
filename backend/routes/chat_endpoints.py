@@ -3,7 +3,11 @@ from pydantic import BaseModel
 from anthropic import Anthropic
 from typing import Optional, List
 import os
+import re
 import logging
+import smtplib
+from email.mime.text import MIMEText
+from datetime import datetime
 
 from services.avatar_personalities import (
     detect_avatar_role,
@@ -61,11 +65,80 @@ except ImportError as e:
 except Exception as e:
     logger.error(f"Error initializing Pinecone: {e}")
 
+# Ukrainian phone number patterns: +380XXXXXXXXX, 380XXXXXXXXX, 0XXXXXXXXX, (0XX) XXX-XX-XX
+_PHONE_RE = re.compile(
+    r'(?:'
+    r'\+?380\d{9}'                                    # +380XXXXXXXXX or 380XXXXXXXXX
+    r'|'
+    r'\(0\d{2}\)[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}'  # (0XX) XXX-XX-XX
+    r'|'
+    r'(?<!\d)0\d{2}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)'  # 0XX-XXX-XX-XX
+    r')'
+)
+
+
+async def _notify_alex_lead(phone: str, user_email: str, history: list) -> None:
+    """Send a HoReCa lead notification via Telegram and optionally email."""
+    context_parts = history[-3:] if history else []
+    context_text = "\n".join(
+        f"{m['role'].title()}: {m['content'][:200]}" for m in context_parts
+    ) or "Немає попередніх повідомлень"
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    # 1. Telegram (primary — works immediately with existing bot token)
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if bot_token and chat_id:
+        try:
+            import httpx
+            tg_text = (
+                f"🎯 <b>Новий лід від Alex — HoReCa контакт</b>\n\n"
+                f"📞 Телефон: <code>{phone}</code>\n"
+                f"📧 Email: {user_email or 'невідомо'}\n"
+                f"📅 Дата: {now}\n\n"
+                f"💬 <b>Контекст розмови:</b>\n{context_text[:800]}"
+            )
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": tg_text, "parse_mode": "HTML"},
+                    timeout=5.0,
+                )
+            logger.info(f"Alex lead Telegram notification sent for phone {phone}")
+        except Exception as e:
+            logger.warning(f"Alex lead Telegram notification failed: {e}")
+
+    # 2. Email via SMTP (requires SMTP_USER + SMTP_PASS env vars)
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    if smtp_user and smtp_pass:
+        try:
+            body = (
+                f"Клієнт зацікавлений у співпраці з AVTD.\n\n"
+                f"Телефон: {phone}\n"
+                f"Email: {user_email or 'невідомо'}\n"
+                f"Контекст розмови:\n{context_text}\n"
+                f"Дата: {now}"
+            )
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = "Новий лід від Alex — HoReCa контакт"
+            msg["From"] = smtp_user
+            msg["To"] = "admin@gradusmedia.org"
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+            logger.info(f"Alex lead email sent for phone {phone}")
+        except Exception as e:
+            logger.warning(f"Alex lead email failed: {e}")
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_history: Optional[List[dict]] = None
     avatar: Optional[str] = None
     source: Optional[str] = "website"  # "telegram" or "website"
+    user_email: Optional[str] = None   # for lead capture
 
 class ChatResponse(BaseModel):
     response: str
@@ -114,7 +187,23 @@ async def chat_with_avatars(request: ChatRequest):
         avatar_role = request.avatar
     else:
         avatar_role = detect_avatar_role(message, history)
-    
+
+    # Phone number lead capture — intercept before calling Claude
+    if avatar_role == "alex":
+        phone_match = _PHONE_RE.search(message)
+        if phone_match:
+            phone = phone_match.group().strip()
+            await _notify_alex_lead(phone, request.user_email, history)
+            return ChatResponse(
+                response=(
+                    "Дякую! Ваш номер передано нашому HoReCa-менеджеру. "
+                    "Очікуйте дзвінка протягом 1 робочого дня. "
+                    "Якщо є ще питання — я тут!"
+                ),
+                type="chat",
+                avatar_used="alex",
+            )
+
     is_first_message = len(history) == 0
     system_prompt = get_avatar_personality(avatar_role, is_first_message=is_first_message)
     
