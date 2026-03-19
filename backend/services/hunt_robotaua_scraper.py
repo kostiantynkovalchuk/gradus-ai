@@ -102,17 +102,21 @@ def _check_jwt_expiry(token: str) -> bool:
         return False
     try:
         import base64, json as _json
-        payload_b64 = token.split(".")[1]
-        payload_b64 += "=" * (4 - len(payload_b64) % 4)
-        decoded = _json.loads(base64.b64decode(payload_b64))
-        exp = decoded.get("exp", 0)
-        if exp and exp < time.time():
-            logger.warning(
-                f"Robota.ua JWT is EXPIRED (exp={exp}). "
-                "Update ROBOTAUA_JWT env secret to re-enable this source."
-            )
-            return False
+        parts = token.split(".")
+        if len(parts) == 3:
+            payload_b64 = parts[1]
+            # Standard base64 padding
+            payload_b64 += "=" * (4 - len(payload_b64) % 4)
+            decoded = _json.loads(base64.b64decode(payload_b64).decode("utf-8", errors="replace"))
+            exp = decoded.get("exp", 0)
+            if exp and exp < time.time():
+                logger.warning(
+                    f"Robota.ua JWT is EXPIRED (exp={exp}). "
+                    "Update ROBOTAUA_JWT env secret to re-enable this source."
+                )
+                return False
     except Exception:
+        # Non-standard/opaque token — assume valid, API will reject if expired
         pass
     return True
 
@@ -168,9 +172,9 @@ query recommendedProfResumesQuery(
       experience {
         company
         position
-        startDate
-        endDate
-        isCurrent
+        startWork
+        endWork
+        description
       }
     }
   }
@@ -322,15 +326,21 @@ def _resolve_city_id(city_name: str) -> Optional[str]:
 # ──────────────────────────────────────────────────────────────────
 
 def _parse_experience_years(experiences: list) -> Optional[float]:
-    """Sum total months across all non-current+past positions, return years."""
+    """
+    Sum total months across all positions and return years.
+    Handles both field naming conventions:
+      - recommendedProfResumes list: startWork / endWork
+      - employerResume detail:       startDate / endDate
+    """
     if not experiences:
         return None
     total_months = 0
     for exp in experiences:
         try:
-            start_str = exp.get("startDate") or ""
-            end_str = exp.get("endDate") or ""
-            is_current = exp.get("isCurrent", False)
+            # Accept either naming convention
+            start_str = exp.get("startDate") or exp.get("startWork") or ""
+            end_str = exp.get("endDate") or exp.get("endWork") or ""
+            is_current = exp.get("isCurrent", False) or (not end_str)
 
             start_dt = _parse_iso_date(start_str)
             end_dt = _parse_iso_date(end_str) if not is_current else datetime.utcnow()
@@ -407,8 +417,9 @@ def _build_raw_text(
         for exp in experiences[:8]:
             pos = exp.get("position") or ""
             company = exp.get("company") or ""
-            start = (exp.get("startDate") or "")[:7]
-            end = "по сьогодні" if exp.get("isCurrent") else (exp.get("endDate") or "")[:7]
+            start = (exp.get("startDate") or exp.get("startWork") or "")[:7]
+            end_raw = exp.get("endDate") or exp.get("endWork") or ""
+            end = "по сьогодні" if (exp.get("isCurrent") or not end_raw) else end_raw[:7]
             desc = exp.get("description") or ""
             line = f"  - {pos} @ {company} ({start} – {end})"
             if desc:
