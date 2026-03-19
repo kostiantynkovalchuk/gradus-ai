@@ -1,0 +1,291 @@
+Major update to the /hr Hunt dashboard. Three changes:
+1. Add role-based filtering to all Hunt data
+2. Add a detailed vacancy/candidate table (like an HR spreadsheet) with XLSX download
+3. Replace the ROI formula with a realistic, HR-verifiable calculation
+
+=== CHANGE 1: ROLE FILTERING ===
+
+## Backend: /hr/api/hunt-analytics endpoint (in backend/routes/hr_admin.py)
+
+Add optional query parameter: ?role=торговий+представник
+- If role is provided, filter ALL queries by hunt_vacancies.position ILIKE '%{role}%'
+- If role is empty/missing, return all data (current behavior)
+
+Also add a new endpoint:
+GET /hr/api/hunt-roles
+Returns: { "roles": ["торговий представник", "мерчандайзер", "водій", "комірник", ...] }
+Query: SELECT DISTINCT position FROM hunt_vacancies WHERE position IS NOT NULL ORDER BY position
+
+## Frontend: Add role filter dropdown
+
+At the top of the Hunt tab (above ROI banner), add a filter bar:
+- Dropdown <select id="roleFilter"> populated from /hr/api/hunt-roles
+  - First option: "Всі посади" (value="")
+  - Then each distinct role
+- When changed: re-call loadHuntAnalytics() with ?role= parameter
+- The role filter should persist across auto-refresh cycles
+
+=== CHANGE 2: DETAILED TABLE VIEW + XLSX EXPORT ===
+
+This is the main deliverable. Reference format: the .numbers spreadsheet the user uploaded,
+which has these columns:
+
+| Посада | Місто | Компанія | Очікуваний дохід | ЗП з податком | ЗП на руки | Макс ЗП (4 рівень) | Примітки | Джерела |
+
+We adapt this to Maya Hunt's actual data model.
+
+## Backend: New endpoint
+GET /hr/api/hunt-report?role=&format=json
+GET /hr/api/hunt-report?role=&format=xlsx
+
+For format=json, returns:
+{
+  "vacancies": [
+    {
+      "id": 1,
+      "position": "торговий представник",
+      "city": "Дніпро",
+      "status": "filled" | "searching" | "no_results",
+      "created_at": "2026-03-15",
+      "salary_max": 25000,
+      "candidates": [
+        {
+          "full_name": "Іван Петренко",
+          "age": 32,
+          "city": "Дніпро",
+          "current_role": "торговий представник",
+          "experience_years": 5.0,
+          "salary_expectation_uah": 22000,
+          "salary_expectation_usd": 537,
+          "ai_score": 78,
+          "hr_decision": "approved",
+          "source": "work.ua",
+          "profile_url": "https://work.ua/resumes/12345",
+          "skills": "FMCG, B2B продажі",
+          "is_fallback": false,
+          "candidate_date": "2026-03-10"
+        }
+      ],
+      "market_data": {
+        "employer_median_uah": 20000,
+        "candidate_median_uah": 25000,
+        "gap_uah": -5000,
+        "source_url": "https://robota.ua/..."
+      }
+    }
+  ],
+  "summary": {
+    "total_vacancies": 10,
+    "total_candidates": 45,
+    "avg_score": 62,
+    "hire_rate": 0.3,
+    "avg_time_to_fill_hours": 1.2
+  },
+  "current_usd_rate": 41.0
+}
+
+For format=xlsx — generate an Excel file using openpyxl with these sheets:
+
+Sheet 1: "Звіт по вакансіях"
+Columns:
+A: Посада (vacancy.position)
+B: Місто (vacancy.city)  
+C: Статус (vacancy.status — translated: searching→Пошук, filled→Закрита, no_results→Без результатів)
+D: Дата створення (vacancy.created_at)
+E: Макс ЗП вакансії (vacancy.salary_max) — in UAH
+F: Кандидатів знайдено (count of candidates)
+G: Найнято (yes/no)
+H: Медіана ринку (роботодавці) — from market_data
+I: Медіана ринку (кандидати) — from market_data  
+J: Розрив — gap
+K: Джерело ринкових даних — source_url as clickable hyperlink
+
+Sheet 2: "Кандидати"
+Columns:
+A: Вакансія (vacancy.position)
+B: Місто вакансії (vacancy.city)
+C: ПІБ кандидата (candidate.full_name)
+D: Вік (candidate.age)
+E: Місто кандидата (candidate.city)
+F: Поточна посада (candidate.current_role)
+G: Досвід (років) (candidate.experience_years)
+H: Очікувана ЗП (грн) (candidate.salary_expectation_uah)
+I: Очікувана ЗП ($) (candidate.salary_expectation_usd)
+J: AI Оцінка (candidate.ai_score)
+K: Рішення HR (candidate.hr_decision — translated)
+L: Навички (candidate.skills)
+M: Джерело (candidate.source)
+N: Профіль — profile_url as clickable hyperlink
+O: Архівний (candidate.is_fallback — Так/Ні)
+
+Sheet 3: "Аналітика ринку"
+Columns matching the .numbers reference:
+A: Посада
+B: Місто  
+C: Медіана роботодавців (грн)
+D: Медіана кандидатів (грн)
+E: Розрив (грн)
+F: Медіана роботодавців ($)
+G: Медіана кандидатів ($)
+H: Розрив ($)
+I: Джерело — hyperlink to robota.ua
+
+Formatting:
+- Header row: bold, blue background (#4472C4), white text
+- Alternating row colors: white / light gray (#F2F2F2)  
+- Currency columns: number format with thousands separator
+- Auto-fit column widths
+- Freeze top row
+
+Install openpyxl if not already available:
+pip install openpyxl --break-system-packages
+
+Return the XLSX as:
+return StreamingResponse(
+    io.BytesIO(workbook_bytes),
+    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.spreadsheet",
+    headers={"Content-Disposition": f"attachment; filename=maya_hunt_report_{date}.xlsx"}
+)
+
+## Frontend: Add table view + download button
+
+After the ROI banner and before the charts, add:
+
+1. Download button:
+<button onclick="downloadReport()" class="download-btn">
+  📥 Завантажити звіт (XLSX)
+</button>
+
+function downloadReport() {
+    const role = document.getElementById('roleFilter').value;
+    window.location.href = `/hr/api/hunt-report?format=xlsx&role=${encodeURIComponent(role)}`;
+}
+
+2. Detailed table (collapsible section):
+<details open>
+  <summary><h3>📋 Детальний звіт</h3></summary>
+  <div id="reportTable"></div>
+</details>
+
+The table renders from /hr/api/hunt-report?format=json&role=...
+Each vacancy is a row with expandable candidate sub-rows.
+Style it like a clean spreadsheet — borders, compact rows, alternating colors.
+
+Columns visible in the HTML table:
+Посада | Місто | Статус | ЗП макс | Кандидатів | AI оцінка (avg) | Найнято | Ринок (медіана) | Джерело
+
+Clicking a vacancy row expands to show its candidates underneath.
+Each candidate row shows: ПІБ, Вік, Місто, Досвід, ЗП очік., Оцінка, Рішення, Джерело (linked).
+
+3. Source links — ALWAYS show. Every candidate row must have a clickable link to their
+source profile (Work.ua, Robota.ua, or Telegram message link). Every market data cell
+must link to the Robota.ua source URL.
+
+
+=== CHANGE 3: ROI FORMULA ===
+
+## Backend: Replace ROI calculation in hunt-analytics endpoint
+
+OLD formula:
+  cost_saved_usd = total_hires * 385
+  hours_saved = total_vacancies * 2.67
+  cost_per_hire_maya = total_vacancies * 0.15 / max(total_hires, 1)
+
+NEW formula (realistic, HR-verifiable):
+
+# Configurable constants (add to hunt_config.py)
+"roi": {
+    "hr_hourly_rate_uah": 150,        # HR specialist hourly rate
+    "hours_per_vacancy_traditional": 3, # Hours HR spends manually per vacancy
+    "portal_cost_per_vacancy_uah": 800, # Average cost to post on job portals
+    "maya_api_cost_per_search_uah": 6,  # Claude Haiku API cost per full search (~$0.15)
+    "maya_time_per_vacancy_minutes": 5,  # Time HR spends with Maya per vacancy
+}
+
+# Calculation
+traditional_cost_per_vacancy = (hours_trad * hr_rate) + portal_cost  # 450 + 800 = 1250 UAH
+maya_cost_per_vacancy = maya_api_cost  # 6 UAH
+savings_per_vacancy = traditional_cost_per_vacancy - maya_cost_per_vacancy  # 1244 UAH
+
+total_savings_uah = total_vacancies * savings_per_vacancy
+total_savings_usd = total_savings_uah / usd_rate
+hours_saved = total_vacancies * (hours_trad - maya_minutes/60)  # vacancies * 2.92 hours
+cost_per_hire_maya_uah = (total_vacancies * maya_api_cost) / max(total_hires, 1)
+cost_per_hire_traditional_uah = traditional_cost_per_vacancy
+
+## Frontend: Update ROI banner
+
+Replace the 4-item ROI grid with 6 items:
+
+<div class="roi-grid" style="grid-template-columns: repeat(3, 1fr);">
+  <!-- Row 1 -->
+  <div class="roi-item">
+    <div class="roi-value" id="roiSavedUah">0 грн</div>
+    <div class="roi-label">💰 Зекономлено</div>
+  </div>
+  <div class="roi-item">
+    <div class="roi-value" id="roiHours">0 год</div>
+    <div class="roi-label">⏱️ Годин збережено</div>
+  </div>
+  <div class="roi-item">
+    <div class="roi-value" id="roiHired">0</div>
+    <div class="roi-label">🎯 Найнято</div>
+  </div>
+  <!-- Row 2 -->
+  <div class="roi-item">
+    <div class="roi-value" id="roiCostMaya">0 грн</div>
+    <div class="roi-label">📉 Вартість найму (Maya)</div>
+  </div>
+  <div class="roi-item">
+    <div class="roi-value" id="roiCostTraditional">0 грн</div>
+    <div class="roi-label">📊 Вартість найму (традиційно)</div>
+  </div>
+  <div class="roi-item">
+    <div class="roi-value" id="roiVacancies">0</div>
+    <div class="roi-label">📋 Вакансій оброблено</div>
+  </div>
+</div>
+
+<!-- Below the banner, add methodology note (collapsible) -->
+<details style="margin-top:8px; font-size:12px; opacity:0.8;">
+  <summary>ℹ️ Методологія розрахунку</summary>
+  <p>Традиційна вартість: 3 год роботи HR (150 грн/год) + 800 грн розміщення = 1,250 грн/вакансію<br>
+  Maya Hunt: ~6 грн API витрат на пошук<br>
+  Економія: 1,244 грн та 2 год 55 хв на кожну вакансію</p>
+</details>
+
+## Backend: Update the hunt-analytics response to include new ROI fields
+
+Add to the kpi object:
+  "roi": {
+    "total_savings_uah": ...,
+    "total_savings_usd": ...,
+    "hours_saved": ...,
+    "cost_per_hire_maya_uah": ...,
+    "cost_per_hire_traditional_uah": 1250,
+    "cost_per_vacancy_maya_uah": 6,
+    "cost_per_vacancy_traditional_uah": 1250,
+    "total_vacancies_processed": ...,
+    "total_hires": ...,
+    "methodology": {
+      "hr_hourly_rate": 150,
+      "hours_per_vacancy_traditional": 3,
+      "portal_cost": 800,
+      "api_cost_per_search": 6
+    }
+  }
+
+
+=== IMPORTANT RULES ===
+1. All data in the report table MUST have source links — no orphan data without attribution
+2. XLSX export must work without JavaScript — direct download via GET endpoint
+3. Role filter affects ALL sections: ROI, table, charts, salary data
+4. Keep the existing charts (funnel, source, salary, skills, trends) — just make them respond to role filter
+5. Currency toggle (UAH/USD) should work on the new table too
+6. The HTML file is 1980 lines already — keep new code clean, use functions, avoid duplication
+7. openpyxl is needed for XLSX — install it
+8. Test the XLSX download manually after implementation
+9. Do NOT break existing endpoints or the Alex Photo Report dashboard
+10. Keep HTTP Basic Auth on all new endpoints
+
+Show me the complete diff for all files changed.
