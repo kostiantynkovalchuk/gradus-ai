@@ -40,6 +40,9 @@ class HuntCandidate(Base):
     hr_decision = Column(String(20), default='pending')
     telegram_message_id = Column(BigInteger)
     hired_at = Column(DateTime)
+    candidate_date = Column(TIMESTAMP)
+    is_fallback = Column(Boolean, default=False)
+    fallback_round = Column(Integer)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 

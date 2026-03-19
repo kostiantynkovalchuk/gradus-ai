@@ -13,8 +13,16 @@ PHONE_PATTERN = re.compile(r'\+?\d[\d\s\-()]{8,}\d')
 USERNAME_PATTERN = re.compile(r'@[A-Za-z0-9_]{5,}')
 
 
-async def scrape_telegram_channels(keywords: list[str], channels: list[str]) -> list[dict]:
-    logger.info(f"TG scraper received {len(channels)} channels: {channels}")
+async def scrape_telegram_channels(
+    keywords: list[str],
+    channels: list[str],
+    depth_days: int = None,
+) -> list[dict]:
+    from config.hunt_config import HUNT_CONFIG
+    if depth_days is None:
+        depth_days = HUNT_CONFIG["search_depth_days"]
+
+    logger.info(f"TG scraper received {len(channels)} channels: {channels}, depth_days={depth_days}")
     if channels:
         logger.info(f"First channel item type: {type(channels[0])}, value: {channels[0]}")
 
@@ -30,7 +38,7 @@ async def scrape_telegram_channels(keywords: list[str], channels: list[str]) -> 
         return []
 
     candidates = []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=depth_days)
 
     try:
         client = TelegramClient(
@@ -45,10 +53,13 @@ async def scrape_telegram_channels(keywords: list[str], channels: list[str]) -> 
             await client.disconnect()
             return []
 
+        from config.hunt_config import HUNT_CONFIG
+        msg_limit = HUNT_CONFIG["tg_messages_per_channel"]
+
         for channel in channels:
             try:
                 entity = await client.get_entity(channel)
-                async for message in client.iter_messages(entity, limit=200):
+                async for message in client.iter_messages(entity, limit=msg_limit):
                     if not message.text or not message.date:
                         continue
                     if message.date.replace(tzinfo=timezone.utc) < cutoff:
@@ -82,5 +93,5 @@ async def scrape_telegram_channels(keywords: list[str], channels: list[str]) -> 
         logger.error(f"Telethon connection error: {e}")
         return []
 
-    logger.info(f"TG scraper found {len(candidates)} candidates from {len(channels)} channels")
+    logger.info(f"TG scraper found {len(candidates)} candidates from {len(channels)} channels (depth={depth_days}d)")
     return candidates

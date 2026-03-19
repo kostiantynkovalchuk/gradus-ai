@@ -1,0 +1,82 @@
+I need to implement two related features in Maya Hunt: 60-day default search window + 6-month fallback when no quality candidates are found.
+
+=== CHANGES NEEDED ===
+
+## 1. Create config file: backend/config/hunt_config.py
+
+HUNT_CONFIG = {
+    "search_depth_days": 60,           # First round: 60 days
+    "fallback_depth_days": 180,         # Fallback: 6 months
+    "quality_threshold": 35,            # Min score to show
+    "city_mismatch_cap": 20,            # Max score if city wrong
+    "max_candidates_to_score": 10,      # How many to send to Claude
+    "max_cards_shown": 5,               # Top N shown to HR
+    "tg_messages_per_channel": 200,     # Telegram message limit
+    "workua_max_candidates": 15,        # Work.ua per search
+    "workua_absolute_ceiling": 30,      # Work.ua hard max
+}
+
+## 2. Modify hunt_tg_scraper.py
+
+Change line 33 from:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+To accept a parameter:
+    async scrape_telegram_channels(keywords, channels, depth_days=60) -> list[dict]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=depth_days)
+
+Also add `message_date` as a proper field in the returned dict (it's already there as ISO string — good, keep it).
+
+## 3. Modify hunt_workua_scraper.py
+
+The scraper currently doesn't filter by date. Work.ua search URL likely supports a period parameter. 
+
+Add to search_workua():
+    async search_workua(vacancy: dict, depth_days: int = 60) -> list
+
+Inside scrape_workua_candidates, add date filtering:
+- Parse the `last_active` field that's already being scraped
+- Filter out candidates whose last_active is older than depth_days
+- If last_active can't be parsed, KEEP the candidate (don't discard on parse failure)
+- Add `last_active_parsed` (datetime or None) to returned dict
+
+Also try adding `?period=60` or `?time=60` to the Work.ua search URL — investigate which URL param Work.ua uses for date filtering. Check the Work.ua search page to see if there's a date filter in the URL.
+
+## 4. Modify hunt_service.py — run_hunt() — Add fallback logic
+
+Current flow:
+1. Scrape (30 days) → Score → Filter quality → Show or "no results"
+
+New flow:
+1. Scrape (60 days) → Score → Filter quality
+2. IF quality_candidates is empty:
+   a. Send message: "🔄 Розширюю пошук до 6 місяців..."
+   b. Scrape again with depth_days=180
+   c. Score new candidates (skip already-scored ones by profile_url/phone dedup)
+   d. For fallback candidates, add marker: candidate["is_fallback"] = True
+   e. Filter quality again
+   f. If still empty → "😔 Якісних кандидатів не знайдено..."
+3. When showing cards, if candidate["is_fallback"]:
+   - Add line to card: "⏳ CV від {message_date}" (showing the age)
+
+## 5. Modify hunt_candidates DB table
+
+Add column via new migration (next number after 023):
+    ALTER TABLE hunt_candidates ADD COLUMN candidate_date TIMESTAMP;
+    ALTER TABLE hunt_candidates ADD COLUMN is_fallback BOOLEAN DEFAULT FALSE;
+
+candidate_date = when the CV was posted/last active (from source), NOT when we scraped it.
+
+## 6. Modify hunt_card_formatter.py
+
+If candidate has is_fallback=True and candidate_date is set:
+- Add to card text: "⏳ Дата CV: {formatted_date}"
+- This tells HR the CV is older than 60 days
+
+=== IMPORTANT ===
+- Import HUNT_CONFIG everywhere instead of hardcoded values
+- Keep backward compatibility — if depth_days param is missing, use config default
+- All existing tests should still pass
+- Do NOT change the scoring logic or Claude prompts
+- Do NOT change the Telegram bot handlers
+
+Please implement all changes above and show me the diff for each file.

@@ -2,6 +2,7 @@ import logging
 import time
 import random
 import re
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from urllib.parse import quote
 
@@ -53,6 +54,46 @@ CITY_SLUGS = {
     "житомир": "zhytomyr",
 }
 
+# Regex patterns for parsing Work.ua's Ukrainian date strings
+# e.g. "3 дні тому", "1 місяць тому", "2 роки тому", "Вчора", "Сьогодні"
+_RELATIVE_DATE_PATTERNS = [
+    (re.compile(r'(\d+)\s*хвилин', re.I),     lambda m: timedelta(minutes=int(m.group(1)))),
+    (re.compile(r'(\d+)\s*годин', re.I),       lambda m: timedelta(hours=int(m.group(1)))),
+    (re.compile(r'(\d+)\s*день|дн[іиь]', re.I), lambda m: timedelta(days=int(m.group(1)))),
+    (re.compile(r'(\d+)\s*тиж', re.I),         lambda m: timedelta(weeks=int(m.group(1)))),
+    (re.compile(r'(\d+)\s*місяц', re.I),        lambda m: timedelta(days=int(m.group(1)) * 30)),
+    (re.compile(r'(\d+)\s*рок|роки|років', re.I), lambda m: timedelta(days=int(m.group(1)) * 365)),
+    (re.compile(r'вчора', re.I),               lambda m: timedelta(days=1)),
+    (re.compile(r'сьогодні|сьогоднi', re.I),  lambda m: timedelta(days=0)),
+]
+
+def _parse_last_active(text: str) -> Optional[datetime]:
+    """
+    Parse Work.ua relative date strings into a datetime.
+    Returns None if parsing fails — callers must KEEP the candidate on None.
+    """
+    if not text:
+        return None
+    text = text.strip()
+
+    # Try explicit date formats first: "dd.mm.yyyy", "dd month yyyy"
+    for fmt in ("%d.%m.%Y", "%d %m %Y"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+
+    # Try relative patterns
+    for pattern, delta_fn in _RELATIVE_DATE_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            try:
+                return datetime.now() - delta_fn(m)
+            except Exception:
+                pass
+
+    return None
+
 
 def build_search_url(position: str, city: str, page: int = 1) -> str:
     city_lower = city.lower().strip() if city else ""
@@ -103,7 +144,10 @@ def parse_resume_card(card, session) -> Optional[Dict]:
 
         time_el = card.find(class_=re.compile(r'(date|time|ago)'))
         if time_el:
-            candidate["last_active"] = time_el.get_text(strip=True)
+            last_active_text = time_el.get_text(strip=True)
+            candidate["last_active"] = last_active_text
+            parsed_dt = _parse_last_active(last_active_text)
+            candidate["last_active_parsed"] = parsed_dt
 
         salary_match = re.search(
             r'(\d[\d\s,]+)\s*(грн|₴|\$|USD|usd)',
@@ -192,10 +236,17 @@ def scrape_workua_candidates(
     city: str,
     keywords: List[str],
     max_candidates: int = 20,
+    depth_days: int = None,
 ) -> List[Dict]:
     from services.salary_normalizer import extract_salary
+    from config.hunt_config import HUNT_CONFIG
 
-    max_candidates = min(max_candidates, 30)
+    if depth_days is None:
+        depth_days = HUNT_CONFIG["search_depth_days"]
+
+    max_candidates = min(max_candidates, HUNT_CONFIG["workua_absolute_ceiling"])
+
+    cutoff = datetime.now() - timedelta(days=depth_days)
 
     session = _get_public_session()
 
@@ -205,7 +256,7 @@ def scrape_workua_candidates(
         from bs4 import BeautifulSoup
 
         search_url = build_search_url(position, city)
-        logger.info(f"Work.ua search: {search_url}")
+        logger.info(f"Work.ua search: {search_url} (depth_days={depth_days})")
 
         _rate_limit()
         resp = session.get(search_url, timeout=15)
@@ -226,9 +277,19 @@ def scrape_workua_candidates(
 
         logger.info(f"Found {len(cards)} CV cards on page")
 
-        for card in cards[:max_candidates]:
+        for card in cards[:max_candidates * 2]:
             candidate = parse_resume_card(card, session)
             if not candidate:
+                continue
+
+            # Date filter: skip candidates older than depth_days
+            # If last_active_parsed is None (parse failure), KEEP the candidate
+            last_active_parsed = candidate.get("last_active_parsed")
+            if last_active_parsed is not None and last_active_parsed < cutoff:
+                logger.info(
+                    f"Skipping stale Work.ua candidate "
+                    f"(last_active={candidate.get('last_active')}, cutoff={depth_days}d)"
+                )
                 continue
 
             if candidate.get("profile_url"):
@@ -257,7 +318,7 @@ def scrape_workua_candidates(
             if len(candidates) >= max_candidates:
                 break
 
-        logger.info(f"Work.ua scrape complete: {len(candidates)} candidates")
+        logger.info(f"Work.ua scrape complete: {len(candidates)} candidates (depth_days={depth_days})")
 
     except Exception as e:
         logger.error(f"Work.ua scrape error: {e}")
@@ -267,8 +328,13 @@ def scrape_workua_candidates(
     return candidates
 
 
-async def search_workua(vacancy: dict) -> list:
+async def search_workua(vacancy: dict, depth_days: int = None) -> list:
     import asyncio
+    from config.hunt_config import HUNT_CONFIG
+
+    if depth_days is None:
+        depth_days = HUNT_CONFIG["search_depth_days"]
+
     position = vacancy.get("position", "")
     city = vacancy.get("city", "")
     keywords = vacancy.get("keywords", [])
@@ -277,10 +343,13 @@ async def search_workua(vacancy: dict) -> list:
         logger.info("Work.ua: no position specified, skipping")
         return []
 
+    max_cands = HUNT_CONFIG["workua_max_candidates"]
+
     try:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, scrape_workua_candidates, position, city, keywords, 15
+            None,
+            lambda: scrape_workua_candidates(position, city, keywords, max_cands, depth_days),
         )
     except Exception as e:
         logger.error(f"Work.ua search_workua wrapper error: {e}")

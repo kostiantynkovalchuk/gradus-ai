@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -6,6 +7,11 @@ SOURCE_EMOJI = {
     "telegram": "📱",
     "work.ua": "💼",
     "robota.ua": "🔍",
+}
+
+FALLBACK_ROUND_LABELS = {
+    180: "📋 Знайдено в архіві за 6 місяців",
+    365: "📋 Знайдено в архіві за 1 рік",
 }
 
 
@@ -38,6 +44,25 @@ def _format_salary(candidate: dict) -> str:
         return f"${amount:,} (~{uah_calc:,} грн)"
 
 
+def _format_candidate_date(candidate: dict) -> str:
+    """
+    Return a formatted date string for the candidate's CV/post date.
+    Tries candidate_date first (DB field), then message_date (TG), then last_active_parsed.
+    """
+    for field in ("candidate_date", "message_date", "last_active_parsed"):
+        val = candidate.get(field)
+        if not val:
+            continue
+        if isinstance(val, str):
+            try:
+                val = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            except Exception:
+                continue
+        if isinstance(val, datetime):
+            return val.strftime("%d.%m.%Y")
+    return ""
+
+
 def format_candidate_card(candidate: dict, index: int) -> str:
     try:
         score = candidate.get("score", 0)
@@ -53,6 +78,9 @@ def format_candidate_card(candidate: dict, index: int) -> str:
         contact = candidate.get("contact")
         profile_url = candidate.get("profile_url")
         summary = candidate.get("summary", "")
+
+        is_fallback = candidate.get("is_fallback", False)
+        fallback_round = candidate.get("fallback_round")  # 180 or 365
 
         name_line = full_name
         if age:
@@ -80,6 +108,19 @@ def format_candidate_card(candidate: dict, index: int) -> str:
         if summary:
             lines.append("")
             lines.append(summary)
+
+        # Fallback archive label
+        if is_fallback:
+            cv_date = _format_candidate_date(candidate)
+            date_suffix = f" від {cv_date}" if cv_date else ""
+            if fallback_round == 365:
+                lines.append(f"\n⏳ CV{date_suffix} (архів)")
+            else:
+                lines.append(f"\n⏳ CV{date_suffix}")
+
+            round_label = FALLBACK_ROUND_LABELS.get(fallback_round)
+            if round_label:
+                lines.append(round_label)
 
         return "\n".join(lines)
 

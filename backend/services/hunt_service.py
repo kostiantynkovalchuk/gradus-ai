@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import httpx
+from datetime import datetime as dt
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,109 @@ async def _fetch_and_save_salary_analytics(position: str, vacancy_id: int) -> No
         logger.error(f"Salary analytics background task failed: {e}")
 
 
+def _candidate_key(c: dict) -> str:
+    """Deduplication key: prefer profile_url, fall back to phone."""
+    return c.get("profile_url") or c.get("phone") or c.get("username") or ""
+
+
+async def _scrape_round(
+    parsed: dict,
+    channels: list,
+    depth_days: int,
+    seen_keys: set,
+) -> list:
+    """
+    Run one round of TG + Work.ua scraping with the given depth_days.
+    Returns only candidates NOT already in seen_keys.
+    Adds new keys to seen_keys in-place.
+    """
+    from services.hunt_tg_scraper import scrape_telegram_channels as search_tg_channels
+    from services.hunt_workua_scraper import search_workua
+
+    keywords = parsed.get("keywords", [])
+    if not keywords and parsed.get("position"):
+        keywords = parsed["position"].split()[:5]
+
+    results = await asyncio.gather(
+        search_tg_channels(keywords, channels, depth_days=depth_days),
+        search_workua(parsed, depth_days=depth_days),
+        return_exceptions=True,
+    )
+
+    raw = []
+    for r in results:
+        if isinstance(r, Exception):
+            logger.error(f"Scraper error: {r}")
+            continue
+        if isinstance(r, list):
+            for c in r:
+                if "phone" in c or "username" in c:
+                    contact_parts = []
+                    if c.get("phone"):
+                        contact_parts.append(c["phone"])
+                    if c.get("username"):
+                        contact_parts.append(c["username"])
+                    c.setdefault("contact", " / ".join(contact_parts))
+                if c.get("message_link") and not c.get("profile_url"):
+                    c["profile_url"] = c["message_link"]
+                src = c.get("source", "")
+                if src.startswith("telegram:"):
+                    c["source"] = "telegram"
+                raw.append(c)
+
+    # Dedup against already-seen candidates
+    new_candidates = []
+    for c in raw:
+        key = _candidate_key(c)
+        if key and key in seen_keys:
+            continue
+        if key:
+            seen_keys.add(key)
+        new_candidates.append(c)
+
+    return new_candidates
+
+
+async def _score_candidates(candidates: list, parsed: dict, vacancy_city: str) -> list:
+    """Score a list of candidates and apply city-mismatch cap."""
+    from services.hunt_scorer import score_candidate
+    from config.hunt_config import HUNT_CONFIG
+
+    to_score = candidates[:HUNT_CONFIG["max_candidates_to_score"]]
+    scored_raw = await asyncio.gather(
+        *[score_candidate(c, parsed) for c in to_score],
+        return_exceptions=True,
+    )
+
+    scored = []
+    for i, s in enumerate(scored_raw):
+        if isinstance(s, Exception):
+            logger.error(f"Scoring error: {s}")
+            continue
+        s["raw_text"] = to_score[i].get("raw_text", "")
+        # Carry forward date/fallback metadata from the raw candidate
+        for field in ("message_date", "last_active_parsed", "candidate_date"):
+            if field in to_score[i]:
+                s.setdefault(field, to_score[i][field])
+        scored.append(s)
+
+    for sc in scored:
+        if not _cities_match(vacancy_city, sc.get("city", "")):
+            cap = HUNT_CONFIG["city_mismatch_cap"]
+            old_score = sc.get("score", 0)
+            sc["score"] = min(old_score, cap)
+            logger.info(
+                f"City mismatch: capped score to {cap} "
+                f"({sc.get('city')} vs {vacancy_city})"
+            )
+
+    scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return scored
+
+
 async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: int):
+    from config.hunt_config import HUNT_CONFIG
+
     import models
     if models.SessionLocal is None:
         models.init_db()
@@ -146,9 +249,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
     try:
         from models.hunt_models import HuntVacancy, HuntCandidate, HuntSource
         from services.hunt_vacancy_parser import parse_vacancy
-        from services.hunt_tg_scraper import scrape_telegram_channels as search_tg_channels
-        from services.hunt_workua_scraper import search_workua
-        from services.hunt_scorer import score_candidate, extract_salary_data
+        from services.hunt_scorer import extract_salary_data
         from services.hunt_card_formatter import format_candidate_card
 
         logger.info(f"🔍 Hunt started for vacancy #{vacancy_id}")
@@ -178,6 +279,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         )
         status_msg_id = status_resp.get("result", {}).get("message_id")
 
+        # Load active TG channels from DB
         import psycopg2
         try:
             conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL"))
@@ -204,82 +306,99 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         else:
             logger.info(f"Channels from DB (scan): {channels}")
 
-        keywords = parsed.get("keywords", [])
-        if not keywords and parsed.get("position"):
-            keywords = parsed["position"].split()[:5]
+        vacancy_city = parsed.get("city", "")
+        seen_keys: set = set()
 
-        results = await asyncio.gather(
-            search_tg_channels(keywords, channels),
-            search_workua(parsed),
-            return_exceptions=True,
-        )
+        # ── ROUND 1: 60 days ──────────────────────────────────────
+        depth1 = HUNT_CONFIG["search_depth_days"]
+        logger.info(f"Hunt #{vacancy_id} Round 1: depth={depth1}d")
+        round1_raw = await _scrape_round(parsed, channels, depth1, seen_keys)
 
-        all_candidates = []
-        for r in results:
-            if isinstance(r, Exception):
-                logger.error(f"Scraper error: {r}")
-                continue
-            if isinstance(r, list):
-                for c in r:
-                    if "phone" in c or "username" in c:
-                        contact_parts = []
-                        if c.get("phone"):
-                            contact_parts.append(c["phone"])
-                        if c.get("username"):
-                            contact_parts.append(c["username"])
-                        c.setdefault("contact", " / ".join(contact_parts))
-                    if c.get("message_link") and not c.get("profile_url"):
-                        c["profile_url"] = c["message_link"]
-                    src = c.get("source", "")
-                    if src.startswith("telegram:"):
-                        c["source"] = "telegram"
-                    all_candidates.append(c)
-
-        if not all_candidates:
-            msg = "⚠️ Кандидатів не знайдено.\n💡 Спробуйте переформулювати вакансію або розширити вимоги."
+        if not round1_raw:
             if status_msg_id:
-                await _edit_message(chat_id, status_msg_id, msg)
-            else:
-                await _send_message(chat_id, msg, thread_id=thread_id)
+                await _edit_message(
+                    chat_id, status_msg_id,
+                    "⚠️ Кандидатів не знайдено.\n💡 Спробуйте переформулювати вакансію або розширити вимоги.",
+                )
             if vacancy:
                 vacancy.status = 'no_results'
                 db.commit()
-            logger.info(f"Hunt #{vacancy_id}: no candidates found")
             return
 
-        to_score = all_candidates[:10]
-        scored = await asyncio.gather(
-            *[score_candidate(c, parsed) for c in to_score],
-            return_exceptions=True,
-        )
+        scored1 = await _score_candidates(round1_raw, parsed, vacancy_city)
+        quality1 = [sc for sc in scored1 if sc.get("score", 0) >= HUNT_CONFIG["quality_threshold"]]
+        logger.info(f"Hunt #{vacancy_id} Round 1: {len(scored1)} scored, {len(quality1)} quality")
 
-        scored_candidates = []
-        for i, s in enumerate(scored):
-            if isinstance(s, Exception):
-                logger.error(f"Scoring error: {s}")
-                continue
-            s["raw_text"] = to_score[i].get("raw_text", "")
-            scored_candidates.append(s)
+        all_scored = list(scored1)
 
-        vacancy_city = parsed.get("city", "")
-        for sc in scored_candidates:
-            if not _cities_match(vacancy_city, sc.get("city", "")):
-                old_score = sc.get("score", 0)
-                sc["score"] = min(old_score, 20)
-                logger.info(
-                    f"City mismatch: capped score to 20 "
-                    f"({sc.get('city')} vs {vacancy_city})"
+        # ── ROUND 2: 180 days (fallback) ──────────────────────────
+        if not quality1:
+            depth2 = HUNT_CONFIG["fallback_depth_days"]
+            logger.info(f"Hunt #{vacancy_id} Round 2: depth={depth2}d (no quality from R1)")
+            if status_msg_id:
+                await _edit_message(
+                    chat_id, status_msg_id,
+                    "🔄 Розширюю пошук до 6 місяців...",
                 )
+            else:
+                await _send_message(chat_id, "🔄 Розширюю пошук до 6 місяців...", thread_id=thread_id)
 
-        scored_candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+            round2_raw = await _scrape_round(parsed, channels, depth2, seen_keys)
+            if round2_raw:
+                scored2 = await _score_candidates(round2_raw, parsed, vacancy_city)
+                for sc in scored2:
+                    sc["is_fallback"] = True
+                    sc["fallback_round"] = 180
+                quality1 = [sc for sc in scored2 if sc.get("score", 0) >= HUNT_CONFIG["quality_threshold"]]
+                all_scored.extend(scored2)
+                logger.info(f"Hunt #{vacancy_id} Round 2: {len(scored2)} scored, {len(quality1)} quality")
 
-        for sc in scored_candidates:
+        # ── ROUND 3: 365 days (deep fallback) ─────────────────────
+        if not quality1:
+            depth3 = HUNT_CONFIG["fallback_deep_depth_days"]
+            logger.info(f"Hunt #{vacancy_id} Round 3: depth={depth3}d (no quality from R1+R2)")
+            if status_msg_id:
+                await _edit_message(
+                    chat_id, status_msg_id,
+                    "🔄 Розширюю пошук до 1 року...",
+                )
+            else:
+                await _send_message(chat_id, "🔄 Розширюю пошук до 1 року...", thread_id=thread_id)
+
+            round3_raw = await _scrape_round(parsed, channels, depth3, seen_keys)
+            if round3_raw:
+                scored3 = await _score_candidates(round3_raw, parsed, vacancy_city)
+                for sc in scored3:
+                    sc["is_fallback"] = True
+                    sc["fallback_round"] = 365
+                quality1 = [sc for sc in scored3 if sc.get("score", 0) >= HUNT_CONFIG["quality_threshold"]]
+                all_scored.extend(scored3)
+                logger.info(f"Hunt #{vacancy_id} Round 3: {len(scored3)} scored, {len(quality1)} quality")
+
+        # ── Save ALL scored candidates to DB ───────────────────────
+        for sc in all_scored:
+            # Resolve candidate_date from available date fields
+            candidate_date = None
+            for field in ("candidate_date", "message_date", "last_active_parsed"):
+                val = sc.get(field)
+                if not val:
+                    continue
+                if isinstance(val, str):
+                    try:
+                        from datetime import datetime as _dt
+                        candidate_date = _dt.fromisoformat(val.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except Exception:
+                        pass
+                elif hasattr(val, "year"):
+                    candidate_date = val
+                if candidate_date:
+                    break
+
             try:
                 await extract_salary_data(sc, parsed, vacancy_id)
             except Exception as sal_err:
                 logger.warning(f"Salary extraction skipped: {sal_err}")
 
-        for sc in scored_candidates:
             candidate = HuntCandidate(
                 vacancy_id=vacancy_id,
                 source=sc.get("source", "unknown"),
@@ -296,30 +415,46 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
                 ai_score=sc.get("score", 0),
                 ai_summary=sc.get("summary", ""),
                 hr_decision='pending',
+                candidate_date=candidate_date,
+                is_fallback=sc.get("is_fallback", False),
+                fallback_round=sc.get("fallback_round"),
             )
             db.add(candidate)
             db.flush()
             sc["db_id"] = candidate.id
         db.commit()
 
-        quality = [sc for sc in scored_candidates if sc.get("score", 0) >= 35]
-        total = len(scored_candidates)
+        quality = quality1
+        total = len(all_scored)
 
         if not quality:
+            msg = "😔 Якісних кандидатів не знайдено.\nСпробуйте переформулювати вакансію або розширити вимоги."
             if status_msg_id:
-                await _edit_message(
-                    chat_id, status_msg_id,
-                    f"😔 Якісних кандидатів не знайдено.\nСпробуйте переформулювати вакансію або розширити вимоги.",
-                )
+                await _edit_message(chat_id, status_msg_id, msg)
+            else:
+                await _send_message(chat_id, msg, thread_id=thread_id)
+            if vacancy:
+                vacancy.status = 'no_results'
+                db.commit()
             return
 
-        top = quality[:5]
+        top = quality[:HUNT_CONFIG["max_cards_shown"]]
 
+        # Determine which round produced the results for the status message
+        round_label = ""
+        if top and top[0].get("is_fallback"):
+            fr = top[0].get("fallback_round")
+            if fr == 365:
+                round_label = "\n📋 Знайдено в архіві за 1 рік"
+            elif fr == 180:
+                round_label = "\n📋 Знайдено в архіві за 6 місяців"
+
+        status_text = (
+            f"✅ Знайдено {len(quality)} якісних кандидатів з {total}. "
+            f"Показую топ {len(top)}:{round_label}"
+        )
         if status_msg_id:
-            await _edit_message(
-                chat_id, status_msg_id,
-                f"✅ Знайдено {len(quality)} якісних кандидатів з {total}. Показую топ {min(5, len(quality))}:",
-            )
+            await _edit_message(chat_id, status_msg_id, status_text)
 
         for idx, sc in enumerate(top, 1):
             card_text = format_candidate_card(sc, idx)
@@ -412,14 +547,12 @@ async def handle_hunt_action(callback_query: dict):
             vacancy.status = 'searching'
             db.commit()
             await _edit_message(chat_id, message_id, f"🔍 Шукаю кандидатів для вакансії #{vacancy_id}...")
-            import asyncio
             asyncio.create_task(run_hunt(vacancy_id, vacancy_text, thread_id, chat_id))
 
         elif action == "post":
             vacancy.status = 'posting'
             db.commit()
             await _edit_message(chat_id, message_id, f"📢 Розміщую вакансію #{vacancy_id} в каналах...")
-            import asyncio
             from services.hunt_poster import run_vacancy_posting
             asyncio.create_task(run_vacancy_posting(vacancy_id, chat_id, thread_id))
 
@@ -427,7 +560,6 @@ async def handle_hunt_action(callback_query: dict):
             vacancy.status = 'searching'
             db.commit()
             await _edit_message(chat_id, message_id, f"🔍+📢 Шукаю кандидатів і розміщую вакансію #{vacancy_id}...")
-            import asyncio
             from services.hunt_poster import run_vacancy_posting
             asyncio.create_task(run_hunt(vacancy_id, vacancy_text, thread_id, chat_id))
             asyncio.create_task(run_vacancy_posting(vacancy_id, chat_id, thread_id))
@@ -465,7 +597,7 @@ async def handle_hunt_decision(callback_query: dict, db):
         await _answer_callback(callback_id, "Невірний ID")
         return
 
-    from models.hunt_models import HuntCandidate
+    from models.hunt_models import HuntCandidate, HuntVacancy
 
     decision_map = {
         "approve": ("approved", "✅ Взято в роботу"),
@@ -487,7 +619,6 @@ async def handle_hunt_decision(callback_query: dict, db):
             return
         candidate.hr_decision = status
         if decision == "hire":
-            from datetime import datetime as dt
             candidate.hired_at = dt.now()
             vacancy = db.query(HuntVacancy).filter(HuntVacancy.id == candidate.vacancy_id).first()
             if vacancy and vacancy.status != "filled":
