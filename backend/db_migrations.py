@@ -620,6 +620,25 @@ MIGRATIONS = [
             )""",
         ]
     },
+    {
+        "version": "023_photo_report_storage",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS report_photos (
+                id SERIAL PRIMARY KEY,
+                report_id INTEGER REFERENCES photo_reports(id) ON DELETE CASCADE,
+                photo_order INTEGER NOT NULL,
+                photo_data BYTEA NOT NULL,
+                size_bytes INTEGER,
+                uploaded_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_report_photos_report_id
+               ON report_photos(report_id)""",
+            """ALTER TABLE photo_reports
+               ADD COLUMN IF NOT EXISTS vision_raw_json JSONB""",
+            """ALTER TABLE photo_reports
+               ADD COLUMN IF NOT EXISTS scoring_version VARCHAR(10) DEFAULT 'v2'""",
+        ]
+    },
 ]
 
 

@@ -9,8 +9,9 @@ from telegram.ext import (
     ConversationHandler, filters, ContextTypes
 )
 from .vision import analyze_photos
+from .scoring import calculate_score
 from .formatter import format_report_for_telegram
-from .db import get_or_create_agent, save_report, get_agent_stats
+from .db import get_or_create_agent, save_report, save_report_photos, get_agent_stats
 from .keyboards import MAIN_MENU, PHOTO_ACTIONS
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ async def receive_point_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pending_reports[user_id] = {
         "point_name": point_name,
         "photos_b64": [],
+        "photos_bytes": [],
         "photo_file_ids": [],
         "comment": ""
     }
@@ -89,12 +91,14 @@ async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
 
-    photo_bytes = io.BytesIO()
-    await file.download_to_memory(photo_bytes)
-    photo_bytes.seek(0)
-    b64 = base64.b64encode(photo_bytes.read()).decode("utf-8")
+    buf = io.BytesIO()
+    await file.download_to_memory(buf)
+    raw_bytes = buf.getvalue()
+
+    b64 = base64.b64encode(raw_bytes).decode("utf-8")
 
     report_data["photos_b64"].append(b64)
+    report_data["photos_bytes"].append(raw_bytes)
     report_data["photo_file_ids"].append(photo.file_id)
 
     count = len(report_data["photos_b64"])
@@ -123,32 +127,44 @@ async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text and text not in ["✅ Готово", "Готово"]:
         report_data["comment"] = text
 
+    photo_count = len(report_data["photos_b64"])
     await update.message.reply_text(
-        f"⏳ Аналізую {len(report_data['photos_b64'])} фото...\n_Це займе ~15 секунд_",
+        f"⏳ Аналізую {photo_count} фото...\n_Це займе ~20 секунд_",
         parse_mode="Markdown"
     )
 
     try:
         loop = asyncio.get_event_loop()
-        ai_report = await loop.run_in_executor(
+
+        vision_raw = await loop.run_in_executor(
             None,
             analyze_photos,
             report_data["photos_b64"],
             report_data["comment"]
         )
 
+        scored_report = calculate_score(vision_raw)
+
         report_id = await loop.run_in_executor(
             None,
             save_report,
             user_id,
             report_data["point_name"],
-            ai_report,
+            scored_report,
+            vision_raw,
             report_data["photo_file_ids"],
             report_data["comment"]
         )
 
+        await loop.run_in_executor(
+            None,
+            save_report_photos,
+            report_id,
+            report_data["photos_bytes"]
+        )
+
         tg_message = format_report_for_telegram(
-            ai_report,
+            scored_report,
             user.full_name,
             report_data["point_name"]
         )
