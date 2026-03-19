@@ -291,6 +291,10 @@ async def _ensure_city_cache(token: str) -> None:
         .get("cvdbRegions", {})
         .get("cities", [])
     )
+    if not cities:
+        # API returned empty or errored — do not mark as loaded so next call retries
+        logger.warning("Robota.ua: cvdbRegions returned no cities; will retry next call")
+        return
     for city in cities:
         name_lower = city["name"].lower()
         _city_cache[name_lower] = str(city["id"])
