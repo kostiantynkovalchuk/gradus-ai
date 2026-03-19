@@ -11,8 +11,9 @@ cd backend && python3 -c "
 import sys
 sys.path.insert(0, '.')
 from db_migrations import run_migrations
+from models import SessionLocal
 run_migrations()
-print('Migrations OK')
+print('Migrations OK — all migrations already applied or newly applied')
 "
 cd ..
 
