@@ -1,6 +1,7 @@
 """Preset Answer Service - Database-backed instant responses for common questions"""
 
 import logging
+import re
 from typing import Optional, Dict, List
 from fuzzywuzzy import fuzz
 from datetime import datetime
@@ -38,6 +39,14 @@ class PresetService:
             ("craft", "spirits"): "Топ-5 українських craft spirits?",
             ("крафт", "спіритс"): "Топ-5 українських craft spirits?",
             ("українськ", "горілк"): "Топ-5 українських craft spirits?",
+            ("бренди", "avtd"): "бренди avtd",
+            ("бренди", "компанії"): "бренди компанії",
+            ("портфель", "avtd"): "портфель avtd",
+            ("портфель", "компанії"): "портфель компанії",
+            ("торгові", "марки"): "торгові марки",
+            ("які", "бренди"): "які бренди",
+            ("що", "виробляє"): "що виробляє",
+            ("асортимент", "avtd"): "асортимент avtd",
         }
         self.load_presets()
 
@@ -94,6 +103,18 @@ class PresetService:
                 return None
 
         question_normalized = question.strip().lower()
+
+        # Step 0: regex match (pipe-separated patterns stored in question_pattern)
+        for preset in self.presets:
+            pattern = preset.get('question', '')
+            try:
+                if re.search(pattern, question_normalized):
+                    self._track_usage(pattern[:50])
+                    self._update_usage_in_db(preset['id'])
+                    logger.info(f"[PRESET] Regex match: {pattern[:50]}...")
+                    return preset.get('answer')
+            except re.error:
+                pass
 
         for preset in self.presets:
             preset_q = preset.get('question', '')
