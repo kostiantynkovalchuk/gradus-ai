@@ -75,6 +75,58 @@ async def receive_point_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return WAITING_PHOTOS
 
 
+async def photo_before_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Photo arrives while bot was still waiting for the store name — use placeholder."""
+    user_id = update.effective_user.id
+
+    pending_reports[user_id] = {
+        "point_name": "Без назви",
+        "photos_b64": [],
+        "photos_bytes": [],
+        "photo_file_ids": [],
+        "comment": ""
+    }
+
+    return await _accept_photo(update, context, pending_reports[user_id])
+
+
+async def _accept_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, report_data: dict) -> int:
+    """Shared logic: download a photo and append to report_data. Returns next state."""
+    if len(report_data["photos_b64"]) >= 5:
+        await update.message.reply_text(
+            "⚠️ Максимум 5 фото. Натисни *Готово* для аналізу.",
+            parse_mode="Markdown",
+            reply_markup=PHOTO_ACTIONS
+        )
+        return WAITING_PHOTOS
+
+    msg = update.message
+    if msg.photo:
+        tg_file = await context.bot.get_file(msg.photo[-1].file_id)
+        file_id = msg.photo[-1].file_id
+    elif msg.document:
+        tg_file = await context.bot.get_file(msg.document.file_id)
+        file_id = msg.document.file_id
+    else:
+        return WAITING_PHOTOS
+
+    buf = io.BytesIO()
+    await tg_file.download_to_memory(buf)
+    raw_bytes = buf.getvalue()
+
+    report_data["photos_b64"].append(base64.b64encode(raw_bytes).decode("utf-8"))
+    report_data["photos_bytes"].append(raw_bytes)
+    report_data["photo_file_ids"].append(file_id)
+
+    count = len(report_data["photos_b64"])
+    more_msg = "Надішли ще або натисни Готово." if count < 5 else "Натисни Готово для аналізу."
+    await update.message.reply_text(
+        f"📸 Фото {count}/5 отримано. {more_msg}",
+        reply_markup=PHOTO_ACTIONS
+    )
+    return WAITING_PHOTOS
+
+
 async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -82,31 +134,18 @@ async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Спочатку почни новий звіт: /start")
         return WAITING_PHOTOS
 
-    report_data = pending_reports[user_id]
+    return await _accept_photo(update, context, pending_reports[user_id])
 
-    if len(report_data["photos_b64"]) >= 5:
-        await update.message.reply_text("⚠️ Максимум 5 фото. Натисни *Готово*.", parse_mode="Markdown")
+
+async def receive_document_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photos sent as file attachments (not compressed)."""
+    user_id = update.effective_user.id
+
+    if user_id not in pending_reports:
+        await update.message.reply_text("Спочатку почни новий звіт: /start")
         return WAITING_PHOTOS
 
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-
-    buf = io.BytesIO()
-    await file.download_to_memory(buf)
-    raw_bytes = buf.getvalue()
-
-    b64 = base64.b64encode(raw_bytes).decode("utf-8")
-
-    report_data["photos_b64"].append(b64)
-    report_data["photos_bytes"].append(raw_bytes)
-    report_data["photo_file_ids"].append(photo.file_id)
-
-    count = len(report_data["photos_b64"])
-    await update.message.reply_text(
-        f"📸 Фото {count}/5 отримано. "
-        f"{'Надішли ще або натисни Готово.' if count < 5 else 'Натисни Готово.'}"
-    )
-    return WAITING_PHOTOS
+    return await _accept_photo(update, context, pending_reports[user_id])
 
 
 async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,10 +269,13 @@ def create_photo_report_app() -> Application:
         ],
         states={
             WAITING_POINT_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_point_name)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_point_name),
+                MessageHandler(filters.PHOTO, photo_before_name),
+                MessageHandler(filters.Document.IMAGE, photo_before_name),
             ],
             WAITING_PHOTOS: [
                 MessageHandler(filters.PHOTO, receive_photo),
+                MessageHandler(filters.Document.IMAGE, receive_document_photo),
                 MessageHandler(filters.Regex("^(✅ Готово|Готово)$"), process_report),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_report),
             ],
