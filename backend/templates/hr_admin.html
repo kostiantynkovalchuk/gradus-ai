@@ -958,11 +958,21 @@
     <div class="container">
         <div class="hunt-updated" id="huntUpdatedAt"></div>
 
+        <div class="hunt-filter-bar" style="display:flex;align-items:center;gap:var(--space-md);margin-bottom:var(--space-lg);flex-wrap:wrap;">
+            <label style="font-weight:600;color:var(--gray-700);font-size:0.875rem;">🔎 Посада:</label>
+            <select id="roleFilter" onchange="onRoleChange()" style="padding:6px 14px;border:1px solid var(--gray-300);border-radius:var(--radius-md);background:white;font-size:0.875rem;color:var(--gray-700);cursor:pointer;min-width:200px;">
+                <option value="">Всі посади</option>
+            </select>
+            <button class="btn btn-primary" onclick="downloadReport()" style="margin-left:auto;">
+                📥 Завантажити звіт (XLSX)
+            </button>
+        </div>
+
         <div class="roi-banner" id="roiBanner">
-            <div class="roi-grid">
+            <div class="roi-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-lg);">
                 <div class="roi-item">
-                    <div class="roi-value" id="roiSaved">$0</div>
-                    <div class="roi-label">💰 Зекономлено</div>
+                    <div class="roi-value" id="roiSavedUah">0 грн</div>
+                    <div class="roi-label">💰 Зекономлено (UAH)</div>
                 </div>
                 <div class="roi-item">
                     <div class="roi-value" id="roiHours">0 год</div>
@@ -973,11 +983,28 @@
                     <div class="roi-label">🎯 Найнято</div>
                 </div>
                 <div class="roi-item">
-                    <div class="roi-value" id="roiCostPerHire">$0</div>
-                    <div class="roi-label">📉 Вартість найму<br><small style="opacity:0.7">(vs $400 традиційно)</small></div>
+                    <div class="roi-value" id="roiCostMaya">0 грн</div>
+                    <div class="roi-label">📉 Вартість найму Maya</div>
+                </div>
+                <div class="roi-item">
+                    <div class="roi-value" id="roiCostTraditional">0 грн</div>
+                    <div class="roi-label">📊 Вартість традиційно</div>
+                </div>
+                <div class="roi-item">
+                    <div class="roi-value" id="roiVacancies">0</div>
+                    <div class="roi-label">📋 Вакансій оброблено</div>
                 </div>
             </div>
+            <details style="margin-top:var(--space-lg);">
+                <summary style="cursor:pointer;opacity:0.8;font-size:0.8rem;user-select:none;">ℹ️ Методологія розрахунку ROI</summary>
+                <div id="roiMethodology" style="margin-top:8px;font-size:0.78rem;opacity:0.75;line-height:1.6;"></div>
+            </details>
         </div>
+
+        <details open style="margin-bottom:var(--space-xl);">
+            <summary style="cursor:pointer;font-size:1rem;font-weight:700;color:var(--gray-800);padding:var(--space-md) 0;user-select:none;">📋 Детальний звіт по вакансіях</summary>
+            <div id="reportTable" style="margin-top:var(--space-md);overflow-x:auto;"></div>
+        </details>
 
         <div class="kpi-grid" id="kpiGrid">
             <div class="hunt-stat-card">
@@ -1301,7 +1328,9 @@
         let trendsChartInstance = null;
         let huntCurrency = 'USD';
         let huntDataCache = null;
+        let huntReportCache = null;
         let huntRefreshTimer = null;
+        let huntRole = '';
 
         function switchPage(page, evt) {
             currentPage = page;
@@ -1312,6 +1341,7 @@
             else document.querySelector(`.nav-tab[onclick*="${page}"]`).classList.add('active');
             if (huntRefreshTimer) { clearInterval(huntRefreshTimer); huntRefreshTimer = null; }
             if (page === 'hunt') {
+                loadRoleFilter();
                 loadHuntAnalytics();
                 huntRefreshTimer = setInterval(loadHuntAnalytics, 60000);
             }
@@ -1580,15 +1610,51 @@
                 renderTrendsChart(huntDataCache.salary_trends);
                 renderMarketIntelligence(huntDataCache.market_intelligence || []);
             }
+            if (huntReportCache) {
+                renderReportTable(huntReportCache);
+            }
         }
 
         function fmt(n) {
             return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
         }
 
+        async function loadRoleFilter() {
+            try {
+                const resp = await fetch('/hr/api/hunt-roles');
+                const data = await resp.json();
+                const sel = document.getElementById('roleFilter');
+                const prevRole = huntRole;
+                sel.innerHTML = '<option value="">Всі посади</option>';
+                (data.roles || []).forEach(r => {
+                    const opt = document.createElement('option');
+                    opt.value = r;
+                    opt.textContent = r;
+                    sel.appendChild(opt);
+                });
+                if (prevRole) sel.value = prevRole;
+            } catch(e) {
+                console.error('Error loading roles:', e);
+            }
+        }
+
+        function onRoleChange() {
+            huntRole = document.getElementById('roleFilter').value;
+            loadHuntAnalytics();
+        }
+
+        function downloadReport() {
+            const role = document.getElementById('roleFilter').value;
+            let url = '/hr/api/hunt-report?format=xlsx';
+            if (role) url += '&role=' + encodeURIComponent(role);
+            window.location.href = url;
+        }
+
         async function loadHuntAnalytics() {
             try {
-                const response = await fetch('/hr/api/hunt-analytics');
+                let url = '/hr/api/hunt-analytics';
+                if (huntRole) url += '?role=' + encodeURIComponent(huntRole);
+                const response = await fetch(url);
                 const data = await response.json();
                 huntDataCache = data;
 
@@ -1600,10 +1666,24 @@
                 document.getElementById('huntChannels').textContent = kpi.total_channels_posted;
                 document.getElementById('huntReach').textContent = fmt(kpi.estimated_reach);
 
-                document.getElementById('roiSaved').textContent = '$' + kpi.cost_saved_usd.toLocaleString();
-                document.getElementById('roiHours').textContent = kpi.hours_saved + ' год';
+                const roi = kpi.roi || {};
+                document.getElementById('roiSavedUah').textContent = (roi.total_savings_uah || 0).toLocaleString() + ' грн';
+                document.getElementById('roiHours').textContent = (roi.hours_saved || kpi.hours_saved || 0) + ' год';
                 document.getElementById('roiHired').textContent = kpi.total_hires + ' осіб';
-                document.getElementById('roiCostPerHire').textContent = '$' + kpi.cost_per_hire_maya;
+                document.getElementById('roiCostMaya').textContent = (roi.cost_per_hire_maya_uah || 0).toLocaleString() + ' грн';
+                document.getElementById('roiCostTraditional').textContent = (roi.cost_per_hire_traditional_uah || 0).toLocaleString() + ' грн';
+                document.getElementById('roiVacancies').textContent = roi.total_vacancies_processed || roi.vacancies_processed || kpi.total_vacancies;
+                if (roi.methodology) {
+                    const m = roi.methodology;
+                    const hrRate = m.hr_hourly_rate || (m.traditional && m.traditional.hr_hourly_rate_uah) || '—';
+                    const hours = m.hours_per_vacancy_traditional || (m.traditional && m.traditional.hours_per_vacancy) || '—';
+                    const portal = m.portal_cost || (m.traditional && m.traditional.portal_cost_uah) || '—';
+                    const tradCost = m.cost_per_vacancy_traditional_uah || (m.traditional && m.traditional.cost_per_vacancy_uah) || '—';
+                    const apiCost = m.api_cost_per_search || (m.maya && m.maya.api_cost_per_search_uah) || '—';
+                    const mayaMin = m.maya_time_minutes || (m.maya && m.maya.time_per_vacancy_minutes) || '—';
+                    const note = `Традиційний пошук: ${hrRate} грн/год × ${hours} год + ${portal} грн портал = ${tradCost} грн/вакансію. Maya: тільки API ${apiCost} грн (${mayaMin} хв/вакансія). Курс НБУ: 1 USD = ${m.usd_rate || '—'} грн.`;
+                    document.getElementById('roiMethodology').textContent = note;
+                }
 
                 document.getElementById('huntUpdatedAt').textContent = 'Оновлено: щойно';
 
@@ -1632,9 +1712,113 @@
                 }
                 renderMarketIntelligence(mi);
 
+                loadHuntReport(huntRole);
+
             } catch (error) {
                 console.error('Error loading hunt analytics:', error);
             }
+        }
+
+        async function loadHuntReport(role) {
+            const container = document.getElementById('reportTable');
+            if (!container) return;
+            container.innerHTML = '<div style="color:var(--gray-400);padding:var(--space-md);">Завантаження...</div>';
+            try {
+                let url = '/hr/api/hunt-report?format=json';
+                if (role) url += '&role=' + encodeURIComponent(role);
+                const resp = await fetch(url);
+                const data = await resp.json();
+                huntReportCache = data;
+                renderReportTable(data);
+            } catch(e) {
+                console.error('Hunt report error:', e);
+                const c = document.getElementById('reportTable');
+                if (c) c.innerHTML = '<div style="color:var(--danger);padding:var(--space-md);">Помилка завантаження звіту</div>';
+            }
+        }
+
+        function renderReportTable(data) {
+            const container = document.getElementById('reportTable');
+            if (!container) return;
+            const vacancies = (data && data.vacancies) || [];
+            if (vacancies.length === 0) {
+                container.innerHTML = '<div style="color:var(--gray-400);padding:var(--space-md);">Вакансій не знайдено</div>';
+                return;
+            }
+            const isUSD = huntCurrency === 'USD';
+            let html = '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">';
+            html += '<thead><tr style="background:var(--gray-50);">';
+            const headers = ['Посада','Місто','Статус','ЗП макс','Кандидатів','Avg AI оцінка','Найнято','Медіана ринку','Джерело',''];
+            headers.forEach(h => { html += `<th style="padding:8px 10px;text-align:left;border-bottom:2px solid var(--gray-200);font-size:0.75rem;font-weight:700;color:var(--gray-600);text-transform:uppercase;">${h}</th>`; });
+            html += '</tr></thead><tbody>';
+            vacancies.forEach((v, idx) => {
+                const rowBg = idx % 2 === 0 ? 'white' : 'var(--gray-50)';
+                const salMax = isUSD
+                    ? (v.salary_max_usd ? '$' + v.salary_max_usd.toLocaleString() : '—')
+                    : (v.salary_max_uah ? v.salary_max_uah.toLocaleString() + ' грн' : '—');
+                const mktMedUsd = v.market_data && (v.market_data.employer || v.market_data.candidate)
+                    ? ((v.market_data.employer || v.market_data.candidate).salary_median_usd || null)
+                    : null;
+                const mktMed = isUSD
+                    ? (mktMedUsd ? '$' + mktMedUsd.toLocaleString() : '—')
+                    : (v.market_median_uah ? v.market_median_uah.toLocaleString() + ' грн' : '—');
+                const statusColors = {searching:'#dbeafe',completed:'#d1fae5',posted:'#fef3c7',filled:'#ede9fe',new:'#e0e7ff',pending:'#f3f4f6',no_results:'#f3f4f6'};
+                const statusBg = statusColors[v.status] || '#f3f4f6';
+                const srcCell = v.market_source_url
+                    ? `<a href="${v.market_source_url}" target="_blank" style="color:var(--primary);text-decoration:none;">${v.market_source || '—'}</a>`
+                    : (v.market_source || '—');
+                html += `<tr style="background:${rowBg};cursor:pointer;" onclick="toggleCandidates(this,'cands-${v.id}')">`;
+                html += `<td style="padding:8px 10px;font-weight:600;">${v.position}</td>`;
+                html += `<td style="padding:8px 10px;">${v.city}</td>`;
+                html += `<td style="padding:8px 10px;"><span style="background:${statusBg};padding:2px 8px;border-radius:10px;font-size:0.75rem;">${v.status}</span></td>`;
+                html += `<td style="padding:8px 10px;">${salMax}</td>`;
+                html += `<td style="padding:8px 10px;text-align:center;">${v.total_candidates}</td>`;
+                html += `<td style="padding:8px 10px;text-align:center;">${v.avg_ai_score || '—'}</td>`;
+                html += `<td style="padding:8px 10px;text-align:center;">${v.hires > 0 ? '🎯 ' + v.hires : '—'}</td>`;
+                html += `<td style="padding:8px 10px;">${mktMed}</td>`;
+                html += `<td style="padding:8px 10px;font-size:0.75rem;">${srcCell}</td>`;
+                html += `<td style="padding:8px 10px;text-align:center;color:var(--primary);">${v.candidates && v.candidates.length > 0 ? '▼' : ''}</td>`;
+                html += '</tr>';
+                if (v.candidates && v.candidates.length > 0) {
+                    html += `<tr id="cands-${v.id}" style="display:none;"><td colspan="10" style="padding:0;background:#f8faff;">`;
+                    html += '<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">';
+                    html += '<thead><tr style="background:#e0e7ff;">';
+                    ['ПІБ','Вік','Місто','Досвід','ЗП очік.','Оцінка','Рішення','Джерело'].forEach(h => {
+                        html += `<th style="padding:6px 10px;font-weight:600;color:var(--primary);font-size:0.7rem;text-transform:uppercase;">${h}</th>`;
+                    });
+                    html += '</tr></thead><tbody>';
+                    v.candidates.forEach(c => {
+                        const salExp = isUSD
+                            ? (c.salary_expectation_usd ? '$' + c.salary_expectation_usd.toLocaleString() : '—')
+                            : (c.salary_expectation_uah ? c.salary_expectation_uah.toLocaleString() + ' грн' : '—');
+                        const decColors = {hired:'#d1fae5',approved:'#dbeafe',rejected:'#fee2e2',saved:'#fef3c7',pending:'#f3f4f6'};
+                        const decBg = decColors[c.hr_decision] || '#f3f4f6';
+                        const srcLink = c.profile_url ? `<a href="${c.profile_url}" target="_blank" style="color:var(--primary);text-decoration:none;">${c.source}</a>` : c.source;
+                        html += '<tr style="border-top:1px solid #e0e7ff;">';
+                        html += `<td style="padding:6px 10px;font-weight:500;">${c.full_name}</td>`;
+                        html += `<td style="padding:6px 10px;">${c.age || '—'}</td>`;
+                        html += `<td style="padding:6px 10px;">${c.city}</td>`;
+                        html += `<td style="padding:6px 10px;">${c.experience_years != null ? c.experience_years + ' р.' : '—'}</td>`;
+                        html += `<td style="padding:6px 10px;">${salExp}</td>`;
+                        html += `<td style="padding:6px 10px;text-align:center;font-weight:700;">${c.ai_score != null ? c.ai_score : '—'}</td>`;
+                        html += `<td style="padding:6px 10px;"><span style="background:${decBg};padding:2px 8px;border-radius:10px;font-size:0.7rem;">${c.hr_decision}</span></td>`;
+                        html += `<td style="padding:6px 10px;">${srcLink}</td>`;
+                        html += '</tr>';
+                    });
+                    html += '</tbody></table></td></tr>';
+                }
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function toggleCandidates(row, targetId) {
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            const isHidden = target.style.display === 'none';
+            target.style.display = isHidden ? 'table-row' : 'none';
+            const arrow = row.querySelector('td:last-child');
+            if (arrow) arrow.textContent = isHidden ? '▲' : '▼';
         }
 
         function renderFunnelChart(funnel) {

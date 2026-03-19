@@ -3,16 +3,18 @@ HR Admin Dashboard API
 Protected by HTTP Basic Auth
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import text
 from datetime import date, timedelta
 import secrets
 import logging
+import io
 from typing import Optional
 
 from models import get_db
+from hunt_config import ROI_CONSTANTS
 
 router = APIRouter(prefix="/hr", tags=["HR Admin"])
 security = HTTPBasic()
@@ -308,29 +310,53 @@ async def get_recent_queries(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/hunt-roles")
+async def get_hunt_roles(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    db_session = next(get_db())
+    try:
+        result = db_session.execute(text("""
+            SELECT DISTINCT position FROM hunt_vacancies
+            WHERE position IS NOT NULL AND position != ''
+            ORDER BY position
+        """))
+        roles = [r[0] for r in result.fetchall()]
+        return {"roles": roles}
+    except Exception as e:
+        logger.error(f"Hunt roles error: {e}")
+        return {"roles": []}
+
+
 @router.get("/api/hunt-analytics")
 async def get_hunt_analytics(
+    role: Optional[str] = Query(default=None),
     credentials: HTTPBasicCredentials = Depends(verify_admin)
 ):
     db_session = next(get_db())
 
+    role_filter_v = " AND v.position ILIKE :role_pattern" if role else ""
+    role_filter_c = " AND EXISTS (SELECT 1 FROM hunt_vacancies v2 WHERE v2.id = c.vacancy_id AND v2.position ILIKE :role_pattern)" if role else ""
+    role_filter_p = " AND EXISTS (SELECT 1 FROM hunt_vacancies v2 WHERE v2.id = p.vacancy_id AND v2.position ILIKE :role_pattern)" if role else ""
+    role_params = {"role_pattern": f"%{role}%"} if role else {}
+
     try:
-        stats_result = db_session.execute(text("""
+        stats_result = db_session.execute(text(f"""
             SELECT
-                (SELECT COUNT(*) FROM hunt_vacancies) as total_vacancies,
-                (SELECT COUNT(*) FROM hunt_vacancies WHERE status = 'filled') as total_filled,
-                (SELECT COUNT(*) FROM hunt_candidates) as total_candidates,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'hired') as total_hires,
-                (SELECT COUNT(*) FROM hunt_postings WHERE status = 'posted') as total_posted,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'approved') as approved,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'rejected') as rejected,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'saved') as saved,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision = 'pending') as pending,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE created_at >= CURRENT_DATE) as candidates_today,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') as candidates_week,
-                (SELECT COUNT(DISTINCT channel) FROM hunt_postings WHERE status = 'posted') as total_channels,
-                (SELECT COUNT(*) FROM hunt_candidates WHERE hr_decision NOT IN ('pending')) as reviewed
-        """))
+                (SELECT COUNT(*) FROM hunt_vacancies v WHERE 1=1{role_filter_v}) as total_vacancies,
+                (SELECT COUNT(*) FROM hunt_vacancies v WHERE status = 'filled'{role_filter_v}) as total_filled,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE 1=1{role_filter_c}) as total_candidates,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE hr_decision = 'hired'{role_filter_c}) as total_hires,
+                (SELECT COUNT(*) FROM hunt_postings p WHERE p.status = 'posted'{role_filter_p}) as total_posted,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE hr_decision = 'approved'{role_filter_c}) as approved,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE hr_decision = 'rejected'{role_filter_c}) as rejected,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE hr_decision = 'saved'{role_filter_c}) as saved,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE hr_decision = 'pending'{role_filter_c}) as pending,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE created_at >= CURRENT_DATE{role_filter_c}) as candidates_today,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'{role_filter_c}) as candidates_week,
+                (SELECT COUNT(DISTINCT p.channel) FROM hunt_postings p WHERE p.status = 'posted'{role_filter_p}) as total_channels,
+                (SELECT COUNT(*) FROM hunt_candidates c WHERE hr_decision NOT IN ('pending'){role_filter_c}) as reviewed
+        """), role_params)
         s = stats_result.fetchone()
         total_vacancies = s[0] or 0
         total_filled = s[1] or 0
@@ -350,9 +376,64 @@ async def get_hunt_analytics(
         acceptance_rate = round((approved + total_hires) / shown * 100, 1) if shown > 0 else 0
         avg_per_vacancy = round(total_candidates / total_vacancies, 1) if total_vacancies > 0 else 0
         estimated_reach = total_posted * 5000
-        cost_saved_usd = total_hires * 385
-        hours_saved = round(total_vacancies * 2.67, 1)
-        cost_per_hire_maya = round(total_vacancies * 0.15 / max(total_hires, 1), 2)
+
+        from services.salary_normalizer import get_usd_uah_rate
+        current_rate = get_usd_uah_rate()
+
+        rc = ROI_CONSTANTS
+        hr_rate = rc["hr_hourly_rate_uah"]
+        trad_hours = rc["hours_per_vacancy_traditional"]
+        portal_cost = rc["portal_cost_per_vacancy_uah"]
+        maya_api_cost = rc["maya_api_cost_per_search_uah"]
+        maya_minutes = rc["maya_time_per_vacancy_minutes"]
+
+        traditional_cost_per_vacancy_uah = (hr_rate * trad_hours) + portal_cost
+        maya_cost_per_vacancy_uah = maya_api_cost
+
+        hours_saved = round(total_vacancies * (trad_hours - maya_minutes / 60), 1)
+        total_savings_uah = round(total_vacancies * (traditional_cost_per_vacancy_uah - maya_cost_per_vacancy_uah))
+        total_savings_usd = round(total_savings_uah / current_rate) if current_rate > 0 else 0
+        cost_per_hire_maya_uah = round(maya_cost_per_vacancy_uah * total_vacancies / max(total_hires, 1))
+        cost_per_hire_traditional_uah = round(traditional_cost_per_vacancy_uah)
+
+        cost_saved_usd = total_savings_usd
+        cost_per_hire_maya = round(cost_per_hire_maya_uah / current_rate, 2) if current_rate > 0 else 0
+
+        roi_data = {
+            "total_savings_uah": total_savings_uah,
+            "total_savings_usd": total_savings_usd,
+            "hours_saved": hours_saved,
+            "cost_per_hire_maya_uah": cost_per_hire_maya_uah,
+            "cost_per_hire_traditional_uah": cost_per_hire_traditional_uah,
+            "cost_per_vacancy_traditional_uah": traditional_cost_per_vacancy_uah,
+            "cost_per_vacancy_maya_uah": round(maya_cost_per_vacancy_uah),
+            "vacancies_processed": total_vacancies,
+            "total_vacancies_processed": total_vacancies,
+            "total_hires": total_hires,
+            "methodology": {
+                "hr_hourly_rate": hr_rate,
+                "hours_per_vacancy_traditional": trad_hours,
+                "portal_cost": portal_cost,
+                "api_cost_per_search": maya_api_cost,
+                "maya_time_minutes": maya_minutes,
+                "cost_per_vacancy_traditional_uah": traditional_cost_per_vacancy_uah,
+                "cost_per_vacancy_maya_uah": maya_cost_per_vacancy_uah,
+                "usd_rate": round(current_rate, 4),
+                "traditional": {
+                    "formula": "hr_rate × hours + portal_cost",
+                    "hr_hourly_rate_uah": hr_rate,
+                    "hours_per_vacancy": trad_hours,
+                    "portal_cost_uah": portal_cost,
+                    "cost_per_vacancy_uah": traditional_cost_per_vacancy_uah,
+                },
+                "maya": {
+                    "formula": "api_cost_only",
+                    "api_cost_per_search_uah": maya_api_cost,
+                    "time_per_vacancy_minutes": maya_minutes,
+                    "cost_per_vacancy_uah": maya_cost_per_vacancy_uah,
+                },
+            },
+        }
 
         kpi = {
             "total_vacancies": total_vacancies,
@@ -375,7 +456,8 @@ async def get_hunt_analytics(
                 "saved": saved,
                 "pending": pending,
                 "hired": total_hires,
-            }
+            },
+            "roi": roi_data,
         }
 
         hire_funnel = {
@@ -386,16 +468,17 @@ async def get_hunt_analytics(
             "hired": total_hires,
         }
 
-        source_result = db_session.execute(text("""
+        source_result = db_session.execute(text(f"""
             SELECT
                 c.source,
                 COUNT(*) as candidates_found,
                 COUNT(*) FILTER (WHERE c.hr_decision = 'approved') as approved,
                 COUNT(*) FILTER (WHERE c.hr_decision = 'hired') as hired
             FROM hunt_candidates c
+            WHERE 1=1{role_filter_c}
             GROUP BY c.source
             ORDER BY candidates_found DESC
-        """))
+        """), role_params)
         source_performance = []
         for r in source_result.fetchall():
             found = r[1] or 0
@@ -410,16 +493,16 @@ async def get_hunt_analytics(
                 "approval_rate": rate,
             })
 
-        posting_result = db_session.execute(text("""
+        posting_result = db_session.execute(text(f"""
             SELECT
-                channel,
+                p.channel,
                 COUNT(*) as total_posted,
-                MAX(posted_at) as last_posted
-            FROM hunt_postings
-            WHERE status = 'posted'
-            GROUP BY channel
+                MAX(p.posted_at) as last_posted
+            FROM hunt_postings p
+            WHERE p.status = 'posted'{role_filter_p}
+            GROUP BY p.channel
             ORDER BY total_posted DESC
-        """))
+        """), role_params)
         posting_performance = [
             {
                 "channel": r[0],
@@ -429,20 +512,24 @@ async def get_hunt_analytics(
             for r in posting_result.fetchall()
         ]
 
-        salary_result = db_session.execute(text("""
+        salary_role_join = (
+            " AND sd.vacancy_id IN (SELECT id FROM hunt_vacancies v WHERE v.position ILIKE :role_pattern)"
+            if role else ""
+        )
+        salary_result = db_session.execute(text(f"""
             SELECT
-                city,
-                position,
-                data_type,
-                COALESCE(AVG(COALESCE(salary_median_usd, salary_median)), 0)::INTEGER as median_usd,
-                COALESCE(AVG(salary_median_uah), 0)::INTEGER as median_uah,
+                sd.city,
+                sd.position,
+                sd.data_type,
+                COALESCE(AVG(COALESCE(sd.salary_median_usd, sd.salary_median)), 0)::INTEGER as median_usd,
+                COALESCE(AVG(sd.salary_median_uah), 0)::INTEGER as median_uah,
                 COUNT(*) as sample_size,
-                STRING_AGG(DISTINCT source, ', ') as sources
-            FROM hunt_salary_data
-            WHERE city IS NOT NULL AND (salary_median IS NOT NULL OR salary_median_usd IS NOT NULL)
-            GROUP BY city, position, data_type
-            ORDER BY city, position
-        """))
+                STRING_AGG(DISTINCT sd.source, ', ') as sources
+            FROM hunt_salary_data sd
+            WHERE sd.city IS NOT NULL AND (sd.salary_median IS NOT NULL OR sd.salary_median_usd IS NOT NULL){salary_role_join}
+            GROUP BY sd.city, sd.position, sd.data_type
+            ORDER BY sd.city, sd.position
+        """), role_params)
         salary_rows = salary_result.fetchall()
 
         city_map = {}
@@ -477,35 +564,35 @@ async def get_hunt_analytics(
 
         salary_by_city = list(city_map.values())
 
-        skills_result = db_session.execute(text("""
+        skills_result = db_session.execute(text(f"""
             SELECT
                 TRIM(skill) as skill,
                 COUNT(*) as cnt,
-                COALESCE(AVG(COALESCE(salary_median_usd, salary_median)), 0)::INTEGER as avg_salary_usd,
-                COALESCE(AVG(salary_median_uah), 0)::INTEGER as avg_salary_uah
-            FROM hunt_salary_data,
-                 LATERAL unnest(string_to_array(skills, ',')) AS skill
-            WHERE skills IS NOT NULL AND skills != ''
+                COALESCE(AVG(COALESCE(sd.salary_median_usd, sd.salary_median)), 0)::INTEGER as avg_salary_usd,
+                COALESCE(AVG(sd.salary_median_uah), 0)::INTEGER as avg_salary_uah
+            FROM hunt_salary_data sd,
+                 LATERAL unnest(string_to_array(sd.skills, ',')) AS skill
+            WHERE sd.skills IS NOT NULL AND sd.skills != ''{salary_role_join}
             GROUP BY TRIM(skill)
             ORDER BY cnt DESC
             LIMIT 10
-        """))
+        """), role_params)
         top_skills = [
             {"skill": r[0], "count": r[1], "avg_salary": r[2], "avg_salary_uah": r[3]}
             for r in skills_result.fetchall()
         ]
 
-        trends_result = db_session.execute(text("""
+        trends_result = db_session.execute(text(f"""
             SELECT
-                TO_CHAR(collected_at, 'YYYY-MM') as month,
-                data_type,
-                COALESCE(AVG(COALESCE(salary_median_usd, salary_median)), 0)::INTEGER as median_usd,
-                COALESCE(AVG(salary_median_uah), 0)::INTEGER as median_uah
-            FROM hunt_salary_data
-            WHERE salary_median IS NOT NULL OR salary_median_usd IS NOT NULL
-            GROUP BY TO_CHAR(collected_at, 'YYYY-MM'), data_type
+                TO_CHAR(sd.collected_at, 'YYYY-MM') as month,
+                sd.data_type,
+                COALESCE(AVG(COALESCE(sd.salary_median_usd, sd.salary_median)), 0)::INTEGER as median_usd,
+                COALESCE(AVG(sd.salary_median_uah), 0)::INTEGER as median_uah
+            FROM hunt_salary_data sd
+            WHERE (sd.salary_median IS NOT NULL OR sd.salary_median_usd IS NOT NULL){salary_role_join}
+            GROUP BY TO_CHAR(sd.collected_at, 'YYYY-MM'), sd.data_type
             ORDER BY month
-        """))
+        """), role_params)
         trends_map = {}
         for row in trends_result.fetchall():
             if row[0] not in trends_map:
@@ -522,7 +609,7 @@ async def get_hunt_analytics(
                 trends_map[row[0]]["employer_median_uah"] = row[3]
         salary_trends = list(trends_map.values())
 
-        recent_result = db_session.execute(text("""
+        recent_result = db_session.execute(text(f"""
             SELECT
                 v.id,
                 v.position,
@@ -533,9 +620,10 @@ async def get_hunt_analytics(
                 (SELECT COUNT(*) > 0 FROM hunt_candidates c WHERE c.vacancy_id = v.id AND c.hr_decision = 'hired') as has_hire,
                 v.created_at
             FROM hunt_vacancies v
+            WHERE 1=1{role_filter_v}
             ORDER BY v.created_at DESC
             LIMIT 10
-        """))
+        """), role_params)
         recent_vacancies = [
             {
                 "id": r[0],
@@ -555,17 +643,17 @@ async def get_hunt_analytics(
         """))
         active_sources = source_count_result.scalar() or 0
 
-        mi_result = db_session.execute(text("""
-            SELECT DISTINCT ON (position, data_type)
-                position, data_type, source,
-                salary_median_uah, salary_median_usd,
-                salary_min_uah, salary_max_uah,
-                usd_rate_at_collection, source_url, collected_at,
-                COALESCE(sample_count, 0) as sample_count
-            FROM hunt_salary_data
-            WHERE source = 'robota.ua'
-            ORDER BY position, data_type, collected_at DESC
-        """))
+        mi_result = db_session.execute(text(f"""
+            SELECT DISTINCT ON (sd.position, sd.data_type)
+                sd.position, sd.data_type, sd.source,
+                sd.salary_median_uah, sd.salary_median_usd,
+                sd.salary_min_uah, sd.salary_max_uah,
+                sd.usd_rate_at_collection, sd.source_url, sd.collected_at,
+                COALESCE(sd.sample_count, 0) as sample_count
+            FROM hunt_salary_data sd
+            WHERE sd.source = 'robota.ua'{salary_role_join}
+            ORDER BY sd.position, sd.data_type, sd.collected_at DESC
+        """), role_params)
         mi_rows = mi_result.fetchall()
         mi_map = {}
         for r in mi_rows:
@@ -595,9 +683,6 @@ async def get_hunt_analytics(
             entry["gap_usd"] = entry["employer_median_usd"] - entry["candidate_median_usd"]
         market_intelligence = list(mi_map.values())
 
-        from services.salary_normalizer import get_usd_uah_rate
-        current_rate = get_usd_uah_rate()
-
         return {
             "kpi": kpi,
             "hire_funnel": hire_funnel,
@@ -624,6 +709,12 @@ async def get_hunt_analytics(
                 "estimated_reach": 0, "cost_saved_usd": 0, "hours_saved": 0,
                 "cost_per_hire_maya": 0, "traditional_cost_per_hire": 400,
                 "decisions": {"approved": 0, "rejected": 0, "saved": 0, "pending": 0, "hired": 0},
+                "roi": {
+                    "total_savings_uah": 0, "total_savings_usd": 0, "hours_saved": 0,
+                    "cost_per_hire_maya_uah": 0, "cost_per_hire_traditional_uah": 0,
+                    "cost_per_vacancy_traditional_uah": 0, "cost_per_vacancy_maya_uah": 0,
+                    "vacancies_processed": 0, "total_hires": 0, "methodology": "",
+                },
             },
             "hire_funnel": {"found": 0, "reviewed": 0, "approved": 0, "saved": 0, "hired": 0},
             "source_performance": [],
@@ -637,6 +728,350 @@ async def get_hunt_analytics(
             "current_usd_rate": 41.0,
             "rate_source": "НБУ (Національний банк України)",
         }
+
+
+@router.get("/api/hunt-report")
+async def get_hunt_report(
+    role: Optional[str] = Query(default=None),
+    format: str = Query(default="json"),
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    db_session = next(get_db())
+
+    role_filter = " AND v.position ILIKE :role_pattern" if role else ""
+    role_params = {"role_pattern": f"%{role}%"} if role else {}
+
+    try:
+        from services.salary_normalizer import get_usd_uah_rate
+        current_rate = get_usd_uah_rate()
+
+        vac_result = db_session.execute(text(f"""
+            SELECT
+                v.id,
+                v.position,
+                v.city,
+                v.status,
+                v.salary_max,
+                v.created_at,
+                COUNT(c.id) as total_candidates,
+                COUNT(c.id) FILTER (WHERE c.hr_decision = 'hired') as hires,
+                COALESCE(AVG(c.ai_score)::INTEGER, 0) as avg_ai_score
+            FROM hunt_vacancies v
+            LEFT JOIN hunt_candidates c ON c.vacancy_id = v.id
+            WHERE 1=1{role_filter}
+            GROUP BY v.id, v.position, v.city, v.status, v.salary_max, v.created_at
+            ORDER BY v.created_at DESC
+        """), role_params)
+        vacancies_raw = vac_result.fetchall()
+
+        vac_ids = [r[0] for r in vacancies_raw]
+        candidates_by_vac = {}
+        market_by_vac = {}
+
+        if vac_ids:
+            cand_result = db_session.execute(text("""
+                SELECT
+                    c.vacancy_id,
+                    c.id,
+                    c.full_name,
+                    c.age,
+                    c.city,
+                    c.experience_years,
+                    c.salary_expectation,
+                    c.ai_score,
+                    c.hr_decision,
+                    c.source,
+                    c.profile_url,
+                    c.current_role,
+                    c.skills,
+                    c.is_fallback,
+                    c.candidate_date,
+                    c.ai_summary
+                FROM hunt_candidates c
+                WHERE c.vacancy_id = ANY(:ids)
+                ORDER BY c.ai_score DESC NULLS LAST
+            """), {"ids": vac_ids})
+            for r in cand_result.fetchall():
+                vid = r[0]
+                if vid not in candidates_by_vac:
+                    candidates_by_vac[vid] = []
+                salary_uah = int(r[6] * current_rate) if r[6] else None
+                candidates_by_vac[vid].append({
+                    "id": r[1],
+                    "full_name": r[2] or "—",
+                    "age": r[3],
+                    "city": r[4] or "—",
+                    "experience_years": r[5],
+                    "salary_expectation_usd": r[6],
+                    "salary_expectation_uah": salary_uah,
+                    "ai_score": r[7],
+                    "hr_decision": r[8] or "pending",
+                    "source": r[9] or "—",
+                    "profile_url": r[10],
+                    "current_role": r[11],
+                    "skills": r[12],
+                    "is_fallback": r[13] or False,
+                    "candidate_date": r[14].strftime("%Y-%m-%d") if r[14] and hasattr(r[14], 'strftime') else (str(r[14])[:10] if r[14] else None),
+                    "ai_summary": r[15],
+                })
+
+            mkt_result = db_session.execute(text("""
+                SELECT DISTINCT ON (sd.vacancy_id, sd.data_type)
+                    sd.vacancy_id,
+                    sd.data_type,
+                    sd.salary_median_uah,
+                    sd.salary_median_usd,
+                    sd.source,
+                    sd.source_url,
+                    sd.salary_min_uah,
+                    sd.salary_max_uah,
+                    COALESCE(sd.sample_count, 0),
+                    sd.collected_at
+                FROM hunt_salary_data sd
+                WHERE sd.vacancy_id = ANY(:ids)
+                ORDER BY sd.vacancy_id, sd.data_type, sd.collected_at DESC
+            """), {"ids": vac_ids})
+            for r in mkt_result.fetchall():
+                vid = r[0]
+                if vid not in market_by_vac:
+                    market_by_vac[vid] = {"candidate": {}, "employer": {}}
+                dtype = r[1] or "employer"
+                market_by_vac[vid][dtype] = {
+                    "salary_median_uah": r[2],
+                    "salary_median_usd": r[3],
+                    "source": r[4],
+                    "source_url": r[5],
+                    "salary_min_uah": r[6],
+                    "salary_max_uah": r[7],
+                    "sample_count": r[8],
+                    "collected_at": r[9].strftime("%Y-%m-%d") if r[9] and hasattr(r[9], 'strftime') else (str(r[9])[:10] if r[9] else None),
+                }
+
+        vacancies_json = []
+        for r in vacancies_raw:
+            vid = r[0]
+            mkt = market_by_vac.get(vid, {})
+            mkt_median_uah = (mkt.get("employer") or mkt.get("candidate") or {}).get("salary_median_uah")
+            mkt_source = (mkt.get("employer") or mkt.get("candidate") or {}).get("source", "—")
+            salary_max_uah = int(r[4] * current_rate) if r[4] else None
+            mkt_source_url = (mkt.get("employer") or mkt.get("candidate") or {}).get("source_url")
+            vacancies_json.append({
+                "id": vid,
+                "position": r[1] or "—",
+                "city": r[2] or "—",
+                "status": r[3] or "new",
+                "salary_max_usd": r[4],
+                "salary_max_uah": salary_max_uah,
+                "created_at": r[5].strftime("%Y-%m-%d") if r[5] else None,
+                "total_candidates": r[6] or 0,
+                "hires": r[7] or 0,
+                "avg_ai_score": r[8] or 0,
+                "market_median_uah": mkt_median_uah,
+                "market_source": mkt_source,
+                "market_source_url": mkt_source_url,
+                "market_data": mkt,
+                "candidates": candidates_by_vac.get(vid, []),
+            })
+
+        total_hires_report = sum(v["hires"] for v in vacancies_json)
+        total_candidates_report = sum(v["total_candidates"] for v in vacancies_json)
+        avg_score = (
+            sum(v["avg_ai_score"] for v in vacancies_json if v["avg_ai_score"]) /
+            max(sum(1 for v in vacancies_json if v["avg_ai_score"]), 1)
+        )
+
+        hire_rate = round(total_hires_report / total_candidates_report * 100, 1) if total_candidates_report > 0 else 0
+        if format == "json":
+            return {
+                "vacancies": vacancies_json,
+                "current_usd_rate": current_rate,
+                "total_vacancies": len(vacancies_json),
+                "role_filter": role,
+                "summary": {
+                    "total_vacancies": len(vacancies_json),
+                    "total_candidates": total_candidates_report,
+                    "total_hires": total_hires_report,
+                    "hire_rate": hire_rate,
+                    "avg_ai_score": round(avg_score, 1),
+                    "avg_time_to_fill_hours": None,
+                    "current_usd_rate": current_rate,
+                },
+            }
+
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, numbers
+        from openpyxl.utils import get_column_letter
+
+        BLUE_FILL = PatternFill("solid", fgColor="4472C4")
+        LIGHT_FILL = PatternFill("solid", fgColor="F2F2F2")
+        HEADER_FONT = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+        BOLD_FONT = Font(name="Calibri", bold=True, size=10)
+        NORMAL_FONT = Font(name="Calibri", size=10)
+        CURRENCY_FORMAT = '#,##0'
+
+        def style_header_row(ws, cols):
+            for col_idx, col_name in enumerate(cols, start=1):
+                cell = ws.cell(row=1, column=col_idx, value=col_name)
+                cell.font = HEADER_FONT
+                cell.fill = BLUE_FILL
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        def auto_fit(ws):
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    try:
+                        if cell.value:
+                            max_len = max(max_len, len(str(cell.value)))
+                    except:
+                        pass
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 50)
+
+        STATUS_UK = {
+            "searching": "Пошук", "completed": "Завершено", "posted": "Опубліковано",
+            "filled": "Закрито", "new": "Новий", "pending": "Очікування", "no_results": "Без результатів",
+        }
+        DECISION_UK = {
+            "hired": "Найнято", "approved": "Схвалено", "rejected": "Відхилено",
+            "saved": "Збережено", "pending": "Очікування",
+        }
+        DTYPE_UK = {"employer": "Роботодавець", "candidate": "Кандидат"}
+
+        def write_row(ws, row_idx, values, fill, currency_cols=(), hyperlink_col_val=None):
+            for col_idx, val in enumerate(values, start=1):
+                if hyperlink_col_val and col_idx == hyperlink_col_val[0] and hyperlink_col_val[1]:
+                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                    cell.hyperlink = hyperlink_col_val[1]
+                    cell.font = Font(name="Calibri", size=10, color="1E40AF", underline="single")
+                else:
+                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                    cell.font = NORMAL_FONT
+                if fill:
+                    cell.fill = fill
+                if col_idx in currency_cols:
+                    cell.number_format = CURRENCY_FORMAT
+
+        wb = openpyxl.Workbook()
+
+        ws1 = wb.active
+        ws1.title = "Звіт по вакансіях"
+        vac_cols = [
+            "ID", "Посада", "Місто", "Статус",
+            "ЗП макс (USD)", "ЗП макс (UAH)",
+            "Кандидатів", "Avg AI оцінка", "Найнято",
+            "Медіана роботодавця (UAH)", "Медіана кандидата (UAH)", "Розрив ЗП (UAH)",
+            "Джерело ринку", "Дата створення",
+        ]
+        style_header_row(ws1, vac_cols)
+        ws1.freeze_panes = "A2"
+        for row_idx, v in enumerate(vacancies_json, start=2):
+            fill = LIGHT_FILL if row_idx % 2 == 0 else None
+            mkt_src_url = v.get("market_source_url") or ""
+            mkt_src_label = v.get("market_source") or "—"
+            mkt = v.get("market_data", {})
+            emp_median = (mkt.get("employer") or {}).get("salary_median_uah")
+            cand_median = (mkt.get("candidate") or {}).get("salary_median_uah")
+            gap_uah = (cand_median - emp_median) if emp_median and cand_median else None
+            row_data = [
+                v["id"], v["position"], v["city"],
+                STATUS_UK.get(v["status"], v["status"]),
+                v["salary_max_usd"], v["salary_max_uah"],
+                v["total_candidates"], v["avg_ai_score"], v["hires"],
+                emp_median, cand_median, gap_uah,
+                mkt_src_label, v["created_at"],
+            ]
+            write_row(ws1, row_idx, row_data, fill,
+                      currency_cols=(5, 6, 10, 11, 12),
+                      hyperlink_col_val=(13, mkt_src_url) if mkt_src_url else None)
+        auto_fit(ws1)
+
+        ws2 = wb.create_sheet("Кандидати")
+        cand_cols = [
+            "Вакансія ID", "Посада", "ПІБ", "Вік", "Місто", "Досвід (років)",
+            "Поточна посада", "Навички", "ЗП очік. (USD)", "ЗП очік. (UAH)",
+            "AI оцінка", "Резюме AI", "Рішення", "Джерело", "Профіль (URL)",
+            "Дата кандидата", "Fallback",
+        ]
+        style_header_row(ws2, cand_cols)
+        ws2.freeze_panes = "A2"
+        cand_row = 2
+        for v in vacancies_json:
+            for c in v["candidates"]:
+                fill = LIGHT_FILL if cand_row % 2 == 0 else None
+                profile_url = c.get("profile_url") or ""
+                row_data = [
+                    v["id"], v["position"], c["full_name"], c["age"],
+                    c["city"], c["experience_years"],
+                    c.get("current_role"), c.get("skills"),
+                    c["salary_expectation_usd"], c["salary_expectation_uah"],
+                    c["ai_score"], c.get("ai_summary"),
+                    DECISION_UK.get(c["hr_decision"], c["hr_decision"]),
+                    c["source"], profile_url,
+                    c.get("candidate_date"),
+                    "Так" if c.get("is_fallback") else "Ні",
+                ]
+                write_row(ws2, cand_row, row_data, fill,
+                          currency_cols=(9, 10),
+                          hyperlink_col_val=(15, profile_url) if profile_url else None)
+                cand_row += 1
+        auto_fit(ws2)
+
+        ws3 = wb.create_sheet("Аналітика ринку")
+        mkt_cols = [
+            "Посада", "Місто",
+            "Медіана роботодавця (UAH)", "Медіана роботодавця (USD)",
+            "Медіана кандидата (UAH)", "Медіана кандидата (USD)",
+            "Розрив (UAH)", "Розрив (USD)",
+            "Джерело", "URL джерела",
+        ]
+        style_header_row(ws3, mkt_cols)
+        ws3.freeze_panes = "A2"
+        mkt_row = 2
+        for v in vacancies_json:
+            mkt = market_by_vac.get(v["id"], {})
+            emp = mkt.get("employer") or {}
+            cnd = mkt.get("candidate") or {}
+            emp_med_uah = emp.get("salary_median_uah")
+            emp_med_usd = emp.get("salary_median_usd")
+            cnd_med_uah = cnd.get("salary_median_uah")
+            cnd_med_usd = cnd.get("salary_median_usd")
+            gap_uah = (cnd_med_uah - emp_med_uah) if emp_med_uah and cnd_med_uah else None
+            gap_usd = (cnd_med_usd - emp_med_usd) if emp_med_usd and cnd_med_usd else None
+            src_url = emp.get("source_url") or cnd.get("source_url") or ""
+            src_label = emp.get("source") or cnd.get("source") or "—"
+            fill = LIGHT_FILL if mkt_row % 2 == 0 else None
+            row_data = [
+                v["position"], v["city"],
+                emp_med_uah, emp_med_usd,
+                cnd_med_uah, cnd_med_usd,
+                gap_uah, gap_usd,
+                src_label, src_url,
+            ]
+            write_row(ws3, mkt_row, row_data, fill,
+                      currency_cols=(3, 4, 5, 6, 7, 8),
+                      hyperlink_col_val=(10, src_url) if src_url else None)
+            mkt_row += 1
+        auto_fit(ws3)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        filename = "hunt_report.xlsx"
+        if role:
+            safe_role = role.replace(" ", "_")[:30]
+            filename = f"hunt_report_{safe_role}.xlsx"
+
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+        )
+
+    except Exception as e:
+        logger.error(f"Hunt report error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/system-info")
