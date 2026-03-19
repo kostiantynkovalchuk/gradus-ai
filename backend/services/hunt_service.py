@@ -150,12 +150,13 @@ async def _scrape_round(
     seen_keys: set,
 ) -> list:
     """
-    Run one round of TG + Work.ua scraping with the given depth_days.
+    Run one round of TG + Work.ua + Robota.ua scraping with the given depth_days.
     Returns only candidates NOT already in seen_keys.
     Adds new keys to seen_keys in-place.
     """
     from services.hunt_tg_scraper import scrape_telegram_channels as search_tg_channels
     from services.hunt_workua_scraper import search_workua
+    from services.hunt_robotaua_scraper import search_robotaua
 
     keywords = parsed.get("keywords", [])
     if not keywords and parsed.get("position"):
@@ -164,6 +165,7 @@ async def _scrape_round(
     results = await asyncio.gather(
         search_tg_channels(keywords, channels, depth_days=depth_days),
         search_workua(parsed, depth_days=depth_days),
+        search_robotaua(parsed, depth_days=depth_days),
         return_exceptions=True,
     )
 
