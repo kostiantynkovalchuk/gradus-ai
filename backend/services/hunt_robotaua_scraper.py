@@ -356,13 +356,32 @@ def _parse_experience_years(experiences: list) -> Optional[float]:
 
 
 def _parse_iso_date(s: str) -> Optional[datetime]:
+    """Parse ISO 8601 datetime/date strings into a naive UTC datetime.
+
+    Handles common Robota.ua formats:
+      "2024-03-15T10:30:00"
+      "2024-03-15T10:30:00.000Z"
+      "2024-03-15T10:30:00+02:00"
+      "2024-03-15"
+      "2024-03"
+    """
     if not s:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m"):
-        try:
-            return datetime.strptime(s[:len(fmt)], fmt)
-        except Exception:
-            pass
+    s = s.strip()
+    # Normalize trailing Z → +00:00 so fromisoformat handles it (Python 3.10 compat)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        # Strip timezone info to keep comparisons naive/UTC-based
+        return dt.replace(tzinfo=None)
+    except ValueError:
+        pass
+    # Fallback: try year-month "YYYY-MM" → first day of month
+    try:
+        return datetime.strptime(s[:7], "%Y-%m")
+    except ValueError:
+        pass
     return None
 
 
