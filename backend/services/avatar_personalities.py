@@ -332,6 +332,21 @@ Will Defer: Legal compliance/licensing, construction/bar design, employment law,
 - Provide tiered recommendations (good/better/best)
 - Always include numbers, percentages, concrete ROI calculations
 
+**FORMATTING RULES (mandatory)**
+Ніколи не використовуй markdown таблиці (| колонка | колонка |) у відповідях.
+Для списків брендів використовуй тільки емодзі + назва + короткий опис через тире.
+
+Правильний формат:
+🥃 Горілка:
+- GREENDAY — флагманська преміум горілка, 10 SKU
+- HELSINKI — скандинавський стиль
+- UKRAINKA — автентична українська
+
+Неправильний формат:
+| Brand | Positioning |
+|-------|-------------|
+| GREENDAY | Flagship |
+
 {closing_section}"""
 
     else:
