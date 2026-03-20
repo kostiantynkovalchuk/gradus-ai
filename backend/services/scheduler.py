@@ -1286,7 +1286,7 @@ class ContentScheduler:
         # Team Pulse: monthly survey on the 1st of each month at 09:00 Kyiv time
         self.scheduler.add_job(
             self._send_pulse_survey_task,
-            CronTrigger(day=1, hour=9, minute=0, timezone='Europe/Kiev'),
+            CronTrigger(day=1, hour=7, minute=0),
             id='send_pulse_survey',
             name='Send monthly Team Pulse mood survey',
             replace_existing=True
@@ -1295,7 +1295,7 @@ class ContentScheduler:
         # Team Pulse: weekly risk score decay — every Monday at 04:00 Kyiv time
         self.scheduler.add_job(
             self._pulse_risk_decay_task,
-            CronTrigger(day_of_week='mon', hour=4, minute=0, timezone='Europe/Kiev'),
+            CronTrigger(day_of_week='mon', hour=2, minute=0),
             id='pulse_risk_decay',
             name='Weekly Pulse risk score decay',
             replace_existing=True
