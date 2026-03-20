@@ -1,0 +1,46 @@
+CopyTEAM PULSE — Implementation Prompt for Replit Agent
+Module: Maya HR → Team Pulse (Пульс команди)
+Copy-paste this entire prompt into Replit Agent.
+"""
+=== TEAM PULSE — FULL IMPLEMENTATION ===
+You are implementing Team Pulse — an employee emotional intelligence module
+for the existing Maya HR Telegram bot system at AVTD (Ukrainian company, 800 employees).
+Team Pulse has 4 layers:
+
+Monthly anonymous mood survey (5-heart scale via Telegram inline keyboard)
+Behavioral trigger detection (keyword scanner on Maya HR messages)
+Psychological support video delivery (pre-recorded videos sent to employee)
+HR alerts + dashboard tab
+
+=== CRITICAL CONTEXT ABOUT THE EXISTING SYSTEM ===
+Stack: FastAPI + python-telegram-bot + Neon PostgreSQL + SQLAlchemy + psycopg2
+Deployment: Dev on Replit, Prod on Render, DB on Neon
+Repo: github.com/kostiantynkovalchuk/gradus-ai
+Bot: @avtd_photo_report_bot (serves both Alex Photo Report and Maya HR)
+Dashboard: gradus-ai.onrender.com/hr (HTTP Basic Auth, HTML + Chart.js, client-side fetch)
+Current migration: 024 (last applied)
+Existing tables: hunt_vacancies, hunt_candidates, hunt_sources, hunt_postings, hunt_salary_data, schema_migrations + Maya HR tables for employees/presets
+The Maya HR bot already handles messages from ~800 employees. It has:
+
+Employee registration (employees table with telegram_id, name, department, etc.)
+Preset-based Q&A (employees ask questions, Maya matches to presets)
+Message handler that processes every incoming message
+
+You MUST hook into the existing message handler — NOT create a separate bot.
+=== STEP 0: CODEBASE AUDIT (DO THIS FIRST) ===
+Before writing ANY code, read and report:
+
+The main bot entry point — where is Application.run_polling() called?
+The message handler chain — how does the bot route incoming messages?
+Show me ALL handlers registered (MessageHandler, CallbackQueryHandler, CommandHandler)
+The employees table schema — columns and types (especially: telegram_id, department, name)
+How departments are stored — is there a departments table or just a text field?
+The existing /hr dashboard route handler — full function code
+All /hr/api/* endpoints — list them
+How existing migrations work — show migration runner code and naming convention
+The psycopg2 connection pattern used in background tasks (see hunt_service.py for reference)
+How environment variables are loaded (dotenv? os.environ directly?)
+The existing callback_query handler — how are inline keyboard button presses handled?
+
+DO NOT SKIP THIS STEP. I need the audit before you write code.
+Report all findings, then proceed to implementation.
