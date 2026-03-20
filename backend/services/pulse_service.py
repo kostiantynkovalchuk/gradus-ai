@@ -6,7 +6,7 @@ Handles:
 2. Behavioral trigger keyword detection
 3. Psychological support video/message delivery
 4. HR alert notifications
-5. DB writes for pulse_surveys and pulse_triggers
+5. DB writes for pulse_surveys, pulse_triggers, pulse_risk_scores, pulse_video_views
 """
 
 import hashlib
@@ -15,6 +15,9 @@ import os
 from datetime import datetime
 
 import httpx
+from sqlalchemy import text
+
+from models import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,57 @@ TRIGGER_SUPPORT_TEXT: dict[str, str] = {
     ),
 }
 
+# === RISK SCORE ENGINE ===
+
+RISK_POINTS: dict[str, int] = {
+    "звільнення": 3,
+    "конфлікт": 1,
+    "вигорання": 1,
+    "стрес": 1,
+    "плачу": 1,
+}
+
+RISK_THRESHOLD_ALERT = 4
+RISK_THRESHOLD_URGENT = 7
+
+# === PULSE VIDEO MAPPING ===
+
+PULSE_VIDEOS: dict[str, str] = {
+    "breathing": "pulse_breathing.mp4",
+    "conflict": "pulse_conflict.mp4",
+    "burnout": "pulse_burnout.mp4",
+    "decision": "pulse_decision.mp4",
+    "resignation": "pulse_decision.mp4",
+    "rights": "pulse_conflict.mp4",
+    "stress": "pulse_burnout.mp4",
+}
+
+PULSE_VIDEO_FALLBACK_TEXT: dict[str, str] = {
+    "breathing": (
+        "🫁 *Пауза для дихання*\n\n"
+        "Вдихни на 4 рахунки… затримай на 4… видихни на 4… пауза на 4.\n"
+        "Повтори 3 рази. Твоє тіло вже трохи розслабилось.\n\n"
+        "Якщо потрібна підтримка — напиши HR."
+    ),
+    "conflict": (
+        "🤝 *Конфлікт — це не кінець*\n\n"
+        "Спробуй замінити «Ти завжди…» на «Я відчуваю… коли…»\n"
+        "Це не слабкість — це навичка. HR може допомогти як нейтральна сторона."
+    ),
+    "burnout": (
+        "🌿 *Зупинись і подивись*\n\n"
+        "Назви 5 речей, які бачиш… 4 звуки… 3 дотики… 2 запахи… 1 смак.\n"
+        "Що забирає твою енергію сьогодні? Що її дає?\n"
+        "Іноді достатньо змінити одну маленьку річ."
+    ),
+    "decision": (
+        "📋 *Перед рішенням*\n\n"
+        "Візьми аркуш паперу. Зліва: що тримає мене тут. Справа: що штовхає звідси.\n"
+        "Подивись через день, коли емоції вляжуться.\n"
+        "Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
+    ),
+}
+
 
 def _user_hash(telegram_id: int) -> str:
     """SHA-256 hash of telegram_id for anonymous storage."""
@@ -105,7 +159,6 @@ def detect_pulse_trigger(text: str) -> str | None:
     """
     Scan message text for emotional trigger keywords.
     Returns trigger_type string (e.g. 'вигорання') or None.
-    Checks longest/most specific triggers first within each group.
     """
     text_lower = text.lower()
     for trigger_type, keywords in TRIGGER_KEYWORDS.items():
@@ -116,28 +169,158 @@ def detect_pulse_trigger(text: str) -> str | None:
     return None
 
 
-def log_trigger(department: str | None, position: str | None, trigger_type: str) -> None:
-    """Synchronously insert a trigger event into pulse_triggers."""
+def log_trigger(
+    department: str | None,
+    position: str | None,
+    trigger_type: str,
+    employee_id: int | None = None,
+    employee_name: str | None = None,
+    trigger_text: str | None = None,
+) -> int | None:
+    """
+    Insert a trigger event into pulse_triggers.
+    Returns the new trigger id, or None on failure.
+    """
+    severity = "red" if trigger_type == "звільнення" else "yellow"
+    points = RISK_POINTS.get(trigger_type, 1)
     try:
-        import models
-        if models.SessionLocal is None:
-            models.init_db()
-        db = models.SessionLocal()
+        db = SessionLocal()
         try:
-            from sqlalchemy import text
-            db.execute(
+            result = db.execute(
                 text(
-                    "INSERT INTO pulse_triggers (department, position, trigger_type, fired_at) "
-                    "VALUES (:dept, :pos, :ttype, NOW())"
+                    "INSERT INTO pulse_triggers "
+                    "(department, position, trigger_type, fired_at, "
+                    " employee_id, employee_name, trigger_text, severity, risk_points) "
+                    "VALUES (:dept, :pos, :ttype, NOW(), "
+                    " :eid, :ename, :ttext, :sev, :pts) "
+                    "RETURNING id"
                 ),
-                {"dept": department, "pos": position, "ttype": trigger_type},
+                {
+                    "dept": department,
+                    "pos": position,
+                    "ttype": trigger_type,
+                    "eid": employee_id,
+                    "ename": employee_name,
+                    "ttext": trigger_text[:500] if trigger_text else None,
+                    "sev": severity,
+                    "pts": points,
+                },
             )
+            trigger_id = result.fetchone()[0]
             db.commit()
-            logger.info(f"[PULSE] Trigger logged: {trigger_type} | dept={department}")
+            logger.info(
+                f"[PULSE] Trigger logged: {trigger_type} | dept={department} | "
+                f"employee={employee_name} | id={trigger_id}"
+            )
+            return trigger_id
         finally:
             db.close()
     except Exception as e:
         logger.error(f"[PULSE] log_trigger failed: {e}")
+        return None
+
+
+def update_risk_score(
+    employee_id: int,
+    employee_name: str,
+    department: str | None,
+    points: int,
+) -> bool:
+    """
+    Update rolling risk score for an employee via UPSERT.
+    Returns True if the score has crossed RISK_THRESHOLD_ALERT (HR alert needed).
+    """
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(
+                text("""
+                    INSERT INTO pulse_risk_scores
+                        (employee_id, employee_name, department, current_score,
+                         last_trigger_at, last_calculated_at, alert_status)
+                    VALUES (:eid, :ename, :dept, :pts, NOW(), NOW(), 'none')
+                    ON CONFLICT (employee_id) DO UPDATE SET
+                        current_score = pulse_risk_scores.current_score + :pts,
+                        employee_name = :ename,
+                        department = :dept,
+                        last_trigger_at = NOW(),
+                        last_calculated_at = NOW(),
+                        alert_status = CASE
+                            WHEN pulse_risk_scores.current_score + :pts >= :urgent THEN 'urgent'
+                            WHEN pulse_risk_scores.current_score + :pts >= :alert  THEN 'red'
+                            ELSE pulse_risk_scores.alert_status
+                        END
+                """),
+                {
+                    "eid": employee_id,
+                    "ename": employee_name,
+                    "dept": department,
+                    "pts": points,
+                    "urgent": RISK_THRESHOLD_URGENT,
+                    "alert": RISK_THRESHOLD_ALERT,
+                },
+            )
+            db.commit()
+
+            row = db.execute(
+                text("SELECT current_score FROM pulse_risk_scores WHERE employee_id = :eid"),
+                {"eid": employee_id},
+            ).fetchone()
+            return (row[0] >= RISK_THRESHOLD_ALERT) if row else False
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"[PULSE] update_risk_score failed: {e}")
+        return False
+
+
+def log_hr_action(trigger_id: int, action: str, hr_user: str) -> None:
+    """Log HR response to an alert; reduce risk score by 2 on resolve/false_positive."""
+    try:
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT employee_id FROM pulse_triggers WHERE id = :tid"),
+                {"tid": trigger_id},
+            ).fetchone()
+
+            risk_score_id = None
+            if row and row[0]:
+                r = db.execute(
+                    text("SELECT id FROM pulse_risk_scores WHERE employee_id = :eid"),
+                    {"eid": row[0]},
+                ).fetchone()
+                risk_score_id = r[0] if r else None
+
+            db.execute(
+                text("""
+                    INSERT INTO pulse_hr_actions (trigger_id, risk_score_id, action, hr_user)
+                    VALUES (:tid, :rsid, :action, :hr)
+                """),
+                {"tid": trigger_id, "rsid": risk_score_id, "action": action, "hr": hr_user},
+            )
+
+            if action in ("resolved", "false_positive") and row and row[0]:
+                db.execute(
+                    text("""
+                        UPDATE pulse_risk_scores
+                        SET current_score = GREATEST(0, current_score - 2),
+                            alert_status = CASE
+                                WHEN current_score - 2 <= 0 THEN 'none'
+                                ELSE alert_status
+                            END,
+                            last_calculated_at = NOW()
+                        WHERE employee_id = :eid
+                    """),
+                    {"eid": row[0]},
+                )
+
+            db.commit()
+            logger.info(f"[PULSE] HR action logged: {action} | trigger_id={trigger_id} | by={hr_user}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"[PULSE] log_hr_action failed: {e}")
 
 
 def record_mood(telegram_id: int, score: int, db) -> tuple[bool, str | None]:
@@ -145,7 +328,6 @@ def record_mood(telegram_id: int, score: int, db) -> tuple[bool, str | None]:
     Store anonymous mood score for the current month.
     Returns (already_voted: bool, department: str | None).
     """
-    from sqlalchemy import text
     from models.hr_auth_models import HRUser
 
     user = db.query(HRUser).filter(HRUser.telegram_id == telegram_id).first()
@@ -155,9 +337,7 @@ def record_mood(telegram_id: int, score: int, db) -> tuple[bool, str | None]:
     survey_month = datetime.utcnow().strftime("%Y-%m")
 
     existing = db.execute(
-        text(
-            "SELECT id FROM pulse_surveys WHERE user_hash = :uh AND survey_month = :sm"
-        ),
+        text("SELECT id FROM pulse_surveys WHERE user_hash = :uh AND survey_month = :sm"),
         {"uh": user_h, "sm": survey_month},
     ).fetchone()
 
@@ -177,7 +357,7 @@ def record_mood(telegram_id: int, score: int, db) -> tuple[bool, str | None]:
 
 
 async def alert_hr_team(trigger_type: str, department: str | None) -> None:
-    """Send an HR alert to HR_ALERT_CHAT_ID (if configured)."""
+    """Send an anonymous HR alert to HR_ALERT_CHAT_ID (if configured)."""
     if not HR_ALERT_CHAT_ID or not TELEGRAM_MAYA_BOT_TOKEN:
         return
     try:
@@ -218,8 +398,6 @@ async def send_pulse_support(chat_id: int, trigger_type: str) -> None:
     )
 
     video_filename = TRIGGER_VIDEO_MAP.get(trigger_type)
-    video_sent = False
-
     if video_filename:
         import pathlib
         video_path = pathlib.Path(__file__).parent.parent / "static" / "videos" / video_filename
@@ -233,7 +411,6 @@ async def send_pulse_support(chat_id: int, trigger_type: str) -> None:
                             files={"video": (video_filename, f, "video/mp4")},
                         )
                     if resp.status_code == 200:
-                        video_sent = True
                         logger.info(f"[PULSE] Support video sent: {video_filename} → {chat_id}")
             except Exception as e:
                 logger.warning(f"[PULSE] Video send failed ({video_filename}): {e}")
@@ -253,6 +430,78 @@ async def send_pulse_support(chat_id: int, trigger_type: str) -> None:
         logger.warning(f"[PULSE] Support message failed: {e}")
 
 
+async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
+    """
+    Send a support video for the given trigger type or video_id.
+    Falls back to a text message if the video file is not present.
+    """
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        return
+
+    fallback_key = trigger_or_video_id
+    if fallback_key == "звільнення":
+        fallback_key = "decision"
+    elif fallback_key == "конфлікт":
+        fallback_key = "conflict"
+    elif fallback_key in ("вигорання", "стрес", "плачу"):
+        fallback_key = "burnout"
+
+    video_file = PULSE_VIDEOS.get(trigger_or_video_id) or PULSE_VIDEOS.get(fallback_key)
+    video_sent = False
+
+    if video_file:
+        import pathlib
+        video_path = pathlib.Path(__file__).parent.parent / "static" / "pulse_videos" / video_file
+        if video_path.exists():
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    with open(video_path, "rb") as f:
+                        resp = await client.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo",
+                            data={"chat_id": str(chat_id), "supports_streaming": "true"},
+                            files={"video": (video_file, f, "video/mp4")},
+                        )
+                if resp.status_code == 200:
+                    video_sent = True
+                    logger.info(f"[PULSE] Pulse video sent: {video_file} → {chat_id}")
+            except Exception as e:
+                logger.warning(f"[PULSE] Pulse video send failed ({video_file}): {e}")
+
+    if not video_sent:
+        msg = PULSE_VIDEO_FALLBACK_TEXT.get(
+            fallback_key,
+            PULSE_VIDEO_FALLBACK_TEXT["breathing"],
+        )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
+                )
+            logger.info(f"[PULSE] Pulse video fallback text sent: {fallback_key} → {chat_id}")
+        except Exception as e:
+            logger.warning(f"[PULSE] Pulse video fallback failed: {e}")
+
+
+def log_video_view(telegram_id: int, video_id: str) -> None:
+    """Log anonymous video view to pulse_video_views."""
+    salt = os.getenv("PULSE_ANONYMOUS_SALT", "teamPulse2026avtd")
+    emp_hash = hashlib.sha256(f"{telegram_id}:{salt}".encode()).hexdigest()
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(
+                text("INSERT INTO pulse_video_views (employee_hash, video_id) VALUES (:h, :vid)"),
+                {"h": emp_hash, "vid": video_id},
+            )
+            db.commit()
+            logger.info(f"[PULSE] Video view logged: {video_id}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] log_video_view failed: {e}")
+
+
 def send_monthly_survey() -> None:
     """
     Scheduled task: send mood survey to all active hr_users.
@@ -262,14 +511,8 @@ def send_monthly_survey() -> None:
         logger.warning("[PULSE] TELEGRAM_MAYA_BOT_TOKEN not set — survey skipped")
         return
 
-    import models
-    if models.SessionLocal is None:
-        models.init_db()
-
-    db = models.SessionLocal()
+    db = SessionLocal()
     try:
-        from sqlalchemy import text
-
         rows = db.execute(
             text(
                 "SELECT telegram_id, first_name FROM hr_users "

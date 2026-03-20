@@ -665,6 +665,45 @@ MIGRATIONS = [
                ON pulse_triggers(trigger_type, fired_at DESC)""",
         ]
     },
+    {
+        "version": "025_pulse_risk_and_actions",
+        "statements": [
+            "ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS employee_id BIGINT",
+            "ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255)",
+            "ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS trigger_text TEXT",
+            "ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS severity VARCHAR(10) DEFAULT 'yellow'",
+            "ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS risk_points INTEGER DEFAULT 1",
+            """CREATE TABLE IF NOT EXISTS pulse_risk_scores (
+                id SERIAL PRIMARY KEY,
+                employee_id BIGINT NOT NULL UNIQUE,
+                employee_name VARCHAR(255),
+                department VARCHAR(200),
+                current_score INTEGER NOT NULL DEFAULT 0,
+                alert_status VARCHAR(20) DEFAULT 'none',
+                last_trigger_at TIMESTAMP,
+                last_calculated_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_pulse_risk_employee ON pulse_risk_scores(employee_id)",
+            "CREATE INDEX IF NOT EXISTS idx_pulse_risk_score ON pulse_risk_scores(current_score DESC)",
+            """CREATE TABLE IF NOT EXISTS pulse_hr_actions (
+                id SERIAL PRIMARY KEY,
+                trigger_id INTEGER REFERENCES pulse_triggers(id),
+                risk_score_id INTEGER REFERENCES pulse_risk_scores(id),
+                action VARCHAR(30) NOT NULL,
+                notes TEXT,
+                hr_user VARCHAR(100),
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS pulse_video_views (
+                id SERIAL PRIMARY KEY,
+                employee_hash VARCHAR(64) NOT NULL,
+                video_id VARCHAR(50) NOT NULL,
+                viewed_at TIMESTAMP DEFAULT NOW(),
+                completed BOOLEAN DEFAULT FALSE
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_pulse_video_views ON pulse_video_views(video_id, viewed_at DESC)",
+        ]
+    },
 ]
 
 

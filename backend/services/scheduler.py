@@ -451,6 +451,35 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"[SCHEDULER] Team Pulse survey failed: {e}")
 
+    def _pulse_risk_decay_task(self):
+        """
+        Weekly risk score decay: subtract 1 point from scores where
+        the last trigger was > 7 days ago. Prevents stale scores.
+        Runs: every Monday at 04:00 Kyiv time.
+        """
+        logger.info("[SCHEDULER] Running weekly Pulse risk score decay...")
+        try:
+            db = self._get_db_session()
+            try:
+                from sqlalchemy import text as _text
+                result = db.execute(_text("""
+                    UPDATE pulse_risk_scores
+                    SET current_score = GREATEST(0, current_score - 1),
+                        alert_status = CASE
+                            WHEN GREATEST(0, current_score - 1) = 0 THEN 'none'
+                            ELSE alert_status
+                        END,
+                        last_calculated_at = NOW()
+                    WHERE last_trigger_at < NOW() - INTERVAL '7 days'
+                      AND current_score > 0
+                """))
+                db.commit()
+                logger.info(f"[SCHEDULER] Pulse risk decay complete: {result.rowcount} rows updated")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Pulse risk decay failed: {e}")
+
     def _cleanup_alex_memory_task(self):
         """
         Weekly cleanup: keep only last 50 messages per user in alex_conversations.
@@ -1260,6 +1289,15 @@ class ContentScheduler:
             CronTrigger(day=1, hour=9, minute=0, timezone='Europe/Kiev'),
             id='send_pulse_survey',
             name='Send monthly Team Pulse mood survey',
+            replace_existing=True
+        )
+
+        # Team Pulse: weekly risk score decay — every Monday at 04:00 Kyiv time
+        self.scheduler.add_job(
+            self._pulse_risk_decay_task,
+            CronTrigger(day_of_week='mon', hour=4, minute=0, timezone='Europe/Kiev'),
+            id='pulse_risk_decay',
+            name='Weekly Pulse risk score decay',
             replace_existing=True
         )
 

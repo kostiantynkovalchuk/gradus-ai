@@ -1178,6 +1178,116 @@ async def get_pulse_overview(
         db_session.close()
 
 
+@router.get("/api/pulse-alerts")
+async def get_pulse_alerts(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Return employees with elevated risk scores (current_score >= 4)."""
+    db_session = next(get_db())
+    try:
+        rows = db_session.execute(text("""
+            SELECT
+                prs.employee_id,
+                prs.employee_name,
+                prs.department,
+                prs.current_score,
+                prs.alert_status,
+                prs.last_trigger_at,
+                pt.trigger_type AS last_trigger_type,
+                pt.trigger_text AS last_trigger_text,
+                pt.id AS last_trigger_id
+            FROM pulse_risk_scores prs
+            LEFT JOIN pulse_triggers pt
+                ON pt.employee_id = prs.employee_id
+                AND pt.id = (
+                    SELECT id FROM pulse_triggers
+                    WHERE employee_id = prs.employee_id
+                    ORDER BY fired_at DESC LIMIT 1
+                )
+            WHERE prs.current_score >= 4
+            ORDER BY prs.current_score DESC, prs.last_trigger_at DESC
+        """)).fetchall()
+
+        return {
+            "alerts": [
+                {
+                    "employee_id": r[0],
+                    "employee_name": r[1] or "Невідомий",
+                    "department": r[2] or "Невідомий відділ",
+                    "current_score": r[3],
+                    "alert_status": r[4] or "red",
+                    "last_trigger_at": r[5].isoformat() if r[5] else None,
+                    "last_trigger_type": r[6],
+                    "last_trigger_text": r[7],
+                    "last_trigger_id": r[8],
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+    except Exception as e:
+        logger.error(f"Pulse alerts error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db_session.close()
+
+
+@router.get("/api/pulse-videos")
+async def get_pulse_video_stats(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Return video view counts for pulse support videos."""
+    db_session = next(get_db())
+    try:
+        rows = db_session.execute(text("""
+            SELECT
+                video_id,
+                COUNT(*) AS view_count,
+                COUNT(CASE WHEN completed THEN 1 END) AS completed_count,
+                MAX(viewed_at) AS last_viewed_at
+            FROM pulse_video_views
+            WHERE viewed_at >= NOW() - INTERVAL '30 days'
+            GROUP BY video_id
+            ORDER BY view_count DESC
+        """)).fetchall()
+
+        return {
+            "videos": [
+                {
+                    "video_id": r[0],
+                    "view_count": r[1],
+                    "completed_count": r[2],
+                    "last_viewed_at": r[3].isoformat() if r[3] else None,
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Pulse videos error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db_session.close()
+
+
+@router.post("/api/pulse-hr-action")
+async def post_pulse_hr_action(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Record an HR action on a trigger (resolved / false_positive / escalated)."""
+    body = await request.json()
+    trigger_id = body.get("trigger_id")
+    action = body.get("action")
+    hr_user = body.get("hr_user", "admin")
+
+    if not trigger_id or not action:
+        raise HTTPException(status_code=400, detail="trigger_id and action required")
+
+    from services.pulse_service import log_hr_action as _log_hr_action
+    _log_hr_action(trigger_id, action, hr_user)
+    return {"ok": True}
+
+
 @router.get("/api/system-info")
 async def get_system_info(
     credentials: HTTPBasicCredentials = Depends(verify_admin)

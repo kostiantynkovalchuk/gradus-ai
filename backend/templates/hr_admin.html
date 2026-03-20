@@ -1189,9 +1189,23 @@
             </div>
         </div>
 
-        <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);">
+        <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
             <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🔴 Тригери цього місяця</h3>
             <div id="pulseTriggerList" style="display:flex;gap:var(--space-md);flex-wrap:wrap;min-height:60px;align-items:center;">
+                <span style="color:var(--gray-400);">Завантаження...</span>
+            </div>
+        </div>
+
+        <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
+            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🚨 Активні ризик-алерти</h3>
+            <div id="pulseAlertsList">
+                <span style="color:var(--gray-400);">Завантаження...</span>
+            </div>
+        </div>
+
+        <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);">
+            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🎬 Перегляди підтримуючих відео (30 днів)</h3>
+            <div id="pulseVideosList">
                 <span style="color:var(--gray-400);">Завантаження...</span>
             </div>
         </div>
@@ -2321,9 +2335,97 @@
                         </div>`;
                     }).join('');
                 }
+
+                // Load risk alerts
+                try {
+                    const alertResp = await fetch('/hr/api/pulse-alerts');
+                    if (alertResp.ok) {
+                        const alertData = await alertResp.json();
+                        const alertsEl = document.getElementById('pulseAlertsList');
+                        if (!alertData.alerts || alertData.alerts.length === 0) {
+                            alertsEl.innerHTML = '<span style="color:var(--gray-400);">Активних ризик-алертів немає 🟢</span>';
+                        } else {
+                            const statusLabels = { urgent: '🚨 КРИТИЧНО', red: '🔴 Підвищений ризик' };
+                            const trigTypeLabels = { 'вигорання': 'Вигорання', 'конфлікт': 'Конфлікт', 'стрес': 'Стрес', 'плачу': 'Емоційний стан', 'звільнення': 'Думки про звільнення' };
+                            alertsEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
+                                <thead><tr style="background:var(--gray-50);">
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Співробітник</th>
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Відділ</th>
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Статус</th>
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Бали</th>
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Тригер</th>
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Час</th>
+                                    <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Дії</th>
+                                </tr></thead>
+                                <tbody>
+                                ${alertData.alerts.map(a => {
+                                    const statusLabel = statusLabels[a.alert_status] || '🔴';
+                                    const trigLabel = trigTypeLabels[a.last_trigger_type] || (a.last_trigger_type || '—');
+                                    const ts = a.last_trigger_at ? new Date(a.last_trigger_at).toLocaleString('uk-UA') : '—';
+                                    const bgColor = a.alert_status === 'urgent' ? '#fef2f2' : '#fffbeb';
+                                    const tid = a.last_trigger_id;
+                                    return `<tr style="border-top:1px solid var(--gray-100);background:${bgColor};">
+                                        <td style="padding:10px 12px;font-weight:600;">${a.employee_name}</td>
+                                        <td style="padding:10px 12px;color:var(--gray-600);">${a.department}</td>
+                                        <td style="padding:10px 12px;">${statusLabel}</td>
+                                        <td style="padding:10px 12px;font-weight:700;color:#ef4444;">${a.current_score}</td>
+                                        <td style="padding:10px 12px;">${trigLabel}</td>
+                                        <td style="padding:10px 12px;color:var(--gray-500);font-size:0.8rem;">${ts}</td>
+                                        <td style="padding:10px 12px;">
+                                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                                ${tid ? `<button onclick="pulseHrAction(${tid},'resolved')" style="background:#22c55e;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">✓ Вирішено</button>
+                                                <button onclick="pulseHrAction(${tid},'false_positive')" style="background:#6b7280;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">Хибний</button>
+                                                <button onclick="pulseHrAction(${tid},'escalated')" style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">↑ Ескалація</button>` : '—'}
+                                            </div>
+                                        </td>
+                                    </tr>`;
+                                }).join('')}
+                                </tbody>
+                            </table>`;
+                        }
+                    }
+                } catch (alertErr) { console.warn('pulse-alerts error:', alertErr); }
+
+                // Load video stats
+                try {
+                    const videoResp = await fetch('/hr/api/pulse-videos');
+                    if (videoResp.ok) {
+                        const videoData = await videoResp.json();
+                        const videosEl = document.getElementById('pulseVideosList');
+                        if (!videoData.videos || videoData.videos.length === 0) {
+                            videosEl.innerHTML = '<span style="color:var(--gray-400);">Переглядів відео ще немає</span>';
+                        } else {
+                            videosEl.innerHTML = `<div style="display:flex;gap:var(--space-md);flex-wrap:wrap;">
+                                ${videoData.videos.map(v => `
+                                    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:12px 18px;min-width:160px;">
+                                        <div style="font-size:0.8rem;color:var(--gray-500);margin-bottom:4px;">🎬 ${v.video_id}</div>
+                                        <div style="font-size:1.4rem;font-weight:700;color:var(--gray-800);">${v.view_count}</div>
+                                        <div style="font-size:0.75rem;color:var(--gray-400);">переглядів</div>
+                                    </div>
+                                `).join('')}
+                            </div>`;
+                        }
+                    }
+                } catch (vidErr) { console.warn('pulse-videos error:', vidErr); }
+
             } catch (err) {
                 console.error('loadPulseData error:', err);
             }
+        }
+
+        async function pulseHrAction(triggerId, action) {
+            try {
+                const resp = await fetch('/hr/api/pulse-hr-action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trigger_id: triggerId, action: action, hr_user: 'admin' })
+                });
+                if (resp.ok) {
+                    const labels = { resolved: 'Вирішено ✓', false_positive: 'Хибний алерт', escalated: 'Ескалація ↑' };
+                    alert(`Дію записано: ${labels[action] || action}`);
+                    loadPulseData();
+                }
+            } catch (e) { console.error('pulseHrAction error:', e); }
         }
     </script>
 </body>
