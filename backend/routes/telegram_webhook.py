@@ -842,7 +842,8 @@ async def handle_hr_callback(callback_query: dict):
     message_id = message.get('message_id')
     is_video_message = 'video' in message
     
-    await answer_callback(callback_id)
+    if not callback_data.startswith('hr_pulse:'):
+        await answer_callback(callback_id)
     
     try:
         if callback_data.startswith('hr_menu:'):

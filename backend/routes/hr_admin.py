@@ -1129,6 +1129,18 @@ async def get_pulse_overview(
 
         response_rate = round((current_month / total_users_row * 100), 1) if total_users_row > 0 else 0.0
 
+        monthly_by_dept_rows = db_session.execute(text("""
+            SELECT
+                survey_month,
+                COALESCE(department, 'Невідомо') AS department,
+                ROUND(AVG(score)::NUMERIC, 2) AS avg_score,
+                COUNT(*) AS response_count
+            FROM pulse_surveys
+            WHERE survey_month >= TO_CHAR(NOW() - INTERVAL '6 months', 'YYYY-MM')
+            GROUP BY survey_month, department
+            ORDER BY survey_month, department
+        """)).fetchall()
+
         return {
             "monthly_mood": [
                 {"month": r[0], "avg_score": float(r[1] or 0), "responses": r[2]}
@@ -1137,6 +1149,15 @@ async def get_pulse_overview(
             "dept_mood": [
                 {"department": r[0], "avg_score": float(r[1] or 0), "responses": r[2]}
                 for r in dept_mood
+            ],
+            "monthly_by_department": [
+                {
+                    "month": r[0],
+                    "department": r[1],
+                    "avg_score": float(r[2] or 0),
+                    "responses": r[3],
+                }
+                for r in monthly_by_dept_rows
             ],
             "trigger_counts": [
                 {"trigger_type": r[0], "count": r[1]}
