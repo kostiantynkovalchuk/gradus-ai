@@ -439,6 +439,18 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"[SCHEDULER] Channel queue task failed: {e}")
 
+    def _send_pulse_survey_task(self):
+        """
+        Monthly Team Pulse mood survey.
+        Runs: 1st of each month at 07:00 UTC (09:00 Kyiv time).
+        """
+        logger.info("[SCHEDULER] Starting monthly Team Pulse survey...")
+        try:
+            from services.pulse_service import send_monthly_survey
+            send_monthly_survey()
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Team Pulse survey failed: {e}")
+
     def _cleanup_alex_memory_task(self):
         """
         Weekly cleanup: keep only last 50 messages per user in alex_conversations.
@@ -1239,6 +1251,15 @@ class ContentScheduler:
             CronTrigger(day_of_week='sun', hour=4, minute=30),
             id='cleanup_alex_memory',
             name='Cleanup old Alex conversation memory (keep 50/user)',
+            replace_existing=True
+        )
+
+        # Team Pulse: monthly survey on the 1st of each month at 09:00 Kyiv time (UTC+2/UTC+3)
+        self.scheduler.add_job(
+            self._send_pulse_survey_task,
+            CronTrigger(day=1, hour=7, minute=0),
+            id='send_pulse_survey',
+            name='Send monthly Team Pulse mood survey',
             replace_existing=True
         )
 

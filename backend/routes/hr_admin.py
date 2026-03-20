@@ -1074,6 +1074,89 @@ async def get_hunt_report(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/pulse-overview")
+async def get_pulse_overview(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Get Team Pulse statistics: mood trends, department breakdown, trigger counts."""
+    db_session = next(get_db())
+    try:
+        monthly_mood = db_session.execute(text("""
+            SELECT
+                survey_month,
+                ROUND(AVG(score)::NUMERIC, 2) AS avg_score,
+                COUNT(*) AS response_count
+            FROM pulse_surveys
+            WHERE survey_month >= TO_CHAR(NOW() - INTERVAL '6 months', 'YYYY-MM')
+            GROUP BY survey_month
+            ORDER BY survey_month
+        """)).fetchall()
+
+        dept_mood = db_session.execute(text("""
+            SELECT
+                COALESCE(department, 'Невідомо') AS department,
+                ROUND(AVG(score)::NUMERIC, 2) AS avg_score,
+                COUNT(*) AS response_count
+            FROM pulse_surveys
+            WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')
+            GROUP BY department
+            ORDER BY avg_score DESC
+        """)).fetchall()
+
+        trigger_counts = db_session.execute(text("""
+            SELECT
+                trigger_type,
+                COUNT(*) AS cnt
+            FROM pulse_triggers
+            WHERE fired_at >= NOW() - INTERVAL '30 days'
+            GROUP BY trigger_type
+            ORDER BY cnt DESC
+        """)).fetchall()
+
+        total_users_row = db_session.execute(text(
+            "SELECT COUNT(*) FROM hr_users WHERE is_active = TRUE AND telegram_id IS NOT NULL"
+        )).scalar() or 0
+
+        current_month = db_session.execute(text(
+            "SELECT COUNT(DISTINCT user_hash) FROM pulse_surveys "
+            "WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')"
+        )).scalar() or 0
+
+        overall_avg = db_session.execute(text(
+            "SELECT ROUND(AVG(score)::NUMERIC, 2) FROM pulse_surveys "
+            "WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')"
+        )).scalar()
+
+        response_rate = round((current_month / total_users_row * 100), 1) if total_users_row > 0 else 0.0
+
+        return {
+            "monthly_mood": [
+                {"month": r[0], "avg_score": float(r[1] or 0), "responses": r[2]}
+                for r in monthly_mood
+            ],
+            "dept_mood": [
+                {"department": r[0], "avg_score": float(r[1] or 0), "responses": r[2]}
+                for r in dept_mood
+            ],
+            "trigger_counts": [
+                {"trigger_type": r[0], "count": r[1]}
+                for r in trigger_counts
+            ],
+            "kpi": {
+                "response_rate": response_rate,
+                "responses_this_month": int(current_month),
+                "total_active_users": int(total_users_row),
+                "overall_mood_avg": float(overall_avg) if overall_avg else 0.0,
+                "triggers_this_month": sum(r[1] for r in trigger_counts),
+            }
+        }
+    except Exception as e:
+        logger.error(f"Pulse overview error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db_session.close()
+
+
 @router.get("/api/system-info")
 async def get_system_info(
     credentials: HTTPBasicCredentials = Depends(verify_admin)

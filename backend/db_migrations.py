@@ -639,6 +639,32 @@ MIGRATIONS = [
                ADD COLUMN IF NOT EXISTS scoring_version VARCHAR(10) DEFAULT 'v2'""",
         ]
     },
+    {
+        "version": "024_team_pulse",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS pulse_surveys (
+                id SERIAL PRIMARY KEY,
+                user_hash VARCHAR(64) NOT NULL,
+                department VARCHAR(200),
+                score INTEGER NOT NULL CHECK (score BETWEEN 1 AND 5),
+                survey_month VARCHAR(7) NOT NULL,
+                responded_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_pulse_surveys_unique
+               ON pulse_surveys(user_hash, survey_month)""",
+            """CREATE INDEX IF NOT EXISTS idx_pulse_surveys_month
+               ON pulse_surveys(survey_month, department)""",
+            """CREATE TABLE IF NOT EXISTS pulse_triggers (
+                id SERIAL PRIMARY KEY,
+                department VARCHAR(200),
+                position VARCHAR(200),
+                trigger_type VARCHAR(50) NOT NULL,
+                fired_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_pulse_triggers_fired
+               ON pulse_triggers(trigger_type, fired_at DESC)""",
+        ]
+    },
 ]
 
 

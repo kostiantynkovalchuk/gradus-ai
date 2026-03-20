@@ -32,6 +32,7 @@ from services.hr_auth import (
     handle_stats_command, handle_listusers_command
 )
 from utils.phone_normalizer import normalize_phone, format_for_display
+from services.pulse_service import detect_pulse_trigger, log_trigger, alert_hr_team, send_pulse_support
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -406,6 +407,20 @@ async def process_telegram_message(message: dict):
             f"MSG_ROUTED: telegram_id={telegram_id}, "
             f"user={user.full_name}, text='{text[:50]}...'"
         )
+
+        trigger_type = detect_pulse_trigger(text)
+        if trigger_type:
+            try:
+                log_trigger(
+                    getattr(user, 'department', None),
+                    getattr(user, 'position', None),
+                    trigger_type,
+                )
+            except Exception as _pe:
+                logger.warning(f"[PULSE] log_trigger error: {_pe}")
+            asyncio.create_task(alert_hr_team(trigger_type, getattr(user, 'department', None)))
+            asyncio.create_task(send_pulse_support(chat_id, trigger_type))
+
         user_id = message.get("from", {}).get("id", 0)
         await handle_hr_question(chat_id, user_id, text)
         
@@ -945,7 +960,36 @@ async def handle_hr_callback(callback_query: dict):
         
         elif callback_data == 'hr_ask':
             await send_telegram_message(chat_id, "Напишіть своє питання, і я постараюся допомогти! 💬")
-        
+
+        elif callback_data.startswith('hr_pulse:'):
+            parts = callback_data.split(':')
+            if len(parts) >= 3 and parts[1] == 'mood':
+                try:
+                    score = int(parts[2])
+                    if not (1 <= score <= 5):
+                        raise ValueError("score out of range")
+                    telegram_user_id = callback_query.get('from', {}).get('id')
+                    from models import get_db as _pulse_get_db
+                    from services.pulse_service import record_mood as _record_mood
+                    pulse_db = next(_pulse_get_db())
+                    try:
+                        already_voted, department = _record_mood(telegram_user_id, score, pulse_db)
+                    finally:
+                        pulse_db.close()
+                    if already_voted:
+                        await answer_callback(callback_id, "Ви вже відповіли цього місяця 🙏")
+                    else:
+                        await answer_callback(callback_id, "Дякую! Ваша оцінка записана 💛")
+                        await edit_telegram_message(
+                            chat_id, message_id,
+                            "💛 *Дякуємо за вашу відповідь!*\n\n"
+                            "Ваша оцінка анонімно збережена.\n"
+                            "Разом ми робимо ТД АВ кращим місцем для роботи! 🌟"
+                        )
+                except (ValueError, IndexError) as _pulse_err:
+                    logger.warning(f"[PULSE] mood callback error: {_pulse_err}")
+                    await answer_callback(callback_id, "Помилка обробки відповіді")
+
         elif callback_data.startswith('hr_verify_phone:'):
             action = callback_data.replace('hr_verify_phone:', '', 1)
             telegram_id = callback_query.get('from', {}).get('id')
