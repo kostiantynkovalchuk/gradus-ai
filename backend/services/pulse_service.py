@@ -233,20 +233,19 @@ async def send_pulse_support(chat_id: int, trigger_type: str) -> None:
             except Exception as e:
                 logger.warning(f"[PULSE] Video send failed ({video_filename}): {e}")
 
-    if not video_sent:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": support_text,
-                        "parse_mode": "Markdown",
-                    },
-                )
-            logger.info(f"[PULSE] Support message sent (no video): {trigger_type} → {chat_id}")
-        except Exception as e:
-            logger.warning(f"[PULSE] Support message failed: {e}")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": support_text,
+                    "parse_mode": "Markdown",
+                },
+            )
+        logger.info(f"[PULSE] Support message sent: {trigger_type} → {chat_id}")
+    except Exception as e:
+        logger.warning(f"[PULSE] Support message failed: {e}")
 
 
 def send_monthly_survey() -> None:
@@ -327,11 +326,7 @@ def send_monthly_survey() -> None:
             )
 
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(_send_all(rows), loop).result(timeout=300)
-            else:
-                loop.run_until_complete(_send_all(rows))
+            asyncio.run(_send_all(rows))
         except Exception as e:
             logger.error(f"[PULSE] Async survey send failed: {e}")
 

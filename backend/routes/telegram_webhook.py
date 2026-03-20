@@ -32,7 +32,10 @@ from services.hr_auth import (
     handle_stats_command, handle_listusers_command
 )
 from utils.phone_normalizer import normalize_phone, format_for_display
-from services.pulse_service import detect_pulse_trigger, log_trigger, alert_hr_team, send_pulse_support
+from services.pulse_service import (
+    detect_pulse_trigger, log_trigger, alert_hr_team, send_pulse_support,
+    TRIGGER_VIDEO_MAP, TRIGGER_SUPPORT_TEXT,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -419,7 +422,7 @@ async def process_telegram_message(message: dict):
             except Exception as _pe:
                 logger.warning(f"[PULSE] log_trigger error: {_pe}")
             asyncio.create_task(alert_hr_team(trigger_type, getattr(user, 'department', None)))
-            asyncio.create_task(send_pulse_support(chat_id, trigger_type))
+            asyncio.create_task(_send_pulse_with_video(chat_id, trigger_type))
 
         user_id = message.get("from", {}).get("id", 0)
         await handle_hr_question(chat_id, user_id, text)
@@ -472,6 +475,25 @@ async def delete_telegram_message(chat_id: int, message_id: int):
     except Exception as e:
         logger.warning(f"Could not delete message: {e}")
         return False
+
+
+async def _send_pulse_with_video(chat_id: int, trigger_type: str) -> None:
+    """
+    Pulse trigger response: try to send support video via send_telegram_video
+    (with caption = support text). If video is unavailable, fall back to
+    send_pulse_support which always sends the text message.
+    """
+    video_filename = TRIGGER_VIDEO_MAP.get(trigger_type)
+    support_text = TRIGGER_SUPPORT_TEXT.get(trigger_type, "💛 HR-команда поруч і готова допомогти.")
+    sent = False
+    if video_filename:
+        sent = await send_telegram_video(
+            chat_id,
+            f"https://placeholder/{video_filename}",
+            caption=support_text,
+        )
+    if not sent:
+        await send_pulse_support(chat_id, trigger_type)
 
 
 async def send_telegram_video(chat_id: int, video_source: str, caption: str = None, reply_markup: dict = None):
