@@ -1269,6 +1269,16 @@ async def get_pulse_video_stats(
         db_session.close()
 
 
+@router.get("/api/pulse-risk-history/{employee_id}")
+async def get_pulse_risk_history(
+    employee_id: int,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Return recent trigger history for a specific employee."""
+    from services.pulse_service import get_risk_history as _get_risk_history
+    return {"history": _get_risk_history(employee_id)}
+
+
 @router.post("/api/pulse-hr-action")
 async def post_pulse_hr_action(
     request: Request,

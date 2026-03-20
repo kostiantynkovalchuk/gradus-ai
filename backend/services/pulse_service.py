@@ -502,6 +502,42 @@ def log_video_view(telegram_id: int, video_id: str) -> None:
         logger.warning(f"[PULSE] log_video_view failed: {e}")
 
 
+def get_risk_history(employee_id: int, limit: int = 20) -> list[dict]:
+    """
+    Return recent pulse_triggers for an employee, ordered newest-first.
+    Used by dashboard to show risk history timeline.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            rows = db.execute(
+                text("""
+                    SELECT id, trigger_type, severity, risk_points, trigger_text, fired_at
+                    FROM pulse_triggers
+                    WHERE employee_id = :eid
+                    ORDER BY fired_at DESC
+                    LIMIT :lim
+                """),
+                {"eid": employee_id, "lim": limit},
+            ).fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "trigger_type": r[1],
+                    "severity": r[2],
+                    "risk_points": r[3],
+                    "trigger_text": r[4],
+                    "fired_at": r[5].isoformat() if r[5] else None,
+                }
+                for r in rows
+            ]
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"[PULSE] get_risk_history failed: {e}")
+        return []
+
+
 def send_monthly_survey() -> None:
     """
     Scheduled task: send mood survey to all active hr_users.
