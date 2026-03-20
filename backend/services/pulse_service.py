@@ -228,11 +228,19 @@ def update_risk_score(
 ) -> bool:
     """
     Update rolling risk score for an employee via UPSERT.
-    Returns True if the score has crossed RISK_THRESHOLD_ALERT (HR alert needed).
+    Returns True ONLY if this update crosses the RISK_THRESHOLD_ALERT (prev < 4, new >= 4)
+    — i.e. a true threshold transition, not every subsequent trigger above the line.
     """
     try:
         db = SessionLocal()
         try:
+            # Read previous score before UPSERT
+            prev_row = db.execute(
+                text("SELECT current_score FROM pulse_risk_scores WHERE employee_id = :eid"),
+                {"eid": employee_id},
+            ).fetchone()
+            prev_score = prev_row[0] if prev_row else 0
+
             db.execute(
                 text("""
                     INSERT INTO pulse_risk_scores
@@ -262,11 +270,10 @@ def update_risk_score(
             )
             db.commit()
 
-            row = db.execute(
-                text("SELECT current_score FROM pulse_risk_scores WHERE employee_id = :eid"),
-                {"eid": employee_id},
-            ).fetchone()
-            return (row[0] >= RISK_THRESHOLD_ALERT) if row else False
+            new_score = prev_score + points
+            # Alert only on threshold transition: was below, now at-or-above
+            crossed = prev_score < RISK_THRESHOLD_ALERT and new_score >= RISK_THRESHOLD_ALERT
+            return crossed
         finally:
             db.close()
     except Exception as e:
@@ -502,9 +509,10 @@ def log_video_view(telegram_id: int, video_id: str) -> None:
         logger.warning(f"[PULSE] log_video_view failed: {e}")
 
 
-def get_risk_history(employee_id: int, limit: int = 20) -> list[dict]:
+def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
     """
-    Return recent pulse_triggers for an employee, ordered newest-first.
+    Return the last 5 pulse_triggers within the past 30 days for an employee,
+    ordered newest-first.
     Used by dashboard to show risk history timeline.
     """
     try:
@@ -515,6 +523,7 @@ def get_risk_history(employee_id: int, limit: int = 20) -> list[dict]:
                     SELECT id, trigger_type, severity, risk_points, trigger_text, fired_at
                     FROM pulse_triggers
                     WHERE employee_id = :eid
+                      AND fired_at >= NOW() - INTERVAL '30 days'
                     ORDER BY fired_at DESC
                     LIMIT :lim
                 """),

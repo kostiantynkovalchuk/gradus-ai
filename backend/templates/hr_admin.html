@@ -2373,9 +2373,9 @@
                                         <td style="padding:10px 12px;color:var(--gray-500);font-size:0.8rem;">${ts}</td>
                                         <td style="padding:10px 12px;">
                                             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                                                ${tid ? `<button onclick="pulseHrAction(${tid},'resolved')" style="background:#22c55e;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">✓ Вирішено</button>
-                                                <button onclick="pulseHrAction(${tid},'false_positive')" style="background:#6b7280;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">Хибний</button>
-                                                <button onclick="pulseHrAction(${tid},'escalated')" style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">↑ Ескалація</button>` : '—'}
+                                                ${tid ? `<button onclick="pulseHrAction('resolved',${tid})" style="background:#22c55e;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">✓ Вирішено</button>
+                                                <button onclick="pulseHrAction('false_positive',${tid})" style="background:#6b7280;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">Хибний</button>
+                                                <button onclick="pulseHrAction('escalated',${tid})" style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">↑ Ескалація</button>` : '—'}
                                             </div>
                                         </td>
                                     </tr>`;
@@ -2413,7 +2413,7 @@
             }
         }
 
-        async function pulseHrAction(triggerId, action) {
+        async function pulseHrAction(action, triggerId) {
             try {
                 const resp = await fetch('/hr/api/pulse-hr-action', {
                     method: 'POST',

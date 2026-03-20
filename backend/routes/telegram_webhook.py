@@ -571,11 +571,11 @@ async def alert_hr_team_identified(
             payload["reply_markup"] = {
                 "inline_keyboard": [
                     [
-                        {"text": "✅ Вирішено", "callback_data": f"hr_pulse:hr_action:{trigger_id}:resolved"},
-                        {"text": "🚨 Ескалація", "callback_data": f"hr_pulse:hr_action:{trigger_id}:escalated"},
+                        {"text": "✅ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
+                        {"text": "🚨 Ескалація", "callback_data": f"hr_pulse:hr_action:escalated:{trigger_id}"},
                     ],
                     [
-                        {"text": "❌ Хибний алерт", "callback_data": f"hr_pulse:hr_action:{trigger_id}:false_positive"},
+                        {"text": "❌ Хибний алерт", "callback_data": f"hr_pulse:hr_action:false_positive:{trigger_id}"},
                     ],
                 ]
             }
@@ -1121,7 +1121,6 @@ async def handle_hr_callback(callback_query: dict):
                                 ]
                             }
                         )
-                        log_video_view(telegram_user_id, "breathing")
                     else:
                         await answer_callback(callback_id, "Ваша оцінка отримана 💛")
                         await edit_telegram_message(
@@ -1138,7 +1137,6 @@ async def handle_hr_callback(callback_query: dict):
                                 ]
                             }
                         )
-                        log_video_view(telegram_user_id, "burnout")
                 except (ValueError, IndexError) as _pulse_err:
                     logger.warning(f"[PULSE] mood callback error: {_pulse_err}")
                     await answer_callback(callback_id, "Помилка обробки відповіді")
@@ -1170,9 +1168,9 @@ async def handle_hr_callback(callback_query: dict):
                 )
 
             elif action_part == 'hr_action' and len(parts) >= 4:
-                # Format: hr_pulse:hr_action:{trigger_id}:{action}
-                trigger_id_str = parts[2]
-                action_type = parts[3]
+                # Format: hr_pulse:hr_action:{action}:{trigger_id}
+                action_type = parts[2]
+                trigger_id_str = parts[3]
                 try:
                     t_id = int(trigger_id_str)
                     hr_from = callback_query.get('from', {})
