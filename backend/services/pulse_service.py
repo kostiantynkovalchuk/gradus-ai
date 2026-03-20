@@ -53,11 +53,11 @@ TRIGGER_KEYWORDS: dict[str, list[str]] = {
 }
 
 TRIGGER_VIDEO_MAP: dict[str, str] = {
-    "вигорання": "pulse_burnout.mp4",
-    "конфлікт": "pulse_conflict.mp4",
-    "стрес": "pulse_stress.mp4",
-    "плачу": "pulse_stress.mp4",
-    "звільнення": "pulse_support.mp4",
+    "вигорання": "video_values.mp4",
+    "конфлікт": "video_values.mp4",
+    "стрес": "video_values.mp4",
+    "плачу": "video_values.mp4",
+    "звільнення": "video_offboarding.mp4",
 }
 
 TRIGGER_SUPPORT_TEXT: dict[str, str] = {
