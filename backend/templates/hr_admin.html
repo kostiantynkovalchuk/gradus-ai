@@ -1190,7 +1190,7 @@
         </div>
 
         <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);">
-            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🔴 Тригери за останні 30 днів</h3>
+            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🔴 Тригери цього місяця</h3>
             <div id="pulseTriggerList" style="display:flex;gap:var(--space-md);flex-wrap:wrap;min-height:60px;align-items:center;">
                 <span style="color:var(--gray-400);">Завантаження...</span>
             </div>
@@ -2303,7 +2303,7 @@
                 const triggers = data.trigger_counts || [];
                 const triggerEl = document.getElementById('pulseTriggerList');
                 if (triggers.length === 0) {
-                    triggerEl.innerHTML = '<span style="color:var(--gray-400);">Тригерів не зафіксовано за останні 30 днів 🟢</span>';
+                    triggerEl.innerHTML = '<span style="color:var(--gray-400);">Тригерів не зафіксовано цього місяця 🟢</span>';
                 } else {
                     const triggerLabels = {
                         'вигорання': '🔥 Вигорання',

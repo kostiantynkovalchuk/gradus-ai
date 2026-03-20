@@ -1108,7 +1108,7 @@ async def get_pulse_overview(
                 trigger_type,
                 COUNT(*) AS cnt
             FROM pulse_triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
+            WHERE fired_at >= DATE_TRUNC('month', NOW())
             GROUP BY trigger_type
             ORDER BY cnt DESC
         """)).fetchall()
