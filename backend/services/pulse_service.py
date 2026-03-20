@@ -276,6 +276,10 @@ def update_risk_score(
             new_score = prev_score + points
             # Alert only on threshold transition: was below, now at-or-above
             crossed = prev_score < RISK_THRESHOLD_ALERT and new_score >= RISK_THRESHOLD_ALERT
+            logger.info(
+                f"[PULSE] Risk score updated: emp={employee_id}, "
+                f"prev={prev_score} → new={new_score}, threshold_crossed={crossed}"
+            )
             return crossed
         finally:
             db.close()

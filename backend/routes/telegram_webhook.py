@@ -422,6 +422,7 @@ async def process_telegram_message(message: dict):
                 _emp_pos = getattr(user, 'position', None)
                 _emp_id = getattr(user, 'telegram_id', None)
                 _emp_name = getattr(user, 'full_name', None) or getattr(user, 'first_name', None)
+                logger.info(f"[PULSE] Step 1: logging trigger for emp_id={_emp_id} dept={_emp_dept}")
                 _trigger_id = log_trigger(
                     _emp_dept,
                     _emp_pos,
@@ -430,21 +431,24 @@ async def process_telegram_message(message: dict):
                     employee_name=_emp_name,
                     trigger_text=text,
                 )
+                logger.info(f"[PULSE] Step 2: trigger_id={_trigger_id}, updating risk score...")
                 if _emp_id:
                     _points = RISK_POINTS.get(trigger_type, 1)
                     _needs_alert = update_risk_score(_emp_id, _emp_name or "Unknown", _emp_dept, _points)
+                    logger.info(f"[PULSE] Step 3: should_alert={_needs_alert}, trigger={trigger_type}")
                     # Immediate alert for red triggers (звільнення=3pts) OR threshold crossed
                     if _needs_alert or trigger_type == "звільнення":
+                        logger.info(f"[PULSE] Step 4: sending HR alert to HR_ALERT_CHAT_ID...")
                         asyncio.create_task(
                             alert_hr_team_identified(
                                 trigger_type, _emp_dept, _emp_name, _emp_id, _trigger_id
                             )
                         )
                 else:
-                    # No identified employee — send anonymous alert only
+                    logger.info(f"[PULSE] Step 3b: no emp_id — sending anonymous alert")
                     asyncio.create_task(alert_hr_team(trigger_type, _emp_dept))
             except Exception as _pe:
-                logger.warning(f"[PULSE] trigger processing error: {_pe}")
+                logger.warning(f"[PULSE] trigger processing error: {_pe}", exc_info=True)
             asyncio.create_task(send_pulse_video(chat_id, trigger_type))
 
         user_id = message.get("from", {}).get("id", 0)
@@ -513,9 +517,11 @@ async def alert_hr_team_identified(
     callback_data format: hr_pulse:hr_action:{trigger_id}:{action}
     Called inside telegram_webhook.py to avoid circular imports with pulse_service.
     """
-    hr_chat = os.getenv("HR_ALERT_CHAT_ID")
-    if not hr_chat or not TELEGRAM_MAYA_BOT_TOKEN:
+    hr_chat_raw = os.getenv("HR_ALERT_CHAT_ID")
+    if not hr_chat_raw or not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.warning(f"[PULSE] alert_hr_team_identified skipped: HR_ALERT_CHAT_ID={hr_chat_raw!r}, token_set={bool(TELEGRAM_MAYA_BOT_TOKEN)}")
         return
+    hr_chat_ids = [c.strip() for c in hr_chat_raw.split(",") if c.strip()]
     try:
         db_session = next(get_db())
         try:
@@ -557,10 +563,8 @@ async def alert_hr_team_identified(
                 ]
             }
 
-        # Send to HR alert chat using the shared helper (swapping chat_id temporarily)
-        _orig_token_check = TELEGRAM_MAYA_BOT_TOKEN
-        if _orig_token_check:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for hr_chat in hr_chat_ids:
                 payload: dict = {
                     "chat_id": hr_chat,
                     "text": alert_text,
@@ -568,15 +572,18 @@ async def alert_hr_team_identified(
                 }
                 if keyboard:
                     payload["reply_markup"] = keyboard
-                await client.post(
+                resp = await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
                     json=payload,
                 )
+                logger.info(
+                    f"[PULSE] HR alert sent to {hr_chat}: status={resp.status_code}"
+                )
         logger.info(
-            f"[PULSE] Identified HR alert sent: {trigger_type} | {name_str} | score={current_score}"
+            f"[PULSE] Identified HR alert sent to {hr_chat_ids}: {trigger_type} | {name_str} | score={current_score}"
         )
     except Exception as e:
-        logger.warning(f"[PULSE] alert_hr_team_identified failed: {e}")
+        logger.warning(f"[PULSE] alert_hr_team_identified failed: {e}", exc_info=True)
 
 
 async def send_telegram_video(chat_id: int, video_source: str, caption: str = None, reply_markup: dict = None):
