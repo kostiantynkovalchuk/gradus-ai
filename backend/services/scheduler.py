@@ -1254,10 +1254,10 @@ class ContentScheduler:
             replace_existing=True
         )
 
-        # Team Pulse: monthly survey on the 1st of each month at 09:00 Kyiv time (UTC+2/UTC+3)
+        # Team Pulse: monthly survey on the 1st of each month at 09:00 Kyiv time
         self.scheduler.add_job(
             self._send_pulse_survey_task,
-            CronTrigger(day=1, hour=7, minute=0),
+            CronTrigger(day=1, hour=9, minute=0, timezone='Europe/Kiev'),
             id='send_pulse_survey',
             name='Send monthly Team Pulse mood survey',
             replace_existing=True
