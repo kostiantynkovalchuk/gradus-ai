@@ -17,7 +17,7 @@ from datetime import datetime
 import httpx
 from sqlalchemy import text
 
-from models import SessionLocal
+import models as _models
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ def log_trigger(
     severity = "red" if trigger_type == "звільнення" else "yellow"
     points = RISK_POINTS.get(trigger_type, 1)
     try:
-        db = SessionLocal()
+        db = _models.SessionLocal()
         try:
             result = db.execute(
                 text(
@@ -235,7 +235,7 @@ def update_risk_score(
     — i.e. a true threshold transition, not every subsequent trigger above the line.
     """
     try:
-        db = SessionLocal()
+        db = _models.SessionLocal()
         try:
             # Read previous score before UPSERT
             prev_row = db.execute(
@@ -287,7 +287,7 @@ def update_risk_score(
 def log_hr_action(trigger_id: int, action: str, hr_user: str) -> None:
     """Log HR response to an alert; reduce risk score by 2 on resolve/false_positive."""
     try:
-        db = SessionLocal()
+        db = _models.SessionLocal()
         try:
             row = db.execute(
                 text("SELECT employee_id FROM pulse_triggers WHERE id = :tid"),
@@ -498,7 +498,7 @@ def log_video_view(telegram_id: int, video_id: str) -> None:
     salt = os.getenv("PULSE_ANONYMOUS_SALT", "teamPulse2026avtd")
     emp_hash = hashlib.sha256(f"{telegram_id}:{salt}".encode()).hexdigest()
     try:
-        db = SessionLocal()
+        db = _models.SessionLocal()
         try:
             db.execute(
                 text("INSERT INTO pulse_video_views (employee_hash, video_id) VALUES (:h, :vid)"),
@@ -519,7 +519,7 @@ def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
     Used by dashboard to show risk history timeline.
     """
     try:
-        db = SessionLocal()
+        db = _models.SessionLocal()
         try:
             rows = db.execute(
                 text("""
@@ -559,7 +559,7 @@ def send_monthly_survey() -> None:
         logger.warning("[PULSE] TELEGRAM_MAYA_BOT_TOKEN not set — survey skipped")
         return
 
-    db = SessionLocal()
+    db = _models.SessionLocal()
     try:
         rows = db.execute(
             text(
