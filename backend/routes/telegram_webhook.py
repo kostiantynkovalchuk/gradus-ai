@@ -35,10 +35,9 @@ from services.hr_auth import (
 )
 from utils.phone_normalizer import normalize_phone, format_for_display
 from services.pulse_service import (
-    detect_pulse_trigger, log_trigger, alert_hr_team, send_pulse_support,
+    detect_pulse_trigger, log_trigger, alert_hr_team,
     send_pulse_video, log_video_view, log_hr_action,
     update_risk_score, RISK_POINTS,
-    TRIGGER_VIDEO_MAP, TRIGGER_SUPPORT_TEXT,
 )
 
 logger = logging.getLogger(__name__)
@@ -500,24 +499,6 @@ async def delete_telegram_message(chat_id: int, message_id: int):
         return False
 
 
-async def _send_pulse_with_video(chat_id: int, trigger_type: str) -> None:
-    """
-    Pulse trigger response: try to send support video via send_telegram_video
-    (with caption = support text). If video is unavailable, fall back to
-    send_pulse_support which always sends the text message.
-    """
-    video_filename = TRIGGER_VIDEO_MAP.get(trigger_type)
-    support_text = TRIGGER_SUPPORT_TEXT.get(trigger_type, "💛 HR-команда поруч і готова допомогти.")
-    sent = False
-    if video_filename:
-        sent = await send_telegram_video(
-            chat_id,
-            f"https://placeholder/{video_filename}",
-            caption=support_text,
-        )
-    if not sent:
-        await send_pulse_support(chat_id, trigger_type)
-
 
 async def alert_hr_team_identified(
     trigger_type: str,
@@ -561,14 +542,9 @@ async def alert_hr_team_identified(
             f"_Зверніться до співробітника конфіденційно_"
         )
 
-        payload: dict = {
-            "chat_id": hr_chat,
-            "text": alert_text,
-            "parse_mode": "Markdown",
-        }
-
+        keyboard = None
         if trigger_id:
-            payload["reply_markup"] = {
+            keyboard = {
                 "inline_keyboard": [
                     [
                         {"text": "✅ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
@@ -580,11 +556,21 @@ async def alert_hr_team_identified(
                 ]
             }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
-                json=payload,
-            )
+        # Send to HR alert chat using the shared helper (swapping chat_id temporarily)
+        _orig_token_check = TELEGRAM_MAYA_BOT_TOKEN
+        if _orig_token_check:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                payload: dict = {
+                    "chat_id": hr_chat,
+                    "text": alert_text,
+                    "parse_mode": "Markdown",
+                }
+                if keyboard:
+                    payload["reply_markup"] = keyboard
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                    json=payload,
+                )
         logger.info(
             f"[PULSE] Identified HR alert sent: {trigger_type} | {name_str} | score={current_score}"
         )
