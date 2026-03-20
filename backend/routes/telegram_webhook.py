@@ -414,6 +414,7 @@ async def process_telegram_message(message: dict):
             f"user={user.full_name}, text='{text[:50]}...'"
         )
 
+        logger.info(f"PULSE_CHECK: checking triggers for text: {text[:50]}")
         trigger_type = detect_pulse_trigger(text)
         if trigger_type:
             try:
@@ -1375,8 +1376,8 @@ async def send_video_only_response(chat_id: int, content_id: str, caption: str) 
     try:
         video_url = None
         
-        from services.maya_hr_content import HR_CONTENT
-        direct_content = HR_CONTENT.get(content_id)
+        from services.maya_hr_content import HR_DIRECT_CONTENT
+        direct_content = HR_DIRECT_CONTENT.get(content_id)
         if direct_content and direct_content.get('type') == 'video' and direct_content.get('video_url'):
             video_url = direct_content['video_url']
         

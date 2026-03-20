@@ -1,0 +1,74 @@
+URGENT — Three bugs to investigate and fix. Do NOT skip any step.
+
+=== BUG 1: Video response broken ===
+
+The HR preset q26 (звільнення) used to send a video response. Now it crashes:
+ERROR: cannot import name 'HR_CONTENT' from 'services.maya_hr_content'
+
+This was broken during Team Pulse Phase 2 implementation.
+
+1. Check: was 'HR_CONTENT' removed or renamed in services/maya_hr_content.py?
+2. Check: what import of HR_CONTENT exists in telegram_webhook.py? Show the exact line.
+3. FIX: restore the correct import. If HR_CONTENT was renamed, update the import. If it was accidentally deleted, restore it from git history:
+   git log --oneline -10
+   git diff HEAD~3 -- backend/services/maya_hr_content.py
+4. Verify the video response works for q26 after fix.
+
+=== BUG 2: Team Pulse trigger detection NOT firing ===
+
+When user sends "як звільнитися" — the logs show ZERO pulse-related activity.
+No "detect_pulse_trigger", no "log_trigger", no "alert_hr_team", nothing.
+The message goes straight to preset matching and returns.
+
+This means the trigger detection hook was either:
+a) Not inserted into process_telegram_message(), or
+b) Inserted AFTER a return statement, or  
+c) The import is failing silently
+
+INVESTIGATE:
+1. Show me the EXACT code in process_telegram_message() around where trigger detection should be.
+   I need to see the flow: auth check → [trigger detection should be here] → handle_hr_question()
+2. Is detect_pulse_trigger imported at the top of telegram_webhook.py? Show the import line.
+3. Is the trigger check actually in the code path that runs? Show 20 lines before and after.
+4. Add explicit logging: 
+   logger.info(f"PULSE_CHECK: checking triggers for text: {text[:50]}")
+   right before the detect_pulse_trigger() call.
+5. Add logging inside detect_pulse_trigger() itself:
+   logger.info(f"PULSE_DETECT: checking '{text[:50]}' against {len(TRIGGER_KEYWORDS)} keywords")
+
+FIX: Make sure trigger detection runs BEFORE handle_hr_question() and does NOT return early.
+The flow must be:
+  1. Auth check passes
+  2. detect_pulse_trigger(text) — if match: log trigger, update risk score, send video, alert HR
+  3. CONTINUE (do not return) to handle_hr_question() — user still gets their HR answer
+
+=== BUG 3: SQLAlchemy SSL connection errors ===
+
+ERROR:sqlalchemy.pool.impl.QueuePool: SSL connection has been closed unexpectedly
+
+This is Neon PostgreSQL dropping idle connections. Not caused by Team Pulse but should be fixed.
+
+In the SQLAlchemy engine creation (find it — likely in database.py or db.py), add pool recycling:
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,          # Test connection before using
+    pool_recycle=300,             # Recycle connections every 5 min
+    pool_size=5,
+    max_overflow=10,
+)
+
+Find where the engine is created and add pool_pre_ping=True and pool_recycle=300.
+
+=== AFTER FIXING ALL THREE ===
+
+1. Restart the backend
+2. Test: send "як звільнитися" to the bot
+3. Verify in logs:
+   - PULSE_CHECK log line appears
+   - PULSE_DETECT log line appears  
+   - Trigger is logged to pulse_triggers table
+   - HR alert is sent (check for httpx POST to sendMessage for PULSE_HR_CHAT_IDS)
+   - Video q26 plays (no HR_CONTENT import error)
+   - Preset answer also appears (trigger detection + HR answer both work)
+4. Show me the full log output for the test message

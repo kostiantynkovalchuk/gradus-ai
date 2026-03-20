@@ -56,6 +56,8 @@ TRIGGER_KEYWORDS: dict[str, list[str]] = {
         "хочу звільнитись", "думаю звільнитись", "піти з роботи",
         "шукаю нову роботу", "піду звідси", "не витримую більше",
         "підшукую роботу", "готую резюме щоб піти", "хочу піти",
+        "як звільнитися", "як звільнитись", "звільнитися", "звільнитись",
+        "процедура звільнення", "заява на звільнення", "хочу звільнитися",
         "dismiss", "quit", "resign",
     ],
 }
@@ -161,6 +163,7 @@ def detect_pulse_trigger(text: str) -> str | None:
     Returns trigger_type string (e.g. 'вигорання') or None.
     """
     text_lower = text.lower()
+    logger.info(f"PULSE_DETECT: checking '{text[:50]}' against {len(TRIGGER_KEYWORDS)} keywords")
     for trigger_type, keywords in TRIGGER_KEYWORDS.items():
         for kw in keywords:
             if kw in text_lower:
