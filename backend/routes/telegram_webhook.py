@@ -570,7 +570,7 @@ async def alert_hr_team_identified(
             keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": "✅ Взяв в роботу", "callback_data": f"hr_pulse:hr_action:reviewing:{trigger_id}"},
+                        {"text": "✅ Беру в роботу", "callback_data": f"hr_pulse:hr_action:reviewing:{trigger_id}"},
                         {"text": "✔️ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
                         {"text": "❌ Хибна тривога", "callback_data": f"hr_pulse:hr_action:false_positive:{trigger_id}"},
                     ],
