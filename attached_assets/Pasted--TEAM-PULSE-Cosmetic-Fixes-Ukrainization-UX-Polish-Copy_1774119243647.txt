@@ -1,0 +1,236 @@
+# TEAM PULSE — Cosmetic Fixes: Ukrainization & UX Polish
+# Copy-paste this entire prompt into Replit Agent.
+
+"""
+=== TEAM PULSE — COSMETIC FIXES ===
+
+The core system works. Now polish the text, buttons, and formatting 
+to match the approved HR document and Ukrainian corporate tone.
+
+All changes are text/UI only — no logic changes.
+
+=== 1. HR ALERT MESSAGE FORMAT ===
+
+Find the alert message template in alert_hr_team_identified() 
+(in telegram_webhook.py or pulse_service.py — wherever it builds the alert text).
+
+CURRENT (ugly):
+```
+🏗 Ризик-алерт — Pulse Monitor
+
+🧑 Співробітник: Konstantin Kovalchuk
+🏭 Відділ: AI-engineering
+⚡ Тригер: звільнення
+📊 Рейтинг ризику: 9
+🕐 Час: 20.03.2026 23:23 UTC
+
+Зверніться до співробітника конфіденційно
+```
+
+REPLACE WITH:
+```
+🔴 Пульс команди — Попередження
+
+👤 {employee_name}
+🏢 Відділ: {department}
+⚠️ Рівень ризику: {risk_score}/10
+📌 Тригер: {trigger_type}
+
+📊 Історія сигналів (30 днів):
+  🔴 20.03 — звільнення (+3)
+  🟡 18.03 — конфлікт (+1)
+  (або "(перший сигнал)" якщо це перший)
+
+💬 Зверніться до співробітника конфіденційно
+```
+
+Implementation:
+- After building alert_text, fetch trigger history using get_risk_history(employee_id)
+  or a direct SQL query:
+  SELECT trigger_type, severity, risk_points, fired_at 
+  FROM pulse_triggers 
+  WHERE employee_id = {employee_id} AND fired_at > NOW() - INTERVAL '30 days'
+  ORDER BY fired_at DESC LIMIT 5
+- Format each history entry as: "{emoji} {dd.mm} — {trigger_type} (+{points})"
+  where emoji = 🔴 for red severity, 🟡 for yellow
+- If no history rows → show "(перший сигнал)"
+- Severity emoji before "Team Pulse": 🔴 for resignation triggers, 🟡 for conflict/burnout/rights
+
+=== 2. HR ALERT ACTION BUTTONS ===
+
+CURRENT:
+  ✅ Вирішено  |  🧨 Ескалація  |  ❌ Хибний алерт
+
+REPLACE WITH:
+  ✅ Взяв в роботу  |  ✔️ Вирішено  |  ❌ Хибна тривога
+
+Three buttons, one row. Update:
+a) Button text labels
+b) callback_data values must use these action names: "reviewing", "resolved", "false_positive"
+c) The handler that processes these callbacks — update the action_labels dict:
+   action_labels = {
+       "reviewing": "✅ Взято в роботу",
+       "resolved": "✔️ Вирішено",
+       "false_positive": "❌ Хибна тривога",
+   }
+d) When HR presses a button, edit the original alert message to append:
+   "\n\n— ✅ Взято в роботу (Наталя)" (with HR person's first_name)
+
+=== 3. SURVEY MESSAGE TEXT ===
+
+Find where the survey message is built (in pulse_service.py or wherever send_monthly_survey() is).
+
+CURRENT (if different):
+Check current text and replace with:
+
+```
+💚 Пульс команди
+
+Як ти себе почуваєш на роботі цього місяця?
+(анонімно — ніхто не бачить твою відповідь)
+```
+
+Inline keyboard buttons (ONE ROW, all 5):
+  ❤️ відмінно  |  💚 добре  |  💙 нормально  |  🖤 тривожно  |  💔 важко
+
+=== 4. SURVEY RESPONSE MESSAGES ===
+
+After employee taps a heart, edit the message:
+
+Score 5 (❤️) or 4 (💚) or 3 (💙):
+```
+💚 Пульс команди
+
+Твоя відповідь збережена. Дякую! 🙏
+```
+(no buttons, no video)
+
+Score 2 (🖤):
+```
+💚 Пульс команди
+
+Дякую за чесність. 🤍
+Ось коротке відео — можливо, допоможе.
+```
+Buttons: [ 🎥 Подивитись відео ] [ 📩 Написати HR ]
+
+Score 1 (💔):
+```
+💚 Пульс команди
+
+Я чую тебе. 💙
+Подивись це відео — воно саме для таких моментів.
+```
+Buttons row 1: [ 🎥 Подивитись відео ] [ 📩 Написати HR ]
+Buttons row 2: [ 🙏 Дякую, все ок ]
+
+=== 5. VIDEO FALLBACK TEXT MESSAGES ===
+
+When no video file exists, bot sends text. Check current fallback messages 
+in PULSE_VIDEO_FALLBACK_TEXT or send_pulse_video() and update to:
+
+breathing (for 🖤/💔 in survey):
+```
+🫁 Пауза для дихання
+
+Вдихни на 4 рахунки… затримай на 4… видихни на 4… пауза на 4.
+Повтори 3 рази. Твоє тіло вже трохи розслабилось.
+
+Якщо потрібна підтримка — напиши HR.
+```
+
+conflict:
+```
+🤝 Конфлікт — це не кінець
+
+Спробуй замінити «Ти завжди…» на «Я відчуваю… коли…».
+Це не слабкість — це навичка.
+HR може допомогти як нейтральна сторона.
+```
+
+burnout:
+```
+🌿 Зупинись і подивись
+
+Назви 5 речей, які бачиш… 4 звуки… 3 дотики… 2 запахи… 1 смак.
+Що забирає твою енергію сьогодні? Що її дає?
+Іноді достатньо змінити одну маленьку річ.
+```
+
+decision (for resignation triggers):
+```
+📋 Перед рішенням
+
+Візьми аркуш паперу. Зліва: що тримає мене тут. Справа: що штовхає звідси.
+Подивись через день, коли емоції вляжуться.
+Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти.
+```
+
+=== 6. CONTACT HR MESSAGE ===
+
+When employee presses "📩 Написати HR":
+```
+📩 Напиши HR напряму: @Natty_Reshetilova
+
+Або скажи Майї: «хочу поговорити з HR» — і ми організуємо.
+Це конфіденційно.
+```
+
+=== 7. DISMISS MESSAGE ===
+
+When employee presses "🙏 Дякую, все ок":
+Edit message to:
+```
+💚 Пульс команди
+
+Дякую. Якщо потрібна підтримка — Майя завжди тут. 🤍
+```
+(remove all buttons)
+
+=== 8. TRIGGER DETECTION — ADD MISSING KEYWORDS ===
+
+Check TRIGGER_KEYWORDS dict and make sure these patterns exist:
+
+resignation (severity: red, points: 3):
+  звільн, заяв, піти з роботи, піду звідси, розрахунок, розрахуватися,
+  звільнюсь, звільнитися, звільнитись, як звільнитися, як звільнитись,
+  хочу звільнитися, хочу звільнитись, заява на звільнення, процедура звільнення
+
+conflict (severity: yellow, points: 1):
+  конфлікт, сварк, не можу працювати з, проблема з колегою, 
+  проблема з начальник, цькуванн, булінг
+
+rights (severity: yellow, points: 1):
+  мої права, порушенн, незаконн, трудовий кодекс, кзпп, інспекція праці
+
+burnout (severity: yellow, points: 1):
+  вигоранн, втом, не можу більше, стрес, немає сил, 
+  вигорів, вигоріла, перенавантаженн, перевтом
+
+=== 9. TEMPORARY TEST ENDPOINT ===
+
+Add a test endpoint to trigger survey manually (for testing only):
+
+@router.get("/hr/api/pulse-test-survey")
+async def test_pulse_survey():
+    """Temporary — trigger monthly survey manually for testing. Remove after go-live."""
+    from services.pulse_service import send_monthly_survey
+    count = await send_monthly_survey()
+    return {"sent_to": count}
+
+Protect with same Basic Auth as other /hr/* endpoints.
+
+=== 10. DASHBOARD TAB TITLE ===
+
+In the HR dashboard HTML, the Team Pulse tab should be labeled:
+  💚 Пульс команди
+(not "Pulse Monitor" or any English name)
+
+=== RULES ===
+- All user-facing text MUST be in Ukrainian
+- Internal logs can stay in English
+- Do NOT change any logic — only text, labels, and formatting
+- Do NOT break existing functionality
+- All callback_data must keep the hr_pulse: prefix
+- Test after changes: send "як звільнитися" and verify alert format
+"""

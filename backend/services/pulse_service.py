@@ -26,18 +26,19 @@ HR_ALERT_CHAT_ID = os.getenv("HR_ALERT_CHAT_ID")
 
 TRIGGER_KEYWORDS: dict[str, list[str]] = {
     "вигорання": [
-        "вигорів", "вигоріла", "вигоріли", "вигорання", "більше не можу",
-        "вимотав", "вимотала", "виснажений", "виснажена", "виснаження",
+        "вигоранн", "вигорів", "вигоріла", "вигоріли",
+        "більше не можу", "вимотав", "вимотала", "виснажений", "виснажена", "виснаження",
         "набридло", "набридла", "апатія", "не хочу йти на роботу",
         "немає сил", "все набридло", "втомилась", "втомився від роботи",
-        "хочу все кинути",
+        "хочу все кинути", "не можу більше", "втом", "перенавантаженн", "перевтом",
         "burnout", "burned out", "burnt out",
     ],
     "конфлікт": [
-        "конфлікт", "конфліктую", "посварились", "посварилась", "посварився",
+        "конфлікт", "конфліктую", "посварились", "посварилась", "посварився", "сварк",
         "кричали", "кричав на мене", "кричала на мене", "образили", "образив",
-        "моббінг", "тиснуть", "погрожують", "погрожує", "зацькували",
+        "моббінг", "тиснуть", "погрожують", "погрожує", "зацькували", "цькуванн", "булінг",
         "знущаються", "знущається", "неповага", "упереджене ставлення",
+        "не можу працювати з", "проблема з колегою", "проблема з начальник",
         "conflict",
     ],
     "стрес": [
@@ -53,12 +54,16 @@ TRIGGER_KEYWORDS: dict[str, list[str]] = {
         "cry", "crying",
     ],
     "звільнення": [
+        "звільн", "заяв", "розрахунок", "розрахуватися", "звільнюсь",
         "хочу звільнитись", "думаю звільнитись", "піти з роботи",
         "шукаю нову роботу", "піду звідси", "не витримую більше",
         "підшукую роботу", "готую резюме щоб піти", "хочу піти",
         "як звільнитися", "як звільнитись", "звільнитися", "звільнитись",
         "процедура звільнення", "заява на звільнення", "хочу звільнитися",
         "dismiss", "quit", "resign",
+    ],
+    "права": [
+        "мої права", "порушенн", "незаконн", "трудовий кодекс", "кзпп", "інспекція праці",
     ],
 }
 
@@ -68,6 +73,7 @@ TRIGGER_VIDEO_MAP: dict[str, str] = {
     "стрес": "video_values.mp4",
     "плачу": "video_values.mp4",
     "звільнення": "video_offboarding.mp4",
+    "права": "video_values.mp4",
 }
 
 TRIGGER_SUPPORT_TEXT: dict[str, str] = {
@@ -98,6 +104,11 @@ TRIGGER_SUPPORT_TEXT: dict[str, str] = {
         "HR-команда може допомогти знайти рішення, яке підійде всім.\n\n"
         "📞 Зверніться до HR-партнера — можливо, є варіанти, про які ви не знали."
     ),
+    "права": (
+        "💛 *Твої права важливі.*\n\n"
+        "Якщо ти вважаєш, що щось порушено — HR-команда допоможе розібратись.\n\n"
+        "📞 Зверніться до HR-відділу — всі звернення конфіденційні."
+    ),
 }
 
 # === RISK SCORE ENGINE ===
@@ -108,6 +119,7 @@ RISK_POINTS: dict[str, int] = {
     "вигорання": 1,
     "стрес": 1,
     "плачу": 1,
+    "права": 1,
 }
 
 RISK_THRESHOLD_ALERT = 4
@@ -127,24 +139,25 @@ PULSE_VIDEOS: dict[str, str] = {
 
 PULSE_VIDEO_FALLBACK_TEXT: dict[str, str] = {
     "breathing": (
-        "🫁 *Пауза для дихання*\n\n"
+        "🫁 Пауза для дихання\n\n"
         "Вдихни на 4 рахунки… затримай на 4… видихни на 4… пауза на 4.\n"
         "Повтори 3 рази. Твоє тіло вже трохи розслабилось.\n\n"
         "Якщо потрібна підтримка — напиши HR."
     ),
     "conflict": (
-        "🤝 *Конфлікт — це не кінець*\n\n"
-        "Спробуй замінити «Ти завжди…» на «Я відчуваю… коли…»\n"
-        "Це не слабкість — це навичка. HR може допомогти як нейтральна сторона."
+        "🤝 Конфлікт — це не кінець\n\n"
+        "Спробуй замінити «Ти завжди…» на «Я відчуваю… коли…».\n"
+        "Це не слабкість — це навичка.\n"
+        "HR може допомогти як нейтральна сторона."
     ),
     "burnout": (
-        "🌿 *Зупинись і подивись*\n\n"
+        "🌿 Зупинись і подивись\n\n"
         "Назви 5 речей, які бачиш… 4 звуки… 3 дотики… 2 запахи… 1 смак.\n"
         "Що забирає твою енергію сьогодні? Що її дає?\n"
         "Іноді достатньо змінити одну маленьку річ."
     ),
     "decision": (
-        "📋 *Перед рішенням*\n\n"
+        "📋 Перед рішенням\n\n"
         "Візьми аркуш паперу. Зліва: що тримає мене тут. Справа: що штовхає звідси.\n"
         "Подивись через день, коли емоції вляжуться.\n"
         "Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
@@ -455,7 +468,7 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
     fallback_key = trigger_or_video_id
     if fallback_key == "звільнення":
         fallback_key = "decision"
-    elif fallback_key == "конфлікт":
+    elif fallback_key in ("конфлікт", "права"):
         fallback_key = "conflict"
     elif fallback_key in ("вигорання", "стрес", "плачу"):
         fallback_key = "burnout"
@@ -554,14 +567,15 @@ def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
         return []
 
 
-def send_monthly_survey() -> None:
+def send_monthly_survey() -> int:
     """
     Scheduled task: send mood survey to all active hr_users.
-    Called by APScheduler on the 1st of each month at 09:00 Kyiv time.
+    Called by APScheduler on the 1st of each month at 07:00 UTC.
+    Returns count of successfully sent messages.
     """
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.warning("[PULSE] TELEGRAM_MAYA_BOT_TOKEN not set — survey skipped")
-        return
+        return 0
 
     db = _models.SessionLocal()
     try:
@@ -576,19 +590,18 @@ def send_monthly_survey() -> None:
         survey_keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "💔", "callback_data": "hr_pulse:mood:1"},
-                    {"text": "🧡", "callback_data": "hr_pulse:mood:2"},
-                    {"text": "💛", "callback_data": "hr_pulse:mood:3"},
-                    {"text": "💚", "callback_data": "hr_pulse:mood:4"},
-                    {"text": "💙", "callback_data": "hr_pulse:mood:5"},
+                    {"text": "❤️ відмінно",  "callback_data": "hr_pulse:mood:5"},
+                    {"text": "💚 добре",      "callback_data": "hr_pulse:mood:4"},
+                    {"text": "💙 нормально",  "callback_data": "hr_pulse:mood:3"},
+                    {"text": "🖤 тривожно",   "callback_data": "hr_pulse:mood:2"},
+                    {"text": "💔 важко",      "callback_data": "hr_pulse:mood:1"},
                 ]
             ]
         }
         survey_text = (
-            "💛 *Пульс команди — щомісячне опитування*\n\n"
-            "Як ти почуваєшся на роботі цього місяця?\n"
-            "Оціни своє самопочуття від 💔 до 💙\n\n"
-            "_Відповідь анонімна — тільки загальна статистика по відділах_"
+            "💚 *Пульс команди*\n\n"
+            "Як ти себе почуваєш на роботі цього місяця?\n"
+            "_(анонімно — ніхто не бачить твою відповідь)_"
         )
 
         import httpx as _httpx
@@ -624,13 +637,17 @@ def send_monthly_survey() -> None:
             logger.info(
                 f"[PULSE] Survey complete: sent={sent}, skipped={skipped}, errors={errors}"
             )
+            return sent
 
+        sent_count = 0
         try:
-            asyncio.run(_send_all(rows))
+            sent_count = asyncio.run(_send_all(rows))
         except Exception as e:
             logger.error(f"[PULSE] Async survey send failed: {e}")
+        return sent_count
 
     except Exception as e:
         logger.error(f"[PULSE] send_monthly_survey failed: {e}")
+        return 0
     finally:
         db.close()

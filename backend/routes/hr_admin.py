@@ -1337,3 +1337,13 @@ async def get_system_info(
             'embeddings': 0,
             'status': 'operational'
         }
+
+
+@router.get("/api/pulse-test-survey")
+async def test_pulse_survey(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Temporary — trigger monthly survey manually for testing. Remove after go-live."""
+    from services.pulse_service import send_monthly_survey
+    count = send_monthly_survey()
+    return {"sent_to": count}

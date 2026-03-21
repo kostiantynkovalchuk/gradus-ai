@@ -37,7 +37,7 @@ from utils.phone_normalizer import normalize_phone, format_for_display
 from services.pulse_service import (
     detect_pulse_trigger, log_trigger, alert_hr_team,
     send_pulse_video, log_video_view, log_hr_action,
-    update_risk_score, RISK_POINTS,
+    update_risk_score, RISK_POINTS, get_risk_history,
 )
 
 logger = logging.getLogger(__name__)
@@ -535,18 +535,34 @@ async def alert_hr_team_identified(
         current_score = row[0] if row else "?"
         status = row[1] if row else "red"
         urgency_emoji = "🚨" if status == "urgent" else "🔴"
-        ts = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
         dept_str = department or "Невідомий відділ"
         name_str = employee_name or "Невідомий"
 
+        # Build trigger history block
+        history_lines = []
+        if employee_id:
+            history = get_risk_history(employee_id, limit=5)
+            for h in history:
+                sev_emoji = "🔴" if h.get("severity") == "red" else "🟡"
+                fired_at = h.get("fired_at", "")
+                try:
+                    dt = datetime.fromisoformat(fired_at)
+                    date_str = dt.strftime("%d.%m")
+                except Exception:
+                    date_str = fired_at[:5] if fired_at else "?"
+                pts = h.get("risk_points", 1)
+                ttype = h.get("trigger_type", "")
+                history_lines.append(f"  {sev_emoji} {date_str} — {ttype} (+{pts})")
+        history_block = "\n".join(history_lines) if history_lines else "  (перший сигнал)"
+
         alert_text = (
-            f"{urgency_emoji} *Ризик-алерт — Pulse Monitor*\n\n"
-            f"👤 Співробітник: {name_str}\n"
+            f"{urgency_emoji} *Пульс команди — Попередження*\n\n"
+            f"👤 {name_str}\n"
             f"🏢 Відділ: {dept_str}\n"
-            f"⚡ Тригер: `{trigger_type}`\n"
-            f"📊 Рейтинг ризику: *{current_score}*\n"
-            f"🕐 Час: {ts}\n\n"
-            f"_Зверніться до співробітника конфіденційно_"
+            f"⚠️ Рівень ризику: {current_score}/10\n"
+            f"📌 Тригер: {trigger_type}\n\n"
+            f"📊 Історія сигналів (30 днів):\n{history_block}\n\n"
+            f"💬 Зверніться до співробітника конфіденційно"
         )
 
         keyboard = None
@@ -554,11 +570,9 @@ async def alert_hr_team_identified(
             keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": "✅ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
-                        {"text": "🚨 Ескалація", "callback_data": f"hr_pulse:hr_action:escalated:{trigger_id}"},
-                    ],
-                    [
-                        {"text": "❌ Хибний алерт", "callback_data": f"hr_pulse:hr_action:false_positive:{trigger_id}"},
+                        {"text": "✅ Взяв в роботу", "callback_data": f"hr_pulse:hr_action:reviewing:{trigger_id}"},
+                        {"text": "✔️ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
+                        {"text": "❌ Хибна тривога", "callback_data": f"hr_pulse:hr_action:false_positive:{trigger_id}"},
                     ],
                 ]
             }
@@ -1093,41 +1107,42 @@ async def handle_hr_callback(callback_query: dict):
                     if already_voted:
                         await answer_callback(callback_id, "Ви вже відповіли цього місяця 🙏")
                     elif score >= 3:
-                        await answer_callback(callback_id, "Дякую! Ваша оцінка записана 💛")
+                        await answer_callback(callback_id, "Дякую! 🙏")
                         await edit_telegram_message(
                             chat_id, message_id,
-                            "💛 *Дякуємо за вашу відповідь!*\n\n"
-                            "Ваша оцінка анонімно збережена.\n"
-                            "Разом ми робимо ТД АВ кращим місцем для роботи! 🌟"
+                            "💚 *Пульс команди*\n\n"
+                            "Твоя відповідь збережена. Дякую! 🙏"
                         )
                     elif score == 2:
-                        await answer_callback(callback_id, "Дякую за відповідь 💛")
+                        await answer_callback(callback_id, "Дякую за чесність 🤍")
                         await edit_telegram_message(
                             chat_id, message_id,
-                            "💛 *Ваша оцінка збережена.*\n\n"
-                            "Схоже, місяць видався непростим.\n"
-                            "Маємо кілька хвилин для тебе.\n\n"
-                            "📞 Якщо потрібна підтримка — HR-команда поруч:",
+                            "💚 *Пульс команди*\n\n"
+                            "Дякую за чесність. 🤍\n"
+                            "Ось коротке відео — можливо, допоможе.",
                             {
                                 "inline_keyboard": [
-                                    [{"text": "🎬 Перегляньте відео", "callback_data": "hr_pulse:video:breathing"}],
-                                    [{"text": "📞 Зв'язатися з HR", "callback_data": "hr_pulse:contact_hr"}],
+                                    [
+                                        {"text": "🎥 Подивитись відео", "callback_data": "hr_pulse:video:breathing"},
+                                        {"text": "📩 Написати HR", "callback_data": "hr_pulse:contact_hr"},
+                                    ],
                                 ]
                             }
                         )
                     else:
-                        await answer_callback(callback_id, "Ваша оцінка отримана 💛")
+                        await answer_callback(callback_id, "Я чую тебе 💙")
                         await edit_telegram_message(
                             chat_id, message_id,
-                            "💔 *Ми чуємо тебе.*\n\n"
-                            "Схоже, зараз важко. Ти не один(а).\n"
-                            "HR-команда готова вислухати та допомогти.\n\n"
-                            "Що хочеш зробити?",
+                            "💚 *Пульс команди*\n\n"
+                            "Я чую тебе. 💙\n"
+                            "Подивись це відео — воно саме для таких моментів.",
                             {
                                 "inline_keyboard": [
-                                    [{"text": "🎬 Відео підтримки", "callback_data": "hr_pulse:video:burnout"}],
-                                    [{"text": "📞 Зв'язатися з HR", "callback_data": "hr_pulse:contact_hr"}],
-                                    [{"text": "✅ Я в порядку, дякую", "callback_data": "hr_pulse:dismiss"}],
+                                    [
+                                        {"text": "🎥 Подивитись відео", "callback_data": "hr_pulse:video:burnout"},
+                                        {"text": "📩 Написати HR", "callback_data": "hr_pulse:contact_hr"},
+                                    ],
+                                    [{"text": "🙏 Дякую, все ок", "callback_data": "hr_pulse:dismiss"}],
                                 ]
                             }
                         )
@@ -1143,22 +1158,20 @@ async def handle_hr_callback(callback_query: dict):
                 log_video_view(telegram_user_id, video_id)
 
             elif action_part == 'contact_hr':
-                await answer_callback(callback_id, "Зараз надішлю контакти HR")
+                await answer_callback(callback_id, "Надсилаю контакт HR")
                 await send_telegram_message(
                     chat_id,
-                    "📞 *HR-команда ТД АВ*\n\n"
-                    "Всі звернення — конфіденційні.\n\n"
-                    "📧 hr@avtd.com.ua\n"
-                    "💬 Напишіть або зателефонуйте — ми завжди поруч."
+                    "📩 Напиши HR напряму: @Natty_Reshetilova\n\n"
+                    "Або скажи Майї: «хочу поговорити з HR» — і ми організуємо.\n"
+                    "Це конфіденційно."
                 )
 
             elif action_part == 'dismiss':
-                await answer_callback(callback_id, "Добре! Ми завжди поруч 💛")
+                await answer_callback(callback_id, "Добре 🤍")
                 await edit_telegram_message(
                     chat_id, message_id,
-                    "💛 *Добре!*\n\n"
-                    "Пам'ятай — HR-команда завжди готова допомогти.\n"
-                    "Бережи себе! 🌟"
+                    "💚 *Пульс команди*\n\n"
+                    "Дякую. Якщо потрібна підтримка — Майя завжди тут. 🤍"
                 )
 
             elif action_part == 'hr_action' and len(parts) >= 4:
@@ -1171,21 +1184,17 @@ async def handle_hr_callback(callback_query: dict):
                     hr_user = hr_from.get('username') or hr_from.get('first_name') or 'HR'
                     log_hr_action(t_id, action_type, hr_user)
                     action_labels = {
-                        'resolved': '✅ Вирішено',
-                        'escalated': '🚨 Ескалація',
-                        'false_positive': '❌ Хибний алерт',
+                        'reviewing': '✅ Взято в роботу',
+                        'resolved': '✔️ Вирішено',
+                        'false_positive': '❌ Хибна тривога',
                     }
                     action_label = action_labels.get(action_type, action_type)
-                    await answer_callback(callback_id, f"{action_label} збережено")
+                    hr_first_name = hr_from.get('first_name') or hr_user
+                    await answer_callback(callback_id, f"{action_label}")
                     # Edit original alert message to append HR responder
                     try:
                         orig_text = callback_query.get('message', {}).get('text', '')
-                        ts = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
-                        updated_text = (
-                            orig_text + f"\n\n✏️ *Відповідь HR:* {action_label}\n"
-                            f"👤 Відповідальний: @{hr_user}\n"
-                            f"🕐 {ts}"
-                        )
+                        updated_text = orig_text + f"\n\n— {action_label} ({hr_first_name})"
                         await edit_telegram_message(chat_id, message_id, updated_text)
                     except Exception as _edit_err:
                         logger.warning(f"[PULSE] Edit alert message failed: {_edit_err}")
