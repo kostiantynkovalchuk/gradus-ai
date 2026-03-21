@@ -1197,7 +1197,7 @@
         </div>
 
         <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
-            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🚨 Активні ризик-алерти</h3>
+            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🚨 Активні попередження</h3>
             <div id="pulseAlertsList">
                 <span style="color:var(--gray-400);">Завантаження...</span>
             </div>
@@ -2343,7 +2343,7 @@
                         const alertData = await alertResp.json();
                         const alertsEl = document.getElementById('pulseAlertsList');
                         if (!alertData.alerts || alertData.alerts.length === 0) {
-                            alertsEl.innerHTML = '<span style="color:var(--gray-400);">Активних ризик-алертів немає 🟢</span>';
+                            alertsEl.innerHTML = '<span style="color:var(--gray-400);">Активних попереджень немає 🟢</span>';
                         } else {
                             const statusLabels = { urgent: '🚨 КРИТИЧНО', red: '🔴 Підвищений ризик' };
                             const trigTypeLabels = { 'вигорання': 'Вигорання', 'конфлікт': 'Конфлікт', 'стрес': 'Стрес', 'плачу': 'Емоційний стан', 'звільнення': 'Думки про звільнення' };
@@ -2373,9 +2373,9 @@
                                         <td style="padding:10px 12px;color:var(--gray-500);font-size:0.8rem;">${ts}</td>
                                         <td style="padding:10px 12px;">
                                             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                                                ${tid ? `<button onclick="pulseHrAction('resolved',${tid})" style="background:#22c55e;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">✓ Вирішено</button>
-                                                <button onclick="pulseHrAction('false_positive',${tid})" style="background:#6b7280;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">Хибний</button>
-                                                <button onclick="pulseHrAction('escalated',${tid})" style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">↑ Ескалація</button>` : '—'}
+                                                ${tid ? `<button onclick="pulseHrAction('reviewing',${tid})" style="background:#3b82f6;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">✅ Беру в роботу</button>
+                                                <button onclick="pulseHrAction('resolved',${tid})" style="background:#22c55e;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">✔️ Вирішено</button>
+                                                <button onclick="pulseHrAction('false_positive',${tid})" style="background:#6b7280;color:white;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:0.75rem;">❌ Хибна тривога</button>` : '—'}
                                             </div>
                                         </td>
                                     </tr>`;
@@ -2421,7 +2421,7 @@
                     body: JSON.stringify({ trigger_id: triggerId, action: action, hr_user: 'admin' })
                 });
                 if (resp.ok) {
-                    const labels = { resolved: 'Вирішено ✓', false_positive: 'Хибний алерт', escalated: 'Ескалація ↑' };
+                    const labels = { reviewing: '✅ Взято в роботу', resolved: '✔️ Вирішено', false_positive: '❌ Хибна тривога' };
                     alert(`Дію записано: ${labels[action] || action}`);
                     loadPulseData();
                 }
