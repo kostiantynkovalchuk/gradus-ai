@@ -1161,7 +1161,7 @@ async def handle_hr_callback(callback_query: dict):
                 await answer_callback(callback_id, "Надсилаю контакт HR")
                 await send_telegram_message(
                     chat_id,
-                    "📩 Напиши HR напряму: @Natty_Reshetilova\n\n"
+                    "📩 Напиши HR напряму: @Natty_Reshetilova (Наталія)\n\n"
                     "Або скажи Майї: «хочу поговорити з HR» — і ми організуємо.\n"
                     "Це конфіденційно."
                 )
