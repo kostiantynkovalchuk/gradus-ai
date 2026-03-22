@@ -28,6 +28,7 @@ async def scrape_telegram_channels(
 
     if not TELETHON_API_ID or not TELETHON_API_HASH or not TELETHON_SESSION:
         logger.warning("Telethon credentials not set (TELETHON_API_ID/TELETHON_API_HASH/TELETHON_SESSION). Skipping TG scraping.")
+        logger.info("TG scraper complete: 0 candidates (no credentials)")
         return []
 
     try:

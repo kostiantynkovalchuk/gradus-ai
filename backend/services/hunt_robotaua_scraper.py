@@ -158,18 +158,20 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
     Returns a list of candidate dicts compatible with the Hunt scorer.
     Returns [] on any auth/network error — never raises.
     """
+    logger.info(f"[RobotaUA] CV search started: position='{vacancy.get('position')}', city='{vacancy.get('city')}'")
+
     from config.hunt_config import HUNT_CONFIG
     if depth_days is None:
         depth_days = HUNT_CONFIG["search_depth_days"]
 
     token = await login_robotaua()
     if not token:
-        logger.info("[RobotaUA] No token — skipping source")
+        logger.info("[RobotaUA] CV search complete: 0 candidates (no token)")
         return []
 
     position = vacancy.get("position", "")
     if not position:
-        logger.info("[RobotaUA] No position in vacancy — skipping")
+        logger.info("[RobotaUA] CV search complete: 0 candidates (no position)")
         return []
 
     city_name = vacancy.get("city", "")
@@ -197,9 +199,11 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
             if resp.status_code == 401:
                 logger.warning("[RobotaUA] 401 on CV search — invalidating token")
                 invalidate_token()
+                logger.info("[RobotaUA] CV search complete: 0 candidates (401 auth error)")
                 return []
             if resp.status_code != 200:
                 logger.error(f"[RobotaUA] CV search failed: {resp.status_code} {resp.text[:200]}")
+                logger.info(f"[RobotaUA] CV search complete: 0 candidates (HTTP {resp.status_code})")
                 return []
 
             data = resp.json()
@@ -208,6 +212,7 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
             logger.info(f"[RobotaUA] {len(documents)}/{total} CVs returned for '{position}'")
 
             if not documents:
+                logger.info("[RobotaUA] CV search complete: 0 candidates (empty response)")
                 return []
 
             cutoff = datetime.utcnow() - timedelta(days=depth_days)
@@ -319,4 +324,5 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
 
     except Exception as e:
         logger.error(f"[RobotaUA] CV search error: {e}")
+        logger.info(f"[RobotaUA] CV search complete: 0 candidates (exception)")
         return []

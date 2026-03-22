@@ -164,12 +164,23 @@ async def _scrape_round(
     if not keywords and parsed.get("position"):
         keywords = parsed["position"].split()[:5]
 
+    logger.info(f"[Hunt] Round {round_num} — launching 4 scrapers (TG, WorkUA, RobotaUA, Applies) depth={depth_days}d")
     results = await asyncio.gather(
         search_tg_channels(keywords, channels, depth_days=depth_days),
         search_workua(parsed, depth_days=depth_days),
         search_robotaua(parsed, depth_days=depth_days),
         search_robotaua_applies(parsed, round_num=round_num),
         return_exceptions=True,
+    )
+
+    tg_r, workua_r, robotaua_r, applies_r = results
+    tg_count = len(tg_r) if isinstance(tg_r, list) else f"ERR({tg_r})"
+    workua_count = len(workua_r) if isinstance(workua_r, list) else f"ERR({workua_r})"
+    robotaua_count = len(robotaua_r) if isinstance(robotaua_r, list) else f"ERR({robotaua_r})"
+    applies_count = len(applies_r) if isinstance(applies_r, list) else f"ERR({applies_r})"
+    logger.info(
+        f"[Hunt] Round {round_num} results: "
+        f"TG={tg_count}, WorkUA={workua_count}, RobotaUA={robotaua_count}, Applies={applies_count}"
     )
 
     raw = []

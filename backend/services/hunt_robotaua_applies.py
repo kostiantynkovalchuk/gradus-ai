@@ -91,11 +91,15 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
     Only runs on round_num == 1 to avoid duplicate processing.
     Returns [] gracefully on auth failure or any error.
     """
+    logger.info(f"[RobotaUA-Applies] Search started: position='{vacancy.get('position')}', round={round_num}")
+
     if round_num != 1:
+        logger.info("[RobotaUA-Applies] Skipping — only runs on round 1")
         return []
 
     token = await login_robotaua()
     if not token:
+        logger.info("[RobotaUA-Applies] Complete: 0 candidates (no token)")
         return []
 
     position = vacancy.get("position", "").lower()
@@ -240,4 +244,5 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
 
     except Exception as e:
         logger.error(f"[RobotaUA-Applies] Error: {e}")
+        logger.info("[RobotaUA-Applies] Complete: 0 candidates (exception)")
         return []
