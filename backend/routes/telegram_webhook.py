@@ -1712,11 +1712,11 @@ async def _handle_hunt_vacancy(message: dict, db: Session):
             action_keyboard = {
                 "inline_keyboard": [
                     [
-                        {"text": "🔍 Шукати", "callback_data": f"hunt_action_search_{vacancy_id}"},
-                        {"text": "📢 Розмістити", "callback_data": f"hunt_action_post_{vacancy_id}"},
+                        {"text": "🔍 Шукати кандидатів", "callback_data": f"hunt_action_search_{vacancy_id}"},
+                        {"text": "📢 Robota.ua", "callback_data": f"hunt_action_post_{vacancy_id}"},
                     ],
                     [
-                        {"text": "🔍+📢 Обидва", "callback_data": f"hunt_action_both_{vacancy_id}"},
+                        {"text": "🔍+📢 Пошук + Robota.ua", "callback_data": f"hunt_action_both_{vacancy_id}"},
                         {"text": "⏸ Пізніше", "callback_data": f"hunt_action_skip_{vacancy_id}"},
                     ],
                 ]

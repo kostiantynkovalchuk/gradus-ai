@@ -704,6 +704,14 @@ MIGRATIONS = [
             "CREATE INDEX IF NOT EXISTS idx_pulse_video_views ON pulse_video_views(video_id, viewed_at DESC)",
         ]
     },
+    {
+        "version": "026_hunt_robotaua_vacancy_id",
+        "statements": [
+            "ALTER TABLE hunt_vacancies ADD COLUMN IF NOT EXISTS robotaua_vacancy_id INTEGER",
+            "ALTER TABLE hunt_vacancies ADD COLUMN IF NOT EXISTS robotaua_vacancy_url TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_hunt_vacancies_robotaua ON hunt_vacancies(robotaua_vacancy_id)",
+        ]
+    },
 ]
 
 

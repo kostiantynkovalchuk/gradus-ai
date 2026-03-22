@@ -511,6 +511,16 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         db.close()
 
 
+async def _close_robotaua_vacancy_bg(robotaua_vacancy_id: int):
+    """Background task: close a published vacancy on Robota.ua after hire."""
+    try:
+        from services.hunt_robotaua_poster import close_vacancy_on_robotaua
+        closed = await close_vacancy_on_robotaua(robotaua_vacancy_id)
+        logger.info(f"[Hunt] Robota.ua vacancy {robotaua_vacancy_id} closed: {closed}")
+    except Exception as e:
+        logger.error(f"[Hunt] _close_robotaua_vacancy_bg error: {e}")
+
+
 async def handle_hunt_action(callback_query: dict):
     callback_data = callback_query.get("data", "")
     callback_id = callback_query.get("id")
@@ -557,17 +567,17 @@ async def handle_hunt_action(callback_query: dict):
         elif action == "post":
             vacancy.status = 'posting'
             db.commit()
-            await _edit_message(chat_id, message_id, f"📢 Розміщую вакансію #{vacancy_id} в каналах...")
-            from services.hunt_poster import run_vacancy_posting
-            asyncio.create_task(run_vacancy_posting(vacancy_id, chat_id, thread_id))
+            await _edit_message(chat_id, message_id, f"📢 Розміщую вакансію #{vacancy_id} на Robota.ua...")
+            from services.hunt_robotaua_poster import run_vacancy_posting_robotaua
+            asyncio.create_task(run_vacancy_posting_robotaua(vacancy_id, chat_id, thread_id))
 
         elif action == "both":
             vacancy.status = 'searching'
             db.commit()
-            await _edit_message(chat_id, message_id, f"🔍+📢 Шукаю кандидатів і розміщую вакансію #{vacancy_id}...")
-            from services.hunt_poster import run_vacancy_posting
+            await _edit_message(chat_id, message_id, f"🔍+📢 Шукаю кандидатів і публікую вакансію #{vacancy_id} на Robota.ua...")
+            from services.hunt_robotaua_poster import run_vacancy_posting_robotaua
             asyncio.create_task(run_hunt(vacancy_id, vacancy_text, thread_id, chat_id))
-            asyncio.create_task(run_vacancy_posting(vacancy_id, chat_id, thread_id))
+            asyncio.create_task(run_vacancy_posting_robotaua(vacancy_id, chat_id, thread_id))
 
         elif action == "skip":
             vacancy.status = 'pending'
@@ -628,6 +638,8 @@ async def handle_hunt_decision(callback_query: dict, db):
             vacancy = db.query(HuntVacancy).filter(HuntVacancy.id == candidate.vacancy_id).first()
             if vacancy and vacancy.status != "filled":
                 vacancy.status = "filled"
+                if vacancy.robotaua_vacancy_id:
+                    asyncio.create_task(_close_robotaua_vacancy_bg(vacancy.robotaua_vacancy_id))
         db.commit()
         logger.info(f"Hunt candidate #{candidate_id} → {status}")
     else:

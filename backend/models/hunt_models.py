@@ -16,6 +16,8 @@ class HuntVacancy(Base):
     requirements = Column(Text)
     salary_max = Column(Integer)
     status = Column(String(50), default='searching')
+    robotaua_vacancy_id = Column(Integer, nullable=True)
+    robotaua_vacancy_url = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
