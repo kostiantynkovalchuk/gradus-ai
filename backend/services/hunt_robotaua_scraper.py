@@ -1,22 +1,21 @@
 """
-Robota.ua GraphQL CV Scraper for Maya Hunt
-==========================================
-Searches Robota.ua's CV database via the confirmed dracula.robota.ua GraphQL API.
+Robota.ua REST API CV Scraper for Maya Hunt
+============================================
+Uses the official employer REST API (employer-api.robota.ua).
 
-Requires: ROBOTAUA_JWT environment variable (Bearer token from employer.robota.ua).
-If JWT is missing or expired, all functions return [] gracefully.
+Confirmed field names from live API exploration (2026-03-22):
+  POST /cvdb/resumes response document:
+    resumeId, speciality, fullName, displayName, salary (str "20 000 грн."),
+    age (str "51 рік"), cityName, experience[]{beginWork, finishWork, position, company},
+    url, lastActivityDate, keywords, cityId
 
-Key API facts (confirmed from live introspection):
-  - Endpoint: https://dracula.robota.ua/
-  - recommendedProfResumes → AI-matched CVs by vacancy title/city/description
-  - employerResume(id) → full CV with contacts (may be hidden without CVDB sub)
-  - cvdbRegions → { cvdbRegions { cities { id name } } }
-  - employerResume returns a union type; check __typename == "EmployerResume"
+  GET /resume/{id} response:
+    resumeId, name, surname, birthDate, age (str "51"), email, phone, skype,
+    speciality, salary (str "20000"), currencyId, currencySign, salaryFull,
+    skills[]{description (HTML)}, lastActivityDate, updateDate
 """
 
-import os
 import re
-import time
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -24,327 +23,55 @@ from typing import Optional
 
 import httpx
 
+from services.robotaua_auth import login_robotaua, invalidate_token
+from services.robotaua_reference import get_city_id
+
 logger = logging.getLogger(__name__)
 
-GRAPHQL_URL = "https://dracula.robota.ua/"
-PROFILE_URL_TEMPLATE = "https://robota.ua/candidates/{resume_id}"
-
-# Module-level city cache: city_name_lower → str(city_id)
-# Populated lazily on first call to search_robotaua.
-_city_cache: dict = {}
-_city_cache_loaded: bool = False
-
-# City name alias table: variant → canonical key present in _city_cache
-CITY_ALIASES = {
-    "kyiv":             "київ",
-    "kiev":             "київ",
-    "киев":             "київ",
-    "dnipro":           "дніпро",
-    "dnipropetrovsk":   "дніпро",
-    "дніпропетровськ":  "дніпро",
-    "dnepropetrovsk":   "дніпро",
-    "днепр":            "дніпро",
-    "kharkiv":          "харків",
-    "kharkov":          "харків",
-    "харьков":          "харків",
-    "odesa":            "одеса",
-    "odessa":           "одеса",
-    "одесса":           "одеса",
-    "lviv":             "львів",
-    "lvov":             "львів",
-    "львов":            "львів",
-    "zaporizhzhia":     "запоріжжя",
-    "zaporizhja":       "запоріжжя",
-    "запорожье":        "запоріжжя",
-    "vinnytsia":        "вінниця",
-    "vinnitsa":         "вінниця",
-    "вінниця":          "вінниця",
-    "вінниці":          "вінниця",
-    "poltava":          "полтава",
-    "mykolaiv":         "миколаїв",
-    "nikolaev":         "миколаїв",
-    "mykolaiv":         "миколаїв",
-    "kherson":          "херсон",
-    "cherkasy":         "черкаси",
-    "sumy":             "суми",
-    "zhytomyr":         "житомир",
-    "rivne":            "рівне",
-    "рівне":            "рівне",
-    "ternopil":         "тернопіль",
-    "тернопіль":        "тернопіль",
-    "khmelnytskyi":     "хмельницький",
-    "хмельницький":     "хмельницький",
-    "ivano-frankivsk":  "івано-франківськ",
-    "івано-франківськ": "івано-франківськ",
-    "kropyvnytskyi":    "кропивницький",
-    "кропивницький":    "кропивницький",
-    "uzhhorod":         "ужгород",
-    "ужгород":          "ужгород",
-    "lutsk":            "луцьк",
-    "луцьк":            "луцьк",
-    "chernihiv":        "чернігів",
-    "чернігів":         "чернігів",
-    "chernivtsi":       "чернівці",
-    "чернівці":         "чернівці",
-}
-
-# ──────────────────────────────────────────────────────────────────
-# Headers / auth
-# ──────────────────────────────────────────────────────────────────
-
-def _get_jwt() -> str:
-    return os.getenv("ROBOTAUA_JWT", "")
-
-
-def _check_jwt_expiry(token: str) -> bool:
-    """Return True if token is valid (not expired), False otherwise. Logs warning."""
-    if not token:
-        return False
-    try:
-        import base64, json as _json
-        parts = token.split(".")
-        if len(parts) == 3:
-            payload_b64 = parts[1]
-            # Standard base64 padding
-            payload_b64 += "=" * (4 - len(payload_b64) % 4)
-            decoded = _json.loads(base64.b64decode(payload_b64).decode("utf-8", errors="replace"))
-            exp = decoded.get("exp", 0)
-            if exp and exp < time.time():
-                logger.warning(
-                    f"Robota.ua JWT is EXPIRED (exp={exp}). "
-                    "Update ROBOTAUA_JWT env secret to re-enable this source."
-                )
-                return False
-    except Exception:
-        # Non-standard/opaque token — assume valid, API will reject if expired
-        pass
-    return True
-
-
-def _build_headers(token: str) -> dict:
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/145.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "uk",
-        "apollographql-client-name": "web-alliance-desktop",
-        "apollographql-client-version": "071f324",
-        "Content-Type": "application/json",
-        "Origin": "https://employer.robota.ua",
-        "Referer": "https://employer.robota.ua/",
-        "Authorization": f"Bearer {token}",
-        "x-alliance-locale": "uk_UA",
-    }
+_EMPLOYER_API = "https://employer-api.robota.ua"
 
 
 # ──────────────────────────────────────────────────────────────────
-# GraphQL queries (confirmed from live API introspection)
+# Parsing helpers
 # ──────────────────────────────────────────────────────────────────
 
-_REGIONS_QUERY = """
-query cvdbRegions {
-  cvdbRegions {
-    cities { id name }
-  }
-}
-"""
-
-_RECOMMENDED_QUERY = """
-query recommendedProfResumesQuery(
-    $input: RecommendedProfResumesInput!
-    $first: Int
-) {
-  recommendedProfResumes(input: $input, first: $first) {
-    total
-    recommendedProfResumeList {
-      id
-      displayName
-      speciality
-      age
-      gender
-      lastActivityDate
-      updateDate
-      city { id name }
-      resumeSalary { amount currency }
-      experience {
-        company
-        position
-        startWork
-        endWork
-        description
-      }
-    }
-  }
-}
-"""
-
-_EMPLOYER_RESUME_QUERY = """
-query employerResumeQuery($id: ID!) {
-  employerResume(id: $id) {
-    __typename
-    ... on EmployerResume {
-      id
-      title
-      isAnonymous
-      skills
-      addedAt
-      updatedAt
-      isActivelySearchingForNewJob
-      city { id name }
-      salary { amount currency }
-      personal {
-        firstName
-        lastName
-        birthDate
-      }
-      contacts {
-        phones { phone }
-        email { email }
-        socialNetworks { type url }
-      }
-      experiences {
-        company
-        position
-        startDate
-        endDate
-        isCurrent
-        description
-      }
-      educations {
-        name
-        type
-        yearStart
-        yearEnd
-      }
-      languageSkills {
-        language { name }
-        level { name }
-      }
-    }
-    ... on NotFoundEmployerResumeError {
-      message
-    }
-    ... on ServerError {
-      message
-    }
-  }
-}
-"""
-
-
-# ──────────────────────────────────────────────────────────────────
-# HTTP helper
-# ──────────────────────────────────────────────────────────────────
-
-async def _gql(
-    query: str,
-    variables: dict,
-    operation: str,
-    token: str,
-    timeout: float = 15.0,
-) -> dict:
-    payload = {
-        "query": query,
-        "variables": variables,
-        "operationName": operation,
-    }
-    url = f"{GRAPHQL_URL}?q={operation}"
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload, headers=_build_headers(token))
-            resp.raise_for_status()
-            data = resp.json()
-
-        errors = data.get("errors", [])
-        if errors:
-            first_err = errors[0].get("message", "")
-            if any(w in first_err for w in ("Unauthorized", "401", "Forbidden", "jwt", "token")):
-                logger.warning(f"Robota.ua auth error: {first_err}")
-            else:
-                logger.warning(f"Robota.ua GQL error ({operation}): {first_err[:150]}")
-
-        return data
-    except httpx.TimeoutException:
-        logger.warning(f"Robota.ua request timed out ({operation})")
-        return {}
-    except Exception as e:
-        logger.error(f"Robota.ua request failed ({operation}): {e}")
-        return {}
-
-
-# ──────────────────────────────────────────────────────────────────
-# City cache
-# ──────────────────────────────────────────────────────────────────
-
-async def _ensure_city_cache(token: str) -> None:
-    global _city_cache, _city_cache_loaded
-    if _city_cache_loaded:
-        return
-
-    result = await _gql(_REGIONS_QUERY, {}, "cvdbRegions", token)
-    cities = (
-        result
-        .get("data", {})
-        .get("cvdbRegions", {})
-        .get("cities", [])
-    )
-    if not cities:
-        # API returned empty or errored — do not mark as loaded so next call retries
-        logger.warning("Robota.ua: cvdbRegions returned no cities; will retry next call")
-        return
-    for city in cities:
-        name_lower = city["name"].lower()
-        _city_cache[name_lower] = str(city["id"])
-    _city_cache_loaded = True
-    logger.info(f"Robota.ua city cache loaded: {len(_city_cache)} cities")
-
-
-def _resolve_city_id(city_name: str) -> Optional[str]:
-    """Return str city ID or None if the city isn't found."""
-    if not city_name:
+def _parse_age_str(age_val) -> Optional[int]:
+    """Parse age from either "51 рік" (list) or "51" (detail)."""
+    if age_val is None:
         return None
-    name = city_name.lower().strip()
+    s = str(age_val)
+    m = re.search(r"\d+", s)
+    return int(m.group()) if m else None
 
-    # Direct match
-    if name in _city_cache:
-        return _city_cache[name]
 
-    # Alias lookup
-    canonical = CITY_ALIASES.get(name)
-    if canonical and canonical in _city_cache:
-        return _city_cache[canonical]
-
-    # Partial match (e.g. "дніпро" inside "дніпро (дніпропетровськ)")
-    for cached_name, cached_id in _city_cache.items():
-        if name in cached_name or cached_name in name:
-            return cached_id
-
+def _parse_iso_date(s: str) -> Optional[datetime]:
+    if not s:
+        return None
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt.replace(tzinfo=None)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(s[:7], "%Y-%m")
+    except ValueError:
+        pass
     return None
 
 
-# ──────────────────────────────────────────────────────────────────
-# Helpers: parsing fields into scorer-ready format
-# ──────────────────────────────────────────────────────────────────
-
 def _parse_experience_years(experiences: list) -> Optional[float]:
-    """
-    Sum total months across all positions and return years.
-    Handles both field naming conventions:
-      - recommendedProfResumes list: startWork / endWork
-      - employerResume detail:       startDate / endDate
-    """
+    """Sum total months from beginWork/finishWork fields."""
     if not experiences:
         return None
     total_months = 0
     for exp in experiences:
         try:
-            # Accept either naming convention
-            start_str = exp.get("startDate") or exp.get("startWork") or ""
-            end_str = exp.get("endDate") or exp.get("endWork") or ""
-            is_current = exp.get("isCurrent", False) or (not end_str)
+            start_str = exp.get("beginWork") or exp.get("startDate") or ""
+            end_str = exp.get("finishWork") or exp.get("endDate") or ""
+            is_current = not end_str or "0001-01-01" in end_str
 
             start_dt = _parse_iso_date(start_str)
             end_dt = _parse_iso_date(end_str) if not is_current else datetime.utcnow()
@@ -359,103 +86,65 @@ def _parse_experience_years(experiences: list) -> Optional[float]:
     return round(total_months / 12, 1)
 
 
-def _parse_iso_date(s: str) -> Optional[datetime]:
-    """Parse ISO 8601 datetime/date strings into a naive UTC datetime.
+def _strip_html(html: str) -> str:
+    return re.sub(r"<[^>]+>", " ", html or "").strip()
 
-    Handles common Robota.ua formats:
-      "2024-03-15T10:30:00"
-      "2024-03-15T10:30:00.000Z"
-      "2024-03-15T10:30:00+02:00"
-      "2024-03-15"
-      "2024-03"
-    """
-    if not s:
+
+def _parse_salary_str(salary_str: str) -> Optional[int]:
+    """Parse salary string like '20 000 грн.' → 20000."""
+    if not salary_str:
         return None
-    s = s.strip()
-    # Normalize trailing Z → +00:00 so fromisoformat handles it (Python 3.10 compat)
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-        # Strip timezone info to keep comparisons naive/UTC-based
-        return dt.replace(tzinfo=None)
-    except ValueError:
-        pass
-    # Fallback: try year-month "YYYY-MM" → first day of month
-    try:
-        return datetime.strptime(s[:7], "%Y-%m")
-    except ValueError:
-        pass
-    return None
+    digits = re.sub(r"[^\d]", "", salary_str)
+    return int(digits) if digits else None
 
 
-def _parse_age(birth_date: str) -> Optional[int]:
-    dt = _parse_iso_date(birth_date)
-    if not dt:
-        return None
-    today = datetime.utcnow()
-    return today.year - dt.year - ((today.month, today.day) < (dt.month, dt.day))
-
-
-def _salary_to_usd_uah(amount: Optional[int], currency: str) -> tuple:
-    """Return (salary_uah, salary_usd) as ints or None."""
-    if not amount:
+def _salary_to_uah_usd(amount_uah: Optional[int]) -> tuple:
+    """Convert UAH salary to (uah, usd)."""
+    if not amount_uah:
         return None, None
     try:
         from services.salary_normalizer import get_usd_uah_rate
         rate = get_usd_uah_rate()
     except Exception:
         rate = 40.0
-
-    currency_upper = (currency or "").upper()
-    if currency_upper in ("UAH", "ГРН", ""):
-        uah = int(amount)
-        usd = int(amount / rate) if rate else None
-    elif currency_upper in ("USD", "US", "$"):
-        usd = int(amount)
-        uah = int(amount * rate) if rate else None
-    else:
-        uah, usd = int(amount), None
-    return uah, usd
+    usd = int(amount_uah / rate) if rate else None
+    return amount_uah, usd
 
 
 def _build_raw_text(
     role: str,
     city: str,
-    experiences: list,
-    skills: str,
-    education_lines: list,
+    age_str: str,
     salary_str: str,
-    languages: list,
+    experiences: list,
+    skills_html: str,
+    keywords: list,
 ) -> str:
     parts = []
     if role:
         parts.append(f"Посада: {role}")
     if city:
         parts.append(f"Місто: {city}")
+    if age_str:
+        parts.append(f"Вік: {age_str}")
     if salary_str:
         parts.append(f"Зарплата: {salary_str}")
     if experiences:
         parts.append("Досвід:")
-        for exp in experiences[:8]:
+        for exp in experiences[:6]:
             pos = exp.get("position") or ""
             company = exp.get("company") or ""
-            start = (exp.get("startDate") or exp.get("startWork") or "")[:7]
-            end_raw = exp.get("endDate") or exp.get("endWork") or ""
-            end = "по сьогодні" if (exp.get("isCurrent") or not end_raw) else end_raw[:7]
-            desc = exp.get("description") or ""
-            line = f"  - {pos} @ {company} ({start} – {end})"
-            if desc:
-                line += f": {desc[:100]}"
-            parts.append(line)
-    if skills:
-        parts.append(f"Навички: {skills}")
-    if education_lines:
-        parts.append("Освіта:")
-        for e in education_lines[:3]:
-            parts.append(f"  - {e}")
-    if languages:
-        parts.append(f"Мови: {', '.join(languages)}")
+            start = (exp.get("beginWork") or exp.get("startDate") or "")[:7]
+            end_raw = exp.get("finishWork") or exp.get("endDate") or ""
+            is_current = not end_raw or "0001-01-01" in end_raw
+            end = "по сьогодні" if is_current else end_raw[:7]
+            parts.append(f"  - {pos} @ {company} ({start} – {end})")
+    if skills_html:
+        skills_plain = _strip_html(skills_html)[:500]
+        if skills_plain:
+            parts.append(f"Навички: {skills_plain}")
+    if keywords:
+        parts.append(f"Ключові слова: {', '.join(keywords[:20])}")
     return "\n".join(parts)[:3000]
 
 
@@ -465,269 +154,169 @@ def _build_raw_text(
 
 async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
     """
-    Search Robota.ua for candidates matching a vacancy dict.
-
+    Search Robota.ua CV database via REST API.
     Returns a list of candidate dicts compatible with the Hunt scorer.
     Returns [] on any auth/network error — never raises.
-
-    vacancy dict keys used: position, city, keywords, requirements
-    depth_days: only return candidates active within this many days
     """
     from config.hunt_config import HUNT_CONFIG
-
     if depth_days is None:
         depth_days = HUNT_CONFIG["search_depth_days"]
 
-    token = _get_jwt()
+    token = await login_robotaua()
     if not token:
-        logger.info("Robota.ua: ROBOTAUA_JWT not set — skipping source")
-        return []
-
-    if not _check_jwt_expiry(token):
+        logger.info("[RobotaUA] No token — skipping source")
         return []
 
     position = vacancy.get("position", "")
     if not position:
-        logger.info("Robota.ua: no position in vacancy, skipping")
+        logger.info("[RobotaUA] No position in vacancy — skipping")
         return []
-
-    try:
-        await _ensure_city_cache(token)
-    except Exception as e:
-        logger.warning(f"Robota.ua city cache load failed: {e}")
 
     city_name = vacancy.get("city", "")
-    city_id = _resolve_city_id(city_name)
+    city_id = await get_city_id(city_name)
     if city_id:
-        logger.info(f"Robota.ua city resolved: '{city_name}' → id={city_id}")
+        logger.info(f"[RobotaUA] City '{city_name}' → id={city_id}")
     else:
-        logger.info(f"Robota.ua city '{city_name}' not found in cache — searching Ukraine-wide (cityId=0)")
-        city_id = "0"
+        logger.info(f"[RobotaUA] City '{city_name}' not found — searching Ukraine-wide")
 
-    requirements = vacancy.get("requirements", "")
-    keywords = vacancy.get("keywords", [])
-    description_parts = []
-    if requirements:
-        if isinstance(requirements, list):
-            description_parts.append(" ".join(requirements))
-        else:
-            description_parts.append(str(requirements))
-    if keywords:
-        description_parts.append(" ".join(keywords))
-    vacancy_description = " ".join(description_parts).strip()
-
-    gql_input = {
-        "vacancyTitle": position,
-        "vacancyDescription": vacancy_description,
-        "cityId": city_id,
-        "resumeType": "ALL",
+    search_body: dict = {
+        "keyWords": position,
+        "page": 0,
     }
+    if city_id:
+        search_body["cityId"] = city_id
 
-    logger.info(
-        f"Robota.ua search: position='{position}' city_id={city_id} "
-        f"depth_days={depth_days}"
-    )
+    logger.info(f"[RobotaUA] Search: position='{position}' cityId={city_id} depth={depth_days}d")
 
-    search_result = await _gql(
-        _RECOMMENDED_QUERY,
-        {"input": gql_input, "first": 20},
-        "recommendedProfResumesQuery",
-        token,
-    )
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    resume_list = (
-        search_result
-        .get("data", {})
-        .get("recommendedProfResumes", {})
-        .get("recommendedProfResumeList", [])
-    )
-    total_available = (
-        search_result
-        .get("data", {})
-        .get("recommendedProfResumes", {})
-        .get("total", 0)
-    )
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(f"{_EMPLOYER_API}/cvdb/resumes", headers=headers, json=search_body)
 
-    if not resume_list:
-        logger.info(f"Robota.ua: 0 results for '{position}'")
+            if resp.status_code == 401:
+                logger.warning("[RobotaUA] 401 on CV search — invalidating token")
+                invalidate_token()
+                return []
+            if resp.status_code != 200:
+                logger.error(f"[RobotaUA] CV search failed: {resp.status_code} {resp.text[:200]}")
+                return []
+
+            data = resp.json()
+            documents = data.get("documents", [])
+            total = data.get("total", 0)
+            logger.info(f"[RobotaUA] {len(documents)}/{total} CVs returned for '{position}'")
+
+            if not documents:
+                return []
+
+            cutoff = datetime.utcnow() - timedelta(days=depth_days)
+            candidates = []
+
+            for doc in documents[:20]:
+                resume_id = doc.get("resumeId")
+                if not resume_id:
+                    continue
+
+                # Date filter
+                last_activity_str = doc.get("lastActivityDate") or doc.get("addDate") or ""
+                if last_activity_str:
+                    last_dt = _parse_iso_date(last_activity_str)
+                    if last_dt and last_dt < cutoff:
+                        logger.debug(f"[RobotaUA] Skipping {resume_id} (inactive > {depth_days}d)")
+                        continue
+
+                # Basic fields from list response
+                profile_url = doc.get("url") or f"https://robota.ua/ua/cv/{resume_id}"
+                speciality = doc.get("speciality") or ""
+                display_name = (doc.get("fullName") or doc.get("displayName") or "").strip()
+                age_raw = doc.get("age") or ""
+                city = doc.get("cityName") or city_name
+                salary_str_list = doc.get("salary") or ""
+                experiences_list = doc.get("experience") or []
+                keywords_list = doc.get("keywords") or []
+                last_active = last_activity_str[:10] if last_activity_str else ""
+
+                salary_uah = _parse_salary_str(salary_str_list)
+                salary_uah, salary_usd = _salary_to_uah_usd(salary_uah)
+                exp_years = _parse_experience_years(experiences_list)
+                age = _parse_age_str(age_raw)
+
+                # Fetch detail for richer data
+                await asyncio.sleep(1.0)
+                detail_resp = await client.get(
+                    f"{_EMPLOYER_API}/resume/{resume_id}",
+                    headers=headers,
+                )
+
+                full_name = display_name
+                skills_html = ""
+                email = ""
+                phone = ""
+
+                if detail_resp.status_code == 200:
+                    detail = detail_resp.json()
+                    name = (detail.get("name") or "").strip()
+                    surname = (detail.get("surname") or "").strip()
+                    if name or surname:
+                        full_name = f"{name} {surname}".strip()
+                    age_detail = _parse_age_str(detail.get("age"))
+                    if age_detail:
+                        age = age_detail
+                    email = detail.get("email") or ""
+                    phone = detail.get("phone") or ""
+                    skills_list = detail.get("skills") or []
+                    if skills_list:
+                        skills_html = " ".join(s.get("description", "") for s in skills_list)
+                    detail_salary_str = detail.get("salaryFull") or detail.get("salary") or ""
+                    if detail_salary_str and not salary_uah:
+                        salary_uah = _parse_salary_str(detail_salary_str)
+                        salary_uah, salary_usd = _salary_to_uah_usd(salary_uah)
+                elif detail_resp.status_code == 401:
+                    invalidate_token()
+                    break
+
+                # Build contact string
+                contact_parts = []
+                if phone:
+                    contact_parts.append(phone)
+                if email:
+                    contact_parts.append(email)
+                contact = ", ".join(contact_parts) if contact_parts else "Деталі на Robota.ua"
+
+                raw_text = _build_raw_text(
+                    role=speciality,
+                    city=city,
+                    age_str=age_raw,
+                    salary_str=salary_str_list,
+                    experiences=experiences_list,
+                    skills_html=skills_html,
+                    keywords=keywords_list,
+                )
+
+                candidates.append({
+                    "source": "robota.ua",
+                    "profile_url": profile_url,
+                    "full_name": full_name,
+                    "current_role": speciality,
+                    "age": age,
+                    "city": city,
+                    "salary_expectation": salary_usd,
+                    "salary_expectation_uah": salary_uah,
+                    "salary_expectation_usd": salary_usd,
+                    "contact": contact,
+                    "email": email,
+                    "experience_years": exp_years,
+                    "skills": _strip_html(skills_html)[:300],
+                    "education": "",
+                    "raw_text": raw_text,
+                    "message_date": None,
+                    "last_active": last_active,
+                })
+
+            logger.info(f"[RobotaUA] Built {len(candidates)} candidates for '{position}'")
+            return candidates
+
+    except Exception as e:
+        logger.error(f"[RobotaUA] CV search error: {e}")
         return []
-
-    logger.info(
-        f"Robota.ua: {len(resume_list)}/{total_available} resumes returned for '{position}'"
-    )
-
-    cutoff = datetime.utcnow() - timedelta(days=depth_days)
-
-    candidates = []
-    contacts_found = 0
-
-    for item in resume_list:
-        resume_id = str(item.get("id", ""))
-        if not resume_id:
-            continue
-
-        # Date filter from list response
-        last_activity_str = item.get("lastActivityDate") or item.get("updateDate") or ""
-        if last_activity_str:
-            last_dt = _parse_iso_date(last_activity_str)
-            if last_dt and last_dt < cutoff:
-                logger.debug(
-                    f"Robota.ua: skipping resume {resume_id} "
-                    f"(lastActivity={last_activity_str[:10]}, cutoff={depth_days}d)"
-                )
-                continue
-
-        profile_url = PROFILE_URL_TEMPLATE.format(resume_id=resume_id)
-
-        # Basic fields from list response
-        display_name = item.get("displayName") or ""
-        speciality = item.get("speciality") or ""
-        age_from_list = item.get("age")
-        city_obj = item.get("city") or {}
-        city_from_list = city_obj.get("name", "")
-        salary_obj = item.get("resumeSalary")
-        salary_uah_l, salary_usd_l = _salary_to_usd_uah(
-            salary_obj.get("amount") if salary_obj else None,
-            salary_obj.get("currency", "UAH") if salary_obj else "UAH",
-        )
-        exp_from_list = _parse_experience_years(item.get("experience") or [])
-
-        # Attempt to fetch full CV for richer data + contacts
-        await asyncio.sleep(1.0)  # 1 second rate limit between employerResume calls
-        detail_result = await _gql(
-            _EMPLOYER_RESUME_QUERY,
-            {"id": resume_id},
-            "employerResumeQuery",
-            token,
-        )
-        detail = (
-            detail_result
-            .get("data", {})
-            .get("employerResume", {})
-        )
-        typename = detail.get("__typename", "")
-
-        full_name = display_name
-        current_role = speciality
-        city = city_from_list
-        age = age_from_list
-        salary_uah = salary_uah_l
-        salary_usd = salary_usd_l
-        salary_expectation = salary_usd_l
-        contact = "Деталі на Robota.ua"
-        email = ""
-        skills = ""
-        education_lines = []
-        experiences = item.get("experience") or []
-        languages = []
-        exp_years = exp_from_list
-        last_active = last_activity_str[:10] if last_activity_str else ""
-
-        if typename == "EmployerResume":
-            personal = detail.get("personal") or {}
-            first_name = personal.get("firstName") or ""
-            last_name = personal.get("lastName") or ""
-            if first_name or last_name:
-                full_name = f"{first_name} {last_name}".strip()
-            birth_date = personal.get("birthDate") or ""
-            if birth_date:
-                age = _parse_age(birth_date)
-
-            title = detail.get("title") or speciality
-            if title:
-                current_role = title
-
-            city_d = detail.get("city") or {}
-            if city_d.get("name"):
-                city = city_d["name"]
-
-            sal_d = detail.get("salary") or {}
-            if sal_d.get("amount"):
-                salary_uah, salary_usd = _salary_to_usd_uah(
-                    sal_d["amount"], sal_d.get("currency", "UAH")
-                )
-                salary_expectation = salary_usd
-
-            # Contacts — may be hidden without CVDB subscription
-            contacts_d = detail.get("contacts") or {}
-            phones = contacts_d.get("phones") or []
-            email_d = contacts_d.get("email") or {}
-            email = (email_d.get("email") or "") if isinstance(email_d, dict) else ""
-
-            if phones:
-                first_phone = phones[0].get("phone", "") if isinstance(phones[0], dict) else str(phones[0])
-                contact = first_phone or email or "Деталі на Robota.ua"
-                contacts_found += 1
-            elif email:
-                contact = email
-                contacts_found += 1
-
-            # Experiences from detail (more fields than list)
-            detail_exps = detail.get("experiences") or []
-            if detail_exps:
-                experiences = detail_exps
-            exp_years = _parse_experience_years(experiences)
-
-            skills_raw = detail.get("skills") or ""
-            skills = skills_raw[:500] if isinstance(skills_raw, str) else ""
-
-            edus = detail.get("educations") or []
-            for edu in edus[:3]:
-                edu_name = edu.get("name") or ""
-                year_end = edu.get("yearEnd") or ""
-                if edu_name:
-                    education_lines.append(f"{edu_name} ({year_end})" if year_end else edu_name)
-
-            lang_skills = detail.get("languageSkills") or []
-            for ls in lang_skills:
-                lang_name = (ls.get("language") or {}).get("name", "")
-                level_name = (ls.get("level") or {}).get("name", "")
-                if lang_name:
-                    languages.append(f"{lang_name} ({level_name})" if level_name else lang_name)
-
-        # Build salary string for raw_text
-        if salary_uah and salary_usd:
-            salary_str = f"{salary_uah:,} грн / ${salary_usd:,}"
-        elif salary_uah:
-            salary_str = f"{salary_uah:,} грн"
-        elif salary_usd:
-            salary_str = f"${salary_usd:,}"
-        else:
-            salary_str = ""
-
-        raw_text = _build_raw_text(
-            role=current_role,
-            city=city,
-            experiences=experiences,
-            skills=skills,
-            education_lines=education_lines,
-            salary_str=salary_str,
-            languages=languages,
-        )
-
-        candidate = {
-            "source":                 "robota.ua",
-            "profile_url":            profile_url,
-            "full_name":              full_name or "Кандидат Robota.ua",
-            "current_role":           current_role or position,
-            "age":                    age,
-            "city":                   city,
-            "salary_expectation":     salary_expectation,
-            "salary_expectation_usd": salary_usd,
-            "salary_expectation_uah": salary_uah,
-            "contact":                contact,
-            "email":                  email,
-            "experience_years":       exp_years,
-            "skills":                 skills,
-            "raw_text":               raw_text,
-            "message_date":           last_activity_str or "",
-            "last_active":            last_active,
-        }
-        candidates.append(candidate)
-
-    logger.info(
-        f"Robota.ua: returned {len(candidates)} candidates "
-        f"({contacts_found} with visible contacts) "
-        f"for '{position}' (depth={depth_days}d)"
-    )
-    return candidates

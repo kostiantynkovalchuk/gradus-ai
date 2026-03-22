@@ -148,6 +148,7 @@ async def _scrape_round(
     channels: list,
     depth_days: int,
     seen_keys: set,
+    round_num: int = 1,
 ) -> list:
     """
     Run one round of TG + Work.ua + Robota.ua scraping with the given depth_days.
@@ -157,6 +158,7 @@ async def _scrape_round(
     from services.hunt_tg_scraper import scrape_telegram_channels as search_tg_channels
     from services.hunt_workua_scraper import search_workua
     from services.hunt_robotaua_scraper import search_robotaua
+    from services.hunt_robotaua_applies import search_robotaua_applies
 
     keywords = parsed.get("keywords", [])
     if not keywords and parsed.get("position"):
@@ -166,6 +168,7 @@ async def _scrape_round(
         search_tg_channels(keywords, channels, depth_days=depth_days),
         search_workua(parsed, depth_days=depth_days),
         search_robotaua(parsed, depth_days=depth_days),
+        search_robotaua_applies(parsed, round_num=round_num),
         return_exceptions=True,
     )
 
@@ -314,7 +317,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         # ── ROUND 1: 60 days ──────────────────────────────────────
         depth1 = HUNT_CONFIG["search_depth_days"]
         logger.info(f"Hunt #{vacancy_id} Round 1: depth={depth1}d")
-        round1_raw = await _scrape_round(parsed, channels, depth1, seen_keys)
+        round1_raw = await _scrape_round(parsed, channels, depth1, seen_keys, round_num=1)
 
         if not round1_raw:
             if status_msg_id:
@@ -345,7 +348,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
             else:
                 await _send_message(chat_id, "🔄 Розширюю пошук до 6 місяців...", thread_id=thread_id)
 
-            round2_raw = await _scrape_round(parsed, channels, depth2, seen_keys)
+            round2_raw = await _scrape_round(parsed, channels, depth2, seen_keys, round_num=2)
             if round2_raw:
                 scored2 = await _score_candidates(round2_raw, parsed, vacancy_city)
                 for sc in scored2:
@@ -367,7 +370,7 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
             else:
                 await _send_message(chat_id, "🔄 Розширюю пошук до 1 року...", thread_id=thread_id)
 
-            round3_raw = await _scrape_round(parsed, channels, depth3, seen_keys)
+            round3_raw = await _scrape_round(parsed, channels, depth3, seen_keys, round_num=3)
             if round3_raw:
                 scored3 = await _score_candidates(round3_raw, parsed, vacancy_city)
                 for sc in scored3:
