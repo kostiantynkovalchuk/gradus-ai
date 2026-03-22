@@ -17,6 +17,7 @@ import logging
 import httpx
 
 from services.robotaua_auth import login_robotaua, invalidate_token
+from services.robotaua_client import cf_client
 from services.robotaua_reference import get_city_id
 
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ async def post_vacancy_to_robotaua(vacancy: dict) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with cf_client(timeout=20) as client:
             # Step 1: Create vacancy
             logger.info(f"[RobotaUA-Poster] Creating vacancy: {body['name']} / city_id={city_id}")
             add_resp = await client.post(f"{_EMPLOYER_API}/vacancy/add", headers=headers, json=body)
@@ -241,7 +242,7 @@ async def close_vacancy_on_robotaua(robotaua_vacancy_id: int) -> bool:
     if not token:
         return False
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with cf_client(timeout=15) as client:
             resp = await client.post(
                 f"{_EMPLOYER_API}/vacancy/state/{robotaua_vacancy_id}?state=Closed",
                 headers={"Authorization": f"Bearer {token}"},
@@ -262,7 +263,7 @@ async def get_avtd_vacancies() -> list:
     if not token:
         return []
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with cf_client(timeout=15) as client:
             resp = await client.post(
                 f"{_EMPLOYER_API}/vacancy/list",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},

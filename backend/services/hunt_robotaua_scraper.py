@@ -21,9 +21,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-import httpx
-
 from services.robotaua_auth import login_robotaua, invalidate_token
+from services.robotaua_client import cf_client
 from services.robotaua_reference import get_city_id
 
 logger = logging.getLogger(__name__)
@@ -193,7 +192,7 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with cf_client(timeout=30) as client:
             resp = await client.post(f"{_EMPLOYER_API}/cvdb/resumes", headers=headers, json=search_body)
 
             if resp.status_code == 401:

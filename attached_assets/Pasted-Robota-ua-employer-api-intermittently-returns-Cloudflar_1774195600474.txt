@@ -1,0 +1,54 @@
+Robota.ua employer-api intermittently returns Cloudflare 403 "Just a moment..." 
+challenge from Render server IPs. This blocks the /cvdb/resumes endpoint.
+
+Investigate and implement a fix:
+
+1. First, test if the issue is consistent or intermittent:
+   - Run 5 sequential requests to employer-api.robota.ua/cvdb/resumes with 3-second delays
+   - Log status code and first 200 chars of each response
+   - Count how many succeed vs get 403
+
+2. Try these mitigations in order:
+
+   Option A: Better headers (try first — cheapest fix)
+   - Add realistic browser headers to all employer-api requests:
+     {
+       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+       "Accept": "application/json, text/plain, */*",
+       "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+       "Accept-Encoding": "gzip, deflate, br",
+       "Origin": "https://employer.robota.ua",
+       "Referer": "https://employer.robota.ua/",
+       "sec-ch-ua": "\"Chromium\";v=\"123\", \"Not:A-Brand\";v=\"8\"",
+       "sec-ch-ua-mobile": "?0",
+       "sec-ch-ua-platform": "\"Windows\"",
+       "sec-fetch-dest": "empty",
+       "sec-fetch-mode": "cors",
+       "sec-fetch-site": "same-site"
+     }
+   - Apply these headers in robotaua_auth.py and hunt_robotaua_scraper.py
+
+   Option B: If headers alone don't work, try curl_cffi:
+   pip install curl_cffi --break-system-packages
+   
+   curl_cffi can impersonate Chrome's TLS fingerprint which bypasses most Cloudflare checks:
+   from curl_cffi.requests import AsyncSession
+   async with AsyncSession(impersonate="chrome") as s:
+       resp = await s.post(url, headers=headers, json=body)
+
+   Option C: Retry with backoff
+   If 403 is intermittent (not every request), add retry logic:
+   - On 403, wait 5 seconds and retry once
+   - If still 403, wait 10 seconds and retry once more
+   - If still 403, return [] and log warning
+
+3. Apply the fix to ALL employer-api calls:
+   - hunt_robotaua_scraper.py (CV search)
+   - hunt_robotaua_applies.py (applications)
+   - hunt_robotaua_poster.py (vacancy posting)
+   - robotaua_salary.py (salary analytics)
+   - robotaua_auth.py (login — uses auth-api.robota.ua, different domain, may not be affected)
+
+4. Test after applying fix — run the same 5-request test and compare results.
+
+Start with Option A. Only move to B if A doesn't work.

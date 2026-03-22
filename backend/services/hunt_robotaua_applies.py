@@ -13,9 +13,8 @@ import asyncio
 import logging
 from typing import Optional
 
-import httpx
-
 from services.robotaua_auth import login_robotaua, invalidate_token
+from services.robotaua_client import cf_client
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +105,7 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with cf_client(timeout=30) as client:
 
             # Step 1: Get AVTD's published vacancies
             vac_resp = await client.post(

@@ -1,7 +1,8 @@
 import os
 import time
 import logging
-import httpx
+
+from services.robotaua_client import cf_client
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,12 @@ async def login_robotaua() -> str | None:
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with cf_client(timeout=15) as client:
             resp = await client.post(f"{_AUTH_URL}/Login", json={
                 "username": email,
                 "password": password,
                 "remember": True,
-            })
+            }, _cf_no_retry=True)
             if resp.status_code == 200:
                 token = resp.text.strip().strip('"')
                 _token_cache["token"] = token
