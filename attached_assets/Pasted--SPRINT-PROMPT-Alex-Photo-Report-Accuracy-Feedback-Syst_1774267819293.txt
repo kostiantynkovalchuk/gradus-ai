@@ -1,0 +1,867 @@
+# SPRINT PROMPT: Alex Photo Report — Accuracy & Feedback System
+
+## Context
+
+Alex Photo Report is a Telegram bot for AVTD (Торговий Дім АВ, Ukraine) that verifies merchandising compliance at retail stores using Claude Vision API.
+
+**Stack:** FastAPI/Render, Neon PostgreSQL, python-telegram-bot, Claude Vision API
+**Repo:** github.com/kostiantynkovalchuk/gradus-ai
+**Bot files:** `backend/photo_report/`
+**Current state:** Migration 023 applied. Issues 1-11 from previous sprint all fixed. Deterministic scoring engine (`scoring.py`) is live. Photos stored as BYTEA in Neon. `vision_raw_json` saved per report. scoring_version=v2.
+
+We ran Round 2 of expert testing (11 photos, expert Alexandr provided ground-truth corrections). Results: **44% accuracy** (12/27 measurable checks correct). Shelf talker false positives are fixed (100% correct). But brand detection at distance and category recognition in dense stores are still failing.
+
+This sprint fixes the remaining accuracy issues and adds an expert feedback loop for continuous improvement.
+
+---
+
+## WHAT THIS SPRINT DELIVERS
+
+1. **Phase 1 — Prompt improvements** (vision analysis quality)
+2. **Phase 2 — Two-pass retry & validation** (code-level accuracy)  
+3. **Phase 3 — Expert correction feedback loop** (continuous learning)
+
+---
+
+## ROUND 2 TEST RESULTS — The Ground Truth
+
+These are the expert corrections from Alexandr. Use these as the target benchmark for all changes.
+
+### Photo 1 (close-up: ADJARI + Ukrainka)
+- AI vodka: 100% (GD:0, UA:2, HEL:0) → Expert: "Can't count vodka — photo incomplete, there's clearly more shelf below"
+- AI cognac: 100% → Expert: 100% ✅
+- **Lesson:** AI should flag when photo clearly shows only a portion of the shelf
+
+### Photo 2 (wider: ADJARI top + Ukrainka mid + imports)
+- AI vodka: 56% (GD:4, UA:6) → Expert: 56% ✅
+- AI cognac: 100% → Expert: 100% ✅
+- AI shelf talkers: none flagged → Expert: correct, no competitor POS ✅
+
+### Photo 3 (GreenDay + Ukrainka + ADJARI + Funju)
+- AI vodka: 83% (GD:8, UA:2) → Expert: 100%
+- AI cognac: 100% → Expert: 100% ✅
+- **Lesson:** AI under-counted our vodka SKUs. Missed some Ukrainka facings.
+
+### Photo 4 (GreenDay + Villa UA wine + energy drinks)
+- AI vodka: 62% (GD:7, UA:1) → Expert: ~66% (close enough, competitor bottles are wider)
+- AI wine: 67% → Expert: 67% ✅
+
+### Photo 5 (behind-counter store, FULL alcohol section — WORST PERFORMER)
+- AI vodka: 21% (GD:12, UA:0, HEL:0) → Expert: higher — MISSED Ukrainka AND Helsinki
+- AI wine: 0% → Expert: 40% (Villa UA clearly present)
+- AI cognac: 0% → Expert: 40% (ADJARI, DOVBUSH, ЖАН-ЖАК all present)
+- **Lesson:** Wide-angle/distant photo. AI completely blind to non-GreenDay brands. GreenDay's green bottles are easy to spot; Ukrainka/Helsinki/wine/cognac missed entirely.
+
+### Photo 6 (GreenDay + Ukrainka + Villa UA + Funju)
+- AI vodka: 72% (GD:10, UA:3) → Expert: 92% (missed Ukrainka SKUs)
+- AI wine: 67% → Expert: 100%
+- AI cognac: not shown → Expert: 100%
+- **Lesson:** Under-counting Ukrainka. Completely missing cognac category.
+
+### Photo 7 (large corner store, 6 shelves — OVER-counted ours)
+- AI vodka: 26% (GD:12, UA:0) → Expert: 15% (AI missed competitor bottles, inflating share)
+- AI wine: 17% → Expert: 6%
+- AI cognac: 35% → Expert: 100%
+- **Lesson:** In crowded stores AI under-counts BOTH ours and competitors, but unevenly.
+
+### Photo 8 (large store, competitor-heavy)
+- AI vodka: 35% (GD:8) → Expert: ~35% ✅ (but SKU count lower than actual)
+- AI sparkling: 0% → Expert: 16%
+- **Lesson:** Sparkling wine still being missed entirely.
+
+### Photo 9 (large corner store, angle shot)
+- AI vodka: 26% → Expert: correct ✅
+- AI wine: 0% → Expert: 40%
+- AI cognac: 24% → Expert: can't tell (too hard to see)
+- **Lesson:** Wine missed in wide shots.
+
+### Photo 10 (wide angle, mostly competitors)
+- AI vodka: 0% → Expert: 0% ✅
+- AI cognac: 0% → Expert: 23%
+- AI wine: 0% → Expert: 46%
+- **Lesson:** Correctly identified no vodka. But completely missed wine and cognac that ARE present.
+
+### Photo 11 (behind counter, mixed)
+- AI vodka: 30% → Expert: correct ✅
+
+---
+
+## FAILURE PATTERN SUMMARY
+
+| Pattern | Frequency | Root Cause |
+|---------|-----------|------------|
+| Ukrainka/Helsinki missed at distance | 7 of 11 photos | Generic visual description, hard to spot without green color cue |
+| Wine missed entirely (reports 0%) | 5 of 11 photos | Small bottles in frame, missed in wide shots |
+| Cognac missed or under-counted | 5 of 11 photos | ADJARI/DOVBUSH/ЖАН-ЖАК not spotted in distant/angled photos |
+| Sparkling missed (reports 0%) | 2 of 11 photos | Can't distinguish sparkling from still wine section |
+| Competitors under-counted | 2 of 11 photos | Inflates our share (reports 26% when really 15%) |
+| Over-confident 0% when should be null | 6 of 11 photos | Says "0% wine" when it actually can't see wine section |
+
+---
+
+## PHASE 1: SYSTEM_PROMPT Improvements
+
+### 1.1 — Confidence Gating
+
+The biggest single issue: Claude reports 0% for categories it simply can't see clearly, rather than admitting uncertainty. This causes false auto-fails and misleading reports.
+
+**Add to the SYSTEM_PROMPT output JSON schema:**
+
+```
+For EACH category (vodka, cognac, wine, sparkling, soju), report:
+
+  "confidence": "high" | "medium" | "low"
+
+Rules:
+  "high" = I can clearly read brand labels, confident in my count
+  "medium" = I can identify brands by bottle shape/color but labels are blurry or distant
+  "low" = bottles are too small, distant, angled, or obscured to count reliably
+
+  CRITICAL: If confidence is "low", set facing counts to null (not 0).
+  
+  0 means: "I carefully looked and this category is ABSENT from the shelf."
+  null means: "I cannot reliably assess this category from this photo."
+  
+  Only report 0 if you are CERTAIN the category has zero AVTD products.
+  If you're not sure → null.
+```
+
+**Update `scoring.py` to handle null:**
+
+```python
+def calculate_share(our_facings, total_facings, confidence):
+    if confidence == "low" or our_facings is None:
+        return {"share": None, "assessed": False}
+    if total_facings == 0:
+        return {"share": 0, "assessed": True}
+    return {"share": round(our_facings / total_facings * 100), "assessed": True}
+```
+
+**Update report formatting:**
+- If assessed: show percentage as normal → "✅ Горілка: 56% (норма ≥25%)"
+- If not assessed: show info note → "📊 Вино: не вдалося оцінити (фото занадто далеке)"
+
+### 1.2 — Row-by-Row Shelf Scanning Method
+
+Instead of scanning the whole photo at once (which causes Claude to focus on the most visually prominent items and miss the rest), instruct it to scan systematically.
+
+**Add to SYSTEM_PROMPT:**
+
+```
+ANALYSIS METHOD — mandatory row-by-row scanning:
+
+Step 1: Count the number of horizontal shelf rows visible in the photo.
+Step 2: For EACH row, starting from TOP to BOTTOM:
+  - Describe what category is on this row (vodka? cognac? wine? imported spirits?)
+  - List every brand you can identify, left to right
+  - Count facings per brand
+
+Step 3: After scanning ALL rows, compile totals per category.
+
+IMPORTANT: Do NOT skip any row. Even if a row looks like it only has competitors, 
+scan it anyway — AVTD brands may be mixed in.
+
+Example output for a 4-shelf display:
+  "shelf_scan": [
+    {"row": 1, "category": "imported spirits", "brands": ["Jameson x2", "VAT69 x1", "Bell's x1"]},
+    {"row": 2, "category": "cognac", "brands": ["ADJARI 3★ x3", "ADJARI 5★ x2", "ADJARI Cherry x1", "Aznauri x2"]},
+    {"row": 3, "category": "vodka", "brands": ["GreenDay Classic x4", "Ukrainka x3", "Nemiroff x2", "Khortytsia x3"]},
+    {"row": 4, "category": "wine + soju", "brands": ["Villa UA Rosé x2", "Villa UA White x1", "Funju x2", "competitor wine x5"]}
+  ]
+```
+
+This forces Claude to look at every shelf instead of glancing at the photo and guessing.
+
+### 1.3 — Enhanced Brand Visual Anchors
+
+The current prompt describes brands generically. Add stronger visual identification shortcuts, especially for brands that are being missed:
+
+**Add to SYSTEM_PROMPT brand section:**
+
+```
+=== ENHANCED VISUAL IDENTIFICATION GUIDE ===
+
+BRANDS MOST COMMONLY MISSED — pay extra attention:
+
+UKRAINKA (Українка) — FREQUENTLY MISSED in wide shots:
+  - KEY FEATURE: Wide WHITE label with "УКРАЇНКА" in LARGE Cyrillic text
+  - Bottle: clear glass, rounded shape
+  - Often grouped in 3-6 bottles together
+  - Sub-variants: some have blue accents, some yellow/gold
+  - LOOK FOR: cluster of clear bottles with prominent white labels among green GreenDay bottles
+
+HELSINKI (Хельсінкі) — FREQUENTLY MISSED:
+  - KEY FEATURE: Distinctive BLUE bottle or blue label  
+  - "HELSINKI" in Latin letters
+  - Stands out as blue among green (GreenDay) and clear (Ukrainka) bottles
+  - Usually 1-3 bottles, not large groups
+
+VILLA UA wine — MISSED IN 5 OF 11 TESTS:
+  - KEY FEATURE: MEDALLION/COIN emblem on the label
+  - Standard 750ml wine bottle shape (taller, thinner than vodka)
+  - Multiple colors: pale green (white wine), pink (rosé), dark (red)
+  - Usually on a SEPARATE shelf row from vodka
+  - LOOK FOR: row of wine bottles with consistent label design and medallion
+
+ADJARI cognac — SOMETIMES MISSED at distance:
+  - KEY FEATURE: DIAMOND MESH/NET pattern on dark bottle
+  - Golden/metallic cap
+  - Mountain landscape on label
+  - Multiple sizes side by side (0.25L, 0.5L, 0.7L)
+  - LOOK FOR: row of dark bottles with golden caps and net texture
+
+DOVBUSH cognac — FREQUENTLY MISSED:
+  - KEY FEATURE: "ДОВБУШ" text, Carpathian-themed label
+  - Dark bottle similar to ADJARI but without mesh pattern
+  - Usually 2-4 bottles near ADJARI
+
+ЖАН-ЖАК (JEAN-JACK) brandy — FREQUENTLY MISSED:
+  - KEY FEATURE: "ЖАН-ЖАК" or "JEAN JACK" text
+  - French-style label design
+  - Usually positioned near ADJARI/DOVBUSH in cognac section
+
+VILLA UA SPARKLING — MISSED IN EVERY TEST:
+  - KEY FEATURE: Dark bottles with FOIL WRAPPING on neck (like champagne)
+  - Same "VILLA UA" medallion as still wine but on champagne-shaped bottle
+  - Usually on a SEPARATE shelf from still wine, near other sparkling wines
+  - LOOK FOR: dark champagne-shaped bottles with Villa UA medallion among Asti/Prosecco competitors
+
+FUNJU soju — sometimes missed:
+  - KEY FEATURE: Small GREEN bottles with Korean text "편주"
+  - Much smaller than vodka bottles (typically 0.36L)
+  - Usually 2-4 bottles, sometimes near vodka section
+```
+
+### 1.4 — Partial Photo Awareness
+
+When a photo clearly shows only a portion of the shelf (cut off at bottom, sides cropped), Claude should note this rather than treating the visible area as the complete store.
+
+**Add to SYSTEM_PROMPT:**
+
+```
+PHOTO COMPLETENESS CHECK:
+Before counting, assess whether the photo shows:
+  - Full shelf zone (both edges visible) → "complete"
+  - Partial view (shelf clearly continues beyond frame) → "partial"
+  - Close-up of one section → "close_up"
+
+Report in JSON:
+  "photo_completeness": "complete" | "partial" | "close_up"
+
+If "partial" or "close_up":
+  - Add note: "Фото показує лише частину полиць — результати можуть бути неповними"
+  - Set confidence to "medium" maximum for share calculations
+  - Do NOT report 100% share just because you only see our brands in a close-up
+```
+
+---
+
+## PHASE 2: Code-Level Accuracy Improvements
+
+### 2.1 — Two-Pass Retry for Low-Confidence Categories
+
+When Claude reports `"confidence": "low"` for any category, automatically trigger a focused second API call.
+
+**New function in `vision.py`:**
+
+```python
+async def analyze_focused(photos_b64: list[str], focus_category: str) -> dict:
+    """Re-analyze photos focusing on a single category."""
+    
+    focus_prompts = {
+        "wine": "IGNORE vodka and cognac. Look ONLY for wine bottles. Scan every shelf row for standard wine-shaped bottles (750ml, taller/thinner than vodka). Look for Villa UA (medallion label), Didi Lari, Kristi Valley, Kosher. Count ALL wine bottles including competitors.",
+        "cognac": "IGNORE vodka and wine. Look ONLY for cognac/brandy bottles. Scan every shelf row for ADJARI (dark bottles, golden caps, diamond mesh), DOVBUSH, KLINKOV, ЖАН-ЖАК. Count ALL cognac bottles including competitors.",
+        "sparkling": "IGNORE still wine and vodka. Look ONLY for sparkling wine bottles (champagne-shaped, dark bottles with foil neck wrapping). Look for Villa UA Sparkling. Count ALL sparkling bottles including competitors.",
+        "vodka": "IGNORE cognac and wine. Look ONLY for vodka bottles. Look especially for UKRAINKA (white label, clear bottle) and HELSINKI (blue bottle/label) — these are commonly missed. Also count ALL competitor vodka. Scan every shelf row."
+    }
+    
+    messages = [
+        {"role": "user", "content": [
+            *[{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}} for b64 in photos_b64],
+            {"type": "text", "text": f"FOCUSED RE-ANALYSIS: {focus_prompts[focus_category]}\n\nReturn JSON with ONLY the {focus_category} section."}
+        ]}
+    ]
+    
+    # Call Claude with focused prompt
+    result = await call_claude_vision(messages)
+    return parse_json(result)
+```
+
+**Integrate into main analysis flow:**
+
+```python
+async def analyze_and_score(photos_b64, photos_bytes, store_name, user_id):
+    # Pass 1: Full analysis
+    vision_result = await analyze_photos(photos_b64)
+    
+    # Pass 2: Retry low-confidence categories
+    retried_categories = []
+    for category in ["vodka", "wine", "cognac", "sparkling"]:
+        cat_data = vision_result.get(category, {})
+        if cat_data.get("confidence") == "low":
+            retry = await analyze_focused(photos_b64, category)
+            if retry and retry.get("confidence") in ("high", "medium"):
+                vision_result[category] = retry
+                retried_categories.append(category)
+    
+    if retried_categories:
+        logger.info(f"Retried categories: {retried_categories}")
+    
+    # Score using deterministic engine
+    score_result = calculate_score(vision_result)
+    
+    # Store everything
+    report_id = await save_report(store_name, user_id, vision_result, score_result)
+    await save_photos(report_id, photos_bytes)
+    
+    return report_id, score_result
+```
+
+**Cost control:** Only retry when confidence is "low". Typical case: 0-1 retries per report. Worst case: 4 retries. At ~$0.03 per retry call (Haiku), max extra cost is $0.12 per report.
+
+### 2.2 — Facing Count Sanity Validation
+
+Add post-analysis validation to catch obviously wrong counts.
+
+**New function in `scoring.py`:**
+
+```python
+def validate_counts(vision_data: dict) -> list[str]:
+    """Flag suspicious counts that may indicate detection errors."""
+    warnings = []
+    
+    v = vision_data.get("vodka", {})
+    c = vision_data.get("cognac", {})
+    w = vision_data.get("wine", {})
+    
+    # If GreenDay found but Ukrainka = 0 in a store that has multiple categories
+    # (usually Ukrainka is co-distributed with GreenDay)
+    gd = v.get("greenday_facings", 0) or 0
+    ua = v.get("ukrainka_facings", 0) or 0
+    hel = v.get("helsinki_facings", 0) or 0
+    
+    if gd >= 6 and ua == 0 and hel == 0:
+        warnings.append("⚠️ GreenDay знайдено ({}), але Ukrainka та Helsinki = 0. Можливо, не всі бренди розпізнано.".format(gd))
+    
+    # If vodka share is very high (>80%) with only GreenDay
+    total_vodka = v.get("total_vodka_facings", 0) or 0
+    our_vodka = gd + ua + hel
+    if total_vodka > 0 and our_vodka / total_vodka > 0.8 and ua == 0 and hel == 0:
+        warnings.append("⚠️ Частка горілки >80% тільки за рахунок GreenDay — перевірте фото на наявність Ukrainka/Helsinki.")
+    
+    # If cognac = 0% but vodka shows ADJARI-looking counts
+    # (category confusion — mixing cognac into other counts)
+    our_cognac = sum([
+        c.get("adjari_facings", 0) or 0,
+        c.get("dovbush_facings", 0) or 0,
+        c.get("klinkov_facings", 0) or 0,
+        c.get("jean_jack_facings", 0) or 0,
+    ])
+    total_cognac = c.get("total_cognac_facings", 0) or 0
+    if total_cognac == 0 and vision_data.get("shelf_scan"):
+        # Check if any shelf row mentions cognac-like bottles
+        for row in vision_data["shelf_scan"]:
+            if "cognac" in row.get("category", "").lower() or "коньяк" in row.get("category", "").lower():
+                warnings.append("⚠️ Виявлено коньячну полицю, але кількість = 0. Можливо, бренди не розпізнано.")
+                break
+    
+    return warnings
+```
+
+### 2.3 — Multi-Photo Recommendation
+
+When analysis reveals a complex store but only 1 photo was provided, suggest more photos.
+
+**Add to report formatting in `bot.py`:**
+
+```python
+# Count how many categories are present in the store
+categories_detected = 0
+for cat in ["vodka", "cognac", "wine", "sparkling"]:
+    cat_data = vision_result.get(cat, {})
+    total = cat_data.get(f"total_{cat}_facings", 0) or 0
+    if total > 0:
+        categories_detected += 1
+
+# Count how many categories have low confidence
+low_confidence_cats = sum(
+    1 for cat in ["vodka", "cognac", "wine", "sparkling"]
+    if vision_result.get(cat, {}).get("confidence") == "low"
+)
+
+if len(photos_b64) == 1 and (categories_detected >= 3 or low_confidence_cats >= 2):
+    report_text += "\n\n💡 Рекомендація: для великих магазинів надсилайте 2-3 фото різних ділянок полиць для точнішого аналізу."
+```
+
+---
+
+## PHASE 3: Expert Correction Feedback Loop
+
+### 3.1 — Database Schema (Migration 024)
+
+```sql
+-- Expert corrections table
+CREATE TABLE expert_corrections (
+    id SERIAL PRIMARY KEY,
+    report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE,
+    expert_tg_id BIGINT NOT NULL,
+    
+    -- Corrected share values (NULL = no correction for this category)
+    corrected_vodka_share INTEGER,
+    corrected_wine_share INTEGER,
+    corrected_cognac_share INTEGER,
+    corrected_sparkling_share INTEGER,
+    
+    -- Corrected facing counts (optional, for detailed corrections)
+    corrected_vodka_json JSONB,
+    corrected_wine_json JSONB,
+    corrected_cognac_json JSONB,
+    
+    -- Free-text notes from expert
+    notes TEXT,
+    
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_expert_corrections_report ON expert_corrections(report_id);
+
+-- Track who can submit corrections (expert role)
+-- For now, hardcode expert tg_ids. Later: role-based via hr_users table.
+```
+
+### 3.2 — Expert Correction Bot Flow
+
+When an expert replies to a report message with corrections, parse and store them.
+
+**Add to `bot.py`:**
+
+```python
+# Expert Telegram IDs who can submit corrections
+EXPERT_TG_IDS = {441389791, 424503938}  # Kostiantyn, Natalia — add Alexandr's ID
+
+async def handle_expert_correction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle expert reply to a report message with corrections."""
+    
+    if update.effective_user.id not in EXPERT_TG_IDS:
+        return  # silently ignore non-experts
+    
+    # Check if this is a reply to a report message
+    reply = update.message.reply_to_message
+    if not reply or "ID звіту:" not in reply.text:
+        return
+    
+    # Extract report ID from the original message
+    report_id = extract_report_id(reply.text)  # parse "ID звіту: #XX"
+    if not report_id:
+        return
+    
+    # Parse correction text
+    correction_text = update.message.text
+    correction = parse_correction(correction_text)
+    
+    # Store in DB
+    await save_expert_correction(
+        report_id=report_id,
+        expert_tg_id=update.effective_user.id,
+        vodka_share=correction.get("vodka"),
+        wine_share=correction.get("wine"),
+        cognac_share=correction.get("cognac"),
+        sparkling_share=correction.get("sparkling"),
+        notes=correction_text
+    )
+    
+    await update.message.reply_text(
+        f"✅ Корекцію збережено для звіту #{report_id}.\n"
+        f"{'📊 Горілка: ' + str(correction['vodka']) + '%' if correction.get('vodka') is not None else ''}\n"
+        f"{'📊 Вино: ' + str(correction['wine']) + '%' if correction.get('wine') is not None else ''}\n"
+        f"{'📊 Коньяк: ' + str(correction['cognac']) + '%' if correction.get('cognac') is not None else ''}\n"
+        f"{'📊 Ігристе: ' + str(correction['sparkling']) + '%' if correction.get('sparkling') is not None else ''}"
+    )
+```
+
+**Correction parser — flexible format:**
+
+```python
+def parse_correction(text: str) -> dict:
+    """Parse expert correction text. Supports flexible Ukrainian/Russian formats.
+    
+    Examples:
+        "Водка - 56%, коньяк - 100%"
+        "водки нет, вино 40%, коньяк 23%"
+        "Водка правильно, вино - 6%, коньяк - 100%"
+        "все правильно"
+    """
+    result = {}
+    text_lower = text.lower()
+    
+    # Map category keywords to JSON keys
+    category_patterns = {
+        "vodka": [r"водк[аи]", r"горілк[аи]", r"vodka"],
+        "wine": [r"вин[оа]", r"wine"],
+        "cognac": [r"коньяк\w*", r"cognac", r"бренді"],
+        "sparkling": [r"ігрист\w*", r"игрист\w*", r"sparkling"],
+    }
+    
+    for key, patterns in category_patterns.items():
+        for pattern in patterns:
+            # Look for "category - XX%" or "category XX%"
+            match = re.search(
+                pattern + r'\s*[-—:=]?\s*(\d{1,3})\s*%',
+                text_lower
+            )
+            if match:
+                result[key] = int(match.group(1))
+                break
+            
+            # Look for "category нет" / "category 0" / "категории нет"
+            match_zero = re.search(
+                pattern + r'\s*[-—:=]?\s*(нет|немає|відсутн|0\b)',
+                text_lower
+            )
+            if match_zero:
+                result[key] = 0
+                break
+            
+            # Look for "category правильно" (means AI was correct)
+            match_correct = re.search(
+                pattern + r'\s*[-—]?\s*(правильно|вірно|correct|ок)',
+                text_lower
+            )
+            if match_correct:
+                result[key] = "correct"  # will be resolved to AI value
+                break
+    
+    # Handle "все правильно" / "all correct"
+    if re.search(r'(все|всё|all)\s*(правильно|вірно|correct|ок)', text_lower):
+        for key in category_patterns:
+            if key not in result:
+                result[key] = "correct"
+    
+    return result
+```
+
+### 3.3 — Accuracy Tracking API Endpoint
+
+Add an endpoint to the existing `/hr` dashboard backend to show accuracy metrics.
+
+**New route in FastAPI:**
+
+```python
+@app.get("/hr/api/accuracy")
+async def get_accuracy_metrics(days: int = 30):
+    """Calculate AI accuracy based on expert corrections."""
+    
+    query = """
+    SELECT 
+        pr.id as report_id,
+        pr.vision_raw_json,
+        pr.score_data,
+        ec.corrected_vodka_share,
+        ec.corrected_wine_share,
+        ec.corrected_cognac_share,
+        ec.corrected_sparkling_share,
+        ec.created_at
+    FROM photo_reports pr
+    JOIN expert_corrections ec ON ec.report_id = pr.id
+    WHERE ec.created_at >= NOW() - INTERVAL '%s days'
+    ORDER BY ec.created_at DESC
+    """
+    
+    rows = await db.fetch(query, days)
+    
+    metrics = {"vodka": [], "wine": [], "cognac": [], "sparkling": []}
+    
+    for row in rows:
+        score_data = row["score_data"] or {}
+        shares = score_data.get("shelf_shares", {})
+        
+        for cat in metrics:
+            ai_value = shares.get(cat)
+            expert_value = row[f"corrected_{cat}_share"]
+            
+            if expert_value is not None and expert_value != "correct" and ai_value is not None:
+                deviation = abs(ai_value - expert_value)
+                metrics[cat].append({
+                    "report_id": row["report_id"],
+                    "ai": ai_value,
+                    "expert": expert_value,
+                    "deviation": deviation
+                })
+    
+    summary = {}
+    for cat, deviations in metrics.items():
+        if deviations:
+            avg_dev = sum(d["deviation"] for d in deviations) / len(deviations)
+            exact_matches = sum(1 for d in deviations if d["deviation"] <= 5)
+            summary[cat] = {
+                "samples": len(deviations),
+                "avg_deviation": round(avg_dev, 1),
+                "accuracy_within_5pct": round(exact_matches / len(deviations) * 100),
+                "worst_miss": max(d["deviation"] for d in deviations),
+                "details": deviations[-10:]  # last 10
+            }
+        else:
+            summary[cat] = {"samples": 0, "avg_deviation": None}
+    
+    return {
+        "period_days": days,
+        "total_corrections": len(rows),
+        "categories": summary
+    }
+```
+
+### 3.4 — Accuracy Dashboard Widget
+
+Add to the existing `/hr` dashboard HTML a new section:
+
+```html
+<!-- Accuracy section in /hr dashboard -->
+<div id="accuracy-section">
+  <h3>🎯 AI Accuracy (based on expert corrections)</h3>
+  <div id="accuracy-cards">
+    <!-- Populated by JS from /hr/api/accuracy -->
+    <!-- Each card shows: category, avg deviation, sample count, trend -->
+  </div>
+  <table id="accuracy-detail">
+    <!-- Columns: Report ID | Category | AI said | Expert said | Deviation -->
+  </table>
+</div>
+```
+
+---
+
+## PHASE 4: Updated Scoring.py Rules
+
+With confidence gating, the scoring engine needs updates:
+
+```python
+def calculate_score(vision_data: dict) -> dict:
+    score = 100
+    errors = []
+    info = []
+    warnings = []
+    auto_fail = False
+    
+    # --- Run sanity validation ---
+    warnings = validate_counts(vision_data)
+    
+    # --- Vodka ---
+    v = vision_data.get("vodka", {})
+    v_confidence = v.get("confidence", "high")
+    
+    if v_confidence != "low":
+        gd = v.get("greenday_facings") or 0
+        ua = v.get("ukrainka_facings") or 0
+        hel = v.get("helsinki_facings") or 0
+        our_vodka = gd + ua + hel
+        total_vodka = v.get("total_vodka_facings") or 0
+        
+        vodka_share = round(our_vodka / total_vodka * 100) if total_vodka > 0 else 0
+        
+        if vodka_share < 25:
+            auto_fail = True
+            score = min(score, 55)
+            errors.append({
+                "code": "1_108608",
+                "text": f"Частка полиці горілки {vodka_share}% < 25% — провал звіту",
+                "severity": "critical"
+            })
+    else:
+        vodka_share = None
+        info.append("Горілка: не вдалося точно оцінити (низька впевненість)")
+    
+    # --- Cognac ---
+    c = vision_data.get("cognac", {})
+    c_confidence = c.get("confidence", "high")
+    
+    if c_confidence != "low":
+        our_cognac = sum([
+            c.get("adjari_facings") or 0,
+            c.get("dovbush_facings") or 0,
+            c.get("klinkov_facings") or 0,
+            c.get("jean_jack_facings") or 0,
+        ])
+        total_cognac = c.get("total_cognac_facings") or 0
+        cognac_share = round(our_cognac / total_cognac * 100) if total_cognac > 0 else 0
+    else:
+        cognac_share = None
+        info.append("Коньяк: не вдалося точно оцінити (низька впевненість)")
+    
+    # --- Wine ---
+    w = vision_data.get("wine", {})
+    w_confidence = w.get("confidence", "high")
+    
+    if w_confidence != "low":
+        our_wine = sum([
+            w.get("villa_ua_facings") or 0,
+            w.get("didi_lari_facings") or 0,
+            w.get("kristi_valley_facings") or 0,
+            w.get("kosher_facings") or 0,
+        ])
+        total_wine = w.get("total_wine_facings") or 0
+        wine_share = round(our_wine / total_wine * 100) if total_wine > 0 else 0
+    else:
+        wine_share = None
+        info.append("Вино: не вдалося точно оцінити (низька впевненість)")
+    
+    # --- Sparkling ---
+    s = vision_data.get("sparkling", {})
+    s_confidence = s.get("confidence", "high")
+    
+    if s_confidence != "low":
+        our_sparkling = s.get("villa_ua_sparkling_facings") or 0
+        total_sparkling = s.get("total_sparkling_facings") or 0
+        sparkling_share = round(our_sparkling / total_sparkling * 100) if total_sparkling > 0 else 0
+    else:
+        sparkling_share = None
+        info.append("Ігристе: не вдалося точно оцінити (низька впевненість)")
+    
+    # --- POS Materials ---
+    pos = vision_data.get("pos_materials", {})
+    if pos.get("competitor_branded_pos_present") and not pos.get("avtd_shelf_strip_present"):
+        score -= 10
+        errors.append({
+            "code": "1_108106",
+            "text": "Відсутні шелфстрипери AVTD при наявності у конкурентів",
+            "severity": "major"
+        })
+    
+    # --- General Overview ---
+    if not vision_data.get("has_general_overview"):
+        completeness = vision_data.get("photo_completeness", "complete")
+        if completeness in ("partial", "close_up"):
+            score -= 10
+            errors.append({
+                "code": "NP59_200009734",
+                "text": "Відсутній загальний огляд всіх полиць",
+                "severity": "major"
+            })
+        else:
+            score -= 15
+            errors.append({
+                "code": "NP59_200009734",
+                "text": "Відсутній загальний огляд всіх полиць",
+                "severity": "major"
+            })
+    
+    # --- Premium Shelf ---
+    ps = vision_data.get("premium_shelf", {})
+    if ps.get("top_shelf_visible"):
+        if not any([ps.get("gd_evolution_present"), ps.get("gd_planet_present"), ps.get("gd_discovery_present")]):
+            score -= 10
+            errors.append({
+                "code": "ELITE_SHELF",
+                "text": "GreenDay Evolution/Planet/Discovery відсутні на елітній полиці",
+                "severity": "minor"
+            })
+    else:
+        score -= 5
+        info.append("Верхня полиця не видна на фото")
+    
+    # --- Auto-fail override ---
+    if auto_fail:
+        score = min(score, 55)
+        status = "НЕ ПРОЙДЕНО"
+    elif score >= 70 and len([e for e in errors if e["severity"] != "minor"]) <= 2:
+        status = "ПРОЙДЕНО"
+    else:
+        status = "НЕ ПРОЙДЕНО"
+    
+    return {
+        "score": max(0, score),
+        "status": status,
+        "errors": errors,
+        "info": info,
+        "warnings": warnings,
+        "shelf_shares": {
+            "vodka": vodka_share,
+            "cognac": cognac_share,
+            "wine": wine_share,
+            "sparkling": sparkling_share,
+        },
+        "vodka_detail": {
+            "greenday": v.get("greenday_facings"),
+            "ukrainka": v.get("ukrainka_facings"),
+            "helsinki": v.get("helsinki_facings"),
+        } if v_confidence != "low" else None,
+        "retried_categories": vision_data.get("retried_categories", []),
+        "photo_completeness": vision_data.get("photo_completeness"),
+    }
+```
+
+---
+
+## MIGRATION 024
+
+```sql
+-- Expert corrections table
+CREATE TABLE IF NOT EXISTS expert_corrections (
+    id SERIAL PRIMARY KEY,
+    report_id INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE,
+    expert_tg_id BIGINT NOT NULL,
+    corrected_vodka_share INTEGER,
+    corrected_wine_share INTEGER,
+    corrected_cognac_share INTEGER,
+    corrected_sparkling_share INTEGER,
+    corrected_vodka_json JSONB,
+    corrected_wine_json JSONB,
+    corrected_cognac_json JSONB,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_expert_corrections_report ON expert_corrections(report_id);
+CREATE INDEX IF NOT EXISTS idx_expert_corrections_date ON expert_corrections(created_at);
+```
+
+---
+
+## FILE CHANGE SUMMARY
+
+| File | Changes |
+|------|---------|
+| `vision.py` SYSTEM_PROMPT | Add confidence gating, row-by-row scanning, enhanced brand anchors, photo completeness check |
+| `vision.py` analysis logic | Add two-pass retry for low-confidence categories |
+| `scoring.py` | Handle null/confidence in all category calculations, add `validate_counts()`, add warnings to output |
+| `bot.py` | Add expert correction handler, multi-photo recommendation note, register `EXPERT_TG_IDS` |
+| `bot.py` report formatting | Show confidence info, warnings, unassessed categories differently from 0% |
+| `db.py` | Add `save_expert_correction()`, `get_accuracy_metrics()` functions |
+| Migration 024 | Create `expert_corrections` table |
+| `/hr` dashboard | Add accuracy metrics section with `/hr/api/accuracy` endpoint |
+
+---
+
+## EXPECTED OUTCOMES
+
+After this sprint, re-running the same 11 test photos should show:
+
+| Metric | Before (Test 2) | Target |
+|--------|-----------------|--------|
+| Vodka share accuracy | 7/11 correct | 9/11 correct |
+| Wine detection | 2/11 correct | 7/11 (rest flagged as "low confidence") |
+| Cognac detection | 4/11 correct | 7/11 (rest flagged as "low confidence") |
+| False 0% reports | 6 instances | 0 (replaced with "not assessed") |
+| Shelf talker false positives | 0 | 0 (maintained) |
+| Expert can submit corrections | No | Yes |
+| Accuracy dashboard | No | Yes |
+
+The key insight: we can't make Claude perfectly count bottles in distant wide-angle photos. But we CAN stop it from confidently reporting "0%" when it really means "I can't tell" — and build a feedback loop to measure and improve over time.
+
+---
+
+## TESTING CHECKLIST
+
+After all changes deployed:
+
+| # | Test | Expected |
+|---|------|----------|
+| 1 | Re-analyze Photo 5 (worst performer) | Wine and cognac should show "low confidence" or be caught by retry pass |
+| 2 | Re-analyze Photo 6 | Ukrainka count should improve with enhanced visual anchors |
+| 3 | Re-analyze Photo 10 (wide angle) | Wine 46% and cognac 23% should be partially detected or flagged as low confidence |
+| 4 | Reply to report with "Водка - 56%, коньяк - 100%" | Correction saved, confirmed |
+| 5 | Reply with "все правильно" | All categories marked as correct |
+| 6 | Reply with "вино 40%, коньяк 23%" | Both parsed and saved |
+| 7 | Visit /hr dashboard accuracy section | Shows metrics from corrections |
+| 8 | Send 1 photo of large store | Report includes "💡 Рекомендація: надсилайте 2-3 фото" |
+| 9 | Validate scoring: vodka=null confidence=low | Report shows "не вдалося оцінити" not "0%" |
+| 10 | Validate auto-fail still works | Vodka 20% with high confidence → НЕ ПРОЙДЕНО 55/100 |

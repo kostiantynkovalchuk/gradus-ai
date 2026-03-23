@@ -1,4 +1,5 @@
 import io
+import re
 import base64
 import asyncio
 import logging
@@ -11,7 +12,10 @@ from telegram.ext import (
 from .vision import analyze_photos
 from .scoring import calculate_score
 from .formatter import format_report_for_telegram
-from .db import get_or_create_agent, save_report, save_report_photos, get_agent_stats
+from .db import (
+    get_or_create_agent, save_report, save_report_photos,
+    get_agent_stats, save_expert_correction,
+)
 from .keyboards import MAIN_MENU, PHOTO_ACTIONS
 
 logger = logging.getLogger(__name__)
@@ -20,7 +24,145 @@ WAITING_POINT_NAME = 1
 WAITING_PHOTOS = 2
 WAITING_CONFIRM = 3
 
+EXPERT_TG_IDS: set[int] = {441389791, 424503938}
+
 pending_reports = {}
+
+
+def parse_correction(text: str) -> dict:
+    """
+    Parse a free-form expert correction message.
+
+    Accepted formats (case-insensitive):
+      "горілка 35% 7/20"
+      "vodka GD=4 UA=3 total=20"
+      "коньяк: наша=5 всього=15 → 33%"
+      "вино villa 3 конкуренти 9 → 25%"
+      "sparkling: villa 0, всього 8"
+      "ігристе — не бачу villa ua зовсім"
+    """
+    text_l = text.lower()
+
+    category_map = {
+        "горілк": "vodka",
+        "горілц": "vodka",
+        "vodka": "vodka",
+        "коньяк": "cognac",
+        "cognac": "cognac",
+        "бренді": "cognac",
+        "brandy": "cognac",
+        "вин": "wine",
+        "wine": "wine",
+        "ігрист": "sparkling",
+        "sparkling": "sparkling",
+        "шампан": "sparkling",
+    }
+    category = None
+    for key, cat in category_map.items():
+        if key in text_l:
+            category = cat
+            break
+
+    share_match = re.search(r"(\d{1,3})\s*%", text)
+    true_share = int(share_match.group(1)) if share_match else None
+
+    fraction_match = re.search(r"(\d+)\s*/\s*(\d+)", text)
+    our_facings = int(fraction_match.group(1)) if fraction_match else None
+    total_facings = int(fraction_match.group(2)) if fraction_match else None
+
+    if our_facings is None:
+        for pat in [
+            r"(?:gd|наш|наші|our|ours?)\s*[=:]\s*(\d+)",
+            r"(?:villa|adjari|greenday)\s+(\d+)",
+            r"наш\w*\s+(\d+)",
+        ]:
+            m = re.search(pat, text_l)
+            if m:
+                our_facings = int(m.group(1))
+                break
+
+    if total_facings is None:
+        for pat in [
+            r"(?:total|всього|загал\w*|tot)\s*[=:]\s*(\d+)",
+            r"(?:конкурент\w*|comp)\s+(\d+)",
+        ]:
+            m = re.search(pat, text_l)
+            if m:
+                if "конкурент" in pat and our_facings is not None:
+                    comp = int(m.group(1))
+                    total_facings = our_facings + comp
+                else:
+                    total_facings = int(m.group(1))
+                break
+
+    if our_facings is not None and total_facings is not None and true_share is None and total_facings > 0:
+        true_share = round(our_facings / total_facings * 100)
+
+    return {
+        "category": category,
+        "true_share": true_share,
+        "our_facings": our_facings,
+        "total_facings": total_facings,
+        "raw_text": text,
+    }
+
+
+async def handle_expert_correction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Experts (by Telegram ID) can reply to a report to provide corrections."""
+    user = update.effective_user
+    if user is None or user.id not in EXPERT_TG_IDS:
+        return
+
+    msg = update.message
+    if not msg or not msg.reply_to_message:
+        return
+
+    replied_text = msg.reply_to_message.text or ""
+    report_id_match = re.search(r"ID звіту: #(\d+)", replied_text)
+    if not report_id_match:
+        await msg.reply_text(
+            "⚠️ Не знайшов ID звіту в повідомленні. "
+            "Будь ласка, відповідай саме на повідомлення зі звітом.",
+            parse_mode="Markdown",
+        )
+        return
+
+    report_id = int(report_id_match.group(1))
+    correction_text = msg.text or ""
+
+    parsed = parse_correction(correction_text)
+
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            save_expert_correction,
+            report_id,
+            user.id,
+            user.full_name,
+            parsed,
+        )
+
+        cat_ua = {"vodka": "горілка", "wine": "вино", "cognac": "коньяк", "sparkling": "ігристе"}
+        cat_display = cat_ua.get(parsed.get("category"), parsed.get("category") or "невідомо")
+
+        lines = [f"✅ *Корекцію до звіту #{report_id} збережено.*", ""]
+        lines.append(f"📋 Категорія: {cat_display}")
+        if parsed.get("true_share") is not None:
+            lines.append(f"📊 Фактична частка: {parsed['true_share']}%")
+        if parsed.get("our_facings") is not None and parsed.get("total_facings") is not None:
+            lines.append(f"🔢 Фейсинги: {parsed['our_facings']} / {parsed['total_facings']}")
+        lines.append("")
+        lines.append("_Дякуємо! Дані використовуються для покращення точності AI._")
+
+        await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"[PhotoReport] Failed to save expert correction: {e}", exc_info=True)
+        await msg.reply_text(
+            "❌ Помилка при збереженні корекції. Спробуй ще раз.",
+            parse_mode="Markdown",
+        )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,6 +208,9 @@ async def receive_point_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(
         f"✅ Точка: *{point_name}*\n\n"
         "📸 Надішли фотографії (до 5 штук).\n\n"
+        "💡 *Порада:* Надсилай 2–3 фото для точнішого аналізу:\n"
+        "  • Загальний огляд всіх полиць\n"
+        "  • Крупні плани окремих секцій\n\n"
         "⚠️ *Обов'язково:* загальний огляд всіх полиць!\n\n"
         "Коли завантажиш всі фото — натисни *Готово* або напиши коментар "
         "(напр: 'без ліцензії', 'дефіцит центрального складу').",
@@ -119,11 +264,24 @@ async def _accept_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, repo
     report_data["photo_file_ids"].append(file_id)
 
     count = len(report_data["photos_b64"])
-    more_msg = "Надішли ще або натисни Готово." if count < 5 else "Натисни Готово для аналізу."
-    await update.message.reply_text(
-        f"📸 Фото {count}/5 отримано. {more_msg}",
-        reply_markup=PHOTO_ACTIONS
-    )
+    if count == 1:
+        more_msg = (
+            "📸 Фото 1/5 отримано.\n\n"
+            "💡 _Для точнішого аналізу надсилай 2–3 фото з різних кутів. "
+            "Або натисни Готово якщо фото достатньо._"
+        )
+    else:
+        more_msg = (
+            f"📸 Фото {count}/5 отримано. "
+            + ("Надішли ще або натисни Готово." if count < 5 else "Натисни Готово для аналізу.")
+        )
+
+    try:
+        await update.message.reply_text(more_msg, reply_markup=PHOTO_ACTIONS, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(
+            f"Фото {count}/5 отримано.", reply_markup=PHOTO_ACTIONS
+        )
     return WAITING_PHOTOS
 
 
@@ -168,7 +326,7 @@ async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo_count = len(report_data["photos_b64"])
     await update.message.reply_text(
-        f"⏳ Аналізую {photo_count} фото...\n_Це займе ~20 секунд_",
+        f"⏳ Аналізую {photo_count} фото...\n_Це займе ~20–40 секунд_",
         parse_mode="Markdown"
     )
 
@@ -209,11 +367,28 @@ async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         tg_message += f"\n\n_ID звіту: #{report_id}_"
 
-        await update.message.reply_text(
-            tg_message,
-            parse_mode="Markdown",
-            reply_markup=MAIN_MENU
-        )
+        if photo_count == 1:
+            tg_message += (
+                "\n\n💡 _Порада: Наступного разу надішли 2–3 фото (загальний огляд + "
+                "крупні плани) — це підвищить точність аналізу._"
+            )
+
+        retried = scored_report.get("retried_categories", [])
+        if retried:
+            cat_ua = {"vodka": "горілка", "wine": "вино", "cognac": "коньяк", "sparkling": "ігристе"}
+            retried_str = ", ".join(cat_ua.get(c, c) for c in retried)
+            tg_message += f"\n🔄 _Виконано повторний аналіз: {retried_str}_"
+
+        try:
+            await update.message.reply_text(
+                tg_message,
+                parse_mode="Markdown",
+                reply_markup=MAIN_MENU
+            )
+        except Exception as fmt_err:
+            logger.warning(f"[PhotoReport] Markdown parse failed, retrying plain: {fmt_err}")
+            plain = tg_message.replace("*", "").replace("_", "").replace("`", "")
+            await update.message.reply_text(plain, reply_markup=MAIN_MENU)
 
     except Exception as e:
         logger.error(f"Photo report error: {e}", exc_info=True)
@@ -289,5 +464,8 @@ def create_photo_report_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.Regex("^📊 Моя статистика$"), my_stats))
+
+    expert_filter = filters.TEXT & filters.REPLY & filters.User(list(EXPERT_TG_IDS))
+    app.add_handler(MessageHandler(expert_filter, handle_expert_correction))
 
     return app

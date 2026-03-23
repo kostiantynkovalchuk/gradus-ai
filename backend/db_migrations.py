@@ -712,6 +712,26 @@ MIGRATIONS = [
             "CREATE INDEX IF NOT EXISTS idx_hunt_vacancies_robotaua ON hunt_vacancies(robotaua_vacancy_id)",
         ]
     },
+    {
+        "version": "027_expert_corrections",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS expert_corrections (
+                id                  SERIAL PRIMARY KEY,
+                report_id           INTEGER NOT NULL REFERENCES photo_reports(id) ON DELETE CASCADE,
+                expert_telegram_id  BIGINT NOT NULL,
+                expert_name         TEXT NOT NULL DEFAULT '',
+                category            TEXT,
+                true_share          INTEGER,
+                our_facings         INTEGER,
+                total_facings       INTEGER,
+                raw_text            TEXT NOT NULL DEFAULT '',
+                created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_expert_corrections_report ON expert_corrections(report_id)",
+            "CREATE INDEX IF NOT EXISTS idx_expert_corrections_cat ON expert_corrections(category)",
+            "CREATE INDEX IF NOT EXISTS idx_expert_corrections_created ON expert_corrections(created_at DESC)",
+        ]
+    },
 ]
 
 

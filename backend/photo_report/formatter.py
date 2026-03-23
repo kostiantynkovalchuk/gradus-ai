@@ -3,11 +3,13 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
     passed = report.get("passed", False)
     errors = report.get("errors", [])
     info = report.get("info", [])
+    warnings = report.get("warnings", [])
     share = report.get("shelf_share", {})
     elite = report.get("elite_shelf_check", {})
     pq = report.get("photo_quality", {})
     scored_cats = report.get("scored_categories", ["vodka"])
     info_cats = report.get("info_only_categories", ["wine", "cognac", "sparkling"])
+    retried = report.get("retried_categories", [])
 
     status_icon = "✅" if passed else "❌"
     status_text = "ПРОЙДЕНО" if passed else "НЕ ПРОЙДЕНО"
@@ -17,8 +19,14 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
         f"👤 {agent_name}",
         f"{status_icon} *{status_text} — {score}/100*",
         f"📷 Фото проаналізовано: {pq.get('photos_analyzed', 1)}",
-        ""
     ]
+    if pq.get("photo_completeness") in ("partial", "close_up"):
+        lines.append("⚠️ _Фото показує лише частину полиць — результати можуть бути неповними_")
+    if retried:
+        cat_ua = {"vodka": "горілка", "wine": "вино", "cognac": "коньяк", "sparkling": "ігристе"}
+        retried_str = ", ".join(cat_ua.get(c, c) for c in retried)
+        lines.append(f"🔄 _Повторний аналіз: {retried_str}_")
+    lines.append("")
 
     if errors:
         lines.append(f"❌ *Помилки ({len(errors)}):*")
@@ -27,6 +35,11 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
             brand = f" ({e['brand']})" if e.get("brand") else ""
             code = f" `[{e['code']}]`" if e.get("code") else ""
             lines.append(f"{prefix} {e['description']}{brand}{code}")
+        lines.append("")
+
+    if warnings:
+        for w in warnings:
+            lines.append(w)
         lines.append("")
 
     if info:
@@ -39,18 +52,25 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
     scored_lines = []
     for cat in scored_cats:
         data = share.get(cat, {})
-        if data.get("total_facings", 0) > 0:
+        confidence = data.get("confidence", "high")
+        percent = data.get("percent")
+        if percent is None or confidence == "low":
+            scored_lines.append(f"📊 {cat_names.get(cat, cat)}: не вдалося оцінити (фото занадто далеке)")
+        elif data.get("total_facings", 0) > 0:
             icon = "✅" if data.get("passed") else "❌"
             breakdown = data.get("breakdown", {})
             bd_str = ""
             if breakdown:
-                parts = [f"GD:{breakdown.get('greenday',0)}",
-                         f"UA:{breakdown.get('ukrainka',0)}",
-                         f"HEL:{breakdown.get('helsinki',0)}"]
+                parts = [
+                    f"GD:{breakdown.get('greenday', 0)}",
+                    f"UA:{breakdown.get('ukrainka', 0)}",
+                    f"HEL:{breakdown.get('helsinki', 0)}",
+                ]
                 bd_str = f" ({', '.join(parts)})"
+            conf_note = " _(середня впевненість)_" if confidence == "medium" else ""
             scored_lines.append(
-                f"{icon} {cat_names.get(cat, cat)}: {data.get('percent', 0)}%"
-                f"{bd_str} (норма ≥{data.get('threshold', 0)}%)"
+                f"{icon} {cat_names.get(cat, cat)}: {percent}%"
+                f"{bd_str} (норма ≥{data.get('threshold', 0)}%){conf_note}"
             )
     if scored_lines:
         lines.append("📈 *Частка полиці (горілка):*")
@@ -60,10 +80,17 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
     info_lines = []
     for cat in info_cats:
         data = share.get(cat, {})
-        if data.get("total_facings", 0) > 0:
+        confidence = data.get("confidence", "high")
+        percent = data.get("percent")
+        if percent is None or confidence == "low":
             info_lines.append(
-                f"📊 {cat_names.get(cat, cat)}: {data.get('percent', 0)}% "
-                f"(норма Phase 2 ≥{data.get('threshold', 0)}%)"
+                f"📊 {cat_names.get(cat, cat)}: не вдалося оцінити (фото занадто далеке)"
+            )
+        elif data.get("total_facings", 0) > 0:
+            conf_note = " _(середня впевненість)_" if confidence == "medium" else ""
+            info_lines.append(
+                f"📊 {cat_names.get(cat, cat)}: {percent}% "
+                f"(норма Phase 2 ≥{data.get('threshold', 0)}%){conf_note}"
             )
     if info_lines:
         lines.append("📋 *Інфо (не впливає на оцінку):*")

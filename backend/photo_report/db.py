@@ -139,3 +139,148 @@ def get_agent_stats(telegram_id: int) -> dict:
         }
     finally:
         conn.close()
+
+
+def save_expert_correction(
+    report_id: int,
+    expert_telegram_id: int,
+    expert_name: str,
+    parsed: dict,
+) -> int:
+    """Save an expert's manual correction for a report. Returns correction id."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO expert_corrections
+                (report_id, expert_telegram_id, expert_name,
+                 category, true_share, our_facings, total_facings, raw_text)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (
+                report_id,
+                expert_telegram_id,
+                expert_name,
+                parsed.get("category"),
+                parsed.get("true_share"),
+                parsed.get("our_facings"),
+                parsed.get("total_facings"),
+                parsed.get("raw_text", ""),
+            ),
+        )
+        correction_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        logger.info(
+            f"[PhotoReport] Expert correction #{correction_id} saved for report #{report_id} "
+            f"by {expert_name} ({expert_telegram_id})"
+        )
+        return correction_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_accuracy_metrics(days: int = 30) -> dict:
+    """
+    Return accuracy metrics comparing AI predictions vs expert corrections.
+    Used by the /hr/api/accuracy endpoint.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT
+                COUNT(DISTINCT ec.report_id)             AS corrected_reports,
+                COUNT(ec.id)                              AS total_corrections,
+                COUNT(DISTINCT ec.category)               AS categories_corrected,
+                AVG(ABS(
+                    COALESCE(
+                        (pr.shelf_share->ec.category->>'percent')::float,
+                        0
+                    ) - ec.true_share
+                ))                                        AS avg_share_error_pct,
+                ec.category                               AS most_corrected_category,
+                COUNT(ec.id)                              AS cat_count
+            FROM expert_corrections ec
+            JOIN photo_reports pr ON pr.id = ec.report_id
+            WHERE ec.created_at > NOW() - INTERVAL '%s days'
+              AND ec.true_share IS NOT NULL
+            GROUP BY ec.category
+            ORDER BY cat_count DESC
+            """,
+            (days,),
+        )
+        rows = cur.fetchall()
+
+        total_corrections = 0
+        corrected_reports = 0
+        avg_errors: list[float] = []
+        by_category: dict = {}
+
+        for row in rows:
+            corrected_reports = max(corrected_reports, row[0] or 0)
+            total_corrections += row[1] or 0
+            if row[3] is not None:
+                avg_errors.append(float(row[3]))
+            cat = row[4]
+            if cat:
+                by_category[cat] = {
+                    "corrections": row[1] or 0,
+                    "avg_share_error_pct": round(float(row[3]), 1) if row[3] else None,
+                }
+
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM photo_reports
+            WHERE created_at > NOW() - INTERVAL '%s days'
+            """,
+            (days,),
+        )
+        total_reports = cur.fetchone()[0] or 0
+
+        cur.execute(
+            """
+            SELECT ec.id, ec.report_id, ec.expert_name, ec.category,
+                   ec.true_share, ec.our_facings, ec.total_facings,
+                   ec.raw_text, ec.created_at
+            FROM expert_corrections ec
+            ORDER BY ec.created_at DESC
+            LIMIT 10
+            """,
+        )
+        recent_rows = cur.fetchall()
+        recent = [
+            {
+                "id": r[0],
+                "report_id": r[1],
+                "expert_name": r[2],
+                "category": r[3],
+                "true_share": r[4],
+                "our_facings": r[5],
+                "total_facings": r[6],
+                "raw_text": r[7],
+                "created_at": r[8].isoformat() if r[8] else None,
+            }
+            for r in recent_rows
+        ]
+
+        cur.close()
+        return {
+            "period_days": days,
+            "total_reports": total_reports,
+            "corrected_reports": corrected_reports,
+            "correction_rate_pct": (
+                round(corrected_reports / total_reports * 100, 1) if total_reports > 0 else 0
+            ),
+            "total_corrections": total_corrections,
+            "avg_share_error_pct": round(sum(avg_errors) / len(avg_errors), 1) if avg_errors else None,
+            "by_category": by_category,
+            "recent_corrections": recent,
+        }
+    finally:
+        conn.close()
