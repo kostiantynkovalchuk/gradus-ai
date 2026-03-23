@@ -311,6 +311,11 @@ def scrape_workua_candidates(
             candidate.setdefault("skills", "")
             candidate.setdefault("contact", "Деталі на Work.ua")
             candidate.setdefault("raw_text", "")
+            # Prepend structured name so scorer can extract it reliably
+            fn = candidate.get("full_name", "")
+            rt = candidate.get("raw_text", "")
+            if fn and fn != "Кандидат Work.ua" and not rt.startswith(f"Ім'я: {fn}"):
+                candidate["raw_text"] = f"Ім'я: {fn}\n{rt}"[:3000]
 
             candidates.append(candidate)
             logger.info(f"Parsed: {candidate['full_name']} ({candidate.get('city', '?')})")

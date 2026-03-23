@@ -58,6 +58,12 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
             system=(
                 "You are an HR assistant scoring a candidate for a vacancy.\n"
                 "Return JSON only. No preamble, no markdown.\n\n"
+                "IMPORTANT: If the text is a job vacancy/posting by an employer (not a "
+                "candidate's resume/CV), score it 0 and set full_name to "
+                "'ВАКАНСІЯ (не кандидат)'. Signs of a vacancy: company hiring, job "
+                "description with requirements, 'шукаємо'/'запрошуємо'/'потрібен' "
+                "language, store/company name, or contact instructions like "
+                "'надіслати резюме'/'звертайтесь'.\n\n"
                 "Return:\n"
                 '{\n'
                 '  "score": 0-100,\n'
@@ -80,7 +86,14 @@ async def score_candidate(candidate: dict, vacancy: dict) -> dict:
             ),
             messages=[{
                 "role": "user",
-                "content": f"Vacancy: {vacancy_json[:2000]}\n\nCandidate text: {candidate_text[:2000]}",
+                "content": (
+                    f"Vacancy: {vacancy_json[:2000]}\n\n"
+                    f"Candidate name (from structured data): {candidate.get('full_name') or 'unknown'}\n"
+                    f"Candidate source: {candidate.get('source', 'unknown')}\n"
+                    f"Candidate city: {candidate.get('city') or 'unknown'}\n"
+                    f"Candidate age: {candidate.get('age') or 'unknown'}\n\n"
+                    f"Candidate text:\n{candidate_text[:2000]}"
+                ),
             }],
         )
 

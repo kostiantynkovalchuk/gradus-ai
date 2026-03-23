@@ -111,6 +111,7 @@ def _salary_to_uah_usd(amount_uah: Optional[int]) -> tuple:
 
 
 def _build_raw_text(
+    full_name: str,
     role: str,
     city: str,
     age_str: str,
@@ -120,6 +121,8 @@ def _build_raw_text(
     keywords: list,
 ) -> str:
     parts = []
+    if full_name:
+        parts.append(f"Ім'я: {full_name}")
     if role:
         parts.append(f"Посада: {role}")
     if city:
@@ -289,6 +292,7 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
                 contact = ", ".join(contact_parts) if contact_parts else "Деталі на Robota.ua"
 
                 raw_text = _build_raw_text(
+                    full_name=full_name,
                     role=speciality,
                     city=city,
                     age_str=age_raw,

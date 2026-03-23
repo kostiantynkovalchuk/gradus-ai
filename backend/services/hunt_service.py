@@ -49,7 +49,18 @@ async def _send_message(chat_id: int, text: str, thread_id: int = None, reply_ma
             resp = await client.post(url, json=payload, timeout=15.0)
             data = resp.json()
             if not data.get("ok"):
-                logger.error(f"TG send error: {data}")
+                if data.get("error_code") == 400 or resp.status_code == 400:
+                    logger.warning(
+                        f"TG parse_mode error, retrying without parse_mode: "
+                        f"{data.get('description', '')}"
+                    )
+                    payload_plain = {k: v for k, v in payload.items() if k != "parse_mode"}
+                    resp2 = await client.post(url, json=payload_plain, timeout=15.0)
+                    data = resp2.json()
+                    if not data.get("ok"):
+                        logger.error(f"TG send error (plain fallback): {data}")
+                else:
+                    logger.error(f"TG send error: {data}")
             return data
     except Exception as e:
         logger.error(f"TG send exception: {e}")
@@ -251,6 +262,10 @@ async def _score_candidates(candidates: list, parsed: dict, vacancy_city: str) -
             )
 
     scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+    before = len(scored)
+    scored = [sc for sc in scored if sc.get("score", 0) > 0]
+    if len(scored) < before:
+        logger.info(f"[Score filter] Removed {before - len(scored)} vacancy/zero-score entries")
     return scored
 
 
