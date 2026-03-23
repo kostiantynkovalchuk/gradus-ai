@@ -195,7 +195,7 @@ async def _scrape_round(
     )
 
     raw = []
-    for r in results:
+    for r in (applies_r, robotaua_r, workua_r, tg_r):
         if isinstance(r, Exception):
             logger.error(f"Scraper error: {r}")
             continue
@@ -214,6 +214,12 @@ async def _scrape_round(
                 if src.startswith("telegram:"):
                     c["source"] = "telegram"
                 raw.append(c)
+
+    source_counts: dict = {}
+    for c in raw:
+        s = c.get("source", "?")
+        source_counts[s] = source_counts.get(s, 0) + 1
+    logger.info(f"[Hunt] Round {round_num} candidates by source: {source_counts}")
 
     # Dedup against already-seen candidates
     new_candidates = []
