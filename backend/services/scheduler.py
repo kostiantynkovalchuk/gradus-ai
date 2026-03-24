@@ -1283,12 +1283,13 @@ class ContentScheduler:
             replace_existing=True
         )
 
-        # Team Pulse: monthly survey on the 1st of each month at 09:00 Kyiv time
+        # Team Pulse: daily check for monthly survey dispatch (days 13-17, weekday only)
+        # The function itself handles day/weekday validation and deduplication.
         self.scheduler.add_job(
             self._send_pulse_survey_task,
-            CronTrigger(day=1, hour=7, minute=0),
+            CronTrigger(hour=7, minute=0),
             id='send_pulse_survey',
-            name='Send monthly Team Pulse mood survey',
+            name='Send monthly Team Pulse mood survey (15th of month)',
             replace_existing=True
         )
 

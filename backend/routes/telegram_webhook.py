@@ -38,6 +38,7 @@ from services.pulse_service import (
     detect_pulse_trigger, log_trigger, alert_hr_team,
     send_pulse_video, log_video_view, log_hr_action,
     update_risk_score, RISK_POINTS, get_risk_history,
+    PULSE_AWAITING_TEXT, PROBLEM_CATEGORIES, send_pulse_meme,
 )
 
 logger = logging.getLogger(__name__)
@@ -414,6 +415,39 @@ async def process_telegram_message(message: dict):
             f"user={user.full_name}, text='{text[:50]}...'"
         )
 
+        # ── PULSE: capture free-text "Інше" problem description ──────────
+        if telegram_id in PULSE_AWAITING_TEXT:
+            month_key = PULSE_AWAITING_TEXT.pop(telegram_id)
+            try:
+                import models as _models_pulse
+                _pdb = _models_pulse.SessionLocal()
+                try:
+                    _pdb.execute(
+                        text(
+                            "UPDATE pulse_surveys SET problem_category='other', problem_text=:txt "
+                            "WHERE telegram_id=:tid AND survey_month=:mk"
+                        ),
+                        {"txt": text[:500], "tid": telegram_id, "mk": month_key},
+                    )
+                    _pdb.commit()
+                finally:
+                    _pdb.close()
+                _emp_name = getattr(user, "full_name", None)
+                _emp_dept = getattr(user, "department", None)
+                await send_telegram_message(
+                    chat_id,
+                    "❤️ *Пульс команди*\n\nДякую, що поділився/поділилась. 🤍\n"
+                    "HR зверне на це увагу.\n\n"
+                    "Якщо хочеш поговорити зараз — напиши @Natty_Reshetilova",
+                )
+                asyncio.create_task(
+                    alert_hr_pulse_problem(telegram_id, _emp_name, _emp_dept, "other", text[:500])
+                )
+            except Exception as _pte:
+                logger.warning(f"[PULSE] awaiting_text processing error: {_pte}")
+            return
+        # ─────────────────────────────────────────────────────────────────
+
         logger.info(f"PULSE_CHECK: checking triggers for text: {text[:50]}")
         trigger_type = detect_pulse_trigger(text)
         if trigger_type:
@@ -598,6 +632,65 @@ async def alert_hr_team_identified(
         )
     except Exception as e:
         logger.warning(f"[PULSE] alert_hr_team_identified failed: {e}", exc_info=True)
+
+
+async def alert_hr_pulse_problem(
+    telegram_id: int,
+    employee_name: str | None,
+    department: str | None,
+    problem_category: str,
+    problem_text: str | None = None,
+    trigger_id: int | None = None,
+) -> None:
+    """
+    Send an identified HR alert when employee selects 💔 + problem category in pulse survey.
+    """
+    hr_chat_raw = os.getenv("HR_ALERT_CHAT_ID")
+    if not hr_chat_raw or not TELEGRAM_MAYA_BOT_TOKEN:
+        return
+    hr_chat_ids = [c.strip() for c in hr_chat_raw.split(",") if c.strip()]
+    try:
+        cat_label = PROBLEM_CATEGORIES.get(problem_category, problem_category)
+        if problem_category == "other" and problem_text:
+            cat_label = f"Інше: {problem_text[:100]}"
+        name_str = employee_name or "Невідомий"
+        dept_str = department or "Невідомий відділ"
+
+        alert_text = (
+            f"🔴 *Пульс команди — Попередження*\n\n"
+            f"👤 {name_str}\n"
+            f"🏢 Відділ: {dept_str}\n"
+            f"📌 Проблема: {cat_label}\n"
+            f"📊 Самопочуття: 💔 перевантаження\n\n"
+            f"💬 Зверніться до співробітника конфіденційно"
+        )
+
+        keyboard = None
+        if trigger_id:
+            keyboard = {
+                "inline_keyboard": [[
+                    {"text": "✅ Беру в роботу", "callback_data": f"hr_pulse:hr_action:reviewing:{trigger_id}"},
+                    {"text": "✔️ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
+                    {"text": "❌ Хибна тривога", "callback_data": f"hr_pulse:hr_action:false_positive:{trigger_id}"},
+                ]]
+            }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for hr_chat in hr_chat_ids:
+                payload: dict = {
+                    "chat_id": hr_chat,
+                    "text": alert_text,
+                    "parse_mode": "Markdown",
+                }
+                if keyboard:
+                    payload["reply_markup"] = keyboard
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                    json=payload,
+                )
+                logger.info(f"[PULSE] Survey problem alert sent to {hr_chat}: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[PULSE] alert_hr_pulse_problem failed: {e}", exc_info=True)
 
 
 async def send_telegram_video(chat_id: int, video_source: str, caption: str = None, reply_markup: dict = None):
@@ -1095,54 +1188,62 @@ async def handle_hr_callback(callback_query: dict):
             if action_part == 'mood' and len(parts) >= 3:
                 try:
                     score = int(parts[2])
-                    if not (1 <= score <= 5):
+                    month_key = parts[3] if len(parts) >= 4 else datetime.utcnow().strftime("%Y-%m")
+                    if not (1 <= score <= 3):
                         raise ValueError("score out of range")
                     telegram_user_id = callback_query.get('from', {}).get('id')
                     from services.pulse_service import record_mood as _record_mood
                     pulse_db = next(get_db())
                     try:
-                        already_voted, department = _record_mood(telegram_user_id, score, pulse_db)
+                        already_voted, department = _record_mood(
+                            telegram_user_id, score, pulse_db, month_key
+                        )
                     finally:
                         pulse_db.close()
                     if already_voted:
                         await answer_callback(callback_id, "Ви вже відповіли цього місяця 🙏")
-                    elif score >= 3:
-                        await answer_callback(callback_id, "Дякую! 🙏")
+                    elif score == 3:
+                        await answer_callback(callback_id, "Клас! 💪")
                         await edit_telegram_message(
                             chat_id, message_id,
-                            "💚 *Пульс команди*\n\n"
-                            "Твоя відповідь збережена. Дякую! 🙏"
+                            "❤️ *Пульс команди*\n\n"
+                            "💚 Тримаюсь впевнено 💪\n\n"
+                            "Клас, так і тримай! 💪\n"
+                            "Порада: поки є ресурс — закривай найскладніші задачі. Потім буде легше."
                         )
                     elif score == 2:
                         await answer_callback(callback_id, "Дякую за чесність 🤍")
                         await edit_telegram_message(
                             chat_id, message_id,
-                            "💚 *Пульс команди*\n\n"
-                            "Дякую за чесність. 🤍\n"
-                            "Ось коротке відео — можливо, допоможе.",
+                            "❤️ *Пульс команди*\n\n"
+                            "💛 Нормально, буває різне\n\n"
+                            "Зрозуміло. Ти не один/одна в такому стані 🙂\n"
+                            "Давай спробую допомогти:",
                             {
                                 "inline_keyboard": [
-                                    [
-                                        {"text": "🎥 Подивитись відео", "callback_data": "hr_pulse:video:breathing"},
-                                        {"text": "📩 Написати HR", "callback_data": "hr_pulse:contact_hr"},
-                                    ],
+                                    [{"text": "😄 Мем-терапія", "callback_data": "hr_pulse:meme"}],
+                                    [{"text": "💙 Психологічна підтримка", "callback_data": "hr_pulse:support"}],
                                 ]
                             }
                         )
                     else:
-                        await answer_callback(callback_id, "Я чую тебе 💙")
+                        await answer_callback(callback_id, "Я чую тебе 🤍")
                         await edit_telegram_message(
                             chat_id, message_id,
-                            "💚 *Пульс команди*\n\n"
-                            "Я чую тебе. 💙\n"
-                            "Подивись це відео — воно саме для таких моментів.",
+                            "❤️ *Пульс команди*\n\n"
+                            "💔 Стоп, перевантаження\n\n"
+                            "Зрозуміла. Давай розберемось, як тобі допомогти.\n"
+                            "З чим пов'язана проблема?",
                             {
                                 "inline_keyboard": [
-                                    [
-                                        {"text": "🎥 Подивитись відео", "callback_data": "hr_pulse:video:burnout"},
-                                        {"text": "📩 Написати HR", "callback_data": "hr_pulse:contact_hr"},
-                                    ],
-                                    [{"text": "🙏 Дякую, все ок", "callback_data": "hr_pulse:dismiss"}],
+                                    [{"text": "👥 Комунікація з колегами",
+                                      "callback_data": f"hr_pulse:problem:colleagues:{month_key}"}],
+                                    [{"text": "👔 Комунікація з керівником",
+                                      "callback_data": f"hr_pulse:problem:manager:{month_key}"}],
+                                    [{"text": "📋 Складність задач",
+                                      "callback_data": f"hr_pulse:problem:tasks:{month_key}"}],
+                                    [{"text": "💬 Інше (опишу)",
+                                      "callback_data": f"hr_pulse:problem:other:{month_key}"}],
                                 ]
                             }
                         )
@@ -1170,9 +1271,94 @@ async def handle_hr_callback(callback_query: dict):
                 await answer_callback(callback_id, "Добре 🤍")
                 await edit_telegram_message(
                     chat_id, message_id,
-                    "💚 *Пульс команди*\n\n"
+                    "❤️ *Пульс команди*\n\n"
                     "Дякую. Якщо потрібна підтримка — Майя завжди тут. 🤍"
                 )
+
+            elif action_part == 'meme':
+                await answer_callback(callback_id, "😄 Зараз буде")
+                asyncio.create_task(send_pulse_meme(chat_id))
+
+            elif action_part == 'support':
+                await answer_callback(callback_id, "💙 Надсилаю")
+                await send_telegram_message(
+                    chat_id,
+                    "💙 *Психологічна підтримка*\n\n"
+                    "Іноді «нормально, буває різне» — це сигнал, що варто зупинитись.\n\n"
+                    "Спробуй: 4 рази — вдих 4с, затримка 4с, видих 4с.\n\n"
+                    "Якщо відчуваєш, що потрібна розмова — HR тут:\n"
+                    "📩 @Natty_Reshetilova (Наталія) — конфіденційно."
+                )
+
+            elif action_part == 'problem' and len(parts) >= 3:
+                category = parts[2]
+                month_key = parts[3] if len(parts) >= 4 else datetime.utcnow().strftime("%Y-%m")
+                telegram_user_id = callback_query.get('from', {}).get('id')
+                _emp_row = None
+                try:
+                    import models as _models_prob
+                    _pdb2 = _models_prob.SessionLocal()
+                    try:
+                        _pdb2.execute(
+                            text(
+                                "UPDATE pulse_surveys SET problem_category=:cat "
+                                "WHERE telegram_id=:tid AND survey_month=:mk"
+                            ),
+                            {"cat": category, "tid": telegram_user_id, "mk": month_key},
+                        )
+                        _pdb2.commit()
+                    finally:
+                        _pdb2.close()
+                    from models.hr_auth_models import HRUser
+                    _udb = _models_prob.SessionLocal()
+                    try:
+                        _emp_row = _udb.query(HRUser).filter(
+                            HRUser.telegram_id == telegram_user_id
+                        ).first()
+                    finally:
+                        _udb.close()
+                except Exception as _pe:
+                    logger.warning(f"[PULSE] problem handler DB error: {_pe}")
+
+                _emp_name = getattr(_emp_row, "full_name", None) if _emp_row else None
+                _emp_dept = getattr(_emp_row, "department", None) if _emp_row else None
+
+                if category == "other":
+                    PULSE_AWAITING_TEXT[telegram_user_id] = month_key
+                    await answer_callback(callback_id, "Пишіть")
+                    await edit_telegram_message(
+                        chat_id, message_id,
+                        "❤️ *Пульс команди*\n\n"
+                        "Опиши, будь ласка, своїми словами що відбувається.\n"
+                        "Я передам це HR конфіденційно."
+                    )
+                else:
+                    await answer_callback(callback_id, "Дякую 🤍")
+                    cat_label = PROBLEM_CATEGORIES.get(category, category)
+                    await edit_telegram_message(
+                        chat_id, message_id,
+                        f"❤️ *Пульс команди*\n\n"
+                        f"Зрозуміла — *{cat_label}*.\n\n"
+                        f"HR обов'язково зверне на це увагу. 🤍\n"
+                        f"Якщо хочеш поговорити зараз — напиши @Natty_Reshetilova"
+                    )
+                    try:
+                        _trig_id = log_trigger(
+                            department=_emp_dept,
+                            position=None,
+                            trigger_type=f"survey_{category}",
+                            employee_id=telegram_user_id,
+                            employee_name=_emp_name,
+                            trigger_text=f"Пульс-опитування: {cat_label}",
+                        )
+                        asyncio.create_task(
+                            alert_hr_pulse_problem(
+                                telegram_user_id, _emp_name, _emp_dept,
+                                category, None, _trig_id
+                            )
+                        )
+                    except Exception as _ae:
+                        logger.warning(f"[PULSE] problem alert error: {_ae}")
 
             elif action_part == 'hr_action' and len(parts) >= 4:
                 # Format: hr_pulse:hr_action:{action}:{trigger_id}

@@ -2,7 +2,7 @@
 Team Pulse — Employee Mood Intelligence Service
 
 Handles:
-1. Monthly anonymous mood survey dispatch
+1. Monthly mood survey dispatch (15th of month, weekday)
 2. Behavioral trigger keyword detection
 3. Psychological support video/message delivery
 4. HR alert notifications
@@ -23,6 +23,29 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 HR_ALERT_CHAT_ID = os.getenv("HR_ALERT_CHAT_ID")
+
+# ── NEW V2 CONSTANTS ──────────────────────────────────────────────────────────
+
+PULSE_SCALE: dict[int, dict] = {
+    3: {"emoji": "💚", "label": "тримаюсь впевнено 💪"},
+    2: {"emoji": "💛", "label": "нормально, буває різне"},
+    1: {"emoji": "💔", "label": "стоп, перевантаження"},
+}
+
+PROBLEM_CATEGORIES: dict[str, str] = {
+    "colleagues": "Комунікація з колегами",
+    "manager": "Комунікація з керівником",
+    "tasks": "Складність задач",
+    "other": "Інше",
+}
+
+# In-process state: {telegram_id: month_key} for "Інше" free-text capture
+PULSE_AWAITING_TEXT: dict[int, str] = {}
+
+# Deduplication: which survey months have already been dispatched (in-process)
+_PULSE_SURVEY_DISPATCHED: set[str] = set()
+
+# ── TRIGGER KEYWORDS ──────────────────────────────────────────────────────────
 
 TRIGGER_KEYWORDS: dict[str, list[str]] = {
     "вигорання": [
@@ -111,7 +134,7 @@ TRIGGER_SUPPORT_TEXT: dict[str, str] = {
     ),
 }
 
-# === RISK SCORE ENGINE ===
+# ── RISK SCORE ENGINE ─────────────────────────────────────────────────────────
 
 RISK_POINTS: dict[str, int] = {
     "звільнення": 3,
@@ -125,7 +148,7 @@ RISK_POINTS: dict[str, int] = {
 RISK_THRESHOLD_ALERT = 4
 RISK_THRESHOLD_URGENT = 7
 
-# === PULSE VIDEO MAPPING ===
+# ── PULSE VIDEO MAPPING ───────────────────────────────────────────────────────
 
 PULSE_VIDEOS: dict[str, str] = {
     "breathing": "pulse_breathing.mp4",
@@ -163,11 +186,6 @@ PULSE_VIDEO_FALLBACK_TEXT: dict[str, str] = {
         "Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
     ),
 }
-
-
-def _user_hash(telegram_id: int) -> str:
-    """SHA-256 hash of telegram_id for anonymous storage."""
-    return hashlib.sha256(str(telegram_id).encode()).hexdigest()
 
 
 def detect_pulse_trigger(text: str) -> str | None:
@@ -244,13 +262,11 @@ def update_risk_score(
 ) -> bool:
     """
     Update rolling risk score for an employee via UPSERT.
-    Returns True ONLY if this update crosses the RISK_THRESHOLD_ALERT (prev < 4, new >= 4)
-    — i.e. a true threshold transition, not every subsequent trigger above the line.
+    Returns True ONLY if this update crosses the RISK_THRESHOLD_ALERT.
     """
     try:
         db = _models.SessionLocal()
         try:
-            # Read previous score before UPSERT
             prev_row = db.execute(
                 text("SELECT current_score FROM pulse_risk_scores WHERE employee_id = :eid"),
                 {"eid": employee_id},
@@ -287,7 +303,6 @@ def update_risk_score(
             db.commit()
 
             new_score = prev_score + points
-            # Alert only on threshold transition: was below, now at-or-above
             crossed = prev_score < RISK_THRESHOLD_ALERT and new_score >= RISK_THRESHOLD_ALERT
             logger.info(
                 f"[PULSE] Risk score updated: emp={employee_id}, "
@@ -350,22 +365,27 @@ def log_hr_action(trigger_id: int, action: str, hr_user: str) -> None:
         logger.error(f"[PULSE] log_hr_action failed: {e}")
 
 
-def record_mood(telegram_id: int, score: int, db) -> tuple[bool, str | None]:
+def record_mood(
+    telegram_id: int,
+    score: int,
+    db,
+    month_key: str | None = None,
+) -> tuple[bool, str | None]:
     """
-    Store anonymous mood score for the current month.
+    Store mood score for the current month (identified — stores telegram_id + name).
     Returns (already_voted: bool, department: str | None).
     """
     from models.hr_auth_models import HRUser
 
     user = db.query(HRUser).filter(HRUser.telegram_id == telegram_id).first()
     department = user.department if user else None
+    employee_name = user.full_name if user else None
 
-    user_h = _user_hash(telegram_id)
-    survey_month = datetime.utcnow().strftime("%Y-%m")
+    survey_month = month_key or datetime.utcnow().strftime("%Y-%m")
 
     existing = db.execute(
-        text("SELECT id FROM pulse_surveys WHERE user_hash = :uh AND survey_month = :sm"),
-        {"uh": user_h, "sm": survey_month},
+        text("SELECT id FROM pulse_surveys WHERE telegram_id = :tid AND survey_month = :sm"),
+        {"tid": telegram_id, "sm": survey_month},
     ).fetchone()
 
     if existing:
@@ -373,13 +393,51 @@ def record_mood(telegram_id: int, score: int, db) -> tuple[bool, str | None]:
 
     db.execute(
         text(
-            "INSERT INTO pulse_surveys (user_hash, department, score, survey_month, responded_at) "
-            "VALUES (:uh, :dept, :score, :sm, NOW())"
+            "INSERT INTO pulse_surveys "
+            "(telegram_id, employee_name, department, score, survey_month, responded_at) "
+            "VALUES (:tid, :ename, :dept, :score, :sm, NOW())"
         ),
-        {"uh": user_h, "dept": department, "score": score, "sm": survey_month},
+        {
+            "tid": telegram_id,
+            "ename": employee_name,
+            "dept": department,
+            "score": score,
+            "sm": survey_month,
+        },
     )
     db.commit()
-    logger.info(f"[PULSE] Mood recorded: score={score}, dept={department}, month={survey_month}")
+
+    if score == 1:
+        try:
+            db.execute(
+                text("""
+                    INSERT INTO pulse_risk_scores
+                        (employee_id, employee_name, department, current_score,
+                         last_trigger_at, last_calculated_at, alert_status)
+                    VALUES (:eid, :ename, :dept, 2, NOW(), NOW(), 'red')
+                    ON CONFLICT (employee_id) DO UPDATE SET
+                        current_score = pulse_risk_scores.current_score + 2,
+                        employee_name = :ename,
+                        department = :dept,
+                        last_trigger_at = NOW(),
+                        last_calculated_at = NOW(),
+                        alert_status = CASE
+                            WHEN pulse_risk_scores.current_score + 2 >= :urgent THEN 'urgent'
+                            ELSE 'red'
+                        END
+                """),
+                {
+                    "eid": telegram_id,
+                    "ename": employee_name or "Unknown",
+                    "dept": department,
+                    "urgent": RISK_THRESHOLD_URGENT,
+                },
+            )
+            db.commit()
+        except Exception as e:
+            logger.warning(f"[PULSE] Risk score update from survey failed: {e}")
+
+    logger.info(f"[PULSE] Mood recorded: score={score}, dept={department}, month={survey_month}, tid={telegram_id}")
     return False, department
 
 
@@ -391,7 +449,7 @@ async def alert_hr_team(trigger_type: str, department: str | None) -> None:
         ts = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
         dept_str = department or "Невідомий відділ"
         text_msg = (
-            f"🔴 *Пульс-тригер*\n"
+            f"🔴 *Пульс команди — Попередження*\n"
             f"Тип: `{trigger_type}`\n"
             f"Відділ: {dept_str}\n"
             f"Час: {ts}\n\n"
@@ -511,9 +569,9 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
 
 
 def log_video_view(telegram_id: int, video_id: str) -> None:
-    """Log anonymous video view to pulse_video_views."""
-    salt = os.getenv("PULSE_ANONYMOUS_SALT", "teamPulse2026avtd")
-    emp_hash = hashlib.sha256(f"{telegram_id}:{salt}".encode()).hexdigest()
+    """Log video view to pulse_video_views (privacy-hashed)."""
+    _salt = "teamPulse2026avtd"
+    emp_hash = hashlib.sha256(f"{telegram_id}:{_salt}".encode()).hexdigest()
     try:
         db = _models.SessionLocal()
         try:
@@ -533,7 +591,6 @@ def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
     """
     Return the last 5 pulse_triggers within the past 30 days for an employee,
     ordered newest-first.
-    Used by dashboard to show risk history timeline.
     """
     try:
         db = _models.SessionLocal()
@@ -567,15 +624,98 @@ def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
         return []
 
 
+async def send_pulse_meme(chat_id: int) -> bool:
+    """
+    Send a random meme from pulse_memes table.
+    Returns True if a meme was sent, False if fallback text was used.
+    """
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        return False
+
+    try:
+        db = _models.SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT id, file_id, file_url, caption FROM pulse_memes WHERE is_active = TRUE ORDER BY RANDOM() LIMIT 1")
+            ).fetchone()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] send_pulse_meme DB error: {e}")
+        row = None
+
+    meme_keyboard = {
+        "inline_keyboard": [
+            [{"text": "😄 Ще один мем", "callback_data": "hr_pulse:meme"}],
+        ]
+    }
+
+    if row:
+        meme_id, file_id, file_url, caption = row
+        photo_src = file_id or file_url
+        caption_text = caption or "😄"
+        if photo_src:
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto",
+                        json={
+                            "chat_id": chat_id,
+                            "photo": photo_src,
+                            "caption": caption_text,
+                            "reply_markup": meme_keyboard,
+                        },
+                    )
+                if resp.status_code == 200:
+                    logger.info(f"[PULSE] Meme sent (id={meme_id}) to {chat_id}")
+                    return True
+                logger.warning(f"[PULSE] sendPhoto failed: {resp.status_code} {resp.text[:100]}")
+            except Exception as e:
+                logger.warning(f"[PULSE] Meme send error: {e}")
+
+    fallback = "😄 Мем-терапія поки що готується! А поки що — зроби перерву на каву ☕"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": fallback,
+                    "reply_markup": meme_keyboard,
+                },
+            )
+    except Exception as e:
+        logger.warning(f"[PULSE] Meme fallback failed: {e}")
+    return False
+
+
 def send_monthly_survey() -> int:
     """
     Scheduled task: send mood survey to all active hr_users.
-    Called by APScheduler on the 1st of each month at 07:00 UTC.
+    Dispatches on the 15th of the month (or nearest weekday 13–17).
+    Called daily by APScheduler — function handles date/weekday validation.
     Returns count of successfully sent messages.
     """
+    today = datetime.utcnow()
+
+    if not (13 <= today.day <= 17):
+        logger.debug(f"[PULSE] Survey day check: day={today.day} not in 13-17 window, skipping")
+        return 0
+
+    if today.weekday() > 4:
+        logger.info(f"[PULSE] Survey day check: day={today.day} is weekend, skipping")
+        return 0
+
+    month_key = today.strftime("%Y-%m")
+    if month_key in _PULSE_SURVEY_DISPATCHED:
+        logger.info(f"[PULSE] Survey already dispatched for {month_key}, skipping")
+        return 0
+
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.warning("[PULSE] TELEGRAM_MAYA_BOT_TOKEN not set — survey skipped")
         return 0
+
+    _PULSE_SURVEY_DISPATCHED.add(month_key)
 
     db = _models.SessionLocal()
     try:
@@ -585,23 +725,18 @@ def send_monthly_survey() -> int:
                 "WHERE is_active = TRUE AND telegram_id IS NOT NULL"
             )
         ).fetchall()
-        logger.info(f"[PULSE] Sending monthly survey to {len(rows)} users")
+        logger.info(f"[PULSE] Sending monthly survey ({month_key}) to {len(rows)} users")
 
         survey_keyboard = {
             "inline_keyboard": [
-                [
-                    {"text": "❤️ відмінно",  "callback_data": "hr_pulse:mood:5"},
-                    {"text": "💚 добре",      "callback_data": "hr_pulse:mood:4"},
-                    {"text": "💙 нормально",  "callback_data": "hr_pulse:mood:3"},
-                    {"text": "🖤 тривожно",   "callback_data": "hr_pulse:mood:2"},
-                    {"text": "💔 важко",      "callback_data": "hr_pulse:mood:1"},
-                ]
+                [{"text": "💚 Тримаюсь впевнено 💪", "callback_data": f"hr_pulse:mood:3:{month_key}"}],
+                [{"text": "💛 Нормально, буває різне", "callback_data": f"hr_pulse:mood:2:{month_key}"}],
+                [{"text": "💔 Стоп, перевантаження", "callback_data": f"hr_pulse:mood:1:{month_key}"}],
             ]
         }
         survey_text = (
-            "💚 *Пульс команди*\n\n"
-            "Як ти себе почуваєш на роботі цього місяця?\n"
-            "_(анонімно — ніхто не бачить твою відповідь)_"
+            "❤️ *Пульс команди*\n\n"
+            "Як би ти описав/описала своє робоче самопочуття?"
         )
 
         import httpx as _httpx
@@ -648,6 +783,7 @@ def send_monthly_survey() -> int:
 
     except Exception as e:
         logger.error(f"[PULSE] send_monthly_survey failed: {e}")
+        _PULSE_SURVEY_DISPATCHED.discard(month_key)
         return 0
     finally:
         db.close()

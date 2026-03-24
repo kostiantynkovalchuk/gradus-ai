@@ -1118,7 +1118,7 @@ async def get_pulse_overview(
         )).scalar() or 0
 
         current_month = db_session.execute(text(
-            "SELECT COUNT(DISTINCT user_hash) FROM pulse_surveys "
+            "SELECT COUNT(*) FROM pulse_surveys "
             "WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')"
         )).scalar() or 0
 
@@ -1139,6 +1139,30 @@ async def get_pulse_overview(
             WHERE survey_month >= TO_CHAR(NOW() - INTERVAL '6 months', 'YYYY-MM')
             GROUP BY survey_month, department
             ORDER BY survey_month, department
+        """)).fetchall()
+
+        individual_responses = db_session.execute(text("""
+            SELECT
+                COALESCE(employee_name, user_hash, 'Анонім') AS name,
+                COALESCE(department, 'Невідомо') AS department,
+                score,
+                COALESCE(problem_category, '') AS problem_category,
+                COALESCE(problem_text, '') AS problem_text,
+                COALESCE(responded_at::text, '') AS responded_at
+            FROM pulse_surveys
+            WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')
+            ORDER BY score ASC, responded_at DESC
+        """)).fetchall()
+
+        problem_breakdown = db_session.execute(text("""
+            SELECT
+                COALESCE(problem_category, 'none') AS category,
+                COUNT(*) AS cnt
+            FROM pulse_surveys
+            WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')
+              AND score = 1
+            GROUP BY problem_category
+            ORDER BY cnt DESC
         """)).fetchall()
 
         return {
@@ -1162,6 +1186,21 @@ async def get_pulse_overview(
             "trigger_counts": [
                 {"trigger_type": r[0], "count": r[1]}
                 for r in trigger_counts
+            ],
+            "individual_responses": [
+                {
+                    "name": r[0],
+                    "department": r[1],
+                    "score": r[2],
+                    "problem_category": r[3],
+                    "problem_text": r[4],
+                    "responded_at": r[5],
+                }
+                for r in individual_responses
+            ],
+            "problem_breakdown": [
+                {"category": r[0], "count": r[1]}
+                for r in problem_breakdown
             ],
             "kpi": {
                 "response_rate": response_rate,

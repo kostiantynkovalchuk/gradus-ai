@@ -1,0 +1,377 @@
+# TEAM PULSE V2 — Major UX Redesign Based on HR Feedback
+# This replaces the current survey flow with a new 3-heart model.
+# Copy-paste this entire prompt into Replit Agent.
+
+"""
+=== TEAM PULSE V2 — COMPLETE UX REDESIGN ===
+
+HR team reviewed Team Pulse and requested significant changes.
+This is NOT a cosmetic fix — it's a structural redesign of the survey flow.
+
+Read all pulse-related code first (pulse_service.py, telegram_webhook.py hr_pulse callbacks,
+pulse_config or TRIGGER_KEYWORDS, migration 024/025, hr_admin.py pulse endpoints + HTML).
+Then implement ALL changes below.
+
+=== SUMMARY OF CHANGES ===
+
+OLD: 5 hearts (❤️💚💙🖤💔), anonymous survey, text fallback videos
+NEW: 3 hearts (💚💛💔), NOT anonymous (HR sees who answered what), 
+     meme therapy for 💛, problem categories for 💔, follow-up survey after 2 weeks
+
+=== 1. NEW HEART SCALE (3 levels instead of 5) ===
+
+OLD: ❤️ відмінно | 💚 добре | 💙 нормально | 🖤 тривожно | 💔 важко
+NEW: 💚 тримаюсь впевнено 💪 | 💛 нормально, буває різне | 💔 стоп, перевантаження
+
+Score mapping: 💚 = 3, 💛 = 2, 💔 = 1
+
+=== 2. SURVEY IS NO LONGER ANONYMOUS ===
+
+CRITICAL CHANGE: HR wants to see WHO answered WHAT.
+
+a) Modify the survey storage: pulse_surveys table now stores telegram_id (NOT anonymous hash).
+   Add migration 026:
+
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS telegram_id BIGINT;
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255);
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS problem_category VARCHAR(50);
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS problem_text TEXT;
+   ALTER TABLE pulse_surveys DROP CONSTRAINT IF EXISTS pulse_surveys_anonymous_hash_month_key_key;
+   -- New unique constraint: one response per employee per month
+   DO $$ BEGIN
+     ALTER TABLE pulse_surveys ADD CONSTRAINT pulse_surveys_employee_month_unique 
+       UNIQUE (telegram_id, month_key);
+   EXCEPTION WHEN duplicate_table THEN NULL;
+   END $$;
+
+b) Update record_mood() / survey response handler:
+   - Store telegram_id and employee_name (lookup from hr_users)
+   - Remove anonymous_hash logic entirely
+   - Double-vote check: SELECT 1 FROM pulse_surveys WHERE telegram_id = X AND month_key = Y
+
+c) Remove ALL references to anonymous_hash, PULSE_ANONYMOUS_SALT, make_anonymous_hash()
+   from pulse_service.py. These are no longer needed.
+
+d) Update survey message — remove "(анонімно — ніхто не бачить твою відповідь)" text.
+
+=== 3. NEW SURVEY MESSAGE ===
+
+Replace the survey message text and keyboard:
+
+Message:
+```
+❤️ Пульс команди
+
+Як би ти описав/описала своє робоче самопочуття?
+```
+
+Inline keyboard (3 buttons, VERTICAL — each on its own row):
+Row 1: [ 💚 Тримаюсь впевнено 💪 ]
+Row 2: [ 💛 Нормально, буває різне ]
+Row 3: [ 💔 Стоп, перевантаження ]
+
+callback_data format: hr_pulse:mood:{score}:{month_key}
+  💚 → hr_pulse:mood:3:{month_key}
+  💛 → hr_pulse:mood:2:{month_key}
+  💔 → hr_pulse:mood:1:{month_key}
+
+=== 4. RESPONSE BRANCHING (3 paths) ===
+
+--- Path 💚 (score=3): Confident ---
+Edit message to:
+```
+❤️ Пульс команди
+
+💚 Тримаюсь впевнено 💪
+
+Клас, так і тримай! 💪
+Порада: поки є ресурс — закривай найскладніші задачі. Потім буде легше.
+```
+No buttons. Done.
+
+--- Path 💛 (score=2): Mixed feelings ---
+Edit message to:
+```
+❤️ Пульс команди
+
+💛 Нормально, буває різне
+
+Зрозуміло. Ти не один/одна в такому стані 🙂
+Давай спробую допомогти:
+```
+Buttons (2 buttons, vertical):
+Row 1: [ 😄 Мем-терапія ]          callback: hr_pulse:meme
+Row 2: [ 💙 Психологічна підтримка ]  callback: hr_pulse:support
+
+--- Path 💔 (score=1): Overload ---
+Edit message to:
+```
+❤️ Пульс команди
+
+💔 Стоп, перевантаження
+
+Зрозуміла. Давай розберемось, як тобі допомогти.
+З чим пов'язана проблема?
+```
+Buttons (4 buttons, vertical):
+Row 1: [ 👥 Комунікація з колегами ]       callback: hr_pulse:problem:colleagues
+Row 2: [ 👔 Комунікація з керівником ]     callback: hr_pulse:problem:manager
+Row 3: [ 📋 Складність задач ]             callback: hr_pulse:problem:tasks
+Row 4: [ 💬 Інше (опишу) ]                callback: hr_pulse:problem:other
+
+=== 5. PROBLEM CATEGORY HANDLERS ===
+
+--- For "colleagues", "manager", "tasks": ---
+Store problem_category in pulse_surveys (UPDATE ... SET problem_category = X WHERE telegram_id = Y AND month_key = Z)
+Edit message to:
+```
+❤️ Пульс команди
+
+Дякую, що поділився/поділилась. 🤍
+HR отримає повідомлення і зверне на це увагу.
+
+Якщо хочеш поговорити зараз — напиши @Natty_Reshetilova
+```
+
+Send HR alert (identified, with problem category):
+```
+🔴 Пульс команди — Попередження
+
+👤 {employee_name}
+🏢 Відділ: {department}
+📌 Проблема: {category_label}
+📊 Самопочуття: 💔 перевантаження
+
+💬 Зверніться до співробітника конфіденційно
+```
+With action buttons: [ ✅ Беру в роботу ] [ ✔️ Вирішено ] [ ❌ Хибна тривога ]
+
+Category labels for alert:
+  colleagues → "Комунікація з колегами"
+  manager → "Комунікація з керівником"
+  tasks → "Складність задач"
+  other → "Інше: {problem_text}"
+
+--- For "other" (free text): ---
+Edit message to:
+```
+❤️ Пульс команди
+
+Опиши коротко, що тебе турбує:
+```
+Remove keyboard (no buttons).
+Set a flag/state so the NEXT text message from this user is captured as problem_text.
+
+Implementation of "other" text capture:
+- In pulse_service.py or a state dict, store: PULSE_AWAITING_TEXT[telegram_id] = month_key
+- In process_telegram_message() in telegram_webhook.py, BEFORE the trigger check:
+  if telegram_id in PULSE_AWAITING_TEXT:
+      month_key = PULSE_AWAITING_TEXT.pop(telegram_id)
+      # Store the text
+      db.execute("UPDATE pulse_surveys SET problem_category='other', problem_text=:txt WHERE telegram_id=:tid AND month_key=:mk",
+                 {"txt": text[:500], "tid": telegram_id, "mk": month_key})
+      db.commit()
+      # Send confirmation
+      await send_telegram_message(chat_id, "❤️ Пульс команди\n\nДякую, що поділився/поділилась. 🤍\nHR зверне на це увагу.")
+      # Send HR alert with the text
+      await alert_hr_pulse_problem(telegram_id, employee_name, department, "other", text[:500])
+      return  # Don't process as regular HR question
+
+- Use a simple dict (not Redis) — PULSE_AWAITING_TEXT = {} at module level in pulse_service.py
+  Import it in telegram_webhook.py.
+
+=== 6. MEME THERAPY ===
+
+New feature: when 💛 user presses "😄 Мем-терапія", bot sends a random meme.
+
+a) Migration 026 (add to same migration):
+```sql
+CREATE TABLE IF NOT EXISTS pulse_memes (
+    id SERIAL PRIMARY KEY,
+    category VARCHAR(50) NOT NULL DEFAULT 'general',
+    file_id VARCHAR(200),
+    file_url TEXT,
+    caption TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+Categories: 'burnout', 'stress', 'monday', 'deadline', 'general'
+
+b) When user presses hr_pulse:meme callback:
+   - Query random active meme: SELECT * FROM pulse_memes WHERE is_active=TRUE ORDER BY RANDOM() LIMIT 1
+   - If meme has file_id → send as photo with caption
+   - If meme has file_url → send as photo from URL
+   - If no memes in DB → send text fallback:
+     "😄 Мем-терапія поки що готується! А поки що — зроби перерву на каву ☕"
+   - After sending meme, show button: [ 😄 Ще один мем ] callback: hr_pulse:meme
+
+c) Seed 5-10 initial memes — since we can't upload images right now, 
+   add them as file_url pointing to public Ukrainian meme URLs.
+   OR just leave the table empty and add memes manually via SQL later.
+   Add a dashboard section for managing memes (stretch goal, not required now).
+
+d) When user presses hr_pulse:support callback (psychological support):
+   Send the existing support video (breathing/burnout) or text fallback.
+   This reuses the existing send_pulse_video() logic.
+
+=== 7. FOLLOW-UP SURVEY (2 weeks after escalation) ===
+
+When a 💔 response is escalated to HR and HR marks it as "resolved":
+Schedule a follow-up survey to the SAME employee in 14 days.
+
+Implementation:
+a) Add column to pulse_surveys: 
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS followup_scheduled BOOLEAN DEFAULT FALSE;
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS followup_sent_at TIMESTAMP;
+   ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS is_followup BOOLEAN DEFAULT FALSE;
+
+b) When HR presses "✔️ Вирішено" on a 💔 alert:
+   - Find the pulse_survey row for that employee + current month
+   - Set followup_scheduled = TRUE
+   - Schedule a job (or just check daily in scheduler): 
+     "14 days after resolved_at, send follow-up survey to this employee"
+
+c) Follow-up survey message:
+```
+❤️ Пульс команди — Перевірка
+
+Привіт! Минуло 2 тижні. Як ти себе почуваєш зараз?
+```
+Same 3-button keyboard as regular survey.
+Store with is_followup=TRUE and a special month_key like "2026-03-FU" to not conflict with regular survey.
+
+d) In scheduler.py, add a daily check at 09:00 UTC:
+   SELECT ps.telegram_id, ps.employee_name
+   FROM pulse_surveys ps
+   JOIN pulse_hr_actions pha ON pha.trigger_id IN (
+     SELECT id FROM pulse_triggers WHERE employee_id = ps.telegram_id
+   )
+   WHERE ps.score = 1 
+     AND ps.followup_scheduled = TRUE 
+     AND ps.followup_sent_at IS NULL
+     AND pha.action = 'resolved'
+     AND pha.created_at < NOW() - INTERVAL '14 days'
+   
+   For each: send follow-up survey, set followup_sent_at = NOW()
+
+   (This is a simplified approach. If it's too complex for now, 
+    just add a TODO comment and implement the daily check later.)
+
+=== 8. SURVEY SCHEDULE: 15th OF EACH MONTH ===
+
+Change the survey cron from day=1 to day=15.
+
+In scheduler.py, find the pulse survey CronTrigger and change:
+  CronTrigger(day=1, hour=7, minute=0) → CronTrigger(day=15, hour=7, minute=0)
+
+The "must be a working day" requirement: 
+- Simple approach: if 15th is Saturday → send on 13th (Friday). If Sunday → send on 16th (Monday).
+- In send_monthly_survey(), before sending, check:
+  from datetime import datetime
+  today = datetime.utcnow()
+  if today.weekday() == 5:  # Saturday
+      return 0  # Skip, will try tomorrow... 
+  
+  Actually, better approach: schedule for day=15 but also run on 13,14,16,17.
+  The function itself checks: "did I already send for this month? If yes, skip."
+  This way if 15th is weekend, the daily-ish check will catch 16th (Monday).
+  
+  Simplest: Change cron to run daily at 07:00 UTC. Inside the function:
+  - Check if today is between 13th and 17th of the month
+  - Check if today is a weekday (Mon-Fri)
+  - Check if survey for this month already sent
+  - If all true → send survey
+  This handles weekends automatically.
+
+=== 9. UPDATE PULSE CONFIG ===
+
+Update scale config to match new 3-heart model:
+
+PULSE_SCALE = {
+    3: {"emoji": "💚", "label": "тримаюсь впевнено 💪"},
+    2: {"emoji": "💛", "label": "нормально, буває різне"},
+    1: {"emoji": "💔", "label": "стоп, перевантаження"},
+}
+
+PROBLEM_CATEGORIES = {
+    "colleagues": "Комунікація з колегами",
+    "manager": "Комунікація з керівником",
+    "tasks": "Складність задач",
+    "other": "Інше",
+}
+
+=== 10. DASHBOARD UPDATES ===
+
+Update the Пульс команди dashboard tab:
+
+a) Survey results now show employee names. 
+   In /hr/api/pulse-overview, return individual responses:
+   {
+     "responses": [
+       {"name": "Іванов О.", "department": "Торгові агенти", "score": 1, 
+        "problem_category": "manager", "date": "2026-03-15"},
+       ...
+     ],
+     "summary": {"total": 45, "green": 30, "yellow": 10, "red": 5},
+     "response_rate": 0.56,
+     "departments": [...]
+   }
+
+b) Show problem breakdown chart (pie/bar):
+   - How many colleagues / manager / tasks / other
+
+c) Active alerts table already works — keep it.
+
+d) Update chart colors: 💚 green, 💛 yellow, 💔 red
+
+e) Update all text to Ukrainian (apply cosmetic fixes from previous prompt).
+
+=== 11. UKRAINIZE ALL TEXT ===
+
+Apply ALL ukrainization from the cosmetic prompt:
+- Alert title: "🔴 Пульс команди — Попередження"
+- Buttons: "✅ Беру в роботу" / "✔️ Вирішено" / "❌ Хибна тривога"
+- Dashboard: all Ukrainian, no English text visible to users
+- "Активні ризик-алерти" → "Активні попередження"
+
+=== 12. TEMPORARY TEST ENDPOINT ===
+
+Keep or add: GET /hr/api/pulse-test-survey
+Should send survey ONLY to the requesting user (or to a specific telegram_id param).
+For testing without spamming all 800 employees.
+
+=== IMPORTANT RULES ===
+
+1. Keep ALL existing trigger detection logic (resignation/conflict/burnout keywords) — it still works independently of survey
+2. Keep risk score engine — it accumulates from BOTH triggers and survey responses
+3. 💔 survey response adds +2 to risk score (same as before)
+4. When 💔 is selected AND problem category chosen → send HR alert
+5. Meme table can start empty — add memes via SQL INSERT later
+6. "Інше" free text requires conversation state management — use simple dict, not Redis
+7. All callback_data must keep hr_pulse: prefix
+8. Do NOT break existing Maya HR or Alex Photo Report
+9. Follow-up survey is nice-to-have — if too complex, add TODO and skip for now
+10. Test: send survey to yourself, tap each heart, verify full flow
+
+=== MIGRATION 026 — FULL SQL ===
+
+Append to MIGRATIONS list in db_migrations.py:
+
+{
+    "version": "026_pulse_v2_redesign",
+    "statements": [
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS telegram_id BIGINT",
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255)",
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS problem_category VARCHAR(50)",
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS problem_text TEXT",
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS followup_scheduled BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS followup_sent_at TIMESTAMP",
+        "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS is_followup BOOLEAN DEFAULT FALSE",
+        "CREATE TABLE IF NOT EXISTS pulse_memes (id SERIAL PRIMARY KEY, category VARCHAR(50) NOT NULL DEFAULT 'general', file_id VARCHAR(200), file_url TEXT, caption TEXT, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())",
+    ]
+}
+
+After all changes, restart and test the full flow.
+"""

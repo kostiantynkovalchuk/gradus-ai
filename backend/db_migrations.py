@@ -732,6 +732,42 @@ MIGRATIONS = [
             "CREATE INDEX IF NOT EXISTS idx_expert_corrections_created ON expert_corrections(created_at DESC)",
         ]
     },
+    {
+        "version": "028_pulse_v2_redesign",
+        "statements": [
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS telegram_id BIGINT",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS employee_name TEXT",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS problem_category TEXT",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS problem_text TEXT",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS followup_scheduled BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS followup_sent_at TIMESTAMP",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS is_followup BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE pulse_surveys ADD COLUMN IF NOT EXISTS responded_at TIMESTAMP",
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE tablename = 'pulse_surveys'
+                      AND indexname = 'idx_pulse_surveys_telegram_month'
+                ) THEN
+                    CREATE UNIQUE INDEX idx_pulse_surveys_telegram_month
+                    ON pulse_surveys (telegram_id, survey_month)
+                    WHERE telegram_id IS NOT NULL;
+                END IF;
+            END$$
+            """,
+            """CREATE TABLE IF NOT EXISTS pulse_memes (
+                id         SERIAL PRIMARY KEY,
+                file_id    TEXT,
+                file_url   TEXT,
+                caption    TEXT,
+                is_active  BOOLEAN DEFAULT TRUE,
+                added_at   TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_pulse_memes_active ON pulse_memes(is_active) WHERE is_active = TRUE",
+        ]
+    },
 ]
 
 
