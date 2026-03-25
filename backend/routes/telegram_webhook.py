@@ -1193,7 +1193,8 @@ async def handle_hr_callback(callback_query: dict):
                         raise ValueError("score out of range")
                     telegram_user_id = callback_query.get('from', {}).get('id')
                     from services.pulse_service import record_mood as _record_mood
-                    pulse_db = next(get_db())
+                    import models as _models_mood
+                    pulse_db = _models_mood.SessionLocal()
                     try:
                         already_voted, department = _record_mood(
                             telegram_user_id, score, pulse_db, month_key
