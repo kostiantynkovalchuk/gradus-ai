@@ -1380,11 +1380,15 @@ async def get_system_info(
 
 @router.get("/api/pulse-test-survey")
 async def test_pulse_survey(
-    credentials: HTTPBasicCredentials = Depends(verify_admin)
+    tid: int = None,
+    credentials: HTTPBasicCredentials = Depends(verify_admin),
 ):
-    """Temporary — trigger monthly survey manually for testing. Remove after go-live."""
-    from services.pulse_service import send_monthly_survey
-    count = send_monthly_survey()
+    """Send survey to one user (by telegram_id) or all active users if no tid given."""
+    from services.pulse_service import send_monthly_survey, send_survey_to_user
+    if tid:
+        count = await send_survey_to_user(tid)
+    else:
+        count = send_monthly_survey()
     return {"sent_to": count}
 
 

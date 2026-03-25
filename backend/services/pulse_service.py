@@ -787,3 +787,47 @@ def send_monthly_survey() -> int:
         return 0
     finally:
         db.close()
+
+
+async def send_survey_to_user(telegram_id: int) -> int:
+    """
+    Send the pulse mood survey to a single user by telegram_id.
+    Bypasses day/weekday/deduplication checks — intended for manual testing.
+    Returns 1 on success, 0 on failure.
+    """
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.warning("[PULSE] send_survey_to_user: TELEGRAM_MAYA_BOT_TOKEN not set")
+        return 0
+
+    month_key = datetime.utcnow().strftime("%Y-%m")
+    survey_keyboard = {
+        "inline_keyboard": [
+            [{"text": "💚 Тримаюсь впевнено 💪", "callback_data": f"hr_pulse:mood:3:{month_key}"}],
+            [{"text": "💛 Нормально, буває різне", "callback_data": f"hr_pulse:mood:2:{month_key}"}],
+            [{"text": "💔 Стоп, перевантаження", "callback_data": f"hr_pulse:mood:1:{month_key}"}],
+        ]
+    }
+    survey_text = (
+        "❤️ *Пульс команди*\n\n"
+        "Як би ти описав/описала своє робоче самопочуття?"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": telegram_id,
+                    "text": survey_text,
+                    "parse_mode": "Markdown",
+                    "reply_markup": survey_keyboard,
+                },
+            )
+        if resp.status_code == 200:
+            logger.info(f"[PULSE] Test survey sent to {telegram_id}")
+            return 1
+        logger.warning(f"[PULSE] send_survey_to_user failed: {resp.status_code} {resp.text[:100]}")
+        return 0
+    except Exception as e:
+        logger.warning(f"[PULSE] send_survey_to_user error: {e}")
+        return 0
