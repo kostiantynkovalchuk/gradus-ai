@@ -768,6 +768,12 @@ MIGRATIONS = [
             "CREATE INDEX IF NOT EXISTS idx_pulse_memes_active ON pulse_memes(is_active) WHERE is_active = TRUE",
         ]
     },
+    {
+        "version": "029_pulse_user_hash_nullable",
+        "statements": [
+            "ALTER TABLE pulse_surveys ALTER COLUMN user_hash DROP NOT NULL",
+        ]
+    },
 ]
 
 
