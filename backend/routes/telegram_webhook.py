@@ -1194,8 +1194,22 @@ async def handle_hr_callback(callback_query: dict):
                     telegram_user_id = callback_query.get('from', {}).get('id')
                     from services.pulse_service import record_mood as _record_mood
                     import models as _models_mood
+                    from models.hr_auth_models import HRUser as _HRUser
                     pulse_db = _models_mood.SessionLocal()
                     try:
+                        # Developer bypass: delete prior response so they can re-test
+                        _dev_user = pulse_db.query(_HRUser).filter(
+                            _HRUser.telegram_id == telegram_user_id
+                        ).first()
+                        if _dev_user and getattr(_dev_user, 'access_level', None) == 'developer':
+                            pulse_db.execute(
+                                text(
+                                    "DELETE FROM pulse_surveys "
+                                    "WHERE telegram_id = :tid AND survey_month = :sm"
+                                ),
+                                {"tid": telegram_user_id, "sm": month_key},
+                            )
+                            pulse_db.commit()
                         already_voted, department = _record_mood(
                             telegram_user_id, score, pulse_db, month_key
                         )
@@ -1282,14 +1296,18 @@ async def handle_hr_callback(callback_query: dict):
 
             elif action_part == 'support':
                 await answer_callback(callback_id, "💙 Надсилаю")
-                await send_telegram_message(
-                    chat_id,
-                    "💙 *Психологічна підтримка*\n\n"
+                _support_text = (
+                    "💙 Психологічна підтримка\n\n"
                     "Іноді «нормально, буває різне» — це сигнал, що варто зупинитись.\n\n"
                     "Спробуй: 4 рази — вдих 4с, затримка 4с, видих 4с.\n\n"
                     "Якщо відчуваєш, що потрібна розмова — HR тут:\n"
                     "📩 @Natty_Reshetilova (Наталія) — конфіденційно."
                 )
+                async with httpx.AsyncClient(timeout=10.0) as _sc:
+                    await _sc.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                        json={"chat_id": chat_id, "text": _support_text},
+                    )
 
             elif action_part == 'problem' and len(parts) >= 3:
                 category = parts[2]
