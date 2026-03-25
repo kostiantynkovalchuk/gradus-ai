@@ -418,30 +418,39 @@ async def process_telegram_message(message: dict):
         # ── PULSE: capture free-text "Інше" problem description ──────────
         if telegram_id in PULSE_AWAITING_TEXT:
             month_key = PULSE_AWAITING_TEXT.pop(telegram_id)
+            _free_text = text[:500]  # capture before any shadowing
             try:
+                from sqlalchemy import text as _sa_text
                 import models as _models_pulse
                 _pdb = _models_pulse.SessionLocal()
                 try:
                     _pdb.execute(
-                        text(
+                        _sa_text(
                             "UPDATE pulse_surveys SET problem_category='other', problem_text=:txt "
                             "WHERE telegram_id=:tid AND survey_month=:mk"
                         ),
-                        {"txt": text[:500], "tid": telegram_id, "mk": month_key},
+                        {"txt": _free_text, "tid": telegram_id, "mk": month_key},
                     )
                     _pdb.commit()
                 finally:
                     _pdb.close()
                 _emp_name = getattr(user, "full_name", None)
                 _emp_dept = getattr(user, "department", None)
-                await send_telegram_message(
-                    chat_id,
-                    "❤️ *Пульс команди*\n\nДякую, що поділився/поділилась. 🤍\n"
-                    "HR зверне на це увагу.\n\n"
-                    "Якщо хочеш поговорити зараз — напиши @Natty_Reshetilova",
-                )
+                async with httpx.AsyncClient(timeout=10.0) as _awt_client:
+                    await _awt_client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": (
+                                "❤️ Пульс команди\n\n"
+                                "Дякую, що поділився/поділилась. 🤍\n"
+                                "HR зверне на це увагу.\n\n"
+                                "Якщо хочеш поговорити зараз — напиши @Natty_Reshetilova"
+                            ),
+                        },
+                    )
                 asyncio.create_task(
-                    alert_hr_pulse_problem(telegram_id, _emp_name, _emp_dept, "other", text[:500])
+                    alert_hr_pulse_problem(telegram_id, _emp_name, _emp_dept, "other", _free_text)
                 )
             except Exception as _pte:
                 logger.warning(f"[PULSE] awaiting_text processing error: {_pte}")
@@ -1354,13 +1363,17 @@ async def handle_hr_callback(callback_query: dict):
                 else:
                     await answer_callback(callback_id, "Дякую 🤍")
                     cat_label = PROBLEM_CATEGORIES.get(category, category)
-                    await edit_telegram_message(
-                        chat_id, message_id,
-                        f"❤️ *Пульс команди*\n\n"
-                        f"Зрозуміла — *{cat_label}*.\n\n"
+                    _prob_confirm = (
+                        f"❤️ Пульс команди\n\n"
+                        f"Зрозуміла — {cat_label}.\n\n"
                         f"HR обов'язково зверне на це увагу. 🤍\n"
                         f"Якщо хочеш поговорити зараз — напиши @Natty_Reshetilova"
                     )
+                    async with httpx.AsyncClient(timeout=10.0) as _pc:
+                        await _pc.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/editMessageText",
+                            json={"chat_id": chat_id, "message_id": message_id, "text": _prob_confirm},
+                        )
                     try:
                         _trig_id = log_trigger(
                             department=_emp_dept,
