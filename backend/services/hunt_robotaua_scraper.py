@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 _EMPLOYER_API = "https://employer-api.robota.ua"
 
-LIST_FETCH_LIMIT  = 10       # candidates taken from list response
+LIST_FETCH_LIMIT  = 20       # candidates taken from list response
 DETAIL_SLEEP_SEC  = 2.0      # seconds to sleep before a detail call
 
 # ── Daily detail-call counter ────────────────────────────────────────────────
