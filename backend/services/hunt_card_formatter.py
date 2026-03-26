@@ -100,10 +100,14 @@ def format_candidate_card(candidate: dict, index: int) -> str:
             lines.append(f"⚠️ {' · '.join(concerns)}")
 
         lines.append(f"💰 {_format_salary(candidate)}")
-        lines.append(f"📞 {contact or 'Контакт не вказано'}")
 
-        if profile_url:
-            lines.append(f"🔗 {profile_url}")
+        if source == "work.ua" and profile_url:
+            # Merge contact + URL into a single clean clickable line
+            lines.append(f"📞 [Контакт на Work.ua ↗]({profile_url})")
+        else:
+            lines.append(f"📞 {contact or 'Контакт не вказано'}")
+            if profile_url:
+                lines.append(f"🔗 {profile_url}")
 
         if summary:
             lines.append("")

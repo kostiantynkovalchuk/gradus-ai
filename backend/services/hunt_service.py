@@ -496,18 +496,21 @@ async def run_hunt(vacancy_id: int, vacancy_text: str, thread_id: int, chat_id: 
         for idx, sc in enumerate(top, 1):
             card_text = format_candidate_card(sc, idx)
             cand_id = sc.get("db_id")
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "✅ В роботу", "callback_data": f"hunt_approve_{cand_id}"},
-                        {"text": "❌ Пропустити", "callback_data": f"hunt_reject_{cand_id}"},
-                    ],
-                    [
-                        {"text": "💾 Зберегти", "callback_data": f"hunt_save_{cand_id}"},
-                        {"text": "🎯 Найняти", "callback_data": f"hunt_hire_{cand_id}"},
-                    ],
-                ]
-            }
+            keyboard_rows = [
+                [
+                    {"text": "✅ В роботу", "callback_data": f"hunt_approve_{cand_id}"},
+                    {"text": "❌ Пропустити", "callback_data": f"hunt_reject_{cand_id}"},
+                ],
+                [
+                    {"text": "💾 Зберегти", "callback_data": f"hunt_save_{cand_id}"},
+                    {"text": "🎯 Найняти", "callback_data": f"hunt_hire_{cand_id}"},
+                ],
+            ]
+            if sc.get("source") == "robota.ua":
+                keyboard_rows.append([
+                    {"text": "📞 Контакт", "callback_data": f"hunt_contact_{cand_id}"},
+                ])
+            keyboard = {"inline_keyboard": keyboard_rows}
             resp = await _send_message(chat_id, card_text, thread_id=thread_id, reply_markup=keyboard)
             msg_id = resp.get("result", {}).get("message_id")
             if msg_id and cand_id:
@@ -646,6 +649,67 @@ async def handle_hunt_decision(callback_query: dict, db):
 
     from models.hunt_models import HuntCandidate, HuntVacancy
 
+    # ── Contact button: fetch phone/email on demand ────────────────────────
+    if decision == "contact":
+        candidate = db.query(HuntCandidate).filter(HuntCandidate.id == candidate_id).first()
+        if not candidate:
+            await _answer_callback(callback_id, "Кандидата не знайдено")
+            return
+        if candidate.source != "robota.ua":
+            await _answer_callback(callback_id, "Контакт доступний тільки для Robota.ua")
+            return
+
+        # Extract resume_id from profile_url  e.g. https://robota.ua/ua/cv/12345678
+        profile_url = candidate.profile_url or ""
+        import re as _re
+        m = _re.search(r"/cv/(\d+)", profile_url)
+        if not m:
+            await _answer_callback(callback_id, "Не вдалося визначити ID резюме")
+            return
+
+        resume_id_str = m.group(1)
+        await _answer_callback(callback_id, "📞 Завантажуємо контакт...")
+
+        from services.hunt_robotaua_scraper import fetch_robotaua_contact
+        result = await fetch_robotaua_contact(resume_id_str)
+
+        if result.get("error"):
+            await _send_message(
+                chat_id,
+                f"⚠️ Не вдалося отримати контакт:\n{result['error']}",
+                thread_id=message.get("message_thread_id"),
+            )
+            return
+
+        phone = result.get("phone") or "—"
+        email = result.get("email") or "—"
+        full_name = result.get("full_name") or candidate.full_name or ""
+        skills_text = result.get("skills_text") or ""
+
+        contact_lines = [
+            f"📞 *Контакт — {full_name}*",
+            f"Телефон: {phone}",
+            f"Email: {email}",
+        ]
+        if skills_text:
+            contact_lines.append(f"\n🛠 Навички: {skills_text[:300]}")
+        contact_lines.append(f"\n🔗 {profile_url}")
+
+        await _send_message(
+            chat_id,
+            "\n".join(contact_lines),
+            thread_id=message.get("message_thread_id"),
+        )
+
+        # Save contact to DB for future reference
+        if phone != "—" or email != "—":
+            contact_str = ", ".join(p for p in [phone, email] if p != "—")
+            candidate.contact = contact_str
+            db.commit()
+
+        return
+
+    # ── Standard decision buttons ──────────────────────────────────────────
     decision_map = {
         "approve": ("approved", "✅ Взято в роботу"),
         "reject": ("rejected", "❌ Відхилено"),
