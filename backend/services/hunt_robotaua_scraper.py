@@ -13,6 +13,11 @@ Confirmed field names from live API exploration (2026-03-22):
     resumeId, name, surname, birthDate, age (str "51"), email, phone, skype,
     speciality, salary (str "20000"), currencyId, currencySign, salaryFull,
     skills[]{description (HTML)}, lastActivityDate, updateDate
+
+Two-pass strategy (API rate-limit friendly):
+  Pass 1 — list data only:  build raw_text from list fields → score with Claude
+  Pass 2 — detail calls:    only for candidates scoring >= 35 (contacts needed)
+  Hard cap: _DAILY_DETAIL_LIMIT calls per calendar day across all runs.
 """
 
 import re
@@ -28,6 +33,42 @@ from services.robotaua_reference import get_city_id
 logger = logging.getLogger(__name__)
 
 _EMPLOYER_API = "https://employer-api.robota.ua"
+
+# ── Daily detail-call counter ────────────────────────────────────────────────
+_DAILY_DETAIL_LIMIT = 100
+_daily_detail_calls: int = 0
+_daily_detail_date: str = ""          # "YYYY-MM-DD" of last reset
+
+LIST_FETCH_LIMIT   = 10               # candidates to take from list
+DETAIL_SCORE_FLOOR = 35               # min Claude score to trigger detail call
+DETAIL_SLEEP_SEC   = 2.0              # seconds between detail calls
+
+
+def _check_daily_limit() -> bool:
+    """Return True if we can make another detail call today, False if capped."""
+    global _daily_detail_calls, _daily_detail_date
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    if today != _daily_detail_date:
+        _daily_detail_calls = 0
+        _daily_detail_date = today
+    if _daily_detail_calls >= _DAILY_DETAIL_LIMIT:
+        logger.warning(
+            f"[RobotaUA] Daily detail-call limit reached ({_DAILY_DETAIL_LIMIT}/day). "
+            "Skipping remaining detail fetches for today."
+        )
+        return False
+    return True
+
+
+def _increment_daily_counter():
+    global _daily_detail_calls
+    _daily_detail_calls += 1
+    remaining = _DAILY_DETAIL_LIMIT - _daily_detail_calls
+    if remaining <= 20:
+        logger.warning(
+            f"[RobotaUA] Approaching daily limit: {_daily_detail_calls}/{_DAILY_DETAIL_LIMIT} "
+            f"detail calls used ({remaining} remaining)."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -157,10 +198,18 @@ def _build_raw_text(
 async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
     """
     Search Robota.ua CV database via REST API.
+
+    Two-pass strategy:
+      Pass 1: Build candidates from list data (no detail calls) → score with Claude
+      Pass 2: Fetch /resume/{id} only for candidates scoring >= DETAIL_SCORE_FLOOR
+
     Returns a list of candidate dicts compatible with the Hunt scorer.
     Returns [] on any auth/network error — never raises.
     """
-    logger.info(f"[RobotaUA] CV search started: position='{vacancy.get('position')}', city='{vacancy.get('city')}'")
+    logger.info(
+        f"[RobotaUA] CV search started: position='{vacancy.get('position')}', "
+        f"city='{vacancy.get('city')}'"
+    )
 
     from config.hunt_config import HUNT_CONFIG
     if depth_days is None:
@@ -183,49 +232,51 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
     else:
         logger.info(f"[RobotaUA] City '{city_name}' not found — searching Ukraine-wide")
 
-    search_body: dict = {
-        "keyWords": position,
-        "page": 0,
-    }
+    search_body: dict = {"keyWords": position, "page": 0}
     if city_id:
         search_body["cityId"] = city_id
 
-    logger.info(f"[RobotaUA] Search: position='{position}' cityId={city_id} depth={depth_days}d")
-
+    logger.info(
+        f"[RobotaUA] Search: position='{position}' cityId={city_id} depth={depth_days}d"
+    )
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
         async with cf_client(timeout=30) as client:
-            resp = await client.post(f"{_EMPLOYER_API}/cvdb/resumes", headers=headers, json=search_body)
+
+            # ── List call ──────────────────────────────────────────────────
+            resp = await client.post(
+                f"{_EMPLOYER_API}/cvdb/resumes", headers=headers, json=search_body
+            )
 
             if resp.status_code == 401:
                 logger.warning("[RobotaUA] 401 on CV search — invalidating token")
                 invalidate_token()
-                logger.info("[RobotaUA] CV search complete: 0 candidates (401 auth error)")
                 return []
             if resp.status_code != 200:
-                logger.error(f"[RobotaUA] CV search failed: {resp.status_code} {resp.text[:200]}")
-                logger.info(f"[RobotaUA] CV search complete: 0 candidates (HTTP {resp.status_code})")
+                logger.error(
+                    f"[RobotaUA] CV search failed: {resp.status_code} {resp.text[:200]}"
+                )
                 return []
 
             data = resp.json()
             documents = data.get("documents", [])
             total = data.get("total", 0)
-            logger.info(f"[RobotaUA] {len(documents)}/{total} CVs returned for '{position}'")
-
+            logger.info(
+                f"[RobotaUA] {len(documents)}/{total} CVs returned for '{position}'"
+            )
             if not documents:
-                logger.info("[RobotaUA] CV search complete: 0 candidates (empty response)")
                 return []
 
             cutoff = datetime.utcnow() - timedelta(days=depth_days)
-            candidates = []
 
-            for doc in documents[:20]:
+            # ── PASS 1: Build lightweight candidates from list data only ───
+            pass1_candidates: list[dict] = []
+            for doc in documents[:LIST_FETCH_LIMIT]:
                 resume_id = doc.get("resumeId")
                 if not resume_id:
                     continue
 
-                # Date filter
                 last_activity_str = doc.get("lastActivityDate") or doc.get("addDate") or ""
                 if last_activity_str:
                     last_dt = _parse_iso_date(last_activity_str)
@@ -233,7 +284,6 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
                         logger.debug(f"[RobotaUA] Skipping {resume_id} (inactive > {depth_days}d)")
                         continue
 
-                # Basic fields from list response
                 profile_url = doc.get("url") or f"https://robota.ua/ua/cv/{resume_id}"
                 speciality = doc.get("speciality") or ""
                 display_name = (doc.get("fullName") or doc.get("displayName") or "").strip()
@@ -249,83 +299,180 @@ async def search_robotaua(vacancy: dict, depth_days: int = None) -> list:
                 exp_years = _parse_experience_years(experiences_list)
                 age = _parse_age_str(age_raw)
 
-                # Fetch detail for richer data
-                await asyncio.sleep(1.0)
-                detail_resp = await client.get(
-                    f"{_EMPLOYER_API}/resume/{resume_id}",
-                    headers=headers,
-                )
-
-                full_name = display_name
-                skills_html = ""
-                email = ""
-                phone = ""
-
-                if detail_resp.status_code == 200:
-                    detail = detail_resp.json()
-                    name = (detail.get("name") or "").strip()
-                    surname = (detail.get("surname") or "").strip()
-                    if name or surname:
-                        full_name = f"{name} {surname}".strip()
-                    age_detail = _parse_age_str(detail.get("age"))
-                    if age_detail:
-                        age = age_detail
-                    email = detail.get("email") or ""
-                    phone = detail.get("phone") or ""
-                    skills_list = detail.get("skills") or []
-                    if skills_list:
-                        skills_html = " ".join(s.get("description", "") for s in skills_list)
-                    detail_salary_str = detail.get("salaryFull") or detail.get("salary") or ""
-                    if detail_salary_str and not salary_uah:
-                        salary_uah = _parse_salary_str(detail_salary_str)
-                        salary_uah, salary_usd = _salary_to_uah_usd(salary_uah)
-                elif detail_resp.status_code == 401:
-                    invalidate_token()
-                    break
-
-                # Build contact string
-                contact_parts = []
-                if phone:
-                    contact_parts.append(phone)
-                if email:
-                    contact_parts.append(email)
-                contact = ", ".join(contact_parts) if contact_parts else "Деталі на Robota.ua"
-
+                # Build raw_text from list fields — enough for Claude scoring
                 raw_text = _build_raw_text(
-                    full_name=full_name,
+                    full_name=display_name,
                     role=speciality,
                     city=city,
                     age_str=age_raw,
                     salary_str=salary_str_list,
                     experiences=experiences_list,
-                    skills_html=skills_html,
+                    skills_html="",         # not available in list
                     keywords=keywords_list,
                 )
 
-                candidates.append({
+                pass1_candidates.append({
+                    "_resume_id": resume_id,            # internal, stripped before return
+                    "_headers": headers,                # carry auth for pass 2
                     "source": "robota.ua",
                     "profile_url": profile_url,
-                    "full_name": full_name,
+                    "full_name": display_name,
                     "current_role": speciality,
                     "age": age,
                     "city": city,
                     "salary_expectation": salary_usd,
                     "salary_expectation_uah": salary_uah,
                     "salary_expectation_usd": salary_usd,
-                    "contact": contact,
-                    "email": email,
+                    "contact": "Деталі на Robota.ua",   # populated in pass 2
+                    "email": "",
                     "experience_years": exp_years,
-                    "skills": _strip_html(skills_html)[:300],
+                    "skills": "",
                     "education": "",
                     "raw_text": raw_text,
                     "message_date": None,
                     "last_active": last_active,
                 })
 
-            logger.info(f"[RobotaUA] Built {len(candidates)} candidates for '{position}'")
-            return candidates
+            logger.info(
+                f"[RobotaUA] Pass 1 complete: {len(pass1_candidates)} candidates built "
+                f"from list data (no detail calls)"
+            )
+
+            if not pass1_candidates:
+                return []
+
+            # ── Score pass-1 candidates with Claude ───────────────────────
+            from services.hunt_scorer import score_candidate as _score_candidate
+            scored = await asyncio.gather(
+                *[_score_candidate(c, vacancy) for c in pass1_candidates],
+                return_exceptions=True,
+            )
+
+            # Pair candidates with their scores
+            pass1_scored: list[tuple[dict, int]] = []
+            for cand, result in zip(pass1_candidates, scored):
+                if isinstance(result, Exception):
+                    logger.warning(f"[RobotaUA] Scoring error for {cand['_resume_id']}: {result}")
+                    score = 0
+                else:
+                    score = result.get("score", 0) if isinstance(result, dict) else 0
+                pass1_scored.append((cand, score))
+                logger.debug(
+                    f"[RobotaUA] Pass-1 score {cand['_resume_id']}: {score}"
+                )
+
+            # Sort by score descending for logging clarity
+            pass1_scored.sort(key=lambda x: x[1], reverse=True)
+            qualify = [(c, s) for c, s in pass1_scored if s >= DETAIL_SCORE_FLOOR]
+            logger.info(
+                f"[RobotaUA] Pass-1 scoring: {len(qualify)}/{len(pass1_scored)} "
+                f"candidates qualify (score >= {DETAIL_SCORE_FLOOR})"
+            )
+
+            # ── PASS 2: Fetch full details only for qualifying candidates ──
+            final_candidates: list[dict] = []
+            for cand, score in pass1_scored:
+                resume_id = cand["_resume_id"]
+                cand_headers = cand.pop("_headers")
+                cand.pop("_resume_id", None)
+
+                if score >= DETAIL_SCORE_FLOOR:
+                    if not _check_daily_limit():
+                        # Over daily limit — keep list-data version, no contacts
+                        final_candidates.append(cand)
+                        continue
+
+                    await asyncio.sleep(DETAIL_SLEEP_SEC)
+                    try:
+                        detail_resp = await client.get(
+                            f"{_EMPLOYER_API}/resume/{resume_id}",
+                            headers=cand_headers,
+                        )
+                        _increment_daily_counter()
+
+                        if detail_resp.status_code == 200:
+                            detail = detail_resp.json()
+                            name = (detail.get("name") or "").strip()
+                            surname = (detail.get("surname") or "").strip()
+                            if name or surname:
+                                cand["full_name"] = f"{name} {surname}".strip()
+                            age_detail = _parse_age_str(detail.get("age"))
+                            if age_detail:
+                                cand["age"] = age_detail
+                            email = detail.get("email") or ""
+                            phone = detail.get("phone") or ""
+                            skills_list = detail.get("skills") or []
+                            skills_html = " ".join(
+                                s.get("description", "") for s in skills_list
+                            )
+                            if skills_html:
+                                cand["skills"] = _strip_html(skills_html)[:300]
+                            detail_salary_str = (
+                                detail.get("salaryFull") or detail.get("salary") or ""
+                            )
+                            if detail_salary_str and not cand["salary_expectation_uah"]:
+                                sal_uah = _parse_salary_str(detail_salary_str)
+                                sal_uah, sal_usd = _salary_to_uah_usd(sal_uah)
+                                cand["salary_expectation"] = sal_usd
+                                cand["salary_expectation_uah"] = sal_uah
+                                cand["salary_expectation_usd"] = sal_usd
+                            # Update raw_text with skills from detail
+                            if skills_html:
+                                cand["raw_text"] = _build_raw_text(
+                                    full_name=cand["full_name"],
+                                    role=cand["current_role"],
+                                    city=cand["city"],
+                                    age_str=str(cand.get("age") or ""),
+                                    salary_str=detail_salary_str or cand.get("salary_expectation_uah") or "",
+                                    experiences=[],     # already in raw_text from pass 1
+                                    skills_html=skills_html,
+                                    keywords=[],
+                                )
+                            contact_parts = []
+                            if phone:
+                                contact_parts.append(phone)
+                            if email:
+                                contact_parts.append(email)
+                            cand["contact"] = (
+                                ", ".join(contact_parts) if contact_parts else "Деталі на Robota.ua"
+                            )
+                            cand["email"] = email
+                            logger.info(
+                                f"[RobotaUA] Detail fetched for {resume_id} "
+                                f"(score={score}, contact={'yes' if contact_parts else 'no'})"
+                            )
+                        elif detail_resp.status_code == 401:
+                            invalidate_token()
+                            logger.warning("[RobotaUA] 401 on detail call — stopping pass 2")
+                            final_candidates.append(cand)
+                            break
+                        else:
+                            logger.warning(
+                                f"[RobotaUA] Detail call failed for {resume_id}: "
+                                f"{detail_resp.status_code}"
+                            )
+                    except Exception as detail_err:
+                        logger.warning(
+                            f"[RobotaUA] Detail call error for {resume_id}: {detail_err}"
+                        )
+                else:
+                    # Below threshold — strip internal keys, keep list data only
+                    cand.pop("_resume_id", None)
+                    cand.pop("_headers", None)
+
+                final_candidates.append(cand)
+
+            # Clean up any remaining internal keys (safety)
+            for c in final_candidates:
+                c.pop("_resume_id", None)
+                c.pop("_headers", None)
+
+            logger.info(
+                f"[RobotaUA] CV search complete: {len(final_candidates)} candidates "
+                f"(detail calls today: {_daily_detail_calls}/{_DAILY_DETAIL_LIMIT})"
+            )
+            return final_candidates
 
     except Exception as e:
         logger.error(f"[RobotaUA] CV search error: {e}")
-        logger.info(f"[RobotaUA] CV search complete: 0 candidates (exception)")
         return []
