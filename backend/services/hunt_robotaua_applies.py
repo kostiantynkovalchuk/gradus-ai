@@ -6,10 +6,13 @@ These are the highest-quality leads — they came to us.
 
 Requires employer-level credentials (ROBOTAUA_EMAIL + ROBOTAUA_PASSWORD).
 Returns [] gracefully on 401 (candidate-only token) or any error.
+
+No detail calls — contacts are extracted directly from /apply/list response.
+  contacts.phones[].value  →  phone
+  contacts.emails[].value  →  email  (skip phone-registration.rabota.ua addresses)
 """
 
 import re
-import asyncio
 import logging
 from typing import Optional
 
@@ -22,14 +25,8 @@ _EMPLOYER_API = "https://employer-api.robota.ua"
 
 
 # ──────────────────────────────────────────────────────────────────
-# Helpers (minimal — reuse logic from scraper)
+# Helpers
 # ──────────────────────────────────────────────────────────────────
-
-def _parse_age_str(val) -> Optional[int]:
-    s = str(val or "")
-    m = re.search(r"\d+", s)
-    return int(m.group()) if m else None
-
 
 def _parse_salary_str(s: str) -> Optional[int]:
     if not s:
@@ -49,34 +46,18 @@ def _salary_to_uah_usd(uah: Optional[int]) -> tuple:
     return uah, int(uah / rate) if rate else None
 
 
-def _strip_html(html: str) -> str:
-    return re.sub(r"<[^>]+>", " ", html or "").strip()
-
-
-def _build_raw_text(detail: dict, summary: str) -> str:
+def _build_raw_text(full_name: str, speciality: str, skills: str, phone: str, email: str) -> str:
     parts = []
-    role = (detail.get("speciality") or "").strip()
-    city = (detail.get("cityName") or "").strip()
-    age = str(detail.get("age") or "")
-    salary = (detail.get("salaryFull") or detail.get("salary") or "").strip()
-
-    if role:
-        parts.append(f"Посада: {role}")
-    if city:
-        parts.append(f"Місто: {city}")
-    if age:
-        parts.append(f"Вік: {age}")
-    if salary:
-        parts.append(f"Зарплата: {salary}")
-    if summary:
-        parts.append(f"Резюме:\n{summary[:1000]}")
-
-    skills_list = detail.get("skills") or []
-    if skills_list:
-        skills_text = _strip_html(" ".join(s.get("description", "") for s in skills_list))
-        if skills_text:
-            parts.append(f"Навички: {skills_text[:400]}")
-
+    if full_name:
+        parts.append(f"Ім'я: {full_name}")
+    if speciality:
+        parts.append(f"Посада: {speciality}")
+    if skills:
+        parts.append(f"Навички: {skills[:400]}")
+    if phone:
+        parts.append(f"Телефон: {phone}")
+    if email:
+        parts.append(f"Email: {email}")
     return "\n".join(parts)[:3000]
 
 
@@ -88,9 +69,17 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
     """
     Fetch candidates who applied to AVTD vacancies on Robota.ua.
     Only runs on round_num == 1 to avoid duplicate processing.
+
+    Two-step process (zero detail calls):
+      1. POST /vacancy/list  → find vacancies matching the search position
+      2. POST /apply/list    → get all applicants; extract contacts from list response
+
     Returns [] gracefully on auth failure or any error.
     """
-    logger.info(f"[RobotaUA-Applies] Search started: position='{vacancy.get('position')}', round={round_num}")
+    logger.info(
+        f"[RobotaUA-Applies] Search started: position='{vacancy.get('position')}', "
+        f"round={round_num}"
+    )
 
     if round_num != 1:
         logger.info("[RobotaUA-Applies] Skipping — only runs on round 1")
@@ -102,12 +91,15 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
         return []
 
     position = vacancy.get("position", "").lower()
+    # Significant words (> 3 chars) for fuzzy vacancy matching
+    position_words = [w for w in position.split() if len(w) > 3]
+
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
         async with cf_client(timeout=30) as client:
 
-            # Step 1: Get AVTD's published vacancies
+            # ── Step 1: Get AVTD's published vacancies ─────────────────────
             vac_resp = await client.post(
                 f"{_EMPLOYER_API}/vacancy/list",
                 headers=headers,
@@ -122,30 +114,49 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
                 return []
 
             vac_data = vac_resp.json()
-            # Response may be list directly or wrapped in a key
             if isinstance(vac_data, list):
                 all_vacancies = vac_data
             else:
-                all_vacancies = vac_data.get("vacancies") or vac_data.get("items") or []
+                all_vacancies = (
+                    vac_data.get("vacancies")
+                    or vac_data.get("items")
+                    or []
+                )
 
             logger.info(f"[RobotaUA-Applies] {len(all_vacancies)} published AVTD vacancies")
 
-            # Step 2: Match vacancies to our search position
+            # ── Step 2: Fuzzy-match vacancies to search position ───────────
+            # Field names confirmed from production: "vacancyName", "vacancyId"
             matching_ids = []
             for vac in all_vacancies:
-                vac_name = (vac.get("name") or vac.get("title") or "").lower()
-                if position and any(word in vac_name for word in position.split() if len(word) > 3):
-                    vac_id = vac.get("id") or vac.get("vacancyId")
-                    if vac_id:
-                        matching_ids.append(vac_id)
+                vac_name = (
+                    vac.get("vacancyName")        # confirmed field name
+                    or vac.get("name")
+                    or vac.get("title")
+                    or ""
+                ).lower()
+                vac_id = vac.get("vacancyId") or vac.get("id")  # confirmed field name
+                if not vac_id:
+                    continue
+                # Match if at least one significant word from position appears in vacancy name
+                if not position_words or any(word in vac_name for word in position_words):
+                    matching_ids.append(vac_id)
+                    logger.info(
+                        f"[RobotaUA-Applies] Matched vacancy: '{vac_name}' (id={vac_id})"
+                    )
 
             if not matching_ids:
-                logger.info(f"[RobotaUA-Applies] No matching AVTD vacancies for '{position}'")
+                logger.info(
+                    f"[RobotaUA-Applies] No matching AVTD vacancies for '{position}'"
+                )
                 return []
 
-            logger.info(f"[RobotaUA-Applies] {len(matching_ids)} matching vacancy IDs: {matching_ids[:5]}")
+            logger.info(
+                f"[RobotaUA-Applies] {len(matching_ids)} matching vacancy IDs: "
+                f"{matching_ids[:5]}"
+            )
 
-            # Step 3: Get applications for each vacancy
+            # ── Step 3: Fetch applicants from list (no detail calls) ───────
             candidates = []
             for vac_id in matching_ids[:5]:
                 apply_resp = await client.post(
@@ -155,93 +166,99 @@ async def search_robotaua_applies(vacancy: dict, round_num: int = 1) -> list:
                         "vacancyId": vac_id,
                         "folderId": 0,
                         "page": 0,
-                        "candidateTypes": ["ApplicationWithResume", "ApplicationWithFile"],
+                        # Include all real application types; exclude Interaction (views)
+                        "candidateTypes": [
+                            "ApplicationWithResume",
+                            "ApplicationWithFile",
+                            "Application",
+                        ],
                     },
                 )
                 if apply_resp.status_code == 401:
                     invalidate_token()
                     break
                 if apply_resp.status_code != 200:
-                    logger.warning(f"[RobotaUA-Applies] apply/list {apply_resp.status_code} for vac {vac_id}")
+                    logger.warning(
+                        f"[RobotaUA-Applies] apply/list {apply_resp.status_code} "
+                        f"for vac {vac_id}"
+                    )
                     continue
 
                 apply_data = apply_resp.json()
+                # Confirmed response key: "applies"
                 applications = apply_data if isinstance(apply_data, list) else (
-                    apply_data.get("applies") or apply_data.get("items") or []
+                    apply_data.get("applies")
+                    or apply_data.get("items")
+                    or []
                 )
-                logger.info(f"[RobotaUA-Applies] {len(applications)} applicants for vac {vac_id}")
+                logger.info(
+                    f"[RobotaUA-Applies] {len(applications)} applicants for vac {vac_id}"
+                )
 
-                for app in applications[:30]:
-                    app_id = app.get("id") or app.get("applyId")
-                    resume_type = app.get("resumeType") or "Notepad"
+                for apply in applications[:30]:
 
-                    await asyncio.sleep(0.5)
+                    # ── Extract phone from contacts ────────────────────────
+                    phone = ""
+                    phones = (apply.get("contacts") or {}).get("phones") or []
+                    if phones:
+                        phone = phones[0].get("value", "").strip()
 
-                    # Get full application detail
-                    detail_resp = await client.post(
-                        f"{_EMPLOYER_API}/apply/view/{app_id}",
-                        headers=headers,
-                        params={"resumeType": resume_type},
-                    )
-                    if detail_resp.status_code == 401:
-                        invalidate_token()
-                        break
-                    if detail_resp.status_code != 200:
-                        continue
+                    # ── Extract email from contacts ────────────────────────
+                    email = ""
+                    emails = (apply.get("contacts") or {}).get("emails") or []
+                    if emails:
+                        email = emails[0].get("value", "").strip()
+                        # Skip auto-generated phone-registration addresses
+                        if "phone-registration.rabota.ua" in email:
+                            email = ""
 
-                    detail = detail_resp.json()
+                    full_name = (apply.get("name") or "").strip()
+                    speciality = (apply.get("speciality") or "").strip()
+                    skills = (apply.get("skillsSummary") or "").strip()
 
-                    # Extract contact info
-                    email = detail.get("email") or ""
-                    phone = detail.get("phone") or ""
-                    contact_parts = [p for p in [phone, email] if p]
-                    contact = ", ".join(contact_parts) if contact_parts else "Деталі на Robota.ua"
+                    # ── Salary ─────────────────────────────────────────────
+                    salary_raw = apply.get("salary")
+                    salary_uah = None
+                    salary_usd = None
+                    if salary_raw:
+                        currency_id = apply.get("currencyId", "")
+                        if currency_id == "Ua":
+                            salary_uah = int(salary_raw)
+                            salary_uah, salary_usd = _salary_to_uah_usd(salary_uah)
+                        elif currency_id == "Usd":
+                            salary_usd = int(salary_raw)
+                        else:
+                            salary_uah = _parse_salary_str(str(salary_raw))
+                            salary_uah, salary_usd = _salary_to_uah_usd(salary_uah)
 
-                    # Name
-                    name = (detail.get("name") or "").strip()
-                    surname = (detail.get("surname") or "").strip()
-                    full_name = f"{name} {surname}".strip() or (
-                        app.get("fullName") or app.get("displayName") or ""
-                    ).strip()
-
-                    # Salary
-                    salary_str = detail.get("salaryFull") or detail.get("salary") or ""
-                    salary_uah = _parse_salary_str(salary_str)
-                    salary_uah, salary_usd = _salary_to_uah_usd(salary_uah)
-
-                    # Resume summary
-                    summary = ""
-                    resume_file = detail.get("resumeFile") or {}
-                    if resume_file.get("summary"):
-                        summary = _strip_html(resume_file["summary"])
-
-                    resume_id = detail.get("resumeId") or app_id
-                    profile_url = detail.get("url") or f"https://robota.ua/ua/cv/{resume_id}"
+                    resume_id = apply.get("resumeId") or apply.get("id")
+                    profile_url = f"https://robota.ua/ua/cv/{resume_id}"
+                    contact = phone or email or "Деталі на Robota.ua"
 
                     candidates.append({
                         "source": "robota.ua-applies",
                         "profile_url": profile_url,
                         "full_name": full_name,
-                        "current_role": (detail.get("speciality") or "").strip(),
-                        "age": _parse_age_str(detail.get("age")),
-                        "city": (detail.get("cityName") or "").strip(),
+                        "current_role": speciality,
+                        "age": None,
+                        "city": "",
                         "salary_expectation": salary_usd,
                         "salary_expectation_uah": salary_uah,
                         "salary_expectation_usd": salary_usd,
                         "contact": contact,
+                        "phone": phone,
                         "email": email,
                         "experience_years": None,
-                        "skills": "",
+                        "skills": skills[:300] if skills else "",
                         "education": "",
-                        "raw_text": _build_raw_text(detail, summary),
-                        "message_date": None,
-                        "last_active": (detail.get("lastActivityDate") or "")[:10],
+                        "raw_text": _build_raw_text(full_name, speciality, skills, phone, email),
+                        "message_date": apply.get("addDate"),
+                        "last_active": None,
                     })
 
             logger.info(f"[RobotaUA-Applies] Total: {len(candidates)} applicants")
             return candidates
 
     except Exception as e:
-        logger.error(f"[RobotaUA-Applies] Error: {e}")
-        logger.info("[RobotaUA-Applies] Complete: 0 candidates (exception)")
+        logger.error(f"[RobotaUA-Applies] Error: {e}", exc_info=True)
         return []

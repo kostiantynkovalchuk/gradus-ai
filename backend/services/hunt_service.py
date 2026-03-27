@@ -681,15 +681,28 @@ async def handle_hunt_decision(callback_query: dict, db):
             )
             return
 
-        phone = result.get("phone") or "—"
-        email = result.get("email") or "—"
+        phone = result.get("phone") or ""
+        email = result.get("email") or ""
         full_name = result.get("full_name") or candidate.full_name or ""
         skills_text = result.get("skills_text") or ""
 
+        # Contacts not available — this CV requires CVDB subscription to unlock
+        if not phone and not email:
+            await _send_message(
+                chat_id,
+                (
+                    f"📞 Контакти доступні після входу на robota.ua:\n"
+                    f"🔗 {profile_url}\n\n"
+                    f"💡 Для автоматичного отримання контактів потрібна підписка CVDB"
+                ),
+                thread_id=message.get("message_thread_id"),
+            )
+            return
+
         contact_lines = [
             f"📞 *Контакт — {full_name}*",
-            f"Телефон: {phone}",
-            f"Email: {email}",
+            f"Телефон: {phone or '—'}",
+            f"Email: {email or '—'}",
         ]
         if skills_text:
             contact_lines.append(f"\n🛠 Навички: {skills_text[:300]}")

@@ -1,0 +1,110 @@
+CRITICAL FIX: Robota.ua applies scraper has 13 candidates with REAL phone numbers 
+and emails but wasn't matching them. This is the highest quality free source.
+
+Confirmed from production API test:
+- AVTD has vacancy "Торговий представник з авто" (id=11039638) with 13 real applies
+- Each apply has phone + email in contacts.phones[].value and contacts.emails[].value
+- Filter: candidateTypes=['ApplicationWithResume','ApplicationWithFile','Application'] 
+  removes Interaction-type entries (just views, no contacts)
+
+THREE FIXES NEEDED:
+
+FIX 1: Fix vacancy matching in hunt_robotaua_applies.py
+
+The current matching logic fails because:
+- Maya Hunt search position: "торговий представник"
+- AVTD vacancy name: "Торговий представник з авто"
+- The match check is too strict
+
+Change matching to be fuzzy — match if ANY significant word from the 
+search position appears in the vacancy name:
+
+    position_words = [w for w in position.lower().split() if len(w) > 3]
+    # "торговий представник" → ["торговий", "представник"]
+    
+    for vac in avtd_vacancies:
+        vac_name = vac.get("vacancyName", "").lower()
+        # Match if at least 1 significant word matches
+        if any(word in vac_name for word in position_words):
+            matching_ids.append(vac.get("vacancyId"))
+
+Also: the vacancy list response uses "vacancyName" not "name", 
+and "vacancyId" not "id". Fix these field names.
+
+FIX 2: Fix apply/list parsing to extract contacts
+
+Update hunt_robotaua_applies.py to:
+a. Use candidateTypes filter:
+   json={
+       "vacancyId": vac_id,
+       "folderId": 0,
+       "page": 0,
+       "candidateTypes": ["ApplicationWithResume", "ApplicationWithFile", "Application"]
+   }
+
+b. Response structure (confirmed from production):
+   data["applies"] — list of applications (NOT "documents")
+
+c. Extract contacts from each apply:
+   phone = ""
+   phones = apply.get("contacts", {}).get("phones", [])
+   if phones:
+       phone = phones[0].get("value", "")
+   
+   email = ""
+   emails = apply.get("contacts", {}).get("emails", [])
+   if emails:
+       email = emails[0].get("value", "")
+       # Skip auto-generated phone-registration emails
+       if "phone-registration.rabota.ua" in email:
+           email = ""
+
+d. Build candidate dict:
+   {
+       "source": "robota.ua-applies",
+       "profile_url": f"https://robota.ua/ua/cv/{apply.get('resumeId', apply.get('id'))}",
+       "full_name": apply.get("name", ""),
+       "current_role": apply.get("speciality", ""),
+       "age": None,  # not in apply/list
+       "city": "",  # resolve from cityId if needed
+       "salary_expectation": apply.get("salary"),
+       "salary_expectation_uah": apply.get("salary") if apply.get("currencyId") == "Ua" else None,
+       "salary_expectation_usd": apply.get("salary") if apply.get("currencyId") == "Usd" else None,
+       "contact": phone or email or "Деталі на Robota.ua",
+       "phone": phone,
+       "email": email,
+       "experience_years": None,
+       "skills": apply.get("skillsSummary", ""),
+       "education": "",
+       "raw_text": build from name + speciality + skills + phone + email,
+       "message_date": apply.get("addDate"),
+       "last_active": None,
+   }
+
+FIX 3: Fix the contact button for CVDB candidates
+
+In hunt_service.py hunt_contact handler:
+When fetch_robotaua_contact() returns empty phone AND empty email:
+Show: "📞 Контакти доступні після входу на robota.ua:\n🔗 {profile_url}\n\n💡 Для автоматичного отримання контактів потрібна підписка CVDB"
+
+For applies candidates (source="robota.ua-applies"):
+Phone is ALREADY in the card — no need for contact button.
+Don't show "📞 Контакт" button for applies candidates.
+
+FIX 4: Update card formatter for applies candidates
+
+In hunt_card_formatter.py:
+- Source label: "📩 robota.ua (відгук)" 
+- Show phone directly in card: "📞 +38 (066) 801 - 43 - 99"
+- Show email: "📧 getmankosta09@gmail.com"
+- No "📞 Контакт" button needed — contacts already visible
+
+Also: for CVDB candidates (source="robota.ua"), keep showing 
+"📞 Контакт" button but with the improved empty-contact message.
+
+TESTING:
+After implementing, trigger a hunt for "торговий представник" and verify:
+1. Applies scraper finds 13+ candidates from AVTD vacancy 11039638
+2. Cards show real phone numbers and emails
+3. Source label shows "📩 robota.ua (відгук)"
+4. These candidates appear FIRST (highest priority in merge order)

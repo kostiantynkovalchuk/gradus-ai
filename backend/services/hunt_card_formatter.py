@@ -7,6 +7,11 @@ SOURCE_EMOJI = {
     "telegram": "📱",
     "work.ua": "💼",
     "robota.ua": "🔍",
+    "robota.ua-applies": "📩",
+}
+
+SOURCE_LABEL = {
+    "robota.ua-applies": "robota.ua (відгук)",
 }
 
 FALLBACK_ROUND_LABELS = {
@@ -68,6 +73,7 @@ def format_candidate_card(candidate: dict, index: int) -> str:
         score = candidate.get("score", 0)
         source = candidate.get("source", "unknown")
         source_em = SOURCE_EMOJI.get(source, "📋")
+        source_label = SOURCE_LABEL.get(source, source)   # human-readable label
         full_name = candidate.get("full_name", "Невідомо")
         age = candidate.get("age")
         city = candidate.get("city")
@@ -87,7 +93,7 @@ def format_candidate_card(candidate: dict, index: int) -> str:
             name_line += f", {age} р."
 
         lines = [
-            f"#{index} | ⭐ {score}/100 | {source_em} {source}",
+            f"#{index} | ⭐ {score}/100 | {source_em} {source_label}",
             "",
             f"👤 {name_line}",
             f"📍 {city or 'Місто не вказано'}",
@@ -101,7 +107,19 @@ def format_candidate_card(candidate: dict, index: int) -> str:
 
         lines.append(f"💰 {_format_salary(candidate)}")
 
-        if source == "work.ua" and profile_url:
+        if source == "robota.ua-applies":
+            # Contacts are known — show phone and email directly
+            phone = candidate.get("phone") or ""
+            email = candidate.get("email") or ""
+            if phone:
+                lines.append(f"📞 {phone}")
+            if email:
+                lines.append(f"📧 {email}")
+            if not phone and not email:
+                lines.append(f"📞 {contact or 'Контакт не вказано'}")
+            if profile_url:
+                lines.append(f"🔗 {profile_url}")
+        elif source == "work.ua" and profile_url:
             # Merge contact + URL into a single clean clickable line
             lines.append(f"📞 [Контакт на Work.ua ↗]({profile_url})")
         else:
