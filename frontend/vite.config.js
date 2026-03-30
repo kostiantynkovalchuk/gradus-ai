@@ -23,6 +23,10 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true
       },
+      '/alex': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
       '/law': {
         target: 'http://localhost:8000',
         changeOrigin: true

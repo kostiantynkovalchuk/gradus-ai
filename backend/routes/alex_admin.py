@@ -1,0 +1,63 @@
+"""
+Alex Photo Report Admin Dashboard
+GET /alex        → alex_dashboard.html (HTTP Basic Auth)
+GET /alex/api/accuracy  → AI accuracy metrics JSON
+"""
+
+import os
+import secrets
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+router = APIRouter(prefix="/alex", tags=["Alex Photo Admin"])
+security = HTTPBasic()
+logger = logging.getLogger(__name__)
+
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "Maya_2026"
+
+
+def _verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    ok_user = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
+    ok_pass = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
+    if not (ok_user and ok_pass):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+@router.get("", response_class=HTMLResponse)
+async def alex_dashboard(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(_verify_admin),
+):
+    """Render Alex Photo Report admin dashboard."""
+    template_path = os.path.join(
+        os.path.dirname(__file__), "..", "templates", "alex_dashboard.html"
+    )
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="alex_dashboard.html not found")
+
+
+@router.get("/api/accuracy")
+async def alex_accuracy(
+    days: int = Query(default=30, ge=1, le=365),
+    credentials: HTTPBasicCredentials = Depends(_verify_admin),
+):
+    """AI accuracy metrics — compares AI shelf-share predictions vs expert corrections."""
+    try:
+        from photo_report.db import get_accuracy_metrics
+        return get_accuracy_metrics(days=days)
+    except Exception as e:
+        logger.error(f"[Alex] accuracy metrics error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

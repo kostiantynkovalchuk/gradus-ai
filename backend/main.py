@@ -309,6 +309,8 @@ from routes.hr_routes import hr_router
 app.include_router(hr_router)
 from routes.hr_admin import router as hr_admin_router
 app.include_router(hr_admin_router)
+from routes.alex_admin import router as alex_admin_router
+app.include_router(alex_admin_router)
 from routes.payment_routes import router as payment_router
 app.include_router(payment_router)
 

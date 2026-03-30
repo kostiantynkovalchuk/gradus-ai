@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alex Photo Report — Панель адміністратора</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --primary: #2563eb;
+            --primary-light: #eff6ff;
+            --success: #059669;
+            --success-light: #d1fae5;
+            --warning: #d97706;
+            --warning-light: #fef3c7;
+            --danger: #dc2626;
+            --danger-light: #fee2e2;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-400: #9ca3af;
+            --gray-500: #6b7280;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+            --radius-xl: 16px;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,.08);
+            --shadow-md: 0 4px 12px rgba(0,0,0,.1);
+            --space-xs: 4px;
+            --space-sm: 8px;
+            --space-md: 16px;
+            --space-lg: 24px;
+            --space-xl: 32px;
+            --space-2xl: 48px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-800);
+            min-height: 100vh;
+        }
+
+        /* ── Header ── */
+        .header {
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            padding: var(--space-md) var(--space-xl);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-md);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .header-left { display: flex; align-items: center; gap: var(--space-md); }
+        .header-logo {
+            width: 40px; height: 40px;
+            background: var(--primary);
+            border-radius: var(--radius-md);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.25rem; color: white;
+        }
+        .header-title { font-size: 1.125rem; font-weight: 600; color: var(--gray-900); }
+        .header-subtitle { font-size: 0.8rem; color: var(--gray-500); margin-top: 2px; }
+        .header-controls { display: flex; gap: var(--space-sm); align-items: center; }
+
+        /* ── Controls ── */
+        select, button {
+            padding: 7px 14px;
+            border-radius: var(--radius-md);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all .15s;
+        }
+        select {
+            border: 1px solid var(--gray-300);
+            background: white;
+            color: var(--gray-700);
+        }
+        select:focus { outline: none; border-color: var(--primary); }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+            font-weight: 500;
+        }
+        .btn-primary:hover { background: #1d4ed8; }
+
+        /* ── Container ── */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: var(--space-xl) var(--space-lg);
+        }
+
+        /* ── Section title ── */
+        .section-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: var(--space-md);
+            padding-bottom: var(--space-sm);
+            border-bottom: 1px solid var(--gray-200);
+        }
+
+        /* ── KPI cards ── */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: var(--space-md);
+            margin-bottom: var(--space-xl);
+        }
+        .kpi-card {
+            background: white;
+            border-radius: var(--radius-lg);
+            padding: var(--space-lg);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-200);
+        }
+        .kpi-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--gray-900);
+            line-height: 1;
+        }
+        .kpi-label {
+            font-size: 0.8rem;
+            color: var(--gray-500);
+            margin-top: var(--space-sm);
+            line-height: 1.4;
+        }
+        .kpi-icon {
+            font-size: 1.25rem;
+            margin-bottom: var(--space-sm);
+        }
+
+        /* ── Cards ── */
+        .card {
+            background: white;
+            border-radius: var(--radius-lg);
+            padding: var(--space-lg);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-200);
+            margin-bottom: var(--space-xl);
+        }
+
+        /* ── Table ── */
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            padding: 10px 14px;
+            text-align: left;
+            font-size: 0.8rem;
+            color: var(--gray-500);
+            font-weight: 500;
+            background: var(--gray-50);
+            border-bottom: 1px solid var(--gray-200);
+        }
+        th.right, td.right { text-align: right; }
+        td {
+            padding: 10px 14px;
+            font-size: 0.875rem;
+            border-bottom: 1px solid var(--gray-100);
+            color: var(--gray-700);
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: var(--gray-50); }
+
+        /* ── Badges ── */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .badge-success { background: var(--success-light); color: #065f46; }
+        .badge-warning { background: var(--warning-light); color: #92400e; }
+        .badge-danger  { background: var(--danger-light);  color: #991b1b; }
+        .badge-neutral { background: var(--gray-100);      color: var(--gray-500); }
+
+        /* ── Hint box ── */
+        .hint-box {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: var(--radius-lg);
+            padding: var(--space-lg);
+            margin-bottom: var(--space-xl);
+        }
+        .hint-box h4 { font-size: 0.9rem; color: #1e40af; margin-bottom: var(--space-sm); }
+        .hint-box p  { font-size: 0.8375rem; color: #1d4ed8; line-height: 1.7; }
+        .hint-box code {
+            background: #dbeafe;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        /* ── Empty state ── */
+        .empty {
+            text-align: center;
+            padding: var(--space-2xl) var(--space-lg);
+            color: var(--gray-400);
+            font-size: 0.875rem;
+        }
+
+        /* ── Spinner ── */
+        .spinner {
+            display: inline-block;
+            width: 18px; height: 18px;
+            border: 2px solid var(--gray-200);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin .6s linear infinite;
+            vertical-align: middle;
+            margin-right: var(--space-xs);
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+            .header { padding: var(--space-md); }
+            .container { padding: var(--space-md); }
+        }
+        @media (max-width: 480px) {
+            .kpi-grid { grid-template-columns: 1fr 1fr; }
+            .kpi-value { font-size: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-left">
+        <div class="header-logo">📷</div>
+        <div>
+            <div class="header-title">Alex Photo Report</div>
+            <div class="header-subtitle">Панель адміністратора — точність AI</div>
+        </div>
+    </div>
+    <div class="header-controls">
+        <select id="daysSelector" onchange="loadData()">
+            <option value="30" selected>30 днів</option>
+            <option value="90">90 днів</option>
+            <option value="180">180 днів</option>
+            <option value="365">1 рік</option>
+        </select>
+        <button class="btn-primary" onclick="loadData()">🔄 Оновити</button>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- KPI cards -->
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-icon">📋</div>
+            <div class="kpi-value" id="kpiTotal">—</div>
+            <div class="kpi-label">Всього звітів за період</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon">✏️</div>
+            <div class="kpi-value" id="kpiCorrected">—</div>
+            <div class="kpi-label">Звіти з корекціями</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon">📊</div>
+            <div class="kpi-value" id="kpiRate">—</div>
+            <div class="kpi-label">Відсоток корекцій</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon">📐</div>
+            <div class="kpi-value" id="kpiMae">—</div>
+            <div class="kpi-label">Середня похибка (MAE)</div>
+        </div>
+    </div>
+
+    <!-- Per-category accuracy -->
+    <div class="card">
+        <div class="section-title">📊 Точність по категоріях</div>
+        <div id="catTable"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
+    </div>
+
+    <!-- Recent corrections -->
+    <div class="card">
+        <div class="section-title">🕐 Останні корекції</div>
+        <div id="recentTable"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
+    </div>
+
+    <!-- Usage hint -->
+    <div class="hint-box">
+        <h4>💡 Як залишити корекцію</h4>
+        <p>
+            Щоб залишити корекцію — <strong>відповідайте</strong> на повідомлення бота з результатом звіту.<br>
+            Формат: <code>горілка 35% 7/20</code> · <code>vodka GD=4 UA=3 total=20</code> ·
+            <code>коньяк: наша=5 всього=15</code> · <code>Водка 56%, коньяк 100%</code><br><br>
+            Доступ мають експерти з Telegram ID: <code>441389791</code>, <code>424503938</code>
+        </p>
+    </div>
+
+</div>
+
+<script>
+    const CAT_NAMES = {
+        vodka: 'Горілка',
+        wine: 'Вино',
+        cognac: 'Коньяк',
+        sparkling: 'Ігристе',
+    };
+
+    function accuracyBadge(err) {
+        if (err == null) return '<span class="badge badge-neutral">—</span>';
+        if (err <= 8)  return `<span class="badge badge-success">✅ Відмінно (±${err}%)</span>`;
+        if (err <= 15) return `<span class="badge badge-warning">⚠️ Прийнятно (±${err}%)</span>`;
+        return `<span class="badge badge-danger">❌ Потрібне покращення (±${err}%)</span>`;
+    }
+
+    async function loadData() {
+        const days = document.getElementById('daysSelector').value;
+
+        setLoading(true);
+
+        try {
+            const resp = await fetch(`/alex/api/accuracy?days=${days}`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const d = await resp.json();
+
+            // KPIs
+            document.getElementById('kpiTotal').textContent     = d.total_reports ?? '—';
+            document.getElementById('kpiCorrected').textContent = d.corrected_reports ?? '—';
+            document.getElementById('kpiRate').textContent      =
+                d.correction_rate_pct != null ? d.correction_rate_pct + '%' : '—';
+            document.getElementById('kpiMae').textContent       =
+                d.avg_share_error_pct != null ? '±' + d.avg_share_error_pct + '%' : '—';
+
+            // Category table
+            const byCat = d.by_category || {};
+            if (Object.keys(byCat).length === 0) {
+                document.getElementById('catTable').innerHTML =
+                    '<div class="empty">Корекцій ще не надходило.<br>Після того як експерти надішлють корекції — тут з\'являться дані.</div>';
+            } else {
+                let html = '<table><thead><tr>' +
+                    '<th>Категорія</th>' +
+                    '<th class="right">Корекцій</th>' +
+                    '<th class="right">Середня похибка</th>' +
+                    '<th>Статус</th>' +
+                    '</tr></thead><tbody>';
+                for (const [cat, data] of Object.entries(byCat)) {
+                    const name = CAT_NAMES[cat] || cat;
+                    const err  = data.avg_share_error_pct;
+                    html += `<tr>
+                        <td><strong>${name}</strong></td>
+                        <td class="right">${data.corrections ?? 0}</td>
+                        <td class="right">${err != null ? '±' + err + '%' : '—'}</td>
+                        <td>${accuracyBadge(err)}</td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+                document.getElementById('catTable').innerHTML = html;
+            }
+
+            // Recent corrections
+            const recent = d.recent_corrections || [];
+            if (recent.length === 0) {
+                document.getElementById('recentTable').innerHTML =
+                    '<div class="empty">Корекцій ще не надходило.</div>';
+            } else {
+                let html = '<table><thead><tr>' +
+                    '<th>Дата</th>' +
+                    '<th>Звіт</th>' +
+                    '<th>Категорія</th>' +
+                    '<th class="right">Факт. частка</th>' +
+                    '<th>Фейсинги</th>' +
+                    '<th>Експерт</th>' +
+                    '</tr></thead><tbody>';
+                for (const r of recent) {
+                    const dt = r.created_at ? r.created_at.slice(0, 16).replace('T', ' ') : '—';
+                    const catName = CAT_NAMES[r.category] || (r.category || '—');
+                    const facings = (r.our_facings != null && r.total_facings != null)
+                        ? `${r.our_facings} / ${r.total_facings}` : '—';
+                    html += `<tr>
+                        <td style="color:var(--gray-500);font-size:0.8rem;">${dt}</td>
+                        <td style="color:var(--primary);font-weight:500;">#${r.report_id}</td>
+                        <td>${catName}</td>
+                        <td class="right">${r.true_share != null ? r.true_share + '%' : '—'}</td>
+                        <td>${facings}</td>
+                        <td style="color:var(--gray-500);">${r.expert_name || '—'}</td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+                document.getElementById('recentTable').innerHTML = html;
+            }
+
+        } catch (err) {
+            console.error('loadData error:', err);
+            document.getElementById('catTable').innerHTML =
+                '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження даних. Спробуйте оновити сторінку.</div>';
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function setLoading(on) {
+        const btn = document.querySelector('.btn-primary');
+        btn.disabled = on;
+        btn.textContent = on ? '⏳ Завантаження...' : '🔄 Оновити';
+    }
+
+    document.addEventListener('DOMContentLoaded', loadData);
+</script>
+</body>
+</html>

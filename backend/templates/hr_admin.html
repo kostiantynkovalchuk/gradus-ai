@@ -792,7 +792,6 @@
             <div class="nav-tab active" onclick="switchPage('analytics', event)" data-i18n="navAnalytics">📊 Аналітика</div>
             <div class="nav-tab" onclick="switchPage('hunt', event)" data-i18n="navHunt">🔍 Maya Hunt</div>
             <div class="nav-tab" onclick="switchPage('pulse', event)">💛 Пульс команди</div>
-            <div class="nav-tab" onclick="switchPage('photo', event)">📷 Alex Photo</div>
         </div>
     </div>
 
@@ -1214,71 +1213,6 @@
     </div>
     </div>
 
-    <div class="page-content" id="page-photo">
-    <div class="container" style="max-width:1100px;">
-
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl);">
-            <div>
-                <h2 style="margin:0;font-size:1.4rem;color:var(--gray-900);">📷 Alex Photo Report — Точність AI</h2>
-                <p style="margin:var(--space-xs) 0 0;color:var(--gray-500);font-size:0.875rem;">Порівняння AI-прогнозів vs корекції експертів</p>
-            </div>
-            <div style="display:flex;gap:var(--space-sm);align-items:center;">
-                <select id="photoAccuracyDays" onchange="loadPhotoAccuracy()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:var(--radius-md);font-size:0.875rem;background:white;">
-                    <option value="30">30 днів</option>
-                    <option value="90" selected>90 днів</option>
-                    <option value="180">180 днів</option>
-                    <option value="365">1 рік</option>
-                </select>
-                <button onclick="loadPhotoAccuracy()" style="padding:6px 14px;background:var(--primary);color:white;border:none;border-radius:var(--radius-md);cursor:pointer;font-size:0.875rem;">🔄 Оновити</button>
-            </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-md);margin-bottom:var(--space-xl);" id="photoKpiGrid">
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="photoTotalReports">—</div>
-                <div class="hunt-stat-label">📋 Звітів за період</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="photoCorrectedReports">—</div>
-                <div class="hunt-stat-label">✏️ Звітів з корекціями</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="photoCorrectionRate">—</div>
-                <div class="hunt-stat-label">📊 Частка корекцій</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="photoAvgError">—</div>
-                <div class="hunt-stat-label">📐 Середня похибка (MAE)</div>
-            </div>
-        </div>
-
-        <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
-            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">📊 Точність по категоріях</h3>
-            <div id="photoCatTable">
-                <p style="color:var(--gray-400);text-align:center;padding:var(--space-xl);">Завантаження...</p>
-            </div>
-        </div>
-
-        <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
-            <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🕐 Останні корекції експертів</h3>
-            <div id="photoRecentCorrections">
-                <p style="color:var(--gray-400);text-align:center;padding:var(--space-xl);">Завантаження...</p>
-            </div>
-        </div>
-
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius-lg);padding:var(--space-lg);">
-            <h4 style="margin:0 0 var(--space-sm);color:#166534;font-size:0.875rem;">💡 Як надсилати корекції</h4>
-            <p style="margin:0;color:#15803d;font-size:0.8125rem;line-height:1.6;">
-                Експерти (Telegram ID: 441389791, 424503938) можуть надсилати корекції,
-                <strong>відповідаючи</strong> на повідомлення зі звітом у боті Alex Photo Report.<br>
-                Формати: <code>горілка 35% 7/20</code> · <code>vodka GD=4 UA=3 total=20</code> ·
-                <code>коньяк: наша=5 всього=15</code>
-            </p>
-        </div>
-
-    </div>
-    </div>
-
     <script>
         let currentPeriod = 7;
         let currentLang = 'uk';
@@ -1473,9 +1407,6 @@
             }
             if (page === 'pulse') {
                 loadPulseData();
-            }
-            if (page === 'photo') {
-                loadPhotoAccuracy();
             }
         }
 
@@ -2497,93 +2428,6 @@
             } catch (e) { console.error('pulseHrAction error:', e); }
         }
 
-        async function loadPhotoAccuracy() {
-            const days = document.getElementById('photoAccuracyDays')?.value || 90;
-            try {
-                const resp = await fetch(`/hr/api/accuracy?days=${days}`);
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const d = await resp.json();
-
-                document.getElementById('photoTotalReports').textContent = d.total_reports ?? '—';
-                document.getElementById('photoCorrectedReports').textContent = d.corrected_reports ?? '—';
-                document.getElementById('photoCorrectionRate').textContent =
-                    d.correction_rate_pct != null ? d.correction_rate_pct + '%' : '—';
-                document.getElementById('photoAvgError').textContent =
-                    d.avg_share_error_pct != null ? '±' + d.avg_share_error_pct + '%' : '—';
-
-                const catNames = { vodka: 'Горілка', wine: 'Вино', cognac: 'Коньяк', sparkling: 'Ігристе' };
-                const byCat = d.by_category || {};
-
-                if (Object.keys(byCat).length === 0) {
-                    document.getElementById('photoCatTable').innerHTML =
-                        '<p style="color:var(--gray-400);text-align:center;padding:var(--space-xl);">Корекцій ще не надходило. Після того як експерти надішлють корекції — тут з\'являться дані.</p>';
-                } else {
-                    let html = '<table style="width:100%;border-collapse:collapse;">';
-                    html += '<thead><tr style="background:var(--gray-50);">' +
-                        '<th style="padding:10px 14px;text-align:left;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Категорія</th>' +
-                        '<th style="padding:10px 14px;text-align:right;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Корекцій</th>' +
-                        '<th style="padding:10px 14px;text-align:right;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Середня похибка</th>' +
-                        '<th style="padding:10px 14px;text-align:left;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Статус</th>' +
-                        '</tr></thead><tbody>';
-
-                    for (const [cat, data] of Object.entries(byCat)) {
-                        const name = catNames[cat] || cat;
-                        const err = data.avg_share_error_pct;
-                        let badge = '';
-                        if (err == null) {
-                            badge = '<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:12px;font-size:0.75rem;">—</span>';
-                        } else if (err <= 8) {
-                            badge = `<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:12px;font-size:0.75rem;">✅ Точно (±${err}%)</span>`;
-                        } else if (err <= 15) {
-                            badge = `<span style="background:#fef9c3;color:#92400e;padding:2px 8px;border-radius:12px;font-size:0.75rem;">⚠️ Прийнятно (±${err}%)</span>`;
-                        } else {
-                            badge = `<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:12px;font-size:0.75rem;">❌ Висока похибка (±${err}%)</span>`;
-                        }
-                        html += `<tr style="border-bottom:1px solid var(--gray-100);">
-                            <td style="padding:10px 14px;font-weight:500;">${name}</td>
-                            <td style="padding:10px 14px;text-align:right;color:var(--gray-600);">${data.corrections ?? 0}</td>
-                            <td style="padding:10px 14px;text-align:right;color:var(--gray-600);">${err != null ? '±' + err + '%' : '—'}</td>
-                            <td style="padding:10px 14px;">${badge}</td>
-                        </tr>`;
-                    }
-                    html += '</tbody></table>';
-                    document.getElementById('photoCatTable').innerHTML = html;
-                }
-
-                const recent = d.recent_corrections || [];
-                if (recent.length === 0) {
-                    document.getElementById('photoRecentCorrections').innerHTML =
-                        '<p style="color:var(--gray-400);text-align:center;padding:var(--space-xl);">Корекцій ще не надходило.</p>';
-                } else {
-                    let html = '<table style="width:100%;border-collapse:collapse;">';
-                    html += '<thead><tr style="background:var(--gray-50);">' +
-                        '<th style="padding:8px 12px;text-align:left;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Дата</th>' +
-                        '<th style="padding:8px 12px;text-align:left;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Звіт</th>' +
-                        '<th style="padding:8px 12px;text-align:left;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Категорія</th>' +
-                        '<th style="padding:8px 12px;text-align:right;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Факт. частка</th>' +
-                        '<th style="padding:8px 12px;text-align:left;font-size:0.8rem;color:var(--gray-500);border-bottom:1px solid var(--gray-200);">Експерт</th>' +
-                        '</tr></thead><tbody>';
-                    for (const r of recent) {
-                        const dt = r.created_at ? r.created_at.slice(0, 16).replace('T', ' ') : '—';
-                        const catName = catNames[r.category] || (r.category || '—');
-                        html += `<tr style="border-bottom:1px solid var(--gray-100);">
-                            <td style="padding:8px 12px;color:var(--gray-500);font-size:0.8rem;">${dt}</td>
-                            <td style="padding:8px 12px;color:var(--primary);">#${r.report_id}</td>
-                            <td style="padding:8px 12px;">${catName}</td>
-                            <td style="padding:8px 12px;text-align:right;">${r.true_share != null ? r.true_share + '%' : '—'}</td>
-                            <td style="padding:8px 12px;color:var(--gray-600);font-size:0.85rem;">${r.expert_name || '—'}</td>
-                        </tr>`;
-                    }
-                    html += '</tbody></table>';
-                    document.getElementById('photoRecentCorrections').innerHTML = html;
-                }
-
-            } catch (err) {
-                console.error('loadPhotoAccuracy error:', err);
-                document.getElementById('photoCatTable').innerHTML =
-                    '<p style="color:var(--danger);text-align:center;padding:var(--space-xl);">Помилка завантаження даних.</p>';
-            }
-        }
     </script>
 </body>
 </html>

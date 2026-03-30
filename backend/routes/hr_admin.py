@@ -1392,18 +1392,3 @@ async def test_pulse_survey(
     return {"sent_to": count}
 
 
-@router.get("/api/accuracy")
-async def photo_report_accuracy(
-    days: int = Query(default=30, ge=1, le=365),
-    credentials: HTTPBasicCredentials = Depends(verify_admin),
-):
-    """
-    AI accuracy metrics for Alex Photo Report Bot.
-    Compares AI predictions vs expert corrections submitted via Telegram reply.
-    """
-    try:
-        from photo_report.db import get_accuracy_metrics
-        return get_accuracy_metrics(days=days)
-    except Exception as e:
-        logger.error(f"[PhotoReport] Accuracy metrics error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
