@@ -65,21 +65,33 @@ def run_benchmark(image_dir: Path, count: int, specific_file: str | None = None)
             vision_result = analyze_photos([b64])
             score_result = calculate_score(vision_result)
 
-            print(f"Score:   {score_result['score']}/100  [{score_result['status']}]")
+            passed = score_result.get("passed", False)
+            status_str = "ПРОЙДЕНО" if passed else "НЕ ПРОЙДЕНО"
+            print(f"Score:   {score_result['score']}/100  [{status_str}]")
             print(f"Photos:  {img_path.name}")
 
-            shares = score_result.get("shelf_shares", {})
+            shelf_share = score_result.get("shelf_share", {})
             print("\nShelf shares:")
-            for cat, val in shares.items():
-                if val is not None:
-                    print(f"  {cat.title()}: {val}%")
+            for cat in ("vodka", "cognac", "wine", "sparkling"):
+                cat_data = shelf_share.get(cat, {})
+                pct = cat_data.get("percent")
+                conf = cat_data.get("confidence", "?")
+                threshold = cat_data.get("threshold")
+                cat_passed = cat_data.get("passed")
+                if pct is not None:
+                    flag = ""
+                    if cat_passed is True:
+                        flag = " ✓"
+                    elif cat_passed is False:
+                        flag = " ✗"
+                    print(f"  {cat.title()}: {pct}% (threshold {threshold}%{flag}) [conf: {conf}]")
                 else:
                     print(f"  {cat.title()}: (not assessed — low confidence)")
 
-            vodka_detail = score_result.get("vodka_detail")
-            if vodka_detail:
-                print("\nVodka detail:")
-                for brand, facings in vodka_detail.items():
+            breakdown = shelf_share.get("vodka", {}).get("breakdown", {})
+            if breakdown:
+                print("\nVodka breakdown:")
+                for brand, facings in breakdown.items():
                     if facings is not None:
                         print(f"  {brand.title()}: {facings} facings")
 
@@ -92,7 +104,8 @@ def run_benchmark(image_dir: Path, count: int, specific_file: str | None = None)
                 print(f"\nErrors ({len(errors)}):")
                 for e in errors:
                     sev = e.get("severity", "?")
-                    print(f"  [{sev.upper()}] {e['text']}")
+                    msg = e.get("description") or e.get("text", str(e))
+                    print(f"  [{sev.upper()}] {msg}")
 
             warnings = score_result.get("warnings", [])
             if warnings:
