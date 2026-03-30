@@ -6,6 +6,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+try:
+    from .references.references import BRAND_REFERENCES
+except Exception as _ref_err:
+    logger.warning(f"[PhotoReport] Could not load brand references: {_ref_err}")
+    BRAND_REFERENCES = []
+
 SYSTEM_PROMPT = """Ти — AI-аналітик мерчандайзингу компанії AVTD (Торговий Дім АВ).
 Аналізуй фотографії полиць і повертай ВИКЛЮЧНО валідний JSON без жодного тексту до або після.
 Не додавай score, passed, status — лише факти про те, що видно на фото.
@@ -456,6 +462,48 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     content = []
+
+    if BRAND_REFERENCES:
+        product_refs = [r for r in BRAND_REFERENCES if not r["is_shelf_ref"]]
+        shelf_refs = [r for r in BRAND_REFERENCES if r["is_shelf_ref"]]
+
+        if product_refs:
+            content.append({
+                "type": "text",
+                "text": (
+                    "ДОВІДКА — ПРОДУКТИ AVTD: Запам'ятай як виглядає кожен бренд на наступних фото:"
+                ),
+            })
+            for ref in product_refs:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
+                })
+                content.append({"type": "text", "text": f"↑ {ref['label']}"})
+
+        if shelf_refs:
+            content.append({
+                "type": "text",
+                "text": (
+                    "ДОВІДКА — ІДЕАЛЬНІ ПОЛИЦІ: Ось як продукти AVTD виглядають на реальних "
+                    "полицях магазинів (еталонні фото від керівника продажів):"
+                ),
+            })
+            for ref in shelf_refs:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
+                })
+                content.append({"type": "text", "text": f"↑ {ref['label']}"})
+
+        content.append({
+            "type": "text",
+            "text": (
+                "---\nТепер проаналізуй наступні фото з реального візиту агента. "
+                "Знайди бренди AVTD, які ти щойно вивчив, на полицях магазину:"
+            ),
+        })
+
     for b64 in photo_b64_list[:5]:
         content.append({
             "type": "image",
