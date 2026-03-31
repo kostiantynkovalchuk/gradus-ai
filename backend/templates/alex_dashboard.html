@@ -297,6 +297,12 @@
         <div id="recentTable"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
     </div>
 
+    <!-- Error patterns -->
+    <div class="card">
+        <div class="section-title">🔍 Патерни помилок</div>
+        <div id="patternsContainer"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
+    </div>
+
     <!-- Usage hint -->
     <div class="hint-box">
         <h4>💡 Як залишити корекцію</h4>
@@ -401,6 +407,18 @@
                 document.getElementById('recentTable').innerHTML = html;
             }
 
+        // Patterns
+        try {
+            const pr = await fetch(`/alex/api/patterns?days=${days}`);
+            if (pr.ok) {
+                const pd = await pr.json();
+                renderPatterns(pd);
+            }
+        } catch (pe) {
+            document.getElementById('patternsContainer').innerHTML =
+                '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження патернів.</div>';
+        }
+
         } catch (err) {
             console.error('loadData error:', err);
             document.getElementById('catTable').innerHTML =
@@ -408,6 +426,28 @@
         } finally {
             setLoading(false);
         }
+    }
+
+    function renderPatterns(pd) {
+        const container = document.getElementById('patternsContainer');
+        if (!pd || pd.sample_size === 0) {
+            container.innerHTML = '<div class="empty">Корекцій ще немає — патерни з\'являться після накопичення даних.</div>';
+            return;
+        }
+        if (!pd.patterns || pd.patterns.length === 0) {
+            container.innerHTML = `<div class="empty" style="color:var(--success);">✅ Систематичних помилок не виявлено (проаналізовано ${pd.sample_size} звітів).</div>`;
+            return;
+        }
+        let html = `<p style="color:var(--gray-500);margin-bottom:12px;">Аналіз ${pd.sample_size} звітів за ${pd.period_days} днів:</p>`;
+        html += '<table><thead><tr><th>Патерн</th><th>Рекомендація</th><th>Критичність</th></tr></thead><tbody>';
+        for (const p of pd.patterns) {
+            const sev = p.severity === 'high'
+                ? '<span class="badge badge-danger">🔴 Висока</span>'
+                : '<span class="badge badge-warning">🟡 Середня</span>';
+            html += `<tr><td>${p.pattern}</td><td style="color:var(--gray-600);">${p.recommendation}</td><td>${sev}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
     }
 
     function setLoading(on) {

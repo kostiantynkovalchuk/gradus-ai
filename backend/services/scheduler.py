@@ -497,6 +497,19 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"[SCHEDULER] Alex memory cleanup failed: {e}")
 
+    def _weekly_photo_accuracy_digest(self):
+        """
+        Weekly digest: send accuracy summary to expert Telegram IDs.
+        Runs: Monday 9:00 UTC
+        """
+        logger.info("[SCHEDULER] Sending weekly Alex Photo Report accuracy digest...")
+        try:
+            from photo_report.learning import send_weekly_accuracy_digest
+            send_weekly_accuracy_digest()
+            logger.info("[SCHEDULER] Weekly photo accuracy digest sent")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Weekly photo accuracy digest failed: {e}", exc_info=True)
+
     def aggregate_alex_candidates_task(self):
         """
         Task: Aggregate frequent Alex questions into preset candidates
@@ -1299,6 +1312,15 @@ class ContentScheduler:
             CronTrigger(day_of_week='mon', hour=2, minute=0),
             id='pulse_risk_decay',
             name='Weekly Pulse risk score decay',
+            replace_existing=True
+        )
+
+        # Alex Photo Report: weekly accuracy digest — every Monday at 9:00 UTC
+        self.scheduler.add_job(
+            self._weekly_photo_accuracy_digest,
+            CronTrigger(day_of_week='mon', hour=9, minute=0),
+            id='weekly_photo_accuracy_digest',
+            name='Weekly Alex Photo Report accuracy digest',
             replace_existing=True
         )
 

@@ -61,3 +61,17 @@ async def alex_accuracy(
     except Exception as e:
         logger.error(f"[Alex] accuracy metrics error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/patterns")
+async def alex_patterns(
+    days: int = Query(default=30, ge=1, le=365),
+    credentials: HTTPBasicCredentials = Depends(_verify_admin),
+):
+    """Systematic error patterns detected from accumulated expert corrections."""
+    try:
+        from photo_report.learning import analyze_correction_patterns
+        return analyze_correction_patterns(days=days)
+    except Exception as e:
+        logger.error(f"[Alex] patterns error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

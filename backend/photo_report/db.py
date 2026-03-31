@@ -183,6 +183,30 @@ def save_expert_correction(
         conn.close()
 
 
+def get_report_by_id(report_id: int) -> dict | None:
+    """Return report with shelf_share for expert correction resolution."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, shelf_share, score, passed FROM photo_reports WHERE id = %s",
+            (report_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return None
+        shelf_share = row[1] if isinstance(row[1], dict) else {}
+        return {
+            "id": row[0],
+            "shelf_share": shelf_share,
+            "score": row[2],
+            "passed": row[3],
+        }
+    finally:
+        conn.close()
+
+
 def get_accuracy_metrics(days: int = 30) -> dict:
     """
     Return accuracy metrics comparing AI predictions vs expert corrections.

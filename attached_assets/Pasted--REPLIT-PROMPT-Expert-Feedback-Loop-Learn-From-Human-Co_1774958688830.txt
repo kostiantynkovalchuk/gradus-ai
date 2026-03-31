@@ -1,0 +1,639 @@
+# REPLIT PROMPT: Expert Feedback Loop — Learn From Human Corrections
+
+## Context
+
+Alex Photo Report bot analyzes shelf photos and generates merchandising compliance reports. We now have an expert (merchandising analyst) who will:
+1. Send real shelf photos through the bot
+2. Review the AI-generated report
+3. Reply to the report with corrections
+4. The system should absorb these corrections and improve over time
+
+**Current state:** Migration 024 live. `/alex` dashboard exists. `expert_corrections` table exists. Reference images (14) loaded at startup. Scoring engine is deterministic (`scoring.py`).
+
+**What's missing:** The bot doesn't yet handle reply-to-report corrections. The expert correction parser isn't wired into bot.py. No automatic learning from accumulated corrections.
+
+---
+
+## PART 1: Expert Correction Handler in bot.py
+
+### How it works
+
+The expert sends a photo → bot generates report → expert **replies to the bot's report message** with corrections like:
+- "Водка 35%, коньяк 100%"
+- "водки нет, вино 40%"
+- "все правильно"
+- "горілка 56% 12/20, коньяк 100% 8/8"  (with facing counts)
+
+### Implementation
+
+Add a message handler that catches **replies to bot messages** from authorized experts:
+
+```python
+# In bot.py — expert correction handling
+
+# Expert Telegram IDs — users who can submit corrections
+# TODO: Fill in actual tg_id for the merchandising analyst
+EXPERT_TG_IDS = {
+    441389791,   # Kostiantyn
+    424503938,   # Natalia
+    # PLACEHOLDER,  # Merchandising analyst — fill in her tg_id
+}
+
+async def handle_expert_correction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle expert reply to a report message with corrections."""
+    
+    # Only process replies to messages
+    if not update.message.reply_to_message:
+        return
+    
+    # Only accept from experts
+    if update.effective_user.id not in EXPERT_TG_IDS:
+        return
+    
+    # Check if the replied-to message is a bot report (contains "ID звіту:")
+    original_msg = update.message.reply_to_message.text or ""
+    if "ID звіту:" not in original_msg:
+        return
+    
+    # Extract report ID from "ID звіту: #43"
+    import re
+    match = re.search(r'ID звіту:\s*#?(\d+)', original_msg)
+    if not match:
+        return
+    
+    report_id = int(match.group(1))
+    correction_text = update.message.text
+    
+    # Parse correction
+    correction = parse_expert_correction(correction_text)
+    
+    if not correction:
+        await update.message.reply_text(
+            "⚠️ Не вдалося розпізнати корекцію.\n\n"
+            "Формат: «горілка 35%, коньяк 100%»\n"
+            "Або: «все правильно»"
+        )
+        return
+    
+    # Load current report data to resolve "правильно" references
+    report = await get_report_by_id(report_id)
+    if not report:
+        await update.message.reply_text(f"⚠️ Звіт #{report_id} не знайдено")
+        return
+    
+    # Resolve "correct" values to actual AI values
+    resolved = resolve_correct_values(correction, report)
+    
+    # Save to expert_corrections table
+    await save_expert_correction(
+        report_id=report_id,
+        expert_tg_id=update.effective_user.id,
+        corrected_vodka_share=resolved.get("vodka"),
+        corrected_wine_share=resolved.get("wine"),
+        corrected_cognac_share=resolved.get("cognac"),
+        corrected_sparkling_share=resolved.get("sparkling"),
+        corrected_vodka_json=resolved.get("vodka_detail"),
+        notes=correction_text
+    )
+    
+    # Build confirmation message
+    confirmation_lines = [f"✅ Корекцію збережено для звіту #{report_id}:"]
+    category_names = {
+        "vodka": "🥃 Горілка",
+        "wine": "🍷 Вино",
+        "cognac": "🥂 Коньяк",
+        "sparkling": "🍾 Ігристе"
+    }
+    
+    for key, label in category_names.items():
+        val = resolved.get(key)
+        if val is not None:
+            if val == "correct":
+                confirmation_lines.append(f"  {label}: ✅ правильно")
+            else:
+                confirmation_lines.append(f"  {label}: {val}%")
+    
+    # Show deviation from AI if available
+    if report:
+        ai_shares = report.get("score_data", {}).get("shelf_shares", {})
+        deviations = []
+        for key in ["vodka", "wine", "cognac", "sparkling"]:
+            ai_val = ai_shares.get(key)
+            expert_val = resolved.get(key)
+            if ai_val is not None and expert_val is not None and expert_val != "correct":
+                dev = abs(ai_val - expert_val)
+                if dev > 0:
+                    deviations.append(f"{category_names[key]}: AI {ai_val}% → експерт {expert_val}% (±{dev}%)")
+        
+        if deviations:
+            confirmation_lines.append("\n📊 Відхилення AI:")
+            confirmation_lines.extend(f"  {d}" for d in deviations)
+    
+    await update.message.reply_text("\n".join(confirmation_lines))
+
+
+def parse_expert_correction(text: str) -> dict | None:
+    """Parse expert correction text. Supports flexible Ukrainian/Russian formats.
+    
+    Supported formats:
+        "Водка - 56%, коньяк - 100%"
+        "водки нет, вино 40%, коньяк 23%"
+        "Водка правильно, вино - 6%, коньяк - 100%"
+        "все правильно"
+        "горілка 35% 12/20"  (with facing counts: our/total)
+        "горілка 56%, вино 40%"
+    """
+    if not text or len(text) < 3:
+        return None
+    
+    result = {}
+    text_lower = text.lower().strip()
+    
+    # Handle "все правильно" / "all correct"
+    if re.search(r'(все|всё|all)\s*(правильно|вірно|correct|ок|вірн)', text_lower):
+        return {"vodka": "correct", "wine": "correct", "cognac": "correct", "sparkling": "correct"}
+    
+    # Category patterns (Ukrainian + Russian + English)
+    category_patterns = {
+        "vodka": [r"водк[аиу]", r"горілк[аиу]", r"vodka"],
+        "wine": [r"вин[оау]", r"wine"],
+        "cognac": [r"коньяк\w*", r"cognac", r"бренд[іи]"],
+        "sparkling": [r"ігрист\w*", r"игрист\w*", r"sparkling", r"шампанськ\w*"],
+    }
+    
+    for key, patterns in category_patterns.items():
+        for pattern in patterns:
+            # Match "category XX%" or "category - XX%" 
+            match = re.search(
+                pattern + r'\s*[-—:=]?\s*(\d{1,3})\s*%',
+                text_lower
+            )
+            if match:
+                result[key] = int(match.group(1))
+                
+                # Also try to capture facing counts: "35% 7/20"
+                detail_match = re.search(
+                    pattern + r'\s*[-—:=]?\s*\d{1,3}\s*%\s*(\d{1,3})\s*/\s*(\d{1,3})',
+                    text_lower
+                )
+                if detail_match:
+                    result[f"{key}_detail"] = {
+                        "our_facings": int(detail_match.group(1)),
+                        "total_facings": int(detail_match.group(2))
+                    }
+                break
+            
+            # Match "category нет" / "категорії немає" / "0"
+            match_zero = re.search(
+                pattern + r'\s*[-—:=]?\s*(нет|немає|відсутн\w*|0\s*%?\b)',
+                text_lower
+            )
+            if match_zero:
+                result[key] = 0
+                break
+            
+            # Match "category правильно"
+            match_correct = re.search(
+                pattern + r'\s*[-—]?\s*(правильно|вірно|correct|ок)',
+                text_lower
+            )
+            if match_correct:
+                result[key] = "correct"
+                break
+    
+    return result if result else None
+
+
+def resolve_correct_values(correction: dict, report: dict) -> dict:
+    """Replace 'correct' values with actual AI values from the report."""
+    resolved = {}
+    ai_shares = report.get("score_data", {}).get("shelf_shares", {})
+    
+    for key in ["vodka", "wine", "cognac", "sparkling"]:
+        val = correction.get(key)
+        if val == "correct":
+            resolved[key] = ai_shares.get(key)  # keep AI value as ground truth
+        elif val is not None:
+            resolved[key] = val
+        
+        # Copy detail if present
+        detail = correction.get(f"{key}_detail")
+        if detail:
+            resolved[f"{key}_detail"] = detail
+    
+    return resolved
+```
+
+### Register the handler in bot.py
+
+```python
+# IMPORTANT: Register this as a general message handler that catches ALL text replies
+# It must be registered OUTSIDE the ConversationHandler (not inside states)
+# because the expert may reply to old reports at any time, not during an active conversation
+
+app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.REPLY,
+        handle_expert_correction
+    ),
+    group=1  # separate handler group so it doesn't conflict with ConversationHandler
+)
+```
+
+### DB function in db.py
+
+```python
+async def save_expert_correction(
+    report_id: int,
+    expert_tg_id: int,
+    corrected_vodka_share: int | None = None,
+    corrected_wine_share: int | None = None,
+    corrected_cognac_share: int | None = None,
+    corrected_sparkling_share: int | None = None,
+    corrected_vodka_json: dict | None = None,
+    notes: str | None = None,
+):
+    """Save expert correction to database."""
+    import json
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO expert_corrections 
+                    (report_id, expert_tg_id, corrected_vodka_share, corrected_wine_share,
+                     corrected_cognac_share, corrected_sparkling_share, corrected_vodka_json, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                report_id, expert_tg_id,
+                corrected_vodka_share if corrected_vodka_share != "correct" else None,
+                corrected_wine_share if corrected_wine_share != "correct" else None,
+                corrected_cognac_share if corrected_cognac_share != "correct" else None,
+                corrected_sparkling_share if corrected_sparkling_share != "correct" else None,
+                json.dumps(corrected_vodka_json) if corrected_vodka_json else None,
+                notes
+            ))
+            conn.commit()
+            logger.info(f"Saved expert correction for report #{report_id} from tg_id={expert_tg_id}")
+    finally:
+        conn.close()
+
+
+async def get_report_by_id(report_id: int) -> dict | None:
+    """Get report data for correction resolution."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, vision_raw_json, score_data, scoring_version
+                FROM photo_reports WHERE id = %s
+            """, (report_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "vision_raw_json": row[1],
+                "score_data": row[2] if isinstance(row[2], dict) else {},
+                "scoring_version": row[3]
+            }
+    finally:
+        conn.close()
+```
+
+---
+
+## PART 2: Onboarding Message for Expert
+
+When the expert first interacts with the bot, show her a quick guide. Add a welcome handler:
+
+```python
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command with role-specific welcome."""
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+    
+    if user_id in EXPERT_TG_IDS:
+        await update.message.reply_text(
+            f"Привіт, {user_name}! 👋\n\n"
+            f"Я — Alex Photo Report. Перевіряю виставлення товарів AVTD.\n\n"
+            f"🔍 **Як працювати:**\n"
+            f"1. Натисни 📸 Новий звіт\n"
+            f"2. Надішли 1-5 фото полиць\n"
+            f"3. Натисни ✅ Готово\n"
+            f"4. Отримай звіт з оцінкою\n\n"
+            f"✏️ **Як залишити корекцію:**\n"
+            f"Відповідай (reply) на повідомлення бота зі звітом.\n\n"
+            f"Формати корекцій:\n"
+            f"• `горілка 35%, коньяк 100%`\n"
+            f"• `водка 56%, вино 40%`\n"
+            f"• `горілка 35% 7/20` (з фейсингами)\n"
+            f"• `все правильно`\n"
+            f"• `водки нет, коньяк 23%`\n\n"
+            f"Кожна твоя корекція покращує точність AI! 🎯",
+            parse_mode=None  # plain text to avoid underscore issues
+        )
+    else:
+        # Standard welcome for regular agents
+        await update.message.reply_text(
+            f"Привіт, {user_name}! 👋\n\n"
+            f"Я — Alex Photo Report. Перевіряю виставлення товарів AVTD.\n\n"
+            f"Натисни 📸 Новий звіт щоб почати."
+        )
+```
+
+---
+
+## PART 3: Auto-Learning from Accumulated Corrections
+
+### 3.1 — Accuracy Tracking (already exists in /alex dashboard)
+
+The `/alex/api/accuracy` endpoint already calculates MAE per category. This data shows WHERE the AI is failing.
+
+### 3.2 — Pattern Detection (NEW)
+
+Add a scheduled job that runs weekly (or after every N corrections) to analyze error patterns:
+
+```python
+# learning.py — analyze correction patterns and suggest improvements
+
+import logging
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+async def analyze_correction_patterns(days: int = 30) -> dict:
+    """Analyze accumulated expert corrections to find systematic errors.
+    
+    Returns patterns like:
+    - "Ukrainka consistently under-counted by 15-20%"
+    - "Wine missed entirely in 60% of reports"
+    - "Cognac over-counted when import shelf is visible"
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    pr.id,
+                    pr.score_data,
+                    pr.vision_raw_json,
+                    ec.corrected_vodka_share,
+                    ec.corrected_wine_share,
+                    ec.corrected_cognac_share,
+                    ec.corrected_sparkling_share,
+                    ec.corrected_vodka_json,
+                    ec.notes
+                FROM photo_reports pr
+                JOIN expert_corrections ec ON ec.report_id = pr.id
+                WHERE ec.created_at >= NOW() - INTERVAL '%s days'
+                ORDER BY ec.created_at DESC
+            """, (days,))
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    
+    if not rows:
+        return {"patterns": [], "sample_size": 0}
+    
+    patterns = []
+    category_errors = defaultdict(list)
+    brand_misses = defaultdict(int)
+    total_reports = len(rows)
+    
+    for row in rows:
+        score_data = row[1] or {}
+        ai_shares = score_data.get("shelf_shares", {})
+        vision_data = row[2] or {}
+        
+        # Analyze each category
+        corrections = {
+            "vodka": row[3],
+            "wine": row[4],
+            "cognac": row[5],
+            "sparkling": row[6]
+        }
+        
+        for cat, expert_val in corrections.items():
+            if expert_val is None:
+                continue
+            
+            ai_val = ai_shares.get(cat)
+            if ai_val is None:
+                # AI said "not assessed" but expert gave a value
+                category_errors[cat].append({
+                    "type": "missed",
+                    "expert": expert_val,
+                    "ai": None
+                })
+            else:
+                deviation = expert_val - ai_val
+                category_errors[cat].append({
+                    "type": "deviation",
+                    "expert": expert_val,
+                    "ai": ai_val,
+                    "deviation": deviation
+                })
+        
+        # Check vodka brand breakdown
+        vodka_detail = row[7]  # corrected_vodka_json
+        if vodka_detail:
+            ai_vodka = vision_data.get("vodka", {})
+            for brand in ["ukrainka", "helsinki", "greenday"]:
+                ai_count = ai_vodka.get(f"{brand}_facings", 0) or 0
+                expert_count = vodka_detail.get(f"{brand}_facings")
+                if expert_count is not None and ai_count == 0 and expert_count > 0:
+                    brand_misses[brand] += 1
+    
+    # Generate pattern descriptions
+    for cat, errors in category_errors.items():
+        cat_names = {"vodka": "горілка", "wine": "вино", "cognac": "коньяк", "sparkling": "ігристе"}
+        cat_name = cat_names.get(cat, cat)
+        
+        missed = [e for e in errors if e["type"] == "missed"]
+        deviations = [e for e in errors if e["type"] == "deviation"]
+        
+        if missed:
+            miss_rate = len(missed) / len(errors) * 100
+            if miss_rate > 30:
+                patterns.append({
+                    "category": cat,
+                    "severity": "high",
+                    "pattern": f"{cat_name}: AI пропускає категорію в {miss_rate:.0f}% випадків ({len(missed)}/{len(errors)})",
+                    "recommendation": f"Додати більше reference images для {cat_name} або покращити shelf scan prompt"
+                })
+        
+        if deviations:
+            avg_dev = sum(abs(e["deviation"]) for e in deviations) / len(deviations)
+            bias = sum(e["deviation"] for e in deviations) / len(deviations)
+            
+            if avg_dev > 15:
+                direction = "занижує" if bias > 0 else "завищує"
+                patterns.append({
+                    "category": cat,
+                    "severity": "high",
+                    "pattern": f"{cat_name}: AI систематично {direction} на {avg_dev:.0f}% (bias: {bias:+.0f}%)",
+                    "recommendation": f"Перевірити counting logic для {cat_name}. {'Under-counting наших брендів' if bias > 0 else 'Under-counting конкурентів'}"
+                })
+            elif avg_dev > 8:
+                patterns.append({
+                    "category": cat,
+                    "severity": "medium",
+                    "pattern": f"{cat_name}: середнє відхилення {avg_dev:.0f}%",
+                    "recommendation": "Прийнятно, але є простір для покращення"
+                })
+    
+    # Brand-specific misses
+    for brand, miss_count in brand_misses.items():
+        if miss_count >= 2:
+            patterns.append({
+                "category": "vodka",
+                "severity": "high",
+                "pattern": f"{brand.title()}: пропущено AI в {miss_count} звітах з {total_reports}",
+                "recommendation": f"Перевірити reference images для {brand.title()}, можливо додати більше shelf examples"
+            })
+    
+    return {
+        "patterns": patterns,
+        "sample_size": total_reports,
+        "categories_analyzed": list(category_errors.keys()),
+        "period_days": days
+    }
+```
+
+### 3.3 — API Endpoint for Patterns
+
+Add to `alex_admin.py`:
+
+```python
+@alex_router.get("/alex/api/patterns")
+async def get_error_patterns(days: int = 30):
+    """Get systematic error patterns from expert corrections."""
+    patterns = await analyze_correction_patterns(days)
+    return patterns
+```
+
+### 3.4 — Dashboard Widget
+
+Add a "🔍 Патерни помилок" section to `/alex` dashboard that shows:
+- Systematic under/over-counting per category
+- Brand-specific miss rates
+- Recommendations for improvement
+
+```html
+<!-- In alex_dashboard.html -->
+<div class="card">
+    <h3>🔍 Патерни помилок</h3>
+    <div id="patterns-container">
+        <!-- Filled by JS from /alex/api/patterns -->
+    </div>
+</div>
+```
+
+### 3.5 — Weekly Digest to Admin (Optional)
+
+Scheduled job that sends a Telegram message to EXPERT_TG_IDS with weekly accuracy summary:
+
+```python
+# scheduler job — weekly patterns digest
+async def send_weekly_accuracy_digest():
+    """Send weekly accuracy report to admins."""
+    patterns = await analyze_correction_patterns(days=7)
+    
+    if patterns["sample_size"] == 0:
+        return  # no corrections this week
+    
+    lines = [
+        f"📊 Тижневий звіт точності Alex Photo Report",
+        f"Період: останні 7 днів",
+        f"Корекцій проаналізовано: {patterns['sample_size']}",
+        ""
+    ]
+    
+    for p in patterns["patterns"]:
+        icon = "🔴" if p["severity"] == "high" else "🟡"
+        lines.append(f"{icon} {p['pattern']}")
+        lines.append(f"   💡 {p['recommendation']}")
+        lines.append("")
+    
+    if not patterns["patterns"]:
+        lines.append("✅ Систематичних помилок не виявлено!")
+    
+    text = "\n".join(lines)
+    
+    for tg_id in EXPERT_TG_IDS:
+        try:
+            await bot.send_message(chat_id=tg_id, text=text)
+        except Exception as e:
+            logger.error(f"Failed to send digest to {tg_id}: {e}")
+```
+
+Register in scheduler:
+```python
+scheduler.add_job(
+    send_weekly_accuracy_digest,
+    CronTrigger(day_of_week='mon', hour=9, minute=0),  # Every Monday 9:00 UTC
+    id="weekly_accuracy_digest"
+)
+```
+
+---
+
+## PART 4: Expert Onboarding Instructions
+
+Send this to the expert (the girl who analyzes photos):
+
+```
+Привіт! 👋
+
+Тобі надано доступ до Alex Photo Report — AI-бот для перевірки виставлення товарів AVTD.
+
+Як працювати:
+1. Відкрий бота: @avtd_photo_report_bot
+2. Натисни /start
+3. Натисни 📸 Новий звіт
+4. Надішли 1-5 фото полиць магазину
+5. Натисни ✅ Готово
+6. Отримай звіт з оцінкою AI
+
+Як залишити корекцію (ВАЖЛИВО!):
+Після отримання звіту — натисни REPLY (відповісти) на повідомлення бота і напиши реальні цифри.
+
+Приклади:
+• "горілка 35%, коньяк 100%"
+• "водка 56%, вино 40%"
+• "все правильно" (якщо AI порахувало вірно)
+• "водки нет, коньяк 23%"
+
+Кожна твоя корекція автоматично покращує точність AI!
+
+Якщо є питання — пиши @kovalchuk_kostiantyn
+```
+
+---
+
+## FILE CHANGE SUMMARY
+
+| File | Changes |
+|------|---------|
+| `bot.py` | Add `handle_expert_correction()`, `parse_expert_correction()`, `resolve_correct_values()`. Register reply handler in group=1. Update `/start` with expert-specific welcome. Add expert tg_id placeholder. |
+| `db.py` | Add `save_expert_correction()`, `get_report_by_id()` |
+| `learning.py` (NEW) | `analyze_correction_patterns()` — detects systematic errors from accumulated corrections |
+| `alex_admin.py` | Add `GET /alex/api/patterns` endpoint |
+| `alex_dashboard.html` | Add "Патерни помилок" section |
+| `main.py` scheduler | Add weekly accuracy digest job (Monday 9:00 UTC) |
+
+---
+
+## TESTING CHECKLIST
+
+| # | Test | Expected |
+|---|------|----------|
+| 1 | Expert sends /start | Gets expert-specific welcome with correction format guide |
+| 2 | Expert sends photo, gets report, replies "горілка 35%, коньяк 100%" | "✅ Корекцію збережено для звіту #XX" with deviation display |
+| 3 | Expert replies "все правильно" | All categories saved as AI values |
+| 4 | Expert replies "водки нет, вино 40%" | vodka=0, wine=40 saved |
+| 5 | Expert replies gibberish | "⚠️ Не вдалося розпізнати корекцію" with format hint |
+| 6 | Non-expert replies to report | Silently ignored |
+| 7 | Visit /alex → Патерни помилок | Shows patterns from corrections |
+| 8 | Monday 9:00 UTC | Weekly digest sent to expert TG IDs |
+| 9 | Expert replies "горілка 56% 12/20" | Facing counts saved in corrected_vodka_json |

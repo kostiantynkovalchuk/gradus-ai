@@ -14,7 +14,7 @@ from .scoring import calculate_score
 from .formatter import format_report_for_telegram
 from .db import (
     get_or_create_agent, save_report, save_report_photos,
-    get_agent_stats, save_expert_correction,
+    get_agent_stats, save_expert_correction, get_report_by_id,
 )
 from .keyboards import MAIN_MENU, PHOTO_ACTIONS
 
@@ -29,82 +29,94 @@ EXPERT_TG_IDS: set[int] = {441389791, 424503938}
 pending_reports = {}
 
 
-def parse_correction(text: str) -> dict:
+def parse_correction(text: str) -> list[dict]:
     """
     Parse a free-form expert correction message.
+    Returns a list of correction dicts (one per detected category).
 
     Accepted formats (case-insensitive):
-      "горілка 35% 7/20"
+      "горілка 35%, коньяк 100%"
+      "водка 56%, вино 40%"
+      "горілка 35% 7/20"          (with facing counts)
+      "все правильно"             → returns [] (handled by caller as "all correct")
+      "водки нет, коньяк 23%"
       "vodka GD=4 UA=3 total=20"
-      "коньяк: наша=5 всього=15 → 33%"
-      "вино villa 3 конкуренти 9 → 25%"
-      "sparkling: villa 0, всього 8"
-      "ігристе — не бачу villa ua зовсім"
     """
-    text_l = text.lower()
+    text_l = text.lower().strip()
 
-    category_map = {
-        "горілк": "vodka",
-        "горілц": "vodka",
-        "vodka": "vodka",
-        "коньяк": "cognac",
-        "cognac": "cognac",
-        "бренді": "cognac",
-        "brandy": "cognac",
-        "вин": "wine",
-        "wine": "wine",
-        "ігрист": "sparkling",
-        "sparkling": "sparkling",
-        "шампан": "sparkling",
-    }
-    category = None
-    for key, cat in category_map.items():
-        if key in text_l:
-            category = cat
-            break
+    # "все правильно" → empty list = caller treats as "all correct"
+    if re.search(r"(все|всё|all)\s*(правильно|вірно|correct|ок)", text_l):
+        return []
 
-    share_match = re.search(r"(\d{1,3})\s*%", text)
-    true_share = int(share_match.group(1)) if share_match else None
+    CATEGORIES = [
+        ("vodka",    [r"горілк", r"горілц", r"водк", r"vodka"]),
+        ("cognac",   [r"коньяк", r"cognac", r"бренд[іи]", r"brandy"]),
+        ("wine",     [r"\bвин[оау]\b", r"\bwine\b"]),
+        ("sparkling",[r"ігрист", r"sparkling", r"шампан"]),
+    ]
 
-    fraction_match = re.search(r"(\d+)\s*/\s*(\d+)", text)
-    our_facings = int(fraction_match.group(1)) if fraction_match else None
-    total_facings = int(fraction_match.group(2)) if fraction_match else None
+    results = []
+    # Track positions already consumed so "вино" and "коньяк" don't overlap
+    for category, keywords in CATEGORIES:
+        cat_re = "(" + "|".join(keywords) + ")"
+        if not re.search(cat_re, text_l):
+            continue
 
-    if our_facings is None:
-        for pat in [
-            r"(?:gd|наш|наші|our|ours?)\s*[=:]\s*(\d+)",
-            r"(?:villa|adjari|greenday)\s+(\d+)",
-            r"наш\w*\s+(\d+)",
-        ]:
-            m = re.search(pat, text_l)
+        true_share = None
+        our_facings = None
+        total_facings = None
+
+        # Percent share: "категорія 35%" or "категорія - 35%"
+        for kw in keywords:
+            m = re.search(kw + r"\w*\s*[-—:=]?\s*(\d{1,3})\s*%", text_l)
             if m:
-                our_facings = int(m.group(1))
+                true_share = int(m.group(1))
                 break
 
-    if total_facings is None:
-        for pat in [
-            r"(?:total|всього|загал\w*|tot)\s*[=:]\s*(\d+)",
-            r"(?:конкурент\w*|comp)\s+(\d+)",
-        ]:
-            m = re.search(pat, text_l)
-            if m:
-                if "конкурент" in pat and our_facings is not None:
-                    comp = int(m.group(1))
-                    total_facings = our_facings + comp
-                else:
+        # "нет / немає / відсутн / нема" → 0
+        if true_share is None:
+            for kw in keywords:
+                if re.search(kw + r"\w*\s*[-—:=]?\s*(нет|немає|відсутн|нема\b)", text_l):
+                    true_share = 0
+                    break
+
+        # Facing counts: "35% 7/20" or standalone "7/20"
+        fraction_match = re.search(r"(\d+)\s*/\s*(\d+)", text)
+        if fraction_match:
+            our_facings = int(fraction_match.group(1))
+            total_facings = int(fraction_match.group(2))
+
+        # GD=4 / наш=4 style
+        if our_facings is None:
+            for pat in [
+                r"(?:gd|наш|our)\s*[=:]\s*(\d+)",
+                r"(?:villa|adjari|greenday)\s+(\d+)",
+            ]:
+                m = re.search(pat, text_l)
+                if m:
+                    our_facings = int(m.group(1))
+                    break
+
+        if total_facings is None:
+            for pat in [r"(?:total|всього|загал\w*)\s*[=:]\s*(\d+)"]:
+                m = re.search(pat, text_l)
+                if m:
                     total_facings = int(m.group(1))
-                break
+                    break
 
-    if our_facings is not None and total_facings is not None and true_share is None and total_facings > 0:
-        true_share = round(our_facings / total_facings * 100)
+        if our_facings is not None and total_facings is not None and true_share is None and total_facings > 0:
+            true_share = round(our_facings / total_facings * 100)
 
-    return {
-        "category": category,
-        "true_share": true_share,
-        "our_facings": our_facings,
-        "total_facings": total_facings,
-        "raw_text": text,
-    }
+        if true_share is not None or our_facings is not None:
+            results.append({
+                "category": category,
+                "true_share": true_share,
+                "our_facings": our_facings,
+                "total_facings": total_facings,
+                "raw_text": text,
+            })
+
+    return results
 
 
 async def handle_expert_correction(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,48 +133,101 @@ async def handle_expert_correction(update: Update, context: ContextTypes.DEFAULT
     report_id_match = re.search(r"ID звіту: #(\d+)", replied_text)
     if not report_id_match:
         await msg.reply_text(
-            "⚠️ Не знайшов ID звіту в повідомленні. "
-            "Будь ласка, відповідай саме на повідомлення зі звітом.",
-            parse_mode="Markdown",
+            "Не знайшов ID звіту в повідомленні. "
+            "Відповідай саме на повідомлення бота зі звітом.",
         )
         return
 
     report_id = int(report_id_match.group(1))
     correction_text = msg.text or ""
+    loop = asyncio.get_event_loop()
 
-    parsed = parse_correction(correction_text)
+    # Load report shelf_share for deviation display and "все правильно" resolution
+    report = await loop.run_in_executor(None, get_report_by_id, report_id)
+    if not report:
+        await msg.reply_text(f"Звіт #{report_id} не знайдено в базі.")
+        return
+
+    parsed_list = parse_correction(correction_text)
+    cat_ua = {"vodka": "горілка", "wine": "вино", "cognac": "коньяк", "sparkling": "ігристе"}
+
+    # "все правильно" → empty list means save AI values as ground truth for all categories
+    if parsed_list == [] and re.search(r"(все|всё|all)\s*(правильно|вірно|correct|ок)", correction_text.lower()):
+        shelf = report.get("shelf_share", {})
+        all_categories = ["vodka", "cognac", "wine", "sparkling"]
+        saved = 0
+        for cat in all_categories:
+            ai_share = None
+            cat_data = shelf.get(cat)
+            if isinstance(cat_data, dict):
+                ai_share = cat_data.get("percent")
+            row = {"category": cat, "true_share": ai_share, "our_facings": None, "total_facings": None, "raw_text": correction_text}
+            try:
+                await loop.run_in_executor(None, save_expert_correction, report_id, user.id, user.full_name, row)
+                saved += 1
+            except Exception as e:
+                logger.error(f"[PhotoReport] save correction cat={cat}: {e}")
+        await msg.reply_text(
+            f"Дякуємо! Позначено як правильно для звіту #{report_id}. "
+            f"AI-значення збережено як еталон для {saved} категорій."
+        )
+        return
+
+    # Nothing recognized
+    if not parsed_list:
+        await msg.reply_text(
+            "Не вдалося розпізнати корекцію.\n\n"
+            "Формат: горілка 35%, коньяк 100%\n"
+            "Або: все правильно"
+        )
+        return
 
     try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            save_expert_correction,
-            report_id,
-            user.id,
-            user.full_name,
-            parsed,
-        )
+        shelf = report.get("shelf_share", {})
+        saved_count = 0
+        lines = [f"Корекцію до звіту #{report_id} збережено:"]
 
-        cat_ua = {"vodka": "горілка", "wine": "вино", "cognac": "коньяк", "sparkling": "ігристе"}
-        cat_display = cat_ua.get(parsed.get("category"), parsed.get("category") or "невідомо")
+        for parsed in parsed_list:
+            await loop.run_in_executor(
+                None,
+                save_expert_correction,
+                report_id,
+                user.id,
+                user.full_name,
+                parsed,
+            )
+            saved_count += 1
 
-        lines = [f"✅ *Корекцію до звіту #{report_id} збережено.*", ""]
-        lines.append(f"📋 Категорія: {cat_display}")
-        if parsed.get("true_share") is not None:
-            lines.append(f"📊 Фактична частка: {parsed['true_share']}%")
-        if parsed.get("our_facings") is not None and parsed.get("total_facings") is not None:
-            lines.append(f"🔢 Фейсинги: {parsed['our_facings']} / {parsed['total_facings']}")
+            cat = parsed.get("category", "")
+            cat_name = cat_ua.get(cat, cat)
+            share = parsed.get("true_share")
+            of = parsed.get("our_facings")
+            tf = parsed.get("total_facings")
+
+            detail = f"{share}%" if share is not None else "?"
+            if of is not None and tf is not None:
+                detail += f" ({of}/{tf})"
+
+            # Deviation from AI
+            ai_pct = None
+            cat_data = shelf.get(cat)
+            if isinstance(cat_data, dict):
+                ai_pct = cat_data.get("percent")
+
+            if ai_pct is not None and share is not None:
+                dev = share - ai_pct
+                sign = "+" if dev >= 0 else ""
+                lines.append(f"  {cat_name}: {detail}  (AI було {ai_pct}%, відхилення {sign}{dev}%)")
+            else:
+                lines.append(f"  {cat_name}: {detail}")
+
         lines.append("")
-        lines.append("_Дякуємо! Дані використовуються для покращення точності AI._")
-
-        await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+        lines.append("Дякуємо! Дані покращують точність AI.")
+        await msg.reply_text("\n".join(lines))
 
     except Exception as e:
         logger.error(f"[PhotoReport] Failed to save expert correction: {e}", exc_info=True)
-        await msg.reply_text(
-            "❌ Помилка при збереженні корекції. Спробуй ще раз.",
-            parse_mode="Markdown",
-        )
+        await msg.reply_text("Помилка при збереженні корекції. Спробуй ще раз.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,13 +235,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_or_create_agent, user.id, user.full_name)
 
-    await update.message.reply_text(
-        f"Привіт, {user.first_name}! 👋\n\n"
-        "Я — Alex Photo Report. Перевіряю виставлення товарів AVTD.\n\n"
-        "Натисни *📸 Новий звіт* щоб почати.",
-        reply_markup=MAIN_MENU,
-        parse_mode="Markdown"
-    )
+    if user.id in EXPERT_TG_IDS:
+        await update.message.reply_text(
+            f"Привіт, {user.first_name}! 👋\n\n"
+            "Я — Alex Photo Report. Перевіряю виставлення товарів AVTD.\n\n"
+            "Як залишити корекцію:\n"
+            "Відповідай (reply) на повідомлення бота зі звітом.\n\n"
+            "Формати:\n"
+            "  горілка 35%, коньяк 100%\n"
+            "  водка 56%, вино 40%\n"
+            "  горілка 35% 7/20  (з фейсингами)\n"
+            "  все правильно\n\n"
+            "Кожна корекція покращує точність AI!",
+            reply_markup=MAIN_MENU,
+        )
+    else:
+        await update.message.reply_text(
+            f"Привіт, {user.first_name}! 👋\n\n"
+            "Я — Alex Photo Report. Перевіряю виставлення товарів AVTD.\n\n"
+            "Натисни 📸 Новий звіт щоб почати.",
+            reply_markup=MAIN_MENU,
+        )
 
 
 async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
