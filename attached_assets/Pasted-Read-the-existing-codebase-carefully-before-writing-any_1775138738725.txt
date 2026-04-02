@@ -1,0 +1,69 @@
+Read the existing codebase carefully before writing anything.
+
+TASK: Add a broadcast function to send an announcement message to all active 
+registered employees in the Maya HR system via Telegram.
+
+=== STEP 1: AUDIT FIRST ===
+
+Read these files and report what you find:
+1. The employees table schema — find the actual column names, especially: 
+   telegram_id / telegram_chat_id, status/is_active, name
+   Run: SELECT column_name, data_type FROM information_schema.columns 
+        WHERE table_name = 'employees';
+2. How the bot sends messages — find where bot.send_message() or 
+   context.bot.send_message() is used in existing code
+3. The bot token env var name — is it TELEGRAM_BOT_TOKEN or BOT_TOKEN or other?
+
+Report findings, then proceed.
+
+=== STEP 2: CREATE broadcast_avpost.py ===
+
+Create a standalone script: backend/scripts/broadcast_avpost.py
+
+It must:
+
+1. Load env vars (DATABASE_URL, bot token) using python-dotenv or os.environ
+2. Query ALL active registered employees with a telegram_id:
+   SELECT id, name, telegram_id FROM employees 
+   WHERE telegram_id IS NOT NULL 
+   AND (status = 'active' OR is_active = true)
+   — adjust column names to match actual schema from Step 1
+
+3. Send each employee this EXACT message using python-telegram-bot (async):
+
+─────────────────────────────────────
+Всім привіт\! 👋
+
+Рада оголосити про вихід першого номера корпоративної газети *AV Post* — нашого нового внутрішнього медіа\.
+
+📌 Новини компанії, кейси з полів, аналітика ринку та інсайти від команди — все в одному місці\.
+
+👉 [Читати перший номер](https://avpost-bestbrands.vercel.app/)
+
+_З повагою, команда AVTD_
+─────────────────────────────────────
+
+   parse_mode = ParseMode.MARKDOWN_V2
+
+4. Rate limiting: asyncio.sleep(0.3) between each send
+5. Error handling: catch exceptions per-user, log and continue
+6. Final summary printed to console:
+   ✅ Надіслано: X
+   ❌ Помилок: Y
+   📋 Всього співробітників: Z
+
+=== STEP 3: DRY RUN FIRST ===
+
+Before sending to everyone, add a --dry-run flag:
+  python broadcast_avpost.py --dry-run
+  → prints employee count and first 3 names WITHOUT sending anything
+
+=== STEP 4: RUN IT ===
+
+1. First: python backend/scripts/broadcast_avpost.py --dry-run
+   Show me the output (count + sample names)
+2. If count looks correct, run without --dry-run
+
+DO NOT hardcode any tokens or credentials.
+DO NOT modify any existing bot handlers or files.
+This is a one-time broadcast script only.
