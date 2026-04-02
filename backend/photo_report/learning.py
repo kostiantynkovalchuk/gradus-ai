@@ -152,7 +152,7 @@ def send_weekly_accuracy_digest() -> None:
         logger.warning("[Learning] PHOTO_REPORT_BOT_TOKEN not set — skipping weekly digest")
         return
 
-    expert_ids: list[int] = [441389791, 424503938]
+    expert_ids: list[int] = [441389791, 424503938, 5253694737]
 
     try:
         patterns = analyze_correction_patterns(days=7)

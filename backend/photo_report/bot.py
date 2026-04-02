@@ -24,7 +24,11 @@ WAITING_POINT_NAME = 1
 WAITING_PHOTOS = 2
 WAITING_CONFIRM = 3
 
-EXPERT_TG_IDS: set[int] = {441389791, 424503938}
+EXPERT_TG_IDS: set[int] = {
+    441389791,   # Kostiantyn
+    424503938,   # Natalia
+    5253694737,  # Олена — reviewing expert
+}
 
 pending_reports = {}
 
