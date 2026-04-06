@@ -88,3 +88,45 @@ def get_graphql_headers(token: str) -> dict:
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
+
+
+async def check_robotaua_auth() -> None:
+    """
+    Startup diagnostic: call login_robotaua() and log which auth path
+    was actually used. Does NOT modify any auth logic.
+    """
+    email = os.getenv("ROBOTAUA_EMAIL")
+    password = os.getenv("ROBOTAUA_PASSWORD")
+    fallback_jwt = os.getenv("ROBOTAUA_JWT")
+
+    token = await login_robotaua()
+
+    if not token:
+        logger.error(
+            "Robota.ua auth failed completely — "
+            "no token from credentials or ROBOTAUA_JWT fallback"
+        )
+        return
+
+    # Detect which path was taken:
+    # If email+password are set and the returned token differs from the
+    # static JWT env var, live credential login succeeded.
+    creds_configured = bool(email and password)
+    token_matches_static_jwt = fallback_jwt and token == fallback_jwt
+
+    if creds_configured and not token_matches_static_jwt:
+        logger.info(
+            "Robota.ua auth OK — "
+            "using live credentials, JWT fallback not needed"
+        )
+    elif token_matches_static_jwt:
+        logger.warning(
+            "WARNING: Robota.ua falling back to JWT — "
+            "check ROBOTAUA_EMAIL/PASSWORD (login endpoint may have rejected credentials)"
+        )
+    else:
+        # No creds configured, JWT used as primary
+        logger.warning(
+            "WARNING: Robota.ua falling back to JWT — "
+            "ROBOTAUA_EMAIL/PASSWORD not set, running on static token until April 12"
+        )

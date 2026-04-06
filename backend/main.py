@@ -112,6 +112,13 @@ async def lifespan(app: FastAPI):
     
     content_scheduler.start()
     logger.info("✅ Scheduler started - automation enabled!")
+
+    # Robota.ua auth diagnostic — logs which credential path is active
+    try:
+        from services.robotaua_auth import check_robotaua_auth
+        await check_robotaua_auth()
+    except Exception as e:
+        logger.error(f"Robota.ua auth check failed unexpectedly: {e}")
     
     # Check for missed scraping in background thread (non-blocking)
     def check_missed_scraping():
