@@ -1324,6 +1324,24 @@ class ContentScheduler:
             replace_existing=True
         )
 
+        # LinkedIn daily news digest — 07:00 UTC daily (09:00 Kyiv)
+        self.scheduler.add_job(
+            self._linkedin_digest_task,
+            CronTrigger(hour=7, minute=0),
+            id='linkedin_daily_digest',
+            name='LinkedIn daily HoReCa news digest',
+            replace_existing=True
+        )
+
+        # Alex Avatar video digest — Monday 08:00 UTC (10:00 Kyiv)
+        self.scheduler.add_job(
+            self._video_digest_task,
+            CronTrigger(day_of_week='mon', hour=8, minute=0),
+            id='alex_video_digest',
+            name='Alex Gradus weekly video digest',
+            replace_existing=True
+        )
+
         # Easter survey broadcast — 7 Apr 2026 at 07:00 UTC (one-time)
         self.scheduler.add_job(
             self._survey_easter_broadcast_task,
@@ -1383,6 +1401,36 @@ class ContentScheduler:
         logger.info("🚀 System ready! Waiting for next scheduled task...")
         logger.info("=" * 60)
     
+    def _linkedin_digest_task(self):
+        """
+        Daily LinkedIn HoReCa news digest.
+        Fetches top 5 posted articles, generates AI insights via Claude Haiku,
+        posts native text (no link) + first comment with links.
+        Runs: daily at 07:00 UTC (09:00 Kyiv).
+        """
+        logger.info("[SCHEDULER] LinkedIn daily digest starting...")
+        try:
+            from services.linkedin_digest_service import post_daily_digest
+            result = post_daily_digest()
+            logger.info(f"[SCHEDULER] LinkedIn digest done: {result}")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] LinkedIn digest failed: {e}", exc_info=True)
+
+    def _video_digest_task(self):
+        """
+        Weekly Alex Gradus avatar video digest.
+        Generates AI script via Claude Sonnet, HeyGen video, distributes to
+        Facebook + Telegram + LinkedIn.
+        Runs: Monday at 08:00 UTC (10:00 Kyiv).
+        """
+        logger.info("[SCHEDULER] Alex video digest starting...")
+        try:
+            from services.video_digest_service import run_weekly_digest
+            result = run_weekly_digest()
+            logger.info(f"[SCHEDULER] Alex video digest done: {result}")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Alex video digest failed: {e}", exc_info=True)
+
     def _survey_easter_broadcast_task(self):
         """
         Easter 2026 survey broadcast.

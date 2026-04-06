@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Send, Languages } from 'lucide-react'
 import axios from 'axios'
 import { API_URL } from '../lib/api'
+import { trackChatStarted } from '../lib/analytics'
 
 function ChatPage() {
   const [message, setMessage] = useState('')
@@ -14,6 +15,7 @@ function ChatPage() {
     e.preventDefault()
     if (!message.trim()) return
 
+    trackChatStarted(message)
     setLoading(true)
     try {
       const response = await axios.post(`${API_URL}/chat`, {

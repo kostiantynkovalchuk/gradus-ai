@@ -1,0 +1,332 @@
+# Replit Agent Prompt — Gradus AI Platform
+## Full Architecture Briefing + Next Actions
+
+---
+
+## WHO YOU ARE WORKING WITH
+
+You are working on **Gradus AI** — a dual-product platform built for the Ukrainian HoReCa (Hotel/Restaurant/Café) industry and the AVTD alcohol distribution company.
+
+The platform lives at two addresses:
+- **gradusmedia.org** — public consumer-facing website (Next.js, deployed on Render.com or Vercel)
+- **gradus-ai.onrender.com/hr** — internal HR/admin dashboard (FastAPI + Python backend, deployed on Render.com)
+
+**Tech stack:**
+- Backend: Python / FastAPI, async (asyncio), deployed on Render.com
+- Database: Neon PostgreSQL (cloud), accessed via SQLAlchemy ORM (main flow) + raw psycopg2 (background tasks)
+- AI: Anthropic Claude API — Haiku for internal/scoring tasks, Sonnet for client-facing features
+- Telegram: python-telegram-bot (webhook) + Telethon (userbot for scanning/posting)
+- Frontend (gradusmedia.org): Next.js, dark gold theme, Ukrainian language
+- Secrets: All in Render.com environment variables, nothing in GitHub
+
+---
+
+## PRODUCT 1 — ALEX GRADUS (Consumer AI Assistant)
+
+### What It Is
+Alex Gradus is an AI HoReCa consultant available at **gradusmedia.org**. It answers questions about bar profitability, cocktail trends, Ukrainian market, verified suppliers (AVTD), and alcohol licensing.
+
+### Current Landing Page (gradusmedia.org)
+The homepage hero section shows:
+- Headline: "Alex — Ваш особистий експерт з прибутковості бару"
+- Subheadline: "Світові тренди + український ринок + перевірені постачальники"
+- 4 stat cards: 800+ закладів, 25+ років досвіду, <2хв відповідь, 24/7 онлайн
+- Quick-start question buttons (4 preset questions to lower entry barrier)
+- CTA button: "Почати діалог з Alex" → opens chat
+- Footer note: "Безкоштовно. Потім від $7/міс для безлімітного доступу"
+
+### Navigation
+Головна / Новини / Огляди / Тренди / Чат з Alex / Тарифи / FAQ / Про платформу
+
+### Pricing (3 tiers)
+| Tier | Price | Key Features |
+|------|-------|--------------|
+| Безкоштовний | $0 | 5 питань/день, базові відповіді, доступ до новин |
+| Стандарт ⭐ | $7/міс (≈305₴) | Безлімітні питання, щотижневі тренд-звіти (email), база постачальників AVTD, підтримка 24год |
+| Преміум | $10/міс (≈436₴) | Все зі Стандарт + відеоконсультація 1x/міс (30хв), знижки AVTD 10–15%, custom аналіз меню, пріоритетна підтримка |
+
+Annual toggle exists with -20% discount. UAH price shown via live NBU exchange rate.
+
+### Email Gate
+There is an email capture gate — users must provide email before accessing the chat. This feeds a nurture sequence.
+
+### Lead Magnets (existing)
+- Fresh world HoReCa news — posted on Facebook and Telegram channel
+- Ukrainian market news — same distribution
+- These are the top-of-funnel content assets driving organic traffic
+
+### Planned: AI Avatar Video Digest
+Goal: Generate automated video with Alex avatar reading a weekly/daily news digest, distributed to:
+- Facebook (page post)
+- Telegram (channel post)  
+- LinkedIn (native post — link in first comment to avoid algo suppression)
+
+This is not yet built. It requires:
+1. News aggregation pipeline (already partially exists via news section)
+2. Script generation via Claude (summarize top 5 HoReCa stories)
+3. Avatar video generation (HeyGen or D-ID API)
+4. Automated posting to all 3 platforms
+
+---
+
+## PRODUCT 2 — MAYA HUNT (Internal AI Recruitment for AVTD)
+
+### What It Is
+Maya Hunt is an autonomous AI recruitment pipeline embedded in AVTD's HR infrastructure. It activates when HR posts a vacancy in a private Telegram supergroup and returns a scored shortlist in under 3 minutes.
+
+### Pipeline Flow
+```
+HR posts vacancy in Telegram supergroup
+    ↓
+[1] PARSE — Claude Haiku extracts: position, city, salary, requirements → JSON
+    ↓
+[2] ACTION MENU — HR chooses: Search / Post / Both / Skip (inline keyboard)
+    ↓
+[3] SEARCH (parallel):
+    ├── Work.ua public scraping (BeautifulSoup, no auth, up to 14 CVs)
+    ├── 7 Telegram channels scan (Telethon read-only, 30 cap, CV vs vacancy filter)
+    └── Robota.ua salary GraphQL (background task, cached)
+    ↓
+[4] SCORE — Claude Haiku scores each candidate 0–100 against vacancy requirements
+    - City mismatch → hard cap 20/100
+    - Minimum threshold: 35/100 (below = not shown)
+    - safe_parse_json() repair for truncated responses
+    ↓
+[5] DELIVER — Top 5 cards in Telegram thread with buttons: ✅ ❌ 💾 🎯 Найняти
+```
+
+### Candidate Sources
+| Source | Method | Volume |
+|--------|--------|--------|
+| Work.ua | Public scraping, Cloudflare bypassed via unauthenticated search | 14 CVs/run |
+| Telegram channels | Telethon scan, channel_type=scan, is_cv_post() filter | 7 channels, 30 cap |
+| Robota.ua | GraphQL authenticated (JWT token, expires April 12 2026) | Salary data only |
+
+### Database (Neon PostgreSQL)
+All Maya Hunt tables use sequential numbered migrations:
+| Table | Migration | Purpose |
+|-------|-----------|---------|
+| hunt_vacancies | 011 | Parsed vacancy data |
+| hunt_candidates | 011 | Scored candidates, HR decisions, hire tracking |
+| hunt_sources | 011+016 | channel_type: scan/post/both |
+| hunt_postings | 013 | Vacancy post attempt log |
+| hunt_salary_data | 013+014 | Robota.ua employer vs candidate medians |
+| schema_migrations | system | Migration tracking |
+
+### Key Service Files (backend/services/)
+| File | Responsibility |
+|------|---------------|
+| hunt_service.py | Main orchestration |
+| hunt_vacancy_parser.py | Claude Haiku → vacancy JSON |
+| hunt_tg_scraper.py | Telethon channel scanner |
+| hunt_workua_scraper.py | Work.ua BeautifulSoup scraper |
+| hunt_scorer.py | Claude Haiku scoring + safe_parse_json() |
+| hunt_card_formatter.py | Telegram card with action buttons |
+| hunt_poster.py | Vacancy posting via Telethon |
+| robotaua_auth.py | JWT auth + ROBOTAUA_JWT env fallback |
+| robotaua_salary.py | GraphQL salary analytics |
+| salary_normalizer.py | Ukrainian salary format parser, NBU rate |
+
+### Pending Items (URGENT)
+- **Robota.ua JWT expires April 12, 2026** — must fix proper login before then
+- Vacancy posting channels — waiting on AVTD negotiating post rights
+- End-to-end test of 🎯 Найняти hire button
+
+---
+
+## PRODUCT 3 — ALEX PHOTO REPORT (Field Merchandising Bot)
+
+### What It Is
+A Telegram bot used by AVTD field sales reps to photo-audit shelf placements at retail points. The rep sends shelf photos; the bot scores the display 0–100 using Claude vision.
+
+### Flow
+```
+Rep sends /start → bot asks for store name
+Rep sends photos (up to 5) → clicks "Готово"
+Bot: "Аналізую 1 фото... Це займе ~15 секунд"
+Bot returns scored report card:
+  - Score: XX/100 ПРОЙДЕНО or НЕ ПРОЙДЕНО
+  - Помилки (violations with rule IDs)
+  - Доля полки горілки: XX% (норма ≥25%)
+  - Інфо (informational, не впливає на оцінку): вино/коньяк % vs Phase 2 targets
+  - Claude commentary on what was detected
+  - ID звіту: #N
+```
+
+### Scoring Rules (examples observed in production)
+- `1_108106` — Відсутній шелфстрипер GREENDAY при наявності конкурентських POS матеріалів
+- `1_108608` — Частка полиці горілки менше 25% — провал звіту
+- `NP59_200009734` — Відсутній загальний огляд всіх полиць (лівий+центр+правий край)
+
+### Known Issues (from live testing, 19.03.2026)
+- Bot sometimes classifies shelftockers on competitor bottles as "missing" when they shouldn't count
+- AVTD wine and cognac brands (Adjari, Villa UA) not being identified correctly — counted as 0% or as competitor
+- General overview photo requirement (NP59) fails when refrigerators form the visible boundary instead of the full shelf wall
+- Cognac share calculation is mixing top shelf (spirits) with vodka shelf in some shots
+
+### Status
+Live and being tested by sales rep Александр. Several prompt/scoring logic fixes needed.
+
+---
+
+## INFRASTRUCTURE OVERVIEW
+
+### Environment Variables (Render.com)
+```
+# Telegram
+HUNT_TG_SUPERGROUP_ID = -1003782695736
+TELETHON_API_ID = 37312370
+TELETHON_API_HASH = [secret]
+TELETHON_SESSION = [StringSession]
+HR_TELETHON_SESSION = [StringSession — Natalia, parked]
+
+# Work.ua (login bypassed)
+WORKUA_EMAIL = michailova@vinkom.net
+WORKUA_PASSWORD = [secret]
+
+# Robota.ua
+ROBOTAUA_EMAIL = michailova@vinkom.net
+ROBOTAUA_PASSWORD = [secret]
+ROBOTAUA_JWT = [expires April 12 2026]
+
+# Exchange rate fallback
+USD_TO_UAH_RATE = 43.73
+
+# HR contact
+HR_CONTACT = @avtd_hr
+```
+
+### AI Model Strategy
+- **Claude Haiku** — all internal tasks (parsing, scoring, classification). 6–8x cheaper than Sonnet. ~$0.15 per full vacancy search.
+- **Claude Sonnet** — client-facing Alex Gradus chat. Quality over cost for user-visible responses.
+
+### Cost Architecture
+- Preset matching at 75ms (vs RAG at 10 seconds) — preset-first architecture
+- Parallel scraping (not sequential) to minimize wait time
+- Haiku for bulk, Sonnet for client-facing
+
+---
+
+## THREE IMMEDIATE TASKS TO IMPLEMENT
+
+### TASK 1 — Google Analytics 4 on gradusmedia.org
+
+Add GA4 tracking to the Next.js frontend.
+
+Requirements:
+- Install `@next/third-parties` or add gtag.js via `_document.tsx` / `layout.tsx`
+- Measurement ID: to be provided (GA4 property not yet created — agent should scaffold the code with a placeholder `G-XXXXXXXXXX`)
+- Track: page views, CTA button clicks ("Почати діалог з Alex"), quick-start question button clicks, email gate submissions, pricing tier button clicks ("Спробувати 7 днів безкоштовно" for each tier)
+- Custom events needed:
+  - `chat_started` — when user clicks main CTA
+  - `quick_question_clicked` — with question text as parameter
+  - `email_submitted` — email gate conversion
+  - `trial_started` — tier name as parameter (standard/premium)
+  - `plan_viewed` — pricing page view
+
+### TASK 2 — LinkedIn Automated News Posting
+
+Build a scheduled service that auto-posts HoReCa news digest to LinkedIn.
+
+Requirements:
+- Source: pull latest 5 news items from gradusmedia.org (either via existing API endpoint or direct DB query)
+- Script generation: Claude Haiku summarizes each item into a 2–3 sentence LinkedIn-optimized insight (not just headline repost)
+- Post format: native text post (NO external link in post body — link goes in first comment to avoid LinkedIn algo suppression)
+- Scheduling: once per day, configurable time (default 09:00 Kyiv time)
+- LinkedIn API: use LinkedIn OAuth 2.0 + `ugcPosts` endpoint
+- First comment automation: after post is published, immediately post first comment with the link
+- Environment variables needed:
+  - `LINKEDIN_ACCESS_TOKEN`
+  - `LINKEDIN_PERSON_URN` (or `LINKEDIN_ORG_URN` for company page)
+- Logging: save post ID, timestamp, content snippet to DB table `linkedin_posts`
+- Error handling: if LinkedIn API fails, log and skip (do not crash other services)
+
+### TASK 3 — Alex Avatar Video Pipeline (Architecture + Scaffold)
+
+Scaffold the automated video digest pipeline. Full generation can be activated once API keys are provided.
+
+Requirements:
+- **Step 1 — News aggregation**: fetch top 5 HoReCa news items (from gradusmedia.org DB or RSS)
+- **Step 2 — Script generation**: Claude Sonnet generates a 60–90 second spoken script in Ukrainian, in Alex Gradus persona, covering the 5 stories conversationally (not as a list)
+- **Step 3 — Avatar video**: send script to HeyGen API (`/v2/video/generate`) with Alex avatar ID (placeholder: `HEYGEN_AVATAR_ID` env var). Alternatively D-ID if HeyGen unavailable.
+- **Step 4 — Distribution** (parallel):
+  - Facebook: post video to page via Graph API with caption
+  - Telegram: send video to channel via Bot API
+  - LinkedIn: post video natively (or link to hosted video) + first comment with gradusmedia.org link
+- **Scheduling**: weekly (Monday 10:00 Kyiv) or triggered manually via admin panel
+- **Environment variables needed**:
+  - `HEYGEN_API_KEY`
+  - `HEYGEN_AVATAR_ID`
+  - `FACEBOOK_PAGE_ID`
+  - `FACEBOOK_ACCESS_TOKEN`
+  - `TELEGRAM_CHANNEL_ID` (public channel for news)
+  - LinkedIn vars (same as Task 2)
+- **Status tracking**: DB table `video_digests` with fields: id, script, video_url, status (pending/generating/posted/failed), posted_at per platform, created_at
+
+---
+
+---
+
+## PLANNED FEATURE — HORECA STAFF SEARCH (Premium Tier) — ⛔ BLOCKED, DO NOT IMPLEMENT YET
+
+### What It Is
+A planned Premium-tier feature for Alex Gradus subscribers. HoReCa owners (bar managers, restaurant owners) will be able to search for staff (bartenders, waiters, cooks, managers) directly inside the Alex Gradus interface, powered by the Maya Hunt architecture.
+
+### How It Will Work (once unblocked)
+- Premium user types a staff request in natural language: "Шукаю бармена у Дніпрі, досвід від 2 років, знання коктейлів"
+- Alex Gradus parses the request using Claude Haiku (same as Maya Hunt vacancy parser)
+- Pipeline runs parallel CV search: Robota.ua + Work.ua + Telegram job channels
+- Candidates scored 0–100 against HoReCa-specific criteria
+- Top 5 results delivered inside the chat interface as cards
+- This is Maya Hunt architecture reused for B2C, not B2B
+
+### Why It Is Blocked Right Now
+**Robota.ua CV fetching is not working correctly.** The current Maya Hunt integration with Robota.ua only reliably pulls **salary analytics data** via GraphQL. Actual CV/candidate fetching from Robota.ua returns incomplete or empty results. This is a known unresolved issue as of April 2026.
+
+Additionally:
+- The Robota.ua JWT token expires **April 12, 2026** and proper auto-login is not yet solved
+- Work.ua public scraping works but is limited (name, age, city, role only — no contact details without login)
+- Telegram channel scan works but coverage for HoReCa-specific roles (bartenders, waiters) has not been validated
+
+### What To Do Now (scaffold only)
+- Add "Пошук персоналу" as a **locked/coming soon feature** in the Premium tier feature list on the pricing page
+- Add a placeholder UI card in the chat interface that says "Функція в розробці — доступна для Преміум підписників незабаром"
+- Do NOT wire up any backend logic for this feature
+- Do NOT create new DB tables for this feature yet
+- Add a comment in the codebase: `# TODO: HoReCa Staff Search — blocked on Robota.ua CV fetch fix (see Maya Hunt architecture docs)`
+
+### Dependencies Before This Can Be Built
+1. Fix Robota.ua authenticated CV search (resolve login endpoint, replace expired JWT with proper OAuth or session flow)
+2. Validate Telegram channel list covers HoReCa job postings (bartenders, waiters, cooks) — current channels are FMCG/sales focused
+3. Adapt hunt_scorer.py prompt for HoReCa roles vs FMCG sales roles
+4. Build result rendering inside gradusmedia.org chat UI (currently Maya Hunt only delivers to Telegram)
+5. Add rate limiting per user (Premium subscribers only, max N searches per month)
+
+### Impact on Current Pricing
+Once live, this feature significantly strengthens the Premium tier value proposition and justifies a price increase from $10 to $15–19/month. **Do not change pricing until the feature is live.**
+
+---
+
+## WHAT NOT TO TOUCH
+
+- Do not modify Maya Hunt scoring logic or database schema without explicit instruction
+- Do not modify the Robota.ua JWT or authentication logic — it expires April 12 and is being handled separately
+- Do not change the Alex Gradus chat model from Sonnet to Haiku
+- Do not remove the email gate
+- Do not alter existing pricing tiers or UAH conversion display logic
+- Do not implement HoReCa Staff Search backend logic — scaffold UI placeholder only (see PLANNED FEATURE section above)
+- Do not increase Premium tier price — pricing change is gated on Staff Search going live
+
+---
+
+## CONTEXT FOR DECISION MAKING
+
+- The platform serves Ukrainian HoReCa professionals — Ukrainian language is primary, Russian is not used
+- AVTD is the distributor — their brands are GREENDAY vodka, UKRAINKA vodka, ADJARI cognac, Villa UA wine
+- Alex Gradus persona: experienced, confident, male, bar industry expert — not a generic chatbot
+- All costs are displayed in USD with NBU UAH equivalent
+- The platform is early-stage but live — real users, real data, production environment
+
+---
+
+*Prepared: April 2026 | Platform: Gradus AI | gradus-ai.onrender.com | gradusmedia.org*

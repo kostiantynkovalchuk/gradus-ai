@@ -775,6 +775,35 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "031_linkedin_posts_video_digests",
+        "statements": [
+            """
+            CREATE TABLE IF NOT EXISTS linkedin_posts (
+                id               SERIAL PRIMARY KEY,
+                post_id          VARCHAR(255),
+                post_url         TEXT,
+                content_snippet  TEXT,
+                article_ids      JSONB,
+                status           VARCHAR(20) DEFAULT 'posted',
+                posted_at        TIMESTAMP DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS video_digests (
+                id                  SERIAL PRIMARY KEY,
+                script              TEXT,
+                video_url           TEXT,
+                heygen_video_id     VARCHAR(255),
+                status              VARCHAR(20) DEFAULT 'pending',
+                posted_facebook_at  TIMESTAMP,
+                posted_telegram_at  TIMESTAMP,
+                posted_linkedin_at  TIMESTAMP,
+                created_at          TIMESTAMP DEFAULT NOW()
+            )
+            """,
+        ]
+    },
+    {
         "version": "030_hr_surveys",
         "statements": [
             """
