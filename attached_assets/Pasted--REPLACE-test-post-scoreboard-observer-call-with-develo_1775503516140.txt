@@ -1,0 +1,91 @@
+# REPLACE test_post_scoreboard() observer call with developer-only:
+async def test_post_scoreboard():
+    """Post scoreboard to Konstantin only for test."""
+    conn = psycopg2.connect(DB_URL)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT telegram_id FROM hr_users
+        WHERE access_level = 'developer'
+        AND telegram_id IS NOT NULL
+        AND is_active = true
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if not row:
+        print("❌ Developer user not found")
+        return False
+    
+    tg_id = row[0]
+    text  = await _build_scoreboard_text("easter_holiday_2026")
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            json={
+                "chat_id": tg_id,
+                "text": text,
+                "parse_mode": "Markdown"
+            }
+        )
+    result = resp.json()
+    if not result.get("ok"):
+        print(f"❌ Scoreboard send failed: {result}")
+        return False
+    
+    msg_id = result["result"]["message_id"]
+    
+    # Store only Konstantin's message_id in meta
+    conn = psycopg2.connect(DB_URL)
+    cur  = conn.cursor()
+    cur.execute("""
+        INSERT INTO hr_survey_meta (survey_id, scoreboard_targets)
+        VALUES (%s, %s)
+        ON CONFLICT (survey_id) DO UPDATE
+        SET scoreboard_targets = EXCLUDED.scoreboard_targets
+    """, (
+        "easter_holiday_2026",
+        json.dumps([{"chat_id": tg_id, "msg_id": msg_id}])
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    print(f"✅ Scoreboard sent to Konstantin only. msg_id: {msg_id}")
+    return True
+```
+
+---
+
+**Update the manual checklist** — remove all Natalia references:
+```
+┌─────────────────────────────────────────────────┐
+│  MANUAL CHECK REQUIRED — Open Telegram now      │
+├─────────────────────────────────────────────────┤
+│  Konstantin's phone only:                       │
+│  □ Survey message received from Maya HR bot     │
+│  □ "[ТЕСТ]" prefix visible in message           │
+│  □ Two buttons visible: ✅ Так  and  ❌ Ні      │
+│  □ Scoreboard message received separately       │
+│  □ Scoreboard shows 0 з 0 проголосували        │
+│                                                 │
+│  Natalia is NOT contacted during this test.     │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+**Update TEST 3 checklist** — remove Natalia section:
+```
+Konstantin's phone only:
+□ Survey message buttons disappeared
+□ Replaced with confirmation text:
+  "✅ Ваш голос Так збережено."
+□ Confirmation shows current % breakdown
+□ Scoreboard message updated (shows 1 голос)
+
+NOTE: Natalia will only receive scoreboard
+      during the real broadcast on April 7.
+      She is not involved in test runs.

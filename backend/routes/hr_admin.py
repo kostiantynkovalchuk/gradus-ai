@@ -1397,9 +1397,33 @@ async def get_survey_results(
     survey_id: str,
     credentials: HTTPBasicCredentials = Depends(verify_admin),
 ):
-    """Return current vote counts and percentages for a survey."""
+    """Return survey metadata + vote counts for the dashboard and test suite."""
+    import psycopg2, os
     from services.survey_service import get_results
-    return await get_results(survey_id)
+
+    db_url = os.environ.get("DATABASE_URL", "")
+    conn = psycopg2.connect(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT survey_id, question, is_open, sent_count FROM hr_surveys WHERE survey_id = %s",
+                (survey_id,)
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Survey not found")
+
+    results = await get_results(survey_id)
+    return {
+        "survey_id": row[0],
+        "question":  row[1],
+        "is_open":   row[2],
+        "sent":      row[3],
+        "results":   results,
+    }
 
 
 @router.post("/api/survey/{survey_id}/close")

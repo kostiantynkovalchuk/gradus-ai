@@ -1,0 +1,520 @@
+You are working on an existing FastAPI + PostgreSQL + Telegram bot project
+called Gradus AI / AVTD HR system hosted on Render.com.
+The survey feature for easter_holiday_2026 was just implemented.
+You need to run 3 verification tests before the live broadcast on April 7.
+
+════════════════════════════════════════
+CONTEXT — WHAT WAS JUST BUILT
+════════════════════════════════════════
+
+New files:
+  backend/migrations/030_hr_surveys.sql  — already applied
+  backend/services/survey_service.py     — 8 functions
+
+Modified files:
+  backend/telegram_webhook.py   — survey_ callback handler added
+  backend/services/scheduler.py — 2 jobs added
+  backend/routes/hr_admin.py    — 2 API endpoints added
+  backend/templates/hr_admin.html — survey card added
+
+DB tables confirmed live:
+  hr_surveys, hr_survey_votes, hr_survey_meta
+
+Survey seed row confirmed:
+  survey_id = 'easter_holiday_2026'
+  is_open = true
+
+Observer query uses access_level (NOT role):
+  SELECT telegram_id FROM hr_users
+  WHERE access_level IN ('developer', 'admin_hr')
+  AND telegram_id IS NOT NULL
+  AND is_active = true
+
+════════════════════════════════════════
+PRE-TEST CHECKS — RUN FIRST
+════════════════════════════════════════
+
+Before running any test, verify the following in the DB
+and fix anything that is wrong:
+
+1. Confirm seed row exists:
+   SELECT * FROM hr_surveys WHERE survey_id = 'easter_holiday_2026';
+   Expected: 1 row, is_open = true, sent_count = 0
+
+2. Confirm observers exist:
+   SELECT id, full_name, access_level, telegram_id
+   FROM hr_users
+   WHERE access_level IN ('developer', 'admin_hr')
+   AND telegram_id IS NOT NULL
+   AND is_active = true;
+   Expected: exactly 2 rows (Konstantin + Natalia)
+   If 0 rows returned — print the distinct access_level values:
+     SELECT DISTINCT access_level FROM hr_users;
+   And adjust the observer query in survey_service.py to match
+   the actual values used for developer and hr admin.
+
+3. Confirm votes table is empty before testing:
+   SELECT COUNT(*) FROM hr_survey_votes
+   WHERE survey_id = 'easter_holiday_2026';
+   Expected: 0
+
+4. Confirm meta table is empty before testing:
+   SELECT * FROM hr_survey_meta
+   WHERE survey_id = 'easter_holiday_2026';
+   Expected: 0 rows (will be populated by Test 2)
+
+════════════════════════════════════════
+TEST 1 — API ENDPOINT
+════════════════════════════════════════
+
+Goal: Confirm GET /hr/api/survey/easter_holiday_2026/results
+      returns valid JSON with correct structure.
+
+Step 1: Make the HTTP request.
+  Use httpx or requests in a test script:
+
+  import httpx, json
+
+  BASE_URL = "https://gradus-ai.onrender.com"
+  url = f"{BASE_URL}/hr/api/survey/easter_holiday_2026/results"
+
+  resp = httpx.get(url)
+  print(f"Status: {resp.status_code}")
+  print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+
+Step 2: Validate response structure.
+  Assert ALL of the following:
+
+  data = resp.json()
+
+  assert resp.status_code == 200, \
+    f"Expected 200, got {resp.status_code}"
+
+  assert data["survey_id"] == "easter_holiday_2026", \
+    "survey_id mismatch"
+
+  assert isinstance(data["question"], str) and len(data["question"]) > 10, \
+    "question missing or too short"
+
+  assert data["is_open"] == True, \
+    "is_open should be True before any manual close"
+
+  assert isinstance(data["sent"], int), \
+    "sent should be integer"
+
+  assert "results" in data, \
+    "results key missing"
+
+  r = data["results"]
+  assert "yes"   in r, "yes key missing from results"
+  assert "no"    in r, "no key missing from results"
+  assert "total" in r, "total key missing from results"
+  assert "sent"  in r, "sent key missing from results"
+
+  assert "count" in r["yes"] and "pct" in r["yes"], \
+    "yes missing count or pct"
+  assert "count" in r["no"]  and "pct" in r["no"],  \
+    "no missing count or pct"
+
+  # Before any votes: counts should be 0
+  assert r["yes"]["count"] == 0, "yes count should be 0 before voting"
+  assert r["no"]["count"]  == 0, "no count should be 0 before voting"
+  assert r["total"]        == 0, "total should be 0 before voting"
+
+Step 3: Print result.
+  If all assertions pass:
+    print("✅ TEST 1 PASSED — API endpoint returns correct structure")
+  If any assertion fails:
+    print("❌ TEST 1 FAILED")
+    print the exact assertion error
+    DO NOT proceed to Test 2 until Test 1 passes.
+    Fix the endpoint and re-run.
+
+════════════════════════════════════════
+TEST 2 — SINGLE USER BROADCAST + SCOREBOARD
+════════════════════════════════════════
+
+Goal: Send survey to Konstantin only (test user = developer).
+      Confirm inline keyboard renders in Telegram.
+      Confirm scoreboard message appears in both
+      Konstantin and Natalia personal chats.
+
+IMPORTANT: Do NOT broadcast to all hr_users.
+           Send to ONE user only for this test.
+
+Step 1: Create test script backend/scripts/test_survey_send.py
+
+  import asyncio, os, httpx, json
+  import psycopg2
+  from dotenv import load_dotenv
+  load_dotenv()
+
+  TOKEN    = os.environ["TELEGRAM_MAYA_BOT_TOKEN"]
+  DB_URL   = os.environ["DATABASE_URL"]
+
+  async def get_developer_tg_id() -> int:
+      """Fetch Konstantin's telegram_id from hr_users."""
+      conn = psycopg2.connect(DB_URL)
+      cur  = conn.cursor()
+      cur.execute("""
+          SELECT telegram_id, full_name FROM hr_users
+          WHERE access_level IN ('developer', 'admin_hr')
+          AND telegram_id IS NOT NULL
+          AND is_active = true
+          ORDER BY access_level  -- developer sorts before admin_hr
+          LIMIT 1
+      """)
+      row = cur.fetchone()
+      cur.close()
+      conn.close()
+      if not row:
+          raise ValueError("No developer/admin_hr user found in hr_users")
+      print(f"Test recipient: {row[1]} (telegram_id: {row[0]})")
+      return row[0]
+
+  async def send_test_survey(tg_id: int):
+      """Send survey message with inline keyboard to one user."""
+      payload = {
+          "chat_id": tg_id,
+          "text": (
+              "🧪 *[ТЕСТ] Опитування*\n\n"
+              "У зв'язку з діючими обмеженнями на державні свята під час "
+              "воєнного стану просимо поділитись думкою:\n\n"
+              "*Чи необхідний Вам вихідний (пн 13/04/26) після Великодня?*"
+          ),
+          "parse_mode": "Markdown",
+          "reply_markup": {
+              "inline_keyboard": [[
+                  {"text": "✅ Так",
+                   "callback_data": "survey_easter_holiday_2026_yes"},
+                  {"text": "❌ Ні",
+                   "callback_data": "survey_easter_holiday_2026_no"}
+              ]]
+          }
+      }
+      async with httpx.AsyncClient() as client:
+          resp = await client.post(
+              f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+              json=payload
+          )
+      result = resp.json()
+      if result.get("ok"):
+          msg_id = result["result"]["message_id"]
+          print(f"✅ Survey message sent. message_id: {msg_id}")
+          return msg_id
+      else:
+          print(f"❌ Send failed: {result}")
+          return None
+
+  async def test_post_scoreboard():
+      """Call post_scoreboard and verify both observers receive message."""
+      import sys
+      sys.path.insert(0, "/home/user/backend")
+      from services.survey_service import post_scoreboard
+      
+      print("Posting scoreboard to observers...")
+      await post_scoreboard("easter_holiday_2026")
+      
+      # Verify meta was stored
+      conn = psycopg2.connect(DB_URL)
+      cur  = conn.cursor()
+      cur.execute("""
+          SELECT scoreboard_targets
+          FROM hr_survey_meta
+          WHERE survey_id = 'easter_holiday_2026'
+      """)
+      row = cur.fetchone()
+      cur.close()
+      conn.close()
+      
+      if not row or not row[0]:
+          print("❌ SCOREBOARD FAILED — hr_survey_meta has no targets stored")
+          return False
+      
+      targets = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+      print(f"✅ Scoreboard sent. Targets stored: {targets}")
+      print(f"   Message count: {len(targets)}")
+      
+      if len(targets) < 2:
+          print("⚠️  WARNING: Expected 2 targets (Konstantin + Natalia), "
+                f"got {len(targets)}")
+          print("   Check access_level values in hr_users")
+      
+      return True
+
+  async def main():
+      print("=" * 50)
+      print("TEST 2 — Single broadcast + scoreboard")
+      print("=" * 50)
+      
+      tg_id = await get_developer_tg_id()
+      msg_id = await send_test_survey(tg_id)
+      
+      if not msg_id:
+          print("❌ TEST 2 FAILED at send step. Stopping.")
+          return
+      
+      print("\nWaiting 3 seconds before posting scoreboard...")
+      await asyncio.sleep(3)
+      
+      scoreboard_ok = await test_post_scoreboard()
+      
+      print("\n" + "=" * 50)
+      if scoreboard_ok:
+          print("✅ TEST 2 PASSED")
+          print("ACTION REQUIRED: Check Telegram on Konstantin's phone.")
+          print("  1. Survey message arrived with ✅ Так / ❌ Ні buttons")
+          print("  2. Scoreboard message arrived in BOTH personal chats")
+          print("Then proceed to Test 3 — tap a button.")
+      else:
+          print("❌ TEST 2 FAILED — fix scoreboard before Test 3")
+      print("=" * 50)
+
+  asyncio.run(main())
+
+Step 2: Run the script:
+  cd /home/user && python backend/scripts/test_survey_send.py
+
+Step 3: Manual verification required after running.
+  Print this checklist for the human to check:
+
+  print("""
+  ┌─────────────────────────────────────────────────┐
+  │  MANUAL CHECK REQUIRED — Open Telegram now      │
+  ├─────────────────────────────────────────────────┤
+  │  Konstantin's phone:                            │
+  │  □ Survey message received from Maya HR bot     │
+  │  □ "[ТЕСТ]" prefix visible in message           │
+  │  □ Two buttons visible: ✅ Так  and  ❌ Ні      │
+  │  □ Scoreboard message received separately       │
+  │  □ Scoreboard shows 0 з 0 проголосували        │
+  │                                                 │
+  │  Natalia's phone:                               │
+  │  □ Scoreboard message received from Maya HR bot │
+  │  □ Same format as Konstantin's scoreboard       │
+  │                                                 │
+  │  Type YES to proceed to Test 3, or              │
+  │  describe what is missing/wrong.                │
+  └─────────────────────────────────────────────────┘
+  """)
+
+════════════════════════════════════════
+TEST 3 — VOTE + CONFIRMATION + SCOREBOARD UPDATE
+════════════════════════════════════════
+
+Goal: Tap ✅ Так button on the test message from Test 2.
+      Confirm:
+        a) Survey message replaced with confirmation text
+        b) Confirmation shows live percentages
+        c) Scoreboard in BOTH chats updates within 3 seconds
+        d) hr_survey_votes has 1 row
+        e) Tapping ❌ Ні (re-vote) updates vote + scoreboard again
+
+This test is partially manual (requires tapping Telegram button)
+and partially automated (DB verification).
+
+Step 1: Print instructions for human:
+
+  print("""
+  TEST 3 — ACTION REQUIRED
+  ========================
+  1. On Konstantin's phone, tap "✅ Так" on the test survey message.
+  2. Wait 5 seconds.
+  3. Come back here and press Enter to run DB verification.
+  """)
+  input("Press Enter after tapping the button...")
+
+Step 2: DB verification after vote:
+
+  Create and run this verification:
+
+  import psycopg2, os
+  from dotenv import load_dotenv
+  load_dotenv()
+
+  conn = psycopg2.connect(os.environ["DATABASE_URL"])
+  cur  = conn.cursor()
+
+  # Check vote was recorded
+  cur.execute("""
+      SELECT v.answer, v.voted_at, u.full_name
+      FROM hr_survey_votes v
+      JOIN hr_users u ON u.id = v.user_id
+      WHERE v.survey_id = 'easter_holiday_2026'
+  """)
+  votes = cur.fetchall()
+
+  print(f"\nVotes in DB: {len(votes)}")
+  for v in votes:
+      print(f"  {v[2]}: {v[0]} at {v[1]}")
+
+  assert len(votes) == 1, \
+    f"❌ Expected 1 vote, got {len(votes)}"
+  assert votes[0][0] == "yes", \
+    f"❌ Expected answer 'yes', got '{votes[0][0]}'"
+  print("✅ Vote recorded correctly")
+
+  # Check scoreboard was updated (last_edit_at should be recent)
+  cur.execute("""
+      SELECT last_edit_at, scoreboard_targets
+      FROM hr_survey_meta
+      WHERE survey_id = 'easter_holiday_2026'
+  """)
+  meta = cur.fetchone()
+
+  if meta and meta[0]:
+      from datetime import datetime, timezone
+      now     = datetime.now(timezone.utc)
+      edited  = meta[0].replace(tzinfo=timezone.utc) \
+                if meta[0].tzinfo is None else meta[0]
+      elapsed = (now - edited).total_seconds()
+      print(f"✅ Scoreboard last edited {elapsed:.0f}s ago")
+      if elapsed > 30:
+          print("⚠️  WARNING: last_edit_at is older than 30s — "
+                "scoreboard may not have updated on vote")
+  else:
+      print("⚠️  last_edit_at is NULL — scoreboard edit not triggered")
+
+  cur.close()
+  conn.close()
+
+Step 3: Re-vote test — tap ❌ Ні on same message.
+  Print:
+  print("""
+  RE-VOTE TEST
+  ============
+  Now tap "❌ Ні" on the same test survey message.
+  (The message should already show confirmation text —
+   if buttons are gone, this sub-test is skipped.
+   Buttons disappear after first vote — this is correct behaviour.
+   Re-vote is only possible if user sends a new /start — skip for now.)
+  """)
+
+  After re-vote attempt, verify DB shows updated answer:
+  cur.execute("""
+      SELECT answer FROM hr_survey_votes
+      WHERE survey_id = 'easter_holiday_2026'
+  """)
+  # If answer changed to 'no' — re-vote works
+  # If still 'yes' — re-vote blocked (acceptable if buttons removed)
+
+Step 4: Print final test summary:
+
+  print("""
+  ════════════════════════════════════════
+  TEST 3 MANUAL CHECKLIST
+  ════════════════════════════════════════
+  After tapping ✅ Так, verify in Telegram:
+
+  Konstantin's phone:
+  □ Survey message buttons disappeared
+  □ Replaced with confirmation text:
+    "✅ Ваш голос Так збережено."
+  □ Confirmation shows current % breakdown
+  □ Scoreboard message updated (shows 1 голос)
+
+  Natalia's phone:
+  □ Scoreboard message updated automatically
+  □ Shows: ✅ Так █░░░░░░░░░ 100% (1)
+  □ Shows: 👥 Проголосувало: 1 з 0
+
+  HR Dashboard (/hr Pulse tab):
+  □ Survey card visible
+  □ Yes bar shows 100%
+  □ Total shows 1 проголосували
+  □ LIVE 🔴 badge visible
+  □ "🔒 Закрити опитування" button visible
+  ════════════════════════════════════════
+  """)
+
+════════════════════════════════════════
+POST-TEST CLEANUP
+════════════════════════════════════════
+
+After all 3 tests pass, run cleanup to reset state
+before the real broadcast on April 7:
+
+  import psycopg2, os
+  from dotenv import load_dotenv
+  load_dotenv()
+
+  conn = psycopg2.connect(os.environ["DATABASE_URL"])
+  cur  = conn.cursor()
+
+  # Remove test votes
+  cur.execute("""
+      DELETE FROM hr_survey_votes
+      WHERE survey_id = 'easter_holiday_2026'
+  """)
+  deleted_votes = cur.rowcount
+
+  # Remove scoreboard meta (so post_scoreboard creates fresh on April 7)
+  cur.execute("""
+      DELETE FROM hr_survey_meta
+      WHERE survey_id = 'easter_holiday_2026'
+  """)
+  deleted_meta = cur.rowcount
+
+  # Reset sent_count
+  cur.execute("""
+      UPDATE hr_surveys
+      SET sent_count = 0
+      WHERE survey_id = 'easter_holiday_2026'
+  """)
+
+  # Confirm is_open still true
+  cur.execute("""
+      SELECT is_open, sent_count
+      FROM hr_surveys
+      WHERE survey_id = 'easter_holiday_2026'
+  """)
+  row = cur.fetchone()
+
+  conn.commit()
+  cur.close()
+  conn.close()
+
+  print(f"🧹 Cleanup complete:")
+  print(f"   Votes deleted:    {deleted_votes}")
+  print(f"   Meta deleted:     {deleted_meta}")
+  print(f"   is_open:          {row[0]}")
+  print(f"   sent_count reset: {row[1]}")
+  print()
+  print("✅ System ready for live broadcast on April 7 at 10:00 Kyiv")
+
+════════════════════════════════════════
+FINAL PASS/FAIL SUMMARY
+════════════════════════════════════════
+
+After all tests and cleanup, print this summary:
+
+  results = {
+      "TEST 1 — API endpoint":           "PASS / FAIL",
+      "TEST 2 — Single send + scoreboard": "PASS / FAIL",
+      "TEST 3 — Vote + DB verification":  "PASS / FAIL",
+      "Cleanup":                          "DONE / FAILED",
+  }
+
+  Print each line with ✅ or ❌ prefix.
+
+  If all PASS:
+    print("🚀 All tests passed. Survey is ready for April 7 broadcast.")
+    print("   Scheduler jobs will fire automatically at 07:00 UTC.")
+    print("   No manual action needed until HR decides to close the survey.")
+
+  If any FAIL:
+    print("🛑 Fix failures above before April 7.")
+    print("   Do NOT run broadcast_survey() manually as a workaround.")
+    print("   Fix the root cause in survey_service.py or telegram_webhook.py")
+
+════════════════════════════════════════
+IMPORTANT CONSTRAINTS
+════════════════════════════════════════
+
+- Do NOT call broadcast_survey() with all hr_users during testing
+- Do NOT modify hr_surveys.is_open during tests
+- Do NOT delete the hr_surveys seed row at any point
+- All test scripts go in backend/scripts/ with test_ prefix
+- Run cleanup ONLY after all 3 tests pass
+- If Test 1 fails, stop and fix before running Test 2
+- If Test 2 fails, stop and fix before running Test 3

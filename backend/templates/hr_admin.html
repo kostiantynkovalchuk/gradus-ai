@@ -2477,16 +2477,26 @@
                 const resp = await fetch('/hr/api/survey/easter_holiday_2026/results');
                 if (!resp.ok) return;
                 const d = await resp.json();
-                document.getElementById('surveyYesCount').textContent = d.yes.count;
-                document.getElementById('surveyNoCount').textContent  = d.no.count;
-                document.getElementById('surveyTotalCount').textContent = d.total;
+                const r = d.results;
+                document.getElementById('surveyYesCount').textContent = r.yes.count;
+                document.getElementById('surveyNoCount').textContent  = r.no.count;
+                document.getElementById('surveyTotalCount').textContent = r.total;
                 document.getElementById('surveySentCount').textContent  = `з ${d.sent} розісланих`;
-                document.getElementById('surveyYesPct').textContent  = d.yes.pct + '%';
-                document.getElementById('surveyNoPct').textContent   = d.no.pct  + '%';
-                document.getElementById('surveyYesPctBar').textContent = d.yes.pct + '%';
-                document.getElementById('surveyNoPctBar').textContent  = d.no.pct  + '%';
-                document.getElementById('surveyYesBar').style.width = d.yes.pct + '%';
-                document.getElementById('surveyNoBar').style.width  = d.no.pct  + '%';
+                document.getElementById('surveyYesPct').textContent  = r.yes.pct + '%';
+                document.getElementById('surveyNoPct').textContent   = r.no.pct  + '%';
+                document.getElementById('surveyYesPctBar').textContent = r.yes.pct + '%';
+                document.getElementById('surveyNoPctBar').textContent  = r.no.pct  + '%';
+                document.getElementById('surveyYesBar').style.width = r.yes.pct + '%';
+                document.getElementById('surveyNoBar').style.width  = r.no.pct  + '%';
+                if (!d.is_open) {
+                    const badge = document.getElementById('surveyBadge');
+                    badge.textContent = 'ЗАКРИТО';
+                    badge.style.background = '#fee2e2';
+                    badge.style.color = '#991b1b';
+                    const btn = document.getElementById('surveyCloseBtn');
+                    btn.disabled = true;
+                    btn.style.opacity = '0.4';
+                }
             } catch(e) { console.warn('loadSurveyResults error:', e); }
         }
 
