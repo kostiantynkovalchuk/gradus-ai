@@ -1,0 +1,733 @@
+You are working on an existing FastAPI + PostgreSQL + Telegram bot project 
+called Gradus AI / AVTD HR system hosted on Render.com.
+The codebase uses: Python 3.11, FastAPI, SQLAlchemy (async), psycopg2, 
+python-telegram-bot / httpx for Telegram API calls, APScheduler for scheduled 
+jobs, Neon PostgreSQL as the database.
+
+════════════════════════════════════════
+CONTEXT — EXISTING INFRASTRUCTURE
+════════════════════════════════════════
+
+1. DATABASE (Neon PostgreSQL)
+Existing relevant tables:
+  hr_users (id, telegram_id, full_name, is_active, role)
+    Known roles in system: 'developer', 'hr_admin', and others
+    Konstantin Kovalchuk  → role = 'developer'
+    Natalia Reshetilova   → role = 'hr_admin'
+  schema_migrations (migration_id) — tracks applied migrations
+
+2. TELEGRAM BOTS
+  Maya HR bot: env var TELEGRAM_MAYA_BOT_TOKEN
+    Used for all HR employee communication
+  HR Supergroup: env var HUNT_TG_SUPERGROUP_ID
+    NOT used for survey scoreboard — scoreboard goes to personal chats only
+
+3. KEY FILES
+  backend/telegram_webhook.py
+    Main webhook handler. Contains callback_query handler block.
+    All inline button responses are handled here.
+    Has existing helpers: edit_message_text(), answer_callback_query()
+    
+  backend/services/scheduler.py
+    APScheduler instance with 13+ existing jobs.
+    Uses CronTrigger. All times stored as UTC, displayed as Kyiv (UTC+3).
+    
+  backend/scripts/broadcast_avpost.py
+    Reference implementation for employee broadcast:
+    - Fetches hr_users where telegram_id IS NOT NULL AND is_active = true
+    - Sends via httpx POST to Telegram sendMessage
+    - Rate limited with asyncio.sleep(0.05) between sends
+    - Returns sent/failed counts
+    
+  backend/routes/hr_dashboard.py
+    HR admin dashboard at /hr
+    Uses Jinja2 templates + vanilla JS fetch() for data cards.
+    Follow existing card patterns exactly.
+    
+  backend/services/notification_service.py
+    Has send_telegram_message(chat_id, text, parse_mode) helper.
+    Use this instead of raw httpx where possible.
+
+4. ENVIRONMENT VARIABLES AVAILABLE
+  TELEGRAM_MAYA_BOT_TOKEN
+  HUNT_TG_SUPERGROUP_ID
+  DATABASE_URL
+
+════════════════════════════════════════
+SURVEY SPECIFICATION
+════════════════════════════════════════
+
+  Survey ID:   "easter_holiday_2026"
+  
+  Question:
+    "У зв'язку з діючими обмеженнями на державні свята під час воєнного 
+     стану просимо поділитись думкою:\n\n
+     *Чи необхідний Вам вихідний (пн 13/04/26) після Великодня?*"
+  
+  Options:
+    yes → "✅ Так"
+    no  → "❌ Ні"
+  
+  Send time:   2026-04-07 10:00 Kyiv (07:00 UTC)
+  Close time:  MANUAL ONLY — no auto-close, no countdown
+  Recipients:  all hr_users where telegram_id IS NOT NULL AND is_active = true
+  
+  Scoreboard observers (personal DMs only, NOT supergroup):
+    Fetched dynamically from hr_users:
+      SELECT telegram_id FROM hr_users
+      WHERE role IN ('developer', 'hr_admin')
+      AND telegram_id IS NOT NULL
+      AND is_active = true
+    This returns Konstantin (developer) + Natalia (hr_admin).
+    No hardcoded IDs. No new env vars.
+
+════════════════════════════════════════
+DELIVERABLE 1 — DATABASE MIGRATION
+════════════════════════════════════════
+
+Create file: backend/migrations/020_hr_surveys.sql
+
+-- Table 1: survey definitions
+CREATE TABLE IF NOT EXISTS hr_surveys (
+    id          SERIAL PRIMARY KEY,
+    survey_id   VARCHAR(64) UNIQUE NOT NULL,
+    question    TEXT NOT NULL,
+    options     JSONB NOT NULL,
+    is_open     BOOLEAN DEFAULT TRUE,
+    sent_count  INTEGER DEFAULT 0,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    opens_at    TIMESTAMP
+);
+
+-- Table 2: individual votes
+CREATE TABLE IF NOT EXISTS hr_survey_votes (
+    id          SERIAL PRIMARY KEY,
+    survey_id   VARCHAR(64) NOT NULL
+                REFERENCES hr_surveys(survey_id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES hr_users(id),
+    answer      VARCHAR(16) NOT NULL,
+    voted_at    TIMESTAMP DEFAULT NOW(),
+    UNIQUE (survey_id, user_id)
+);
+
+-- Table 3: scoreboard message tracking
+CREATE TABLE IF NOT EXISTS hr_survey_meta (
+    survey_id             VARCHAR(64) PRIMARY KEY
+                          REFERENCES hr_surveys(survey_id),
+    scoreboard_targets    JSONB,
+    -- format: [{"chat_id": 123456, "msg_id": 789}, ...]
+    -- one entry per observer (Konstantin + Natalia)
+    last_edit_at          TIMESTAMP,
+    final_result          VARCHAR(16),
+    closed_at             TIMESTAMP
+);
+
+-- Seed the survey record
+INSERT INTO hr_surveys (survey_id, question, options, opens_at)
+VALUES (
+    'easter_holiday_2026',
+    'У зв''язку з діючими обмеженнями на державні свята під час воєнного 
+     стану просимо поділитись думкою:\n\n*Чи необхідний Вам вихідний 
+     (пн 13/04/26) після Великодня?*',
+    '{"yes": "✅ Так", "no": "❌ Ні"}',
+    '2026-04-07 07:00:00'
+) ON CONFLICT (survey_id) DO NOTHING;
+
+INSERT INTO schema_migrations (migration_id)
+VALUES ('020') ON CONFLICT DO NOTHING;
+
+IMPORTANT: Migration must be fully idempotent.
+Run with: psql $DATABASE_URL -f backend/migrations/020_hr_surveys.sql
+
+════════════════════════════════════════
+DELIVERABLE 2 — SURVEY SERVICE
+════════════════════════════════════════
+
+Create file: backend/services/survey_service.py
+
+All database operations use psycopg2 with explicit connection management
+(same pattern as hunt_service.py background tasks).
+Import TELEGRAM_MAYA_BOT_TOKEN from os.environ.
+Use httpx.AsyncClient() for all Telegram API calls.
+Use zoneinfo.ZoneInfo("Europe/Kiev") for Kyiv time display.
+
+─────────────────────────────────────
+FUNCTION 1: get_survey_observers()
+─────────────────────────────────────
+async def get_survey_observers() -> list[int]:
+  """
+  Returns telegram_ids of Konstantin (developer) + Natalia (hr_admin).
+  Fetched live from hr_users — no hardcoded IDs, no env vars.
+  """
+  Query:
+    SELECT telegram_id FROM hr_users
+    WHERE role IN ('developer', 'hr_admin')
+    AND telegram_id IS NOT NULL
+    AND is_active = true
+  
+  Return list of integers.
+
+─────────────────────────────────────
+FUNCTION 2: broadcast_survey()
+─────────────────────────────────────
+async def broadcast_survey(survey_id: str) -> dict:
+  """
+  Sends survey to all active hr_users with inline keyboard.
+  Mirrors pattern from broadcast_avpost.py exactly.
+  """
+  1. Fetch survey from hr_surveys by survey_id
+  2. Fetch all hr_users where telegram_id IS NOT NULL AND is_active = true
+  3. Build Telegram payload:
+       {
+         "chat_id": <telegram_id>,
+         "text": <survey question>,
+         "parse_mode": "Markdown",
+         "reply_markup": {
+           "inline_keyboard": [[
+             {"text": "✅ Так", 
+              "callback_data": "survey_easter_holiday_2026_yes"},
+             {"text": "❌ Ні",  
+              "callback_data": "survey_easter_holiday_2026_no"}
+           ]]
+         }
+       }
+  4. Send to each user via:
+       POST https://api.telegram.org/bot{TOKEN}/sendMessage
+     With asyncio.sleep(0.05) between sends
+  5. Wrap each send in try/except — never crash the loop
+  6. UPDATE hr_surveys SET sent_count = <successful sends>
+     WHERE survey_id = :survey_id
+  7. Return {"sent": N, "failed": M}
+
+─────────────────────────────────────
+FUNCTION 3: get_results()
+─────────────────────────────────────
+async def get_results(survey_id: str) -> dict:
+  """Returns current vote counts and percentages."""
+  
+  Query:
+    SELECT answer, COUNT(*) as cnt
+    FROM hr_survey_votes
+    WHERE survey_id = :survey_id
+    GROUP BY answer
+  
+  Also fetch sent_count from hr_surveys.
+  
+  Build result:
+    total = yes_count + no_count
+    yes_pct = round(yes_count / total * 100, 1) if total > 0 else 0.0
+    no_pct  = round(no_count  / total * 100, 1) if total > 0 else 0.0
+  
+  Return:
+    {
+      "yes":   {"count": N, "pct": 68.5},
+      "no":    {"count": M, "pct": 31.5},
+      "total": N + M,
+      "sent":  hr_surveys.sent_count
+    }
+
+─────────────────────────────────────
+FUNCTION 4: _build_scoreboard_text()
+─────────────────────────────────────
+async def _build_scoreboard_text(survey_id: str) -> str:
+  """Shared text builder for post and update."""
+  
+  r = await get_results(survey_id)
+  kyiv_time = datetime.now(ZoneInfo("Europe/Kiev")).strftime("%H:%M")
+  
+  def bar(pct):
+    filled = int(pct / 10)
+    return "█" * filled + "░" * (10 - filled)
+  
+  return (
+    f"📊 *Опитування: Вихідний 13/04 — LIVE*\n\n"
+    f"✅ Так {bar(r['yes']['pct'])} "
+        f"{r['yes']['pct']}% ({r['yes']['count']})\n"
+    f"❌ Ні  {bar(r['no']['pct'])}  "
+        f"{r['no']['pct']}% ({r['no']['count']})\n\n"
+    f"👥 Проголосувало: {r['total']} з {r['sent']}\n"
+    f"🕐 Оновлено: {kyiv_time}"
+  )
+
+─────────────────────────────────────
+FUNCTION 5: post_scoreboard()
+─────────────────────────────────────
+async def post_scoreboard(survey_id: str):
+  """
+  Posts initial scoreboard to Konstantin + Natalia personal chats.
+  Called once at 07:05 UTC by scheduler.
+  Stores message_ids for future edits.
+  """
+  text = await _build_scoreboard_text(survey_id)
+  observers = await get_survey_observers()
+  message_ids = []
+
+  async with httpx.AsyncClient() as client:
+    for tg_id in observers:
+      try:
+        resp = await client.post(
+          f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+          json={
+            "chat_id": tg_id,
+            "text": text,
+            "parse_mode": "Markdown"
+          }
+        )
+        msg_id = resp.json()["result"]["message_id"]
+        message_ids.append({"chat_id": tg_id, "msg_id": msg_id})
+      except Exception as e:
+        logger.error(f"post_scoreboard failed for {tg_id}: {e}")
+
+  # Store targets JSON in hr_survey_meta
+  INSERT INTO hr_survey_meta (survey_id, scoreboard_targets)
+  VALUES (:survey_id, :targets)
+  ON CONFLICT (survey_id) DO UPDATE
+  SET scoreboard_targets = EXCLUDED.scoreboard_targets
+
+─────────────────────────────────────
+FUNCTION 6: update_scoreboard()
+─────────────────────────────────────
+async def update_scoreboard(survey_id: str):
+  """
+  Edits existing scoreboard messages in Konstantin + Natalia chats.
+  Called on every vote from callback handler.
+  Has 3-second debounce to respect Telegram rate limits.
+  """
+  1. Fetch hr_survey_meta for survey_id
+  2. If no record or no scoreboard_targets → return silently
+  3. Debounce check:
+       if last_edit_at is not None:
+         elapsed = (datetime.utcnow() - last_edit_at).total_seconds()
+         if elapsed < 3:
+           return
+  4. text = await _build_scoreboard_text(survey_id)
+  5. targets = json.loads(scoreboard_targets)
+  6. async with httpx.AsyncClient() as client:
+       for target in targets:
+         try:
+           await client.post(
+             f"https://api.telegram.org/bot{TOKEN}/editMessageText",
+             json={
+               "chat_id": target["chat_id"],
+               "message_id": target["msg_id"],
+               "text": text,
+               "parse_mode": "Markdown"
+             }
+           )
+         except Exception as e:
+           if "message is not modified" not in str(e).lower():
+             logger.error(f"update_scoreboard failed: {e}")
+  7. UPDATE hr_survey_meta SET last_edit_at = NOW()
+     WHERE survey_id = :survey_id
+
+─────────────────────────────────────
+FUNCTION 7: register_vote()
+─────────────────────────────────────
+async def register_vote(
+    survey_id: str,
+    telegram_id: int,
+    answer: str
+) -> dict:
+  """Records or updates a user's vote."""
+  
+  1. Fetch survey — check is_open
+     If not open: return {"status": "closed"}
+  
+  2. Fetch hr_user by telegram_id
+     If not found: return {"status": "unauthorized"}
+  
+  3. INSERT INTO hr_survey_votes (survey_id, user_id, answer)
+     VALUES (:survey_id, :user_id, :answer)
+     ON CONFLICT (survey_id, user_id)
+     DO UPDATE SET answer = EXCLUDED.answer, voted_at = NOW()
+  
+  4. results = await get_results(survey_id)
+  
+  5. Return:
+     {"status": "ok", "answer": answer, "results": results}
+
+─────────────────────────────────────
+FUNCTION 8: close_survey()
+─────────────────────────────────────
+async def close_survey(survey_id: str):
+  """
+  Manually closes survey. Called only from HR dashboard button.
+  Never called automatically by scheduler.
+  """
+  1. UPDATE hr_surveys SET is_open = FALSE WHERE survey_id = :survey_id
+  
+  2. results = await get_results(survey_id)
+  
+  3. Determine winner:
+     winner = "yes" if yes_count >= no_count else "no"
+     winner_label = "✅ Так" if winner == "yes" else "❌ Ні"
+  
+  4. Build final message:
+       f"📊 *Опитування завершено: Вихідний 13/04*\n\n"
+       f"✅ Так {bar} {pct}% ({count})\n"
+       f"❌ Ні  {bar} {pct}% ({count})\n\n"
+       f"👥 Всього проголосувало: {total} з {sent}\n"
+       f"🏆 Результат: *{winner_label}*"
+  
+  5. Edit scoreboard messages in both personal chats with final text
+     (same editMessageText pattern as update_scoreboard)
+  
+  6. UPDATE hr_survey_meta
+     SET final_result = :winner, closed_at = NOW()
+     WHERE survey_id = :survey_id
+
+════════════════════════════════════════
+DELIVERABLE 3 — CALLBACK HANDLER
+════════════════════════════════════════
+
+File to modify: backend/telegram_webhook.py
+
+In the existing callback_query handler block, add new condition.
+Find where other callback_data patterns are handled and insert:
+
+  elif callback_data.startswith("survey_"):
+    
+    # Parse callback_data format: "survey_{survey_id}_{answer}"
+    # answer is always the last segment (yes/no)
+    # survey_id may contain underscores
+    parts = callback_data.split("_")
+    answer    = parts[-1]              # "yes" or "no"
+    survey_id = "_".join(parts[1:-1]) # "easter_holiday_2026"
+    tg_user_id = callback_query.from_user.id
+    
+    result = await register_vote(survey_id, tg_user_id, answer)
+    
+    if result["status"] == "unauthorized":
+      await answer_callback_query(
+        callback_query.id,
+        text="❌ Не авторизовано.",
+        show_alert=True
+      )
+      return
+    
+    if result["status"] == "closed":
+      await answer_callback_query(
+        callback_query.id,
+        text="⏰ Опитування вже завершено.",
+        show_alert=True
+      )
+      return
+    
+    # Build confirmation with live results
+    r = result["results"]
+    answer_label = "Так" if answer == "yes" else "Ні"
+    
+    confirmation_text = (
+      f"✅ Ваш голос *{answer_label}* збережено.\n\n"
+      f"Поточні результати ({r['total']} голосів):\n"
+      f"✅ Так — {r['yes']['pct']}% ({r['yes']['count']})\n"
+      f"❌ Ні  — {r['no']['pct']}% ({r['no']['count']})"
+    )
+    
+    # Replace survey message (remove inline keyboard)
+    await edit_message_text(
+      chat_id=callback_query.message.chat.id,
+      message_id=callback_query.message.message_id,
+      text=confirmation_text,
+      parse_mode="Markdown"
+    )
+    
+    # Update live scoreboard in Konstantin + Natalia chats
+    await update_scoreboard(survey_id)
+    
+    # Dismiss Telegram loading spinner
+    await answer_callback_query(callback_query.id)
+
+════════════════════════════════════════
+DELIVERABLE 4 — SCHEDULER JOBS
+════════════════════════════════════════
+
+File to modify: backend/services/scheduler.py
+
+Add exactly TWO jobs — no close job:
+
+  from services.survey_service import broadcast_survey, post_scoreboard
+
+  # Job 1: Send survey at 10:00 Kyiv = 07:00 UTC, April 7 2026
+  scheduler.add_job(
+    lambda: asyncio.create_task(
+      broadcast_survey("easter_holiday_2026")
+    ),
+    trigger=CronTrigger(
+      year=2026, month=4, day=7,
+      hour=7, minute=0
+    ),
+    id="survey_easter_send",
+    replace_existing=True,
+    misfire_grace_time=300
+  )
+
+  # Job 2: Post initial scoreboard at 10:05 Kyiv = 07:05 UTC
+  # (5 min after broadcast to allow all sends to complete)
+  scheduler.add_job(
+    lambda: asyncio.create_task(
+      post_scoreboard("easter_holiday_2026")
+    ),
+    trigger=CronTrigger(
+      year=2026, month=4, day=7,
+      hour=7, minute=5
+    ),
+    id="survey_easter_scoreboard",
+    replace_existing=True,
+    misfire_grace_time=300
+  )
+
+  # NO Job 3 — survey stays open until HR manually closes it
+
+════════════════════════════════════════
+DELIVERABLE 5 — API ENDPOINTS
+════════════════════════════════════════
+
+File to modify: backend/routes/hr_dashboard.py
+
+Add two endpoints:
+
+─────────────────────────────────────
+GET /api/hr/survey/{survey_id}/results
+─────────────────────────────────────
+@router.get("/api/hr/survey/{survey_id}/results")
+async def get_survey_results(survey_id: str):
+  
+  Fetch from hr_surveys:
+    question, is_open, opens_at, sent_count
+  
+  results = await get_results(survey_id)
+  
+  Return:
+    {
+      "survey_id":  survey_id,
+      "question":   question,
+      "is_open":    is_open,
+      "opens_at":   opens_at.isoformat(),
+      "sent":       sent_count,
+      "results":    results
+    }
+
+─────────────────────────────────────
+POST /api/hr/survey/{survey_id}/close
+─────────────────────────────────────
+@router.post("/api/hr/survey/{survey_id}/close")
+async def close_survey_endpoint(survey_id: str):
+  """
+  Manual close triggered by HR admin from dashboard button.
+  No auth middleware needed — dashboard is already behind HR login.
+  """
+  await close_survey(survey_id)
+  return {"status": "closed", "survey_id": survey_id}
+
+════════════════════════════════════════
+DELIVERABLE 6 — HR DASHBOARD CARD
+════════════════════════════════════════
+
+File to modify: HR dashboard Jinja2 template
+(find the file used by hr_dashboard.py for the /hr route)
+
+Add survey card following the exact same HTML/CSS pattern 
+as existing KPI cards in the dashboard.
+NO countdown timer. NO closes_at reference.
+
+─────────────────────────────────────
+HTML:
+─────────────────────────────────────
+<div class="card survey-card" id="survey-easter-card">
+  <div class="card-header">
+    <span>📋 Опитування: Вихідний 13/04</span>
+    <span class="badge" id="survey-status-badge">...</span>
+  </div>
+
+  <div class="survey-question" id="survey-q"></div>
+
+  <div class="survey-row">
+    <span class="survey-label">✅ Так</span>
+    <div class="survey-track">
+      <div class="survey-fill yes-fill" id="yes-fill"></div>
+    </div>
+    <span class="survey-stat" id="yes-stat"></span>
+  </div>
+
+  <div class="survey-row">
+    <span class="survey-label">❌ Ні</span>
+    <div class="survey-track">
+      <div class="survey-fill no-fill" id="no-fill"></div>
+    </div>
+    <span class="survey-stat" id="no-stat"></span>
+  </div>
+
+  <div class="survey-footer">
+    <span id="survey-total-label"></span>
+    <button
+      id="close-survey-btn"
+      class="btn-danger"
+      onclick="closeSurvey()"
+      style="display:none">
+      🔒 Закрити опитування
+    </button>
+  </div>
+</div>
+
+─────────────────────────────────────
+CSS (add to dashboard stylesheet):
+─────────────────────────────────────
+.survey-card        { padding: 16px; }
+.survey-question    { font-size: 14px; margin: 8px 0 16px; color: #374151; }
+.survey-row         { display: flex; align-items: center; 
+                      gap: 10px; margin-bottom: 10px; }
+.survey-label       { width: 60px; font-size: 13px; }
+.survey-track       { flex: 1; height: 18px; background: #f3f4f6; 
+                      border-radius: 9px; overflow: hidden; }
+.survey-fill        { height: 100%; border-radius: 9px; 
+                      transition: width 0.4s ease; }
+.yes-fill           { background: #22c55e; }
+.no-fill            { background: #ef4444; }
+.survey-stat        { width: 90px; font-size: 13px; 
+                      text-align: right; color: #6b7280; }
+.survey-footer      { display: flex; justify-content: space-between; 
+                      align-items: center; margin-top: 12px; 
+                      font-size: 13px; color: #6b7280; }
+.badge.live         { background: #fee2e2; color: #dc2626; 
+                      padding: 2px 8px; border-radius: 12px; 
+                      font-size: 12px; font-weight: 600; }
+.badge.closed       { background: #d1fae5; color: #059669; 
+                      padding: 2px 8px; border-radius: 12px; 
+                      font-size: 12px; font-weight: 600; }
+.btn-danger         { background: #ef4444; color: white; border: none; 
+                      padding: 6px 14px; border-radius: 6px; 
+                      cursor: pointer; font-size: 13px; }
+.btn-danger:hover   { background: #dc2626; }
+
+─────────────────────────────────────
+JavaScript (inline in template):
+─────────────────────────────────────
+<script>
+const SURVEY_ID = "easter_holiday_2026";
+
+async function loadSurveyResults() {
+  try {
+    const res  = await fetch(`/api/hr/survey/${SURVEY_ID}/results`);
+    const data = await res.json();
+    const r    = data.results;
+
+    document.getElementById("survey-q").textContent = data.question;
+
+    const yesPct = r.yes?.pct   ?? 0;
+    const noPct  = r.no?.pct    ?? 0;
+    const yesN   = r.yes?.count ?? 0;
+    const noN    = r.no?.count  ?? 0;
+
+    document.getElementById("yes-fill").style.width = yesPct + "%";
+    document.getElementById("no-fill").style.width  = noPct  + "%";
+    document.getElementById("yes-stat").textContent =
+        `${yesPct}% (${yesN})`;
+    document.getElementById("no-stat").textContent  =
+        `${noPct}% (${noN})`;
+    document.getElementById("survey-total-label").textContent =
+        `👥 ${r.total} з ${r.sent} проголосували`;
+
+    const badge = document.getElementById("survey-status-badge");
+    const btn   = document.getElementById("close-survey-btn");
+
+    if (data.is_open) {
+      badge.textContent = "LIVE 🔴";
+      badge.className   = "badge live";
+      btn.style.display = "inline-block";
+    } else {
+      badge.textContent = "ЗАВЕРШЕНО ✅";
+      badge.className   = "badge closed";
+      btn.style.display = "none";
+    }
+
+  } catch (err) {
+    console.error("Survey load error:", err);
+  }
+}
+
+async function closeSurvey() {
+  if (!confirm(
+    "Закрити опитування?\nГолосування буде зупинено. Дію не можна скасувати."
+  )) return;
+
+  try {
+    const res = await fetch(
+      `/api/hr/survey/${SURVEY_ID}/close`,
+      { method: "POST" }
+    );
+    if (res.ok) {
+      loadSurveyResults();   // immediate refresh
+    }
+  } catch (err) {
+    console.error("Close survey error:", err);
+  }
+}
+
+// Initial load + auto-refresh every 30 seconds
+loadSurveyResults();
+setInterval(loadSurveyResults, 30000);
+</script>
+
+════════════════════════════════════════
+IMPLEMENTATION NOTES
+════════════════════════════════════════
+
+DATABASE CONNECTIONS:
+  Use psycopg2 with explicit open/close for all survey_service.py
+  functions — same pattern as hunt_service.py background tasks.
+  Do NOT use SQLAlchemy async session in survey_service.py.
+  API route handlers in hr_dashboard.py may use either pattern —
+  match whatever pattern already exists in that file.
+
+ERROR HANDLING:
+  broadcast loop     → try/except per user, log failure, never crash
+  editMessageText    → catch "message is not modified" silently (normal)
+  register_vote      → return status dict, never raise exceptions
+  get_results        → always guard division by zero with: 
+                       pct = round(x/total*100,1) if total > 0 else 0.0
+
+KYIV TIME:
+  from zoneinfo import ZoneInfo
+  datetime.now(ZoneInfo("Europe/Kiev")).strftime("%H:%M")
+
+CALLBACK DATA LENGTH:
+  "survey_easter_holiday_2026_yes" = 30 chars
+  Telegram limit = 64 chars ✅ safe
+
+SCOREBOARD DEBOUNCE:
+  3 seconds between edits to respect Telegram rate limits.
+  Store last_edit_at in hr_survey_meta, check before each edit.
+
+NO AUTO-CLOSE:
+  close_survey() is NEVER called by scheduler.
+  It is ONLY called by POST /api/hr/survey/{survey_id}/close
+  which is triggered by the HR dashboard "🔒 Закрити опитування" button.
+
+MIGRATION:
+  Run before deploy:
+  psql $DATABASE_URL -f backend/migrations/020_hr_surveys.sql
+  All statements use IF NOT EXISTS and ON CONFLICT DO NOTHING.
+  Safe to run multiple times.
+
+════════════════════════════════════════
+ACCEPTANCE CRITERIA
+════════════════════════════════════════
+
+✅ Migration runs without errors, is idempotent
+✅ Survey broadcasts to all active hr_users at 07:00 UTC April 7
+✅ Each employee receives Telegram message with ✅ Так / ❌ Ні buttons
+✅ Tapping a button saves vote and replaces buttons with confirmation
+   showing live percentages
+✅ Employee can change vote by tapping the other button (while open)
+✅ After voting, Konstantin and Natalia see their scoreboard message
+   update within 3 seconds (debounce)
+✅ GET /api/hr/survey/easter_holiday_2026/results returns correct JSON
+✅ HR dashboard card shows live bars, auto-refreshes every 30 seconds
+✅ "🔒 Закрити опитування" button visible only while is_open = true
+✅ Clicking close button → confirm dialog → POST close → card updates
+✅ After close: scoreboard in personal chats shows final result with 🏆
+✅ After close: any late button tap returns "⏰ Опитування вже завершено"
+✅ No crash if telegram_id not in hr_users
+✅ No hardcoded Telegram IDs anywhere — observers fetched from hr_users
+✅ No auto-close scheduler job exists

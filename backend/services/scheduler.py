@@ -1324,6 +1324,24 @@ class ContentScheduler:
             replace_existing=True
         )
 
+        # Easter survey broadcast — 7 Apr 2026 at 07:00 UTC (one-time)
+        self.scheduler.add_job(
+            self._survey_easter_broadcast_task,
+            CronTrigger(year=2026, month=4, day=7, hour=7, minute=0),
+            id='survey_easter_broadcast',
+            name='Easter 2026 survey broadcast',
+            replace_existing=True
+        )
+
+        # Easter survey scoreboard — 7 Apr 2026 at 07:05 UTC (one-time)
+        self.scheduler.add_job(
+            self._survey_easter_scoreboard_task,
+            CronTrigger(year=2026, month=4, day=7, hour=7, minute=5),
+            id='survey_easter_scoreboard',
+            name='Easter 2026 survey initial scoreboard',
+            replace_existing=True
+        )
+
         self.scheduler.start()
         
         logger.info("=" * 60)
@@ -1365,6 +1383,34 @@ class ContentScheduler:
         logger.info("🚀 System ready! Waiting for next scheduled task...")
         logger.info("=" * 60)
     
+    def _survey_easter_broadcast_task(self):
+        """
+        Easter 2026 survey broadcast.
+        Runs: 7 Apr 2026 at 07:00 UTC (one-time).
+        """
+        logger.info("[SCHEDULER] Easter survey broadcast starting...")
+        try:
+            import asyncio
+            from services.survey_service import broadcast_survey
+            result = asyncio.run(broadcast_survey("easter_holiday_2026"))
+            logger.info(f"[SCHEDULER] Easter survey broadcast done: {result}")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Easter survey broadcast failed: {e}", exc_info=True)
+
+    def _survey_easter_scoreboard_task(self):
+        """
+        Easter 2026 survey — post initial scoreboard to observers.
+        Runs: 7 Apr 2026 at 07:05 UTC (one-time).
+        """
+        logger.info("[SCHEDULER] Easter survey scoreboard post starting...")
+        try:
+            import asyncio
+            from services.survey_service import post_scoreboard
+            asyncio.run(post_scoreboard("easter_holiday_2026"))
+            logger.info("[SCHEDULER] Easter survey scoreboard posted")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Easter survey scoreboard failed: {e}", exc_info=True)
+
     def stop(self):
         """Stop the scheduler (idempotent)"""
         if self.scheduler.running:

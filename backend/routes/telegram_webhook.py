@@ -174,6 +174,9 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
                 result = await handle_hr_callback(data['callback_query'])
                 logger.info(f"✓ HR callback processed")
                 return result
+            elif callback_data.startswith('survey_'):
+                await handle_survey_callback(data['callback_query'])
+                return {"ok": True}
             else:
                 result = telegram_webhook_handler.handle_callback_query(
                     data['callback_query'],
@@ -1037,6 +1040,57 @@ async def handle_admin_button_callback(callback_query: dict, db):
         await handle_listusers_command(chat_id, telegram_id, db)
 
     return {"ok": True}
+
+
+async def handle_survey_callback(callback_query: dict):
+    """Handle survey vote callbacks (survey_<id>_<answer>)"""
+    callback_id   = callback_query.get('id')
+    callback_data = callback_query.get('data', '')
+    message       = callback_query.get('message', {})
+    chat_id       = message.get('chat', {}).get('id')
+    telegram_id   = callback_query.get('from', {}).get('id')
+
+    # callback_data format: "survey_<survey_id>_<answer>"
+    # answer is always the last segment (yes|no); survey_id may contain underscores
+    without_prefix = callback_data[len('survey_'):]   # "easter_holiday_2026_yes"
+    survey_id, answer = without_prefix.rsplit('_', 1)  # split on last underscore
+    if not survey_id or answer not in ('yes', 'no'):
+        return
+
+    try:
+        from services.survey_service import register_vote, update_scoreboard
+        result = await register_vote(survey_id, telegram_id, answer)
+    except Exception as e:
+        logger.error(f"[survey_callback] register_vote error: {e}", exc_info=True)
+        result = {"status": "error"}
+
+    status = result.get("status", "error")
+
+    if status == "ok":
+        ack_text = "✅ Дякуємо! Ваш голос враховано."
+    elif status == "closed":
+        ack_text = "⏹ Опитування вже завершено."
+    elif status == "unauthorized":
+        ack_text = "❌ Тільки зареєстровані співробітники можуть брати участь."
+    elif status == "not_found":
+        ack_text = "❌ Опитування не знайдено."
+    else:
+        ack_text = "⚠️ Помилка сервера."
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/answerCallbackQuery",
+                json={"callback_query_id": callback_id, "text": ack_text}
+            )
+    except Exception as e:
+        logger.error(f"[survey_callback] answerCallbackQuery error: {e}")
+
+    if status == "ok":
+        try:
+            await update_scoreboard(survey_id)
+        except Exception as e:
+            logger.error(f"[survey_callback] update_scoreboard error: {e}")
 
 
 async def handle_hr_callback(callback_query: dict):

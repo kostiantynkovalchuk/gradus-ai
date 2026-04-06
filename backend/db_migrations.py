@@ -774,6 +774,53 @@ MIGRATIONS = [
             "ALTER TABLE pulse_surveys ALTER COLUMN user_hash DROP NOT NULL",
         ]
     },
+    {
+        "version": "030_hr_surveys",
+        "statements": [
+            """
+            CREATE TABLE IF NOT EXISTS hr_surveys (
+                id          SERIAL PRIMARY KEY,
+                survey_id   VARCHAR(64) UNIQUE NOT NULL,
+                question    TEXT NOT NULL,
+                options     JSONB NOT NULL,
+                is_open     BOOLEAN DEFAULT TRUE,
+                sent_count  INTEGER DEFAULT 0,
+                created_at  TIMESTAMP DEFAULT NOW(),
+                opens_at    TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS hr_survey_votes (
+                id          SERIAL PRIMARY KEY,
+                survey_id   VARCHAR(64) NOT NULL
+                            REFERENCES hr_surveys(survey_id) ON DELETE CASCADE,
+                user_id     INTEGER NOT NULL REFERENCES hr_users(id),
+                answer      VARCHAR(16) NOT NULL,
+                voted_at    TIMESTAMP DEFAULT NOW(),
+                UNIQUE (survey_id, user_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS hr_survey_meta (
+                survey_id             VARCHAR(64) PRIMARY KEY
+                                      REFERENCES hr_surveys(survey_id),
+                scoreboard_targets    JSONB,
+                last_edit_at          TIMESTAMP,
+                final_result          VARCHAR(16),
+                closed_at             TIMESTAMP
+            )
+            """,
+            """
+            INSERT INTO hr_surveys (survey_id, question, options, opens_at)
+            VALUES (
+                'easter_holiday_2026',
+                E'У зв''язку з діючими обмеженнями на державні свята під час воєнного стану просимо поділитись думкою:\n\n*Чи необхідний Вам вихідний (пн 13/04/26) після Великодня?*',
+                '{"yes": "✅ Так", "no": "❌ Ні"}',
+                '2026-04-07 07:00:00'
+            ) ON CONFLICT (survey_id) DO NOTHING
+            """,
+        ]
+    },
 ]
 
 

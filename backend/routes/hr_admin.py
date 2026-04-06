@@ -1392,3 +1392,24 @@ async def test_pulse_survey(
     return {"sent_to": count}
 
 
+@router.get("/api/survey/{survey_id}/results")
+async def get_survey_results(
+    survey_id: str,
+    credentials: HTTPBasicCredentials = Depends(verify_admin),
+):
+    """Return current vote counts and percentages for a survey."""
+    from services.survey_service import get_results
+    return await get_results(survey_id)
+
+
+@router.post("/api/survey/{survey_id}/close")
+async def close_survey_endpoint(
+    survey_id: str,
+    credentials: HTTPBasicCredentials = Depends(verify_admin),
+):
+    """Manually close a survey and post final scoreboard to observers."""
+    from services.survey_service import close_survey
+    await close_survey(survey_id)
+    return {"status": "closed", "survey_id": survey_id}
+
+
