@@ -1328,7 +1328,7 @@ class ContentScheduler:
         self.scheduler.add_job(
             self._survey_easter_broadcast_task,
             CronTrigger(year=2026, month=4, day=7, hour=7, minute=0),
-            id='survey_easter_broadcast',
+            id='survey_easter_send',
             name='Easter 2026 survey broadcast',
             replace_existing=True
         )
