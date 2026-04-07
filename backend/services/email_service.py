@@ -14,14 +14,21 @@ Usage:
 
 import logging
 import os
+import re
 
 import resend
 
 logger = logging.getLogger(__name__)
 
-ALEX_PHOTO = "https://gradusmedia.org/assets/alex_new_b.png"
+# Photo URL — override via ALEX_EMAIL_PHOTO_URL env var if the default is
+# not publicly reachable (e.g. point to a Cloudinary or CDN URL).
+ALEX_PHOTO = os.environ.get(
+    "ALEX_EMAIL_PHOTO_URL",
+    "https://gradus-ai.onrender.com/attached_assets/mayagradus.png",
+)
 FROM_ADDRESS = "Alex Gradus | GradusMedia <alex@gradusmedia.org>"
 REPLY_TO = "admin@gradusmedia.org"
+UNSUBSCRIBE_URL = "https://gradusmedia.org/unsubscribe"
 
 
 def _cta_button(text: str, href: str) -> str:
@@ -31,6 +38,15 @@ def _cta_button(text: str, href: str) -> str:
         f'background-color:#c9a84c;color:#0f0f1a;text-decoration:none;'
         f'border-radius:6px;font-weight:bold;font-size:16px;">{text}</a></div>'
     )
+
+
+def _html_to_text(html: str) -> str:
+    """Strip HTML tags to produce a plain-text fallback for spam filters."""
+    text = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def base_template(content_html: str) -> str:
@@ -58,7 +74,7 @@ def base_template(content_html: str) -> str:
             <td align="center" style="padding:40px 40px 0;">
               <img src="{ALEX_PHOTO}"
                    width="100" height="100"
-                   alt="Alex Gradus"
+                   alt="Alex Gradus — AI-консультант GradusMedia"
                    style="width:100px;height:100px;border-radius:50%;
                           object-fit:cover;display:block;
                           border:3px solid #c9a84c;">
@@ -85,7 +101,7 @@ def base_template(content_html: str) -> str:
                 </a>
               </p>
               <p style="margin:0;">
-                <a href="https://gradusmedia.org/unsubscribe"
+                <a href="{UNSUBSCRIBE_URL}"
                    style="color:#444;font-size:11px;text-decoration:none;">
                   Відписатись
                 </a>
@@ -101,9 +117,10 @@ def base_template(content_html: str) -> str:
 </html>"""
 
 
-def send_email(to: str, subject: str, html: str) -> bool:
+def send_email(to: str, subject: str, html: str, text: str | None = None) -> bool:
     """
     Send a transactional email via Resend.
+    Includes deliverability headers required by Gmail/Outlook.
     Returns True on success, False on any error (never raises).
     """
     api_key = os.environ.get("RESEND_API_KEY", "")
@@ -112,13 +129,22 @@ def send_email(to: str, subject: str, html: str) -> bool:
         return False
 
     resend.api_key = api_key
+    plain_text = text or _html_to_text(html)
+
     try:
         resend.Emails.send({
             "from": FROM_ADDRESS,
             "to": [to],
             "subject": subject,
             "html": html,
+            "text": plain_text,
             "reply_to": REPLY_TO,
+            "headers": {
+                "List-Unsubscribe": f"<mailto:unsubscribe@gradusmedia.org>, <{UNSUBSCRIBE_URL}>",
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                "X-Priority": "3",
+                "Importance": "Normal",
+            },
         })
         logger.info(f"[Email] Sent '{subject}' → {to}")
         return True

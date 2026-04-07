@@ -5,15 +5,22 @@ Onboarding Email Sequence — Alex Gradus
 All emails use maya_users as the user registry.
 
 Sequence:
-  Email 1 — Welcome      : step 0 → 1  (immediately on registration)
-  Email 2 — Day 3        : step 1 → 2  (onboarding_scheduled_at + 3 days)
-  Email 3 — Day 6 urgency: step 2 → 3  (onboarding_scheduled_at + 6 days)
-  Email 4 — Day 8 win-back: step 3 → 4 (onboarding_scheduled_at + 8 days)
+  Email 1 — Welcome       : step 0 → 1  (immediately on registration)
+  Email 2 — Day 3         : step 1 → 2  (onboarding_scheduled_at + 3 days)
+  Email 3 — Day 6 urgency : step 2 → 3  (onboarding_scheduled_at + 6 days)
+  Email 4 — Day 8 win-back: step 3 → 4  (onboarding_scheduled_at + 8 days)
 
 Rules:
   - Never send to paid users (standard / premium)
-  - Never re-send a step that's already past
+  - Day 3/6/8 emails require onboarding_scheduled_at to be non-NULL;
+    they never fall back to registered_at (prevents mass-fire on old users)
+  - onboarding_scheduled_at is always set to NOW() when Email 1 fires
   - Log every email attempt to Render logs
+
+BUG HISTORY:
+  v1 — _set_step used COALESCE(sched_at, registered_at, NOW()), which caused
+       day-3/6/8 to fire immediately for existing users with old registered_at.
+  v2 — fixed: sched_at is always NOW() on Email 1; day-3/6/8 skip if sched_at NULL.
 """
 
 import logging
@@ -27,23 +34,29 @@ from services.email_service import base_template, send_email, _cta_button
 logger = logging.getLogger(__name__)
 
 DB_URL = os.environ.get("DATABASE_URL", "")
-PAID_TIERS = {"standard", "premium"}
 
 CHAT_URL    = "https://gradusmedia.org/чат"
 BOT_URL     = "https://t.me/alexgradus_bot"
 PRICING_URL = "https://gradusmedia.org/тарифи"
+
+HORECA_FALLBACK_HEADLINE = "Коктейльні тренди літа 2026 вже на gradusmedia.org"
 
 
 def _conn():
     return psycopg2.connect(DB_URL)
 
 
-def _set_step(cur, email: str, step: int, set_scheduled_at: bool = False) -> None:
-    if set_scheduled_at:
+def _set_step(cur, email: str, step: int, anchor_now: bool = False) -> None:
+    """
+    Advance a user to the given onboarding step.
+    anchor_now=True → also set onboarding_scheduled_at = NOW() (used only for
+    step 1 transition so day calculations are always relative to Email 1 send time).
+    """
+    if anchor_now:
         cur.execute(
             """UPDATE maya_users
                SET onboarding_step = %s,
-                   onboarding_scheduled_at = COALESCE(onboarding_scheduled_at, registered_at, NOW())
+                   onboarding_scheduled_at = NOW()
                WHERE email = %s""",
             (step, email),
         )
@@ -92,11 +105,10 @@ def _build_welcome(name: str) -> str:
 
 
 def _send_welcome(email: str, name: str) -> bool:
-    html = _build_welcome(name)
     return send_email(
         to=email,
         subject="Привіт від Alex 👋 Ваш trial активовано",
-        html=html,
+        html=_build_welcome(name),
     )
 
 
@@ -203,7 +215,13 @@ def _send_day6(email: str, name: str) -> bool:
 # Email 4 — Day 8 win-back (step 3 → 4)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_latest_headline() -> str:
+def _get_latest_horeca_headline() -> str:
+    """
+    Fetches the most recent posted article that is tagged as HoReCa / bar /
+    restaurant content. Falls back to a hardcoded string if none found.
+    The category filter prevents non-HoReCa articles (e.g. pharmacy news)
+    from appearing in the win-back email.
+    """
     try:
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -211,18 +229,29 @@ def _get_latest_headline() -> str:
                    FROM content_queue
                    WHERE status = 'posted'
                      AND COALESCE(translated_title, source_title) IS NOT NULL
+                     AND (
+                       category ILIKE '%horeca%'
+                       OR category ILIKE '%%бар%%'
+                       OR category ILIKE '%%ресторан%%'
+                       OR category ILIKE '%%spirits%%'
+                       OR category ILIKE '%%drinks%%'
+                     )
                    ORDER BY posted_at DESC NULLS LAST, created_at DESC
                    LIMIT 1"""
             )
             row = cur.fetchone()
-            return row[0] if row else "нові тренди HoReCa-ринку"
+            if row and row[0]:
+                return row[0]
+            # No HoReCa-categorised article — use hardcoded fallback
+            logger.warning("[Onboarding] No HoReCa article found for win-back email — using fallback")
+            return HORECA_FALLBACK_HEADLINE
     except Exception as e:
-        logger.warning(f"[Onboarding] Could not fetch headline: {e}")
-        return "нові тренди HoReCa-ринку"
+        logger.warning(f"[Onboarding] Could not fetch HoReCa headline: {e}")
+        return HORECA_FALLBACK_HEADLINE
 
 
 def _build_day8(name: str) -> str:
-    headline = _get_latest_headline()
+    headline = _get_latest_horeca_headline()
     content = f"""
 <h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
   Alex сумує 🥃 Повертайтесь
@@ -283,7 +312,7 @@ def check_and_send_onboarding_emails() -> None:
 
             for (email, name, tier, step, sched_at, registered_at) in users:
                 try:
-                    _process_user(conn, email, name or "", step, sched_at, registered_at)
+                    _process_user(conn, email, name or "", step, sched_at)
                 except Exception as e:
                     logger.error(f"[Onboarding] Error processing {email}: {e}")
 
@@ -297,39 +326,46 @@ def _process_user(
     name: str,
     step: int,
     sched_at,
-    registered_at,
 ) -> None:
     now = datetime.now(timezone.utc)
 
     with conn.cursor() as cur:
+        # ── Email 1 — Welcome (fires immediately for new registrations) ────────
         if step == 0:
-            # Email 1 — send immediately
             if _send_welcome(email, name):
                 logger.info(f"[Onboarding] Welcome sent → {email}")
-            _set_step(cur, email, 1, set_scheduled_at=True)
+            # anchor_now=True → onboarding_scheduled_at = NOW()
+            # This is the correct base for all subsequent day calculations.
+            _set_step(cur, email, 1, anchor_now=True)
             conn.commit()
             return
 
-        # Base time for day calculations
-        base = sched_at or registered_at
-        if base is None:
+        # ── Day-based emails — require sched_at to be set ─────────────────────
+        # If sched_at is NULL the user somehow skipped Email 1 without anchoring
+        # the schedule; skip rather than firing all remaining emails at once.
+        if sched_at is None:
+            logger.warning(
+                f"[Onboarding] {email} at step {step} but onboarding_scheduled_at"
+                " is NULL — skipping until Email 1 fires and sets the anchor"
+            )
             return
-        if base.tzinfo is None:
-            base = base.replace(tzinfo=timezone.utc)
 
-        if step == 1 and now >= base + timedelta(days=3):
+        if sched_at.tzinfo is None:
+            sched_at = sched_at.replace(tzinfo=timezone.utc)
+
+        if step == 1 and now >= sched_at + timedelta(days=3):
             if _send_day3(email, name):
                 logger.info(f"[Onboarding] Day-3 email sent → {email}")
             _set_step(cur, email, 2)
             conn.commit()
 
-        elif step == 2 and now >= base + timedelta(days=6):
+        elif step == 2 and now >= sched_at + timedelta(days=6):
             if _send_day6(email, name):
                 logger.info(f"[Onboarding] Day-6 email sent → {email}")
             _set_step(cur, email, 3)
             conn.commit()
 
-        elif step == 3 and now >= base + timedelta(days=8):
+        elif step == 3 and now >= sched_at + timedelta(days=8):
             if _send_day8(email, name):
                 logger.info(f"[Onboarding] Day-8 email sent → {email}")
             _set_step(cur, email, 4)
