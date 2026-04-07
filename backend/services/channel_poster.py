@@ -16,7 +16,7 @@ KYIV_OFFSET = timedelta(hours=2)
 KYIV_TZ = timezone(KYIV_OFFSET)
 POSTING_SLOTS = [8, 13, 19]          # hour in Kyiv local time
 MAX_CAPTION = 1024
-ARTICLE_BASE_URL = "https://gradusmedia-frontend.pages.dev/article"
+ARTICLE_BASE_URL = "https://gradusmedia.org/article"
 HASHTAGS = "\n\n#GradusAI #HoReCa #Бар #Маркетинг"
 
 
