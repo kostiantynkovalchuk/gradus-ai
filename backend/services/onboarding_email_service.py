@@ -39,7 +39,7 @@ CHAT_URL    = "https://gradusmedia.org/чат"
 BOT_URL     = "https://t.me/alexgradus_bot"
 PRICING_URL = "https://gradusmedia.org/тарифи"
 
-HORECA_FALLBACK_HEADLINE = "Коктейльні тренди літа 2026 вже на gradusmedia.org"
+HORECA_FALLBACK_HEADLINE = "Коктейльні тренди літа 2026 — читайте на gradusmedia.org"
 
 
 def _conn():
@@ -80,7 +80,7 @@ def _build_welcome(name: str) -> str:
 <p style="margin:0 0 16px;">
   Ваш 7-денний безкоштовний доступ активовано.<br>
   Я ваш AI-експерт з прибутковості бару — допомагаю власникам HoReCa-закладів
-  заробляти більше на кожному склянці.
+  заробляти більше на кожній склянці.
 </p>
 
 <p style="margin:0 0 12px;font-weight:bold;color:#c9a84c;">Ось з чим я допомагаю:</p>
@@ -231,10 +231,13 @@ def _get_latest_horeca_headline() -> str:
                      AND COALESCE(translated_title, source_title) IS NOT NULL
                      AND (
                        category ILIKE '%horeca%'
-                       OR category ILIKE '%%бар%%'
-                       OR category ILIKE '%%ресторан%%'
-                       OR category ILIKE '%%spirits%%'
-                       OR category ILIKE '%%drinks%%'
+                       OR category ILIKE '%бар%'
+                       OR category ILIKE '%ресторан%'
+                       OR category ILIKE '%spirits%'
+                       OR category ILIKE '%drinks%'
+                       OR source  ILIKE '%horeca%'
+                       OR source  ILIKE '%spirits%'
+                       OR source  ILIKE '%bar%'
                      )
                    ORDER BY posted_at DESC NULLS LAST, created_at DESC
                    LIMIT 1"""
@@ -254,10 +257,10 @@ def _build_day8(name: str) -> str:
     headline = _get_latest_horeca_headline()
     content = f"""
 <h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
-  Alex сумує 🥃 Повертайтесь
+  Alex чекає на вас 🥃
 </h2>
 <p style="margin:0 0 20px;">
-  Ваш trial завершився, але Alex нікуди не пішов.
+  Ваш trial завершився, але Alex чекає на вас.
 </p>
 
 <div style="background:#0f0f1a;border-left:3px solid #c9a84c;padding:16px 20px;
@@ -282,7 +285,7 @@ def _build_day8(name: str) -> str:
 def _send_day8(email: str, name: str) -> bool:
     return send_email(
         to=email,
-        subject="Alex сумує 🥃 Повертайтесь",
+        subject="Alex чекає на вас 🥃",
         html=_build_day8(name),
     )
 
