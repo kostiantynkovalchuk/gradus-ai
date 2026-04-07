@@ -15,6 +15,7 @@ Usage:
 import logging
 import os
 import re
+import uuid
 
 import resend
 
@@ -144,6 +145,7 @@ def send_email(to: str, subject: str, html: str, text: str | None = None) -> boo
                 "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
                 "X-Priority": "3",
                 "Importance": "Normal",
+                "X-Entity-Ref-ID": str(uuid.uuid4()),
             },
         })
         logger.info(f"[Email] Sent '{subject}' → {to}")

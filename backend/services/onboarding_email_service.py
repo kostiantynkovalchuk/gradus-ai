@@ -46,6 +46,17 @@ def _conn():
     return psycopg2.connect(DB_URL)
 
 
+def _display_name(name: str) -> str:
+    """
+    Return a safe display name for email greetings.
+    Falls back to 'друже' if name looks like an email fragment or is unusable.
+    """
+    name = (name or "").strip()
+    if not name or "@" in name or "+" in name or len(name) < 2:
+        return "друже"
+    return name.capitalize()
+
+
 def _set_step(cur, email: str, step: int, anchor_now: bool = False) -> None:
     """
     Advance a user to the given onboarding step.
@@ -72,7 +83,7 @@ def _set_step(cur, email: str, step: int, anchor_now: bool = False) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_welcome(name: str) -> str:
-    first = name.split()[0] if name else "друже"
+    first = _display_name(name)
     content = f"""
 <h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
   Привіт, {first}! Я Alex Gradus 🥃
@@ -117,7 +128,7 @@ def _send_welcome(email: str, name: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_day3(name: str) -> str:
-    first = name.split()[0] if name else "друже"
+    first = _display_name(name)
     content = f"""
 <h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
   {first}, ось що ще вміє Alex 🥃
@@ -155,7 +166,7 @@ def _build_day3(name: str) -> str:
 
 
 def _send_day3(email: str, name: str) -> bool:
-    first = name.split()[0] if name else "друже"
+    first = _display_name(name)
     return send_email(
         to=email,
         subject=f"{first}, ось що ще вміє Alex 🥃",
