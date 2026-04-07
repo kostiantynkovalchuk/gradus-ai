@@ -247,7 +247,7 @@ async def chat_with_avatars(request: ChatRequest):
 
     # ── Web-side rate limiting for Alex (free tier) ──────────────────────────
     # Only enforce when email is known and avatar is alex, on website source.
-    _detected_avatar = detect_avatar_role(message, history, request.avatar or "")
+    _detected_avatar = request.avatar or detect_avatar_role(message, history)
     if (
         _detected_avatar == "alex"
         and request.user_email
