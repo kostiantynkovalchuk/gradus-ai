@@ -1577,6 +1577,18 @@ async def send_token_alert():
     
     return {"status": "info", "message": "Token never expires or invalid", "token_status": status}
 
+@app.post("/api/linkedin/post-now")
+async def trigger_linkedin_digest():
+    """Manually trigger the LinkedIn daily digest — for testing after deploy."""
+    try:
+        from services.linkedin_digest_service import post_daily_digest
+        result = post_daily_digest()
+        return result
+    except Exception as e:
+        logger.error(f"Manual LinkedIn digest trigger failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/analytics/post/{content_id}")
 async def get_post_analytics(content_id: int, db: Session = Depends(get_db)):
     """Get analytics for specific post by content ID"""

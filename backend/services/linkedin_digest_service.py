@@ -1,23 +1,28 @@
 """
 LinkedIn Daily News Digest Service
 -----------------------------------
-Fetches top 5 recent HoReCa news items, generates AI-powered LinkedIn insights
-via Claude Haiku, posts as a native text post (no link in body),
-then immediately posts a first comment containing all the article links.
+Fetches the 5 most recent posted HoReCa articles from DB, generates a single
+150-200 word Ukrainian LinkedIn post via Claude Sonnet (high-quality copywriting),
+publishes it as native text (no link in body), then immediately:
+  1. Adds first comment: "🔗 gradusmedia.org"
+  2. Sends Telegram notification to HORECA_TG_GROUP_ID
 
-DB: saves each run to the `linkedin_posts` table (migration 031).
+DB: saves each run to the `linkedin_posts` table (migration 031/032).
 Scheduling: daily at 07:00 UTC (09:00 Kyiv) via scheduler.py.
 
 Environment variables required:
-  LINKEDIN_ACCESS_TOKEN   — OAuth 2.0 bearer token (w_organization_social scope)
-  LINKEDIN_ORGANIZATION_URN — e.g. "urn:li:organization:123456"
+  LINKEDIN_ACCESS_TOKEN   — personal OAuth 2.0 bearer token (w_member_social scope)
+                            TOKEN EXPIRES: ~June 6 2026 (60 days from April 7 2026)
+                            Regenerate at: linkedin.com/developers/tools/oauth/token-generator
+  LINKEDIN_AUTHOR_URN     — e.g. "urn:li:person:_Ysk9NLaBQ"
+  HORECA_TG_GROUP_ID      — Telegram group ID for post notifications
+  TELEGRAM_BOT_TOKEN      — bot token used for Telegram notification
   ANTHROPIC_API_KEY
   DATABASE_URL
 """
 import json
 import logging
 import os
-from datetime import datetime, timezone
 
 import anthropic
 import psycopg2
@@ -25,12 +30,18 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-DB_URL  = os.environ.get("DATABASE_URL", "")
-LI_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN", "")
-LI_ORG   = os.environ.get("LINKEDIN_ORGANIZATION_URN", "")
-LI_BASE  = "https://api.linkedin.com/v2"
+DB_URL      = os.environ.get("DATABASE_URL", "")
+LI_BASE     = "https://api.linkedin.com/v2"
 
-HAIKU_MODEL = "claude-haiku-4-5"
+SONNET_MODEL = "claude-sonnet-4-20250514"
+
+
+def _li_token() -> str:
+    return os.environ.get("LINKEDIN_ACCESS_TOKEN", "")
+
+
+def _li_author() -> str:
+    return os.environ.get("LINKEDIN_AUTHOR_URN", "")
 
 
 def _get_conn():
@@ -53,7 +64,7 @@ def fetch_latest_news(limit: int = 5) -> list[dict]:
                 """
                 SELECT id,
                        COALESCE(translated_title, source_title) AS title,
-                       COALESCE(translated_text, original_text) AS body,
+                       COALESCE(translated_text, original_text)  AS body,
                        source,
                        source_url
                 FROM content_queue
@@ -75,37 +86,52 @@ def fetch_latest_news(limit: int = 5) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. Generate LinkedIn insight via Claude Haiku
+# 2. Generate full LinkedIn post via Claude Sonnet
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_insight(article: dict) -> str:
+def generate_linkedin_post(articles: list[dict]) -> str:
     """
-    Uses Claude Haiku to condense one article into a 2-3 sentence
-    LinkedIn-optimized insight in Ukrainian.
-    Returns the insight string (plain text, no markdown).
+    Uses Claude Sonnet to write a single 150-200 word Ukrainian LinkedIn post
+    covering the top HoReCa news. Professional tone, no markdown, ends with
+    the fixed CTA line. No URLs in the body.
     """
     client = anthropic.Anthropic()
-    title  = article.get("title", "")
-    body   = (article.get("text") or "")[:1500]
+
+    news_block = "\n\n".join(
+        f"[{i}] {a['title']}\n{(a.get('text') or '')[:600]}"
+        for i, a in enumerate(articles, 1)
+    )
 
     prompt = (
-        f"Ти — HoReCa-консультант Gradus AI. Напиши 2-3 речення LinkedIn-инсайту "
-        f"українською мовою на основі цієї новини. Текст має бути конкретним, корисним "
-        f"для рестораторів та власників барів, без загальних фраз. НЕ включай посилання.\n\n"
-        f"Заголовок: {title}\n\n"
-        f"Текст: {body}"
+        "Ти — контент-менеджер GradusMedia, медіа для Ukrainian HoReCa-ринку. "
+        "Напиши один LinkedIn-пост українською мовою (150-200 слів).\n\n"
+        "Вимоги:\n"
+        "- Профіл читача: ресторатори, власники барів, F&B-менеджери, дистриб'ютори\n"
+        "- Тон: фаховий, конкретний, без кліше та загальних фраз\n"
+        "- Структура: короткий гачок (1-2 речення) → 2-3 ключових інсайти з новин → заклик до дії\n"
+        "- Можна використати 1-2 emoji якщо доречно, але не перевантажувати\n"
+        "- НЕ включай посилань та URL\n"
+        "- НЕ використовуй markdown (зірочки, решітки тощо)\n"
+        "- Останній рядок ЗАВЖДИ: \"Детальніше на gradusmedia.org 👇\"\n"
+        "- Після тексту постав хештеги у новому рядку: #HoReCa #Бар #Ресторан #GradusMedia\n\n"
+        f"Новини для опрацювання:\n\n{news_block}"
     )
 
     try:
         msg = client.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=200,
+            model=SONNET_MODEL,
+            max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text.strip()
     except Exception as e:
-        logger.error(f"[LinkedInDigest] Haiku insight failed: {e}")
-        return title
+        logger.error(f"[LinkedInDigest] Sonnet post generation failed: {e}")
+        titles = " | ".join(a["title"] for a in articles[:3])
+        return (
+            f"HoReCa дайджест тижня:\n\n{titles}\n\n"
+            "Детальніше на gradusmedia.org 👇\n"
+            "#HoReCa #Бар #Ресторан #GradusMedia"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,20 +140,33 @@ def generate_insight(article: dict) -> str:
 
 def _li_headers() -> dict:
     return {
-        "Authorization": f"Bearer {LI_TOKEN}",
+        "Authorization": f"Bearer {_li_token()}",
         "Content-Type": "application/json",
         "X-Restli-Protocol-Version": "2.0.0",
     }
 
 
 def post_text_to_linkedin(post_text: str) -> dict | None:
-    """Posts a native LinkedIn text post via ugcPosts. Returns result dict or None on failure."""
-    if not LI_TOKEN or not LI_ORG:
-        logger.warning("[LinkedInDigest] LINKEDIN_ACCESS_TOKEN or LINKEDIN_ORGANIZATION_URN not set")
+    """
+    Posts a native LinkedIn text post via ugcPosts using personal profile URN.
+    Returns {"post_id": ..., "post_url": ...} or None on failure.
+    """
+    token  = _li_token()
+    author = _li_author()
+
+    if not token:
+        logger.warning(
+            "[LinkedInDigest] LINKEDIN_ACCESS_TOKEN not set — skipping post"
+        )
+        return None
+    if not author:
+        logger.warning(
+            "[LinkedInDigest] LINKEDIN_AUTHOR_URN not set — skipping post"
+        )
         return None
 
     payload = {
-        "author": LI_ORG,
+        "author": author,
         "lifecycleState": "PUBLISHED",
         "specificContent": {
             "com.linkedin.ugc.ShareContent": {
@@ -141,14 +180,28 @@ def post_text_to_linkedin(post_text: str) -> dict | None:
     }
 
     try:
-        resp = requests.post(f"{LI_BASE}/ugcPosts", headers=_li_headers(), json=payload, timeout=15)
+        resp = requests.post(
+            f"{LI_BASE}/ugcPosts",
+            headers=_li_headers(),
+            json=payload,
+            timeout=15,
+        )
         if resp.status_code == 201:
-            post_id = resp.json().get("id", "")
+            post_id  = resp.json().get("id", "")
             post_url = f"https://www.linkedin.com/feed/update/{post_id}"
             logger.info(f"[LinkedInDigest] Post published: {post_id}")
             return {"post_id": post_id, "post_url": post_url}
+        elif resp.status_code == 401:
+            logger.error(
+                "[LinkedInDigest] 401 Unauthorized — LinkedIn token expired. "
+                # TOKEN EXPIRES: ~June 6 2026 (60 days from April 7 2026)
+                "Regenerate at: linkedin.com/developers/tools/oauth/token-generator"
+            )
+            return None
         else:
-            logger.error(f"[LinkedInDigest] Post failed ({resp.status_code}): {resp.text}")
+            logger.error(
+                f"[LinkedInDigest] Post failed ({resp.status_code}): {resp.text[:300]}"
+            )
             return None
     except Exception as e:
         logger.error(f"[LinkedInDigest] Post request error: {e}")
@@ -156,18 +209,22 @@ def post_text_to_linkedin(post_text: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Post first comment with links (avoids algo suppression on main post)
+# 4. Post first comment: "🔗 gradusmedia.org"
 # ─────────────────────────────────────────────────────────────────────────────
 
-def post_first_comment(post_id: str, links_text: str) -> bool:
-    """Adds the first comment to a LinkedIn post containing source URLs."""
-    if not LI_TOKEN or not LI_ORG:
-        return False
+def post_first_comment(post_id: str) -> str | None:
+    """
+    Adds the first comment to a LinkedIn post.
+    Returns the comment_id string on success, None on failure.
+    """
+    author = _li_author()
+    if not _li_token() or not author:
+        return None
 
     payload = {
-        "actor": LI_ORG,
-        "message": {"text": links_text},
-        "object": post_id,
+        "actor":   author,
+        "message": {"text": "🔗 gradusmedia.org"},
+        "object":  post_id,
     }
 
     try:
@@ -178,30 +235,94 @@ def post_first_comment(post_id: str, links_text: str) -> bool:
             timeout=10,
         )
         if resp.status_code in (200, 201):
-            logger.info(f"[LinkedInDigest] First comment added to {post_id}")
-            return True
+            comment_id = resp.json().get("id", "")
+            logger.info(f"[LinkedInDigest] First comment added: {comment_id}")
+            return comment_id or "ok"
         else:
-            logger.warning(f"[LinkedInDigest] Comment failed ({resp.status_code}): {resp.text}")
-            return False
+            logger.warning(
+                f"[LinkedInDigest] Comment failed ({resp.status_code}): {resp.text[:200]}"
+            )
+            return None
     except Exception as e:
         logger.error(f"[LinkedInDigest] Comment request error: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Telegram notification to HoReCa group
+# ─────────────────────────────────────────────────────────────────────────────
+
+def send_tg_notification(post_url: str) -> bool:
+    """
+    Sends a Telegram message to HORECA_TG_GROUP_ID with the LinkedIn post URL.
+    Returns True on success.
+    """
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    group_id  = os.environ.get("HORECA_TG_GROUP_ID", "")
+
+    if not bot_token or not group_id:
+        logger.warning(
+            "[LinkedInDigest] TELEGRAM_BOT_TOKEN or HORECA_TG_GROUP_ID not set — "
+            "skipping Telegram notification"
+        )
+        return False
+
+    text = (
+        "📢 Новий пост на LinkedIn GradusMedia\n"
+        f"{post_url}\n"
+        "Поділіться з вашою мережею — це займе 10 секунд 👆"
+    )
+
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": group_id, "text": text, "disable_web_page_preview": False},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            logger.info(f"[LinkedInDigest] Telegram notification sent to {group_id}")
+            return True
+        else:
+            logger.warning(
+                f"[LinkedInDigest] Telegram notification failed ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+            return False
+    except Exception as e:
+        logger.error(f"[LinkedInDigest] Telegram notification error: {e}")
         return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Save run to linkedin_posts table
+# 6. Save run to linkedin_posts table
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_linkedin_post(post_id: str, post_url: str, snippet: str, article_ids: list[int]) -> None:
+def save_linkedin_post(
+    post_id: str,
+    post_url: str,
+    snippet: str,
+    article_ids: list[int],
+    comment_id: str | None,
+    tg_sent: bool,
+) -> None:
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO linkedin_posts (post_id, post_url, content_snippet, article_ids, posted_at)
-                VALUES (%s, %s, %s, %s, NOW())
+                INSERT INTO linkedin_posts
+                    (post_id, post_url, content_snippet, article_ids,
+                     comment_id, tg_notification_sent, posted_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
                 """,
-                (post_id, post_url, snippet[:500], json.dumps(article_ids)),
+                (
+                    post_id,
+                    post_url,
+                    snippet[:500],
+                    json.dumps(article_ids),
+                    comment_id,
+                    tg_sent,
+                ),
             )
             conn.commit()
     except Exception as e:
@@ -212,18 +333,18 @@ def save_linkedin_post(post_id: str, post_url: str, snippet: str, article_ids: l
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Main orchestrator
+# 7. Main orchestrator
 # ─────────────────────────────────────────────────────────────────────────────
 
 def post_daily_digest() -> dict:
     """
     Full pipeline:
-      1. Fetch top 5 posted articles
-      2. Generate Haiku insights for each
-      3. Build LinkedIn post (insights only, no links)
-      4. Publish post
-      5. Add first comment with source links
-      6. Save to linkedin_posts table
+      1. Fetch top 5 posted articles from DB
+      2. Generate a 150-200 word Ukrainian LinkedIn post via Claude Sonnet
+      3. Publish post (text only, no link)
+      4. Post first comment: "🔗 gradusmedia.org"
+      5. Send Telegram notification to HORECA_TG_GROUP_ID
+      6. Save result to linkedin_posts table
     Returns: {"status": "ok"|"skipped"|"error", ...}
     """
     logger.info("[LinkedInDigest] Starting daily digest...")
@@ -233,21 +354,9 @@ def post_daily_digest() -> dict:
         logger.warning("[LinkedInDigest] No posted articles found — skipping")
         return {"status": "skipped", "reason": "no articles"}
 
-    insights = []
-    for art in articles:
-        insight = generate_insight(art)
-        insights.append({"article": art, "insight": insight})
-        logger.info(f"[LinkedInDigest] Insight generated for article {art['id']}")
-
-    today = datetime.now(timezone.utc).strftime("%d.%m.%Y")
-    post_lines = [f"📰 HoReCa дайджест — {today}\n"]
-    for i, item in enumerate(insights, 1):
-        post_lines.append(f"{i}. {item['insight']}\n")
-    post_lines.append(
-        "\n🔗 Повні матеріали — у першому коментарі.\n"
-        "#HoReCa #Бар #Ресторан #AlexGradus #GradusMedia"
-    )
-    post_text = "\n".join(post_lines)
+    logger.info(f"[LinkedInDigest] Generating Sonnet post from {len(articles)} articles...")
+    post_text = generate_linkedin_post(articles)
+    logger.info(f"[LinkedInDigest] Post text ({len(post_text.split())} words) ready")
 
     result = post_text_to_linkedin(post_text)
     if not result:
@@ -256,19 +365,23 @@ def post_daily_digest() -> dict:
     post_id  = result["post_id"]
     post_url = result["post_url"]
 
-    links_lines = ["📎 Джерела:\n"]
-    for i, item in enumerate(insights, 1):
-        url = item["article"].get("url") or ""
-        title = item["article"].get("title", f"Стаття {i}")
-        if url:
-            links_lines.append(f"{i}. {title}\n{url}")
-    links_lines.append("\n🌐 gradus-ai.onrender.com")
-    comment_text = "\n".join(links_lines)
+    comment_id = post_first_comment(post_id)
+    tg_sent    = send_tg_notification(post_url)
 
-    post_first_comment(post_id, comment_text)
+    article_ids = [a["id"] for a in articles]
+    save_linkedin_post(post_id, post_url, post_text, article_ids, comment_id, tg_sent)
 
-    article_ids = [item["article"]["id"] for item in insights]
-    save_linkedin_post(post_id, post_url, post_text[:500], article_ids)
-
-    logger.info(f"[LinkedInDigest] Done. post_id={post_id} articles={article_ids}")
-    return {"status": "ok", "post_id": post_id, "post_url": post_url, "articles": len(articles)}
+    logger.info(
+        f"[LinkedInDigest] Done — post_id={post_id} "
+        f"comment={'ok' if comment_id else 'failed'} "
+        f"tg={'ok' if tg_sent else 'skipped'} "
+        f"articles={article_ids}"
+    )
+    return {
+        "status":     "ok",
+        "post_id":    post_id,
+        "post_url":   post_url,
+        "comment_id": comment_id,
+        "tg_sent":    tg_sent,
+        "articles":   len(articles),
+    }

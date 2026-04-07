@@ -775,6 +775,13 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "032_linkedin_posts_v2",
+        "statements": [
+            "ALTER TABLE linkedin_posts ADD COLUMN IF NOT EXISTS comment_id VARCHAR(255)",
+            "ALTER TABLE linkedin_posts ADD COLUMN IF NOT EXISTS tg_notification_sent BOOLEAN DEFAULT FALSE",
+        ]
+    },
+    {
         "version": "031_linkedin_posts_video_digests",
         "statements": [
             """
