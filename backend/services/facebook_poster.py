@@ -33,6 +33,8 @@ class FacebookPoster:
         author = article_data.get('author', '')
         image_credit = article_data.get('image_credit', '')
         
+        article_url = article_data.get('article_url', '')
+
         post_text = f"""📰 {title}
 
 {content}
@@ -42,6 +44,9 @@ class FacebookPoster:
         if author:
             post_text += f"\n✍️ {author}"
         
+        if article_url:
+            post_text += f"\n\n👉 {article_url}"
+
         if image_credit:
             post_text += f"\n\n📷 {image_credit}"
         

@@ -835,6 +835,10 @@ class ContentScheduler:
                     'source': article.source or 'The Spirits Business',
                     'author': article.extra_metadata.get('author', '') if article.extra_metadata else '',
                     'article_id': article.id,  # For public image URL fallback
+                    'article_url': (
+                        f"https://gradusmedia.org/article/{article.id}"
+                        f"?utm_source=facebook&utm_medium=social&utm_campaign=fb_post"
+                    ),
                     'image_url': article.image_url,
                     'local_image_path': article.local_image_path,
                     'image_data': article.image_data,  # Binary from database (Render-persistent)
