@@ -18,6 +18,7 @@ Access rules for free tier:
 
 import logging
 import os
+import re
 from datetime import date, datetime, timezone
 
 import psycopg2
@@ -28,6 +29,36 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Markdown → plain text for Telegram
+# Telegram does not render web-flavoured markdown consistently.
+# Strip all markdown so the message renders as clean plain text.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tg_format(text: str) -> str:
+    """Strip Claude markdown for clean Telegram plain-text rendering."""
+    lines = text.split('\n')
+    cleaned = []
+    for line in lines:
+        # Strip markdown headers (# Header → Header)
+        line = re.sub(r'^#{1,4}\s+', '', line)
+        # Replace ─── / --- / === dividers with a blank line
+        if re.match(r'^[-─═*]{3,}\s*$', line.strip()):
+            cleaned.append('')
+            continue
+        # Strip **bold** markers, keep the inner text
+        line = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
+        # Strip remaining *italic* markers that are NOT bullet hyphens
+        # Only matches *word* patterns, not standalone * at line start
+        line = re.sub(r'(?<![*\n])\*([^*\n]+?)\*(?!\*)', r'\1', line)
+        cleaned.append(line)
+
+    result = '\n'.join(cleaned)
+    # Collapse 3+ consecutive newlines to 2
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    return result.strip()
 
 _alex_app: Application | None = None
 _initialized: bool = False
@@ -256,12 +287,10 @@ async def handle_message(update: Update, context) -> None:
             user_tier=user["tier"],
         )
         result = await chat_with_avatars(req)
-        response_text = result.response
+        response_text = _tg_format(result.response)
     except Exception as e:
         logger.error(f"[AlexTG] chat_with_avatars error: {e}", exc_info=True)
-        response_text = (
-            "Вибачте, сталася технічна помилка. Спробуйте ще раз."
-        )
+        response_text = "Вибачте, сталася технічна помилка. Спробуйте ще раз."
 
     await update.message.reply_text(response_text)
 
