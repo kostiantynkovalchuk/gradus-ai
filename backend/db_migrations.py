@@ -775,6 +775,14 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "036_maya_users_onboarding",
+        "statements": [
+            "ALTER TABLE maya_users ADD COLUMN IF NOT EXISTS onboarding_step INTEGER DEFAULT 0",
+            "ALTER TABLE maya_users ADD COLUMN IF NOT EXISTS onboarding_scheduled_at TIMESTAMP",
+            "ALTER TABLE maya_users ADD COLUMN IF NOT EXISTS telegram_nudge_sent BOOLEAN DEFAULT FALSE",
+        ]
+    },
+    {
         "version": "035_alex_user_profiles_rate_limit",
         "statements": [
             "ALTER TABLE alex_user_profiles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",

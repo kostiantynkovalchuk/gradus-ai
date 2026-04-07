@@ -425,6 +425,32 @@ async def chat_with_avatars(request: ChatRequest):
         ):
             _increment_web_daily_count(user_email)
 
+        # ── Telegram nudge (one-time, first response for registered users) ──
+        if avatar_role == "alex" and user_email and request.source == "website":
+            try:
+                import psycopg2 as _pg
+                _db_url = os.getenv("DATABASE_URL", "")
+                with _pg.connect(_db_url) as _nudge_conn, _nudge_conn.cursor() as _nc:
+                    _nc.execute(
+                        "SELECT telegram_nudge_sent FROM maya_users WHERE email = %s",
+                        (user_email,),
+                    )
+                    _row = _nc.fetchone()
+                    if _row is not None and _row[0] is False:
+                        assistant_message += (
+                            "\n\n---\n"
+                            "💬 До речі — зі мною зручніше у Telegram. "
+                            "Там без браузера, просто пишіть будь-коли:\n"
+                            "👉 t.me/alexgradus_bot"
+                        )
+                        _nc.execute(
+                            "UPDATE maya_users SET telegram_nudge_sent = TRUE WHERE email = %s",
+                            (user_email,),
+                        )
+                        _nudge_conn.commit()
+            except Exception as _ne:
+                logger.warning(f"Telegram nudge check failed: {_ne}")
+
         return ChatResponse(
             response=assistant_message,
             type="chat",

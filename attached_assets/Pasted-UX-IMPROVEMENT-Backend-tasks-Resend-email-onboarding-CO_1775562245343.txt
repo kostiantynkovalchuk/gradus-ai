@@ -1,0 +1,199 @@
+UX IMPROVEMENT — Backend tasks (Resend email + onboarding)
+
+CONTEXT:
+- Resend account set up, domain gradusmedia.org verified
+- RESEND_API_KEY is in Render environment variables
+- EMAIL_FROM = alex@gradusmedia.org
+- EMAIL_REPLY_TO = admin@gradusmedia.org
+- Alex photo URL: https://gradusmedia.org/assets/alex_new_b.png
+- Backend stack: FastAPI + Python, APScheduler already running
+
+════════════════════════════════════════════════════════
+TASK 1 — Email service setup
+════════════════════════════════════════════════════════
+
+1. pip install resend (add to requirements.txt)
+
+2. Create backend/services/email_service.py:
+
+async def send_email(to: str, subject: str, html: str):
+    - Use resend Python SDK
+    - from: "Alex Gradus | GradusMedia <alex@gradusmedia.org>"
+    - reply_to: admin@gradusmedia.org
+    - Wrap in try/except — log error, never crash caller
+    - Return True on success, False on failure
+
+3. Base HTML email template (used by all emails):
+   - Dark background: #0f0f1a
+   - Gold accent: #c9a84c
+   - Alex photo at top (circle, centered):
+     <img src="https://gradusmedia.org/assets/alex_new_b.png"
+          style="width:100px;height:100px;border-radius:50%;
+                 object-fit:cover;display:block;margin:0 auto 20px">
+   - Single column, max-width 600px, centered
+   - Mobile responsive
+   - Footer: "GradusMedia · gradusmedia.org"
+   - Unsubscribe link placeholder in footer
+
+════════════════════════════════════════════════════════
+TASK 2 — Migration 036
+════════════════════════════════════════════════════════
+
+Add to maya_users table:
+- onboarding_step INTEGER DEFAULT 0
+  (0=not started, 1=welcome sent, 2=day3 sent, 
+   3=day6 sent, 4=day8 sent)
+- onboarding_scheduled_at TIMESTAMP
+  (when the user registered — base for day calculations)
+- telegram_nudge_sent BOOLEAN DEFAULT FALSE
+
+════════════════════════════════════════════════════════
+TASK 3 — Onboarding email sequence
+════════════════════════════════════════════════════════
+
+Create backend/services/onboarding_email_service.py
+
+4 emails triggered by APScheduler (check every 5 min):
+
+EMAIL 1 — Welcome (send immediately on registration):
+Trigger: onboarding_step = 0 AND registered_at exists
+Subject: "Привіт від Alex 👋 Ваш trial активовано"
+Body:
+- Alex photo (circle)
+- "Привіт, [name]! Я Alex Gradus — ваш експерт 
+   з прибутковості бару 🥃"
+- "Ваш 7-денний безкоштовний доступ активовано."
+- 3 bullet points what Alex helps with:
+  🍹 Коктейльні тренди та меню
+  💰 Знизити витрати бару на 15-20%  
+  📋 Ліцензії, постачальники, ціноутворення
+- Gold CTA button: "Задати перше питання →"
+  href: https://gradusmedia.org/чат
+- Secondary: "або в Telegram → @alexgradus_bot"
+  href: https://t.me/alexgradus_bot
+- "У вас 5 питань на день протягом 7 днів"
+Set onboarding_step = 1
+
+EMAIL 2 — Day 3 (engagement):
+Trigger: onboarding_step = 1 AND 
+         NOW() >= onboarding_scheduled_at + 3 days
+Subject: "[name], ось що ще вміє Alex 🥃"
+Body:
+- Alex photo
+- "Більшість власників барів використовують 
+   Alex для зниження витрат"
+- Example Q&A block:
+  Q: "Як знизити витрати на бар на 20%?"
+  A: "Аналіз собівартості коктейлів — перший крок.
+      Найчастіше 20-30% списань йде на неправильний 
+      розлив. Alex допоможе знайти де саме..."
+- CTA: "Запитати Alex зараз →"
+  href: https://gradusmedia.org/чат
+- "Залишилось 4 дні trial"
+Set onboarding_step = 2
+
+EMAIL 3 — Day 6 (urgency):
+Trigger: onboarding_step = 2 AND
+         NOW() >= onboarding_scheduled_at + 6 days
+Subject: "Завтра закінчується ваш доступ до Alex ⏰"
+Body:
+- Alex photo
+- "Ваш безкоштовний період закінчується завтра"
+- What they lose (3 points):
+  ❌ Необмежені питання до Alex
+  ❌ Щотижневі тренд-звіти на email
+  ❌ База постачальників AVTD
+- What Standard gives (3 points):
+  ✅ Безлімітні питання 24/7
+  ✅ Щотижневий дайджест трендів
+  ✅ Перевірені постачальники зі знижками
+- Big gold CTA: "Продовжити за $7/міс →"
+  href: https://gradusmedia.org/тарифи
+- "Менше ніж одна пляшка вина на місяць 🍷"
+Set onboarding_step = 3
+
+EMAIL 4 — Day 8 win-back:
+Trigger: onboarding_step = 3 AND
+         NOW() >= onboarding_scheduled_at + 8 days
+Subject: "Alex сумує 🥃 Повертайтесь"
+Body:
+- Alex photo
+- "Ваш trial завершився, але Alex нікуди не пішов"
+- Pull latest news headline from DB:
+  SELECT title FROM articles 
+  ORDER BY published_at DESC LIMIT 1
+- "Поки вас не було, у HoReCa відбулось: [headline]"
+- Soft CTA: "Повернутись за $7/міс →"
+  href: https://gradusmedia.org/тарифи
+- PS: "Якщо є питання — просто відповідіть на цей лист"
+Set onboarding_step = 4
+
+IMPORTANT RULES:
+- Never send onboarding emails to paid users 
+  (subscription_tier IN ('standard', 'premium'))
+- Never send if onboarding_step already past that stage
+- Log every sent email to Render logs
+- Scheduler: CronTrigger every 5 minutes
+  id='onboarding_email_checker'
+
+════════════════════════════════════════════════════════
+TASK 4 — Active Telegram nudge after first message
+════════════════════════════════════════════════════════
+
+In backend/routes/chat_endpoints.py:
+After successful Claude response, check:
+- Is this the first message? 
+  (count messages in alex_conversations for this email = 1)
+- Has telegram_nudge_sent = FALSE for this user?
+
+If both true:
+- Append to Claude's response:
+  "\n\n---\n💬 До речі — зі мною зручніше у Telegram.
+   Там немає браузера, просто пишіть будь-коли:\n
+   👉 @alexgradus_bot → t.me/alexgradus_bot"
+- Set telegram_nudge_sent = TRUE in maya_users
+
+Only fires once per user, never again.
+
+════════════════════════════════════════════════════════
+TASK 5 — UTM parameters on LinkedIn posts
+════════════════════════════════════════════════════════
+
+In backend/services/linkedin_digest_service.py:
+Replace all instances of "gradusmedia.org" with:
+"gradusmedia.org?utm_source=linkedin&utm_medium=social&utm_campaign=weekly_digest"
+
+Apply to:
+- Post body CTA line
+- First comment URL
+
+════════════════════════════════════════════════════════
+TASK 6 — Telegram channel CTA
+════════════════════════════════════════════════════════
+
+In backend/services/channel_poster.py:
+After the article link, before hashtags, append:
+
+"💬 Запитайте Alex детальніше → @alexgradus_bot"
+
+════════════════════════════════════════════════════════
+IMPLEMENTATION ORDER:
+════════════════════════════════════════════════════════
+1. Migration 036
+2. email_service.py
+3. onboarding_email_service.py + scheduler job
+4. Telegram nudge in chat_endpoints.py
+5. UTM in linkedin_digest_service.py
+6. CTA in channel_poster.py
+7. Test: register new email → confirm welcome 
+   email arrives within 5 minutes
+
+════════════════════════════════════════════════════════
+DO NOT TOUCH:
+════════════════════════════════════════════════════════
+- Maya Hunt pipeline
+- Photo report bot
+- Alex Gradus Telegram bot (alex_tg_webhook.py)
+- GA4 tracking
+- Pricing page
+- Existing scheduler jobs (LinkedIn, video digest)

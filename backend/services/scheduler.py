@@ -1360,6 +1360,15 @@ class ContentScheduler:
             replace_existing=True
         )
 
+        # Onboarding email checker — every 5 minutes
+        self.scheduler.add_job(
+            self._onboarding_email_task,
+            CronTrigger(minute='*/5'),
+            id='onboarding_email_checker',
+            name='Onboarding email sequence checker (Alex Gradus)',
+            replace_existing=True
+        )
+
         self.scheduler.start()
         
         logger.info("=" * 60)
@@ -1458,6 +1467,20 @@ class ContentScheduler:
             logger.info("[SCHEDULER] Easter survey scoreboard posted")
         except Exception as e:
             logger.error(f"[SCHEDULER] Easter survey scoreboard failed: {e}", exc_info=True)
+
+    def _onboarding_email_task(self):
+        """
+        Onboarding email sequence for Alex Gradus users.
+        Runs every 5 minutes — sends the next email in the 4-email sequence
+        for any free-tier maya_users user who is due for one.
+        """
+        logger.info("[SCHEDULER] Onboarding email check starting...")
+        try:
+            from services.onboarding_email_service import check_and_send_onboarding_emails
+            check_and_send_onboarding_emails()
+            logger.info("[SCHEDULER] Onboarding email check done")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Onboarding email check failed: {e}", exc_info=True)
 
     def stop(self):
         """Stop the scheduler (idempotent)"""

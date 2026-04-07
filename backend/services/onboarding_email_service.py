@@ -1,0 +1,336 @@
+"""
+Onboarding Email Sequence — Alex Gradus
+========================================
+4 emails triggered by APScheduler (checked every 5 minutes).
+All emails use maya_users as the user registry.
+
+Sequence:
+  Email 1 — Welcome      : step 0 → 1  (immediately on registration)
+  Email 2 — Day 3        : step 1 → 2  (onboarding_scheduled_at + 3 days)
+  Email 3 — Day 6 urgency: step 2 → 3  (onboarding_scheduled_at + 6 days)
+  Email 4 — Day 8 win-back: step 3 → 4 (onboarding_scheduled_at + 8 days)
+
+Rules:
+  - Never send to paid users (standard / premium)
+  - Never re-send a step that's already past
+  - Log every email attempt to Render logs
+"""
+
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+import psycopg2
+
+from services.email_service import base_template, send_email, _cta_button
+
+logger = logging.getLogger(__name__)
+
+DB_URL = os.environ.get("DATABASE_URL", "")
+PAID_TIERS = {"standard", "premium"}
+
+CHAT_URL    = "https://gradusmedia.org/чат"
+BOT_URL     = "https://t.me/alexgradus_bot"
+PRICING_URL = "https://gradusmedia.org/тарифи"
+
+
+def _conn():
+    return psycopg2.connect(DB_URL)
+
+
+def _set_step(cur, email: str, step: int, set_scheduled_at: bool = False) -> None:
+    if set_scheduled_at:
+        cur.execute(
+            """UPDATE maya_users
+               SET onboarding_step = %s,
+                   onboarding_scheduled_at = COALESCE(onboarding_scheduled_at, registered_at, NOW())
+               WHERE email = %s""",
+            (step, email),
+        )
+    else:
+        cur.execute(
+            "UPDATE maya_users SET onboarding_step = %s WHERE email = %s",
+            (step, email),
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email 1 — Welcome (step 0 → 1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_welcome(name: str) -> str:
+    first = name.split()[0] if name else "друже"
+    content = f"""
+<h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
+  Привіт, {first}! Я Alex Gradus 🥃
+</h2>
+<p style="margin:0 0 16px;">
+  Ваш 7-денний безкоштовний доступ активовано.<br>
+  Я ваш AI-експерт з прибутковості бару — допомагаю власникам HoReCa-закладів
+  заробляти більше на кожному склянці.
+</p>
+
+<p style="margin:0 0 12px;font-weight:bold;color:#c9a84c;">Ось з чим я допомагаю:</p>
+<ul style="margin:0 0 24px;padding-left:20px;color:#e8e8e8;">
+  <li style="margin-bottom:8px;">🍹 Коктейльні тренди та побудова меню</li>
+  <li style="margin-bottom:8px;">💰 Знизити витрати бару на 15–20%</li>
+  <li style="margin-bottom:8px;">📋 Ліцензії, постачальники, ціноутворення</li>
+</ul>
+
+{_cta_button("Задати перше питання →", CHAT_URL)}
+
+<p style="text-align:center;margin:0 0 24px;color:#aaa;font-size:14px;">
+  або в Telegram →
+  <a href="{BOT_URL}" style="color:#c9a84c;text-decoration:none;">@alexgradus_bot</a>
+</p>
+
+<p style="margin:0;color:#888;font-size:13px;text-align:center;">
+  У вас 5 питань на день протягом 7 днів.
+</p>
+"""
+    return base_template(content)
+
+
+def _send_welcome(email: str, name: str) -> bool:
+    html = _build_welcome(name)
+    return send_email(
+        to=email,
+        subject="Привіт від Alex 👋 Ваш trial активовано",
+        html=html,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email 2 — Day 3 engagement (step 1 → 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_day3(name: str) -> str:
+    first = name.split()[0] if name else "друже"
+    content = f"""
+<h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
+  {first}, ось що ще вміє Alex 🥃
+</h2>
+<p style="margin:0 0 20px;">
+  Більшість власників барів використовують Alex для зниження витрат
+  і побудови прибуткового меню.
+</p>
+
+<div style="background:#0f0f1a;border-left:3px solid #c9a84c;padding:16px 20px;
+            border-radius:4px;margin:0 0 24px;">
+  <p style="margin:0 0 8px;color:#c9a84c;font-size:14px;font-weight:bold;">
+    Питання клієнта:
+  </p>
+  <p style="margin:0 0 12px;font-style:italic;color:#ddd;">
+    "Як знизити витрати на бар на 20%?"
+  </p>
+  <p style="margin:0 0 6px;color:#c9a84c;font-size:14px;font-weight:bold;">
+    Alex відповів:
+  </p>
+  <p style="margin:0;color:#e8e8e8;">
+    Аналіз собівартості коктейлів — перший крок. Найчастіше 20–30% списань
+    йде на неправильний розлив. Alex допоможе знайти де саме — і дасть план
+    виправлення за тиждень.
+  </p>
+</div>
+
+{_cta_button("Запитати Alex зараз →", CHAT_URL)}
+
+<p style="text-align:center;margin:24px 0 0;color:#888;font-size:13px;">
+  Залишилось 4 дні trial.
+</p>
+"""
+    return base_template(content)
+
+
+def _send_day3(email: str, name: str) -> bool:
+    first = name.split()[0] if name else "друже"
+    return send_email(
+        to=email,
+        subject=f"{first}, ось що ще вміє Alex 🥃",
+        html=_build_day3(name),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email 3 — Day 6 urgency (step 2 → 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_day6(name: str) -> str:
+    content = f"""
+<h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
+  Завтра закінчується ваш доступ до Alex ⏰
+</h2>
+<p style="margin:0 0 20px;">
+  Ваш безкоштовний період закінчується завтра.
+</p>
+
+<p style="margin:0 0 10px;font-weight:bold;color:#e8e8e8;">
+  Що ви втрачаєте:
+</p>
+<ul style="margin:0 0 20px;padding-left:20px;color:#e8e8e8;">
+  <li style="margin-bottom:8px;">❌ Необмежені питання до Alex</li>
+  <li style="margin-bottom:8px;">❌ Щотижневі тренд-звіти на email</li>
+  <li style="margin-bottom:8px;">❌ База постачальників AVTD</li>
+</ul>
+
+<p style="margin:0 0 10px;font-weight:bold;color:#c9a84c;">
+  Що дає Standard:
+</p>
+<ul style="margin:0 0 28px;padding-left:20px;color:#e8e8e8;">
+  <li style="margin-bottom:8px;">✅ Безлімітні питання 24/7</li>
+  <li style="margin-bottom:8px;">✅ Щотижневий дайджест трендів</li>
+  <li style="margin-bottom:8px;">✅ Перевірені постачальники зі знижками</li>
+</ul>
+
+{_cta_button("Продовжити за $7/міс →", PRICING_URL)}
+
+<p style="text-align:center;margin:20px 0 0;color:#888;font-size:13px;">
+  Менше ніж одна пляшка вина на місяць 🍷
+</p>
+"""
+    return base_template(content)
+
+
+def _send_day6(email: str, name: str) -> bool:
+    return send_email(
+        to=email,
+        subject="Завтра закінчується ваш доступ до Alex ⏰",
+        html=_build_day6(name),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email 4 — Day 8 win-back (step 3 → 4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_latest_headline() -> str:
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT COALESCE(translated_title, source_title)
+                   FROM content_queue
+                   WHERE status = 'posted'
+                     AND COALESCE(translated_title, source_title) IS NOT NULL
+                   ORDER BY posted_at DESC NULLS LAST, created_at DESC
+                   LIMIT 1"""
+            )
+            row = cur.fetchone()
+            return row[0] if row else "нові тренди HoReCa-ринку"
+    except Exception as e:
+        logger.warning(f"[Onboarding] Could not fetch headline: {e}")
+        return "нові тренди HoReCa-ринку"
+
+
+def _build_day8(name: str) -> str:
+    headline = _get_latest_headline()
+    content = f"""
+<h2 style="color:#c9a84c;margin:0 0 20px;font-size:22px;">
+  Alex сумує 🥃 Повертайтесь
+</h2>
+<p style="margin:0 0 20px;">
+  Ваш trial завершився, але Alex нікуди не пішов.
+</p>
+
+<div style="background:#0f0f1a;border-left:3px solid #c9a84c;padding:16px 20px;
+            border-radius:4px;margin:0 0 24px;">
+  <p style="margin:0 0 6px;color:#888;font-size:13px;">
+    Поки вас не було, у HoReCa відбулось:
+  </p>
+  <p style="margin:0;color:#e8e8e8;font-style:italic;">
+    {headline}
+  </p>
+</div>
+
+{_cta_button("Повернутись за $7/міс →", PRICING_URL)}
+
+<p style="margin:28px 0 0;color:#888;font-size:13px;">
+  PS: Якщо є питання — просто відповідіть на цей лист.
+</p>
+"""
+    return base_template(content)
+
+
+def _send_day8(email: str, name: str) -> bool:
+    return send_email(
+        to=email,
+        subject="Alex сумує 🥃 Повертайтесь",
+        html=_build_day8(name),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main checker — called every 5 minutes by APScheduler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_and_send_onboarding_emails() -> None:
+    """
+    Scans maya_users for users who need the next onboarding email and sends it.
+    Skips paid users. Runs in the APScheduler background thread.
+    """
+    logger.info("[Onboarding] Checking for pending emails...")
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT email, name, subscription_tier, onboarding_step,
+                              onboarding_scheduled_at, registered_at
+                       FROM maya_users
+                       WHERE subscription_tier NOT IN ('standard', 'premium')
+                         AND onboarding_step < 4
+                       ORDER BY registered_at ASC"""
+                )
+                users = cur.fetchall()
+
+            for (email, name, tier, step, sched_at, registered_at) in users:
+                try:
+                    _process_user(conn, email, name or "", step, sched_at, registered_at)
+                except Exception as e:
+                    logger.error(f"[Onboarding] Error processing {email}: {e}")
+
+    except Exception as e:
+        logger.error(f"[Onboarding] DB error in checker: {e}")
+
+
+def _process_user(
+    conn,
+    email: str,
+    name: str,
+    step: int,
+    sched_at,
+    registered_at,
+) -> None:
+    now = datetime.now(timezone.utc)
+
+    with conn.cursor() as cur:
+        if step == 0:
+            # Email 1 — send immediately
+            if _send_welcome(email, name):
+                logger.info(f"[Onboarding] Welcome sent → {email}")
+            _set_step(cur, email, 1, set_scheduled_at=True)
+            conn.commit()
+            return
+
+        # Base time for day calculations
+        base = sched_at or registered_at
+        if base is None:
+            return
+        if base.tzinfo is None:
+            base = base.replace(tzinfo=timezone.utc)
+
+        if step == 1 and now >= base + timedelta(days=3):
+            if _send_day3(email, name):
+                logger.info(f"[Onboarding] Day-3 email sent → {email}")
+            _set_step(cur, email, 2)
+            conn.commit()
+
+        elif step == 2 and now >= base + timedelta(days=6):
+            if _send_day6(email, name):
+                logger.info(f"[Onboarding] Day-6 email sent → {email}")
+            _set_step(cur, email, 3)
+            conn.commit()
+
+        elif step == 3 and now >= base + timedelta(days=8):
+            if _send_day8(email, name):
+                logger.info(f"[Onboarding] Day-8 email sent → {email}")
+            _set_step(cur, email, 4)
+            conn.commit()

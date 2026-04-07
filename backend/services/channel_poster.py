@@ -79,7 +79,7 @@ def _build_caption(article) -> str:
     link = f"{ARTICLE_BASE_URL}/{article.id}"
 
     fixed = f"📌 <b>{title}</b>\n\n"
-    suffix = f"\n\n👉 Читати повністю: {link}{HASHTAGS}"
+    suffix = f"\n\n👉 Читати повністю: {link}\n\n💬 Запитайте Alex детальніше → @alexgradus_bot{HASHTAGS}"
     available = MAX_CAPTION - len(fixed) - len(suffix)
 
     if len(content) > available:

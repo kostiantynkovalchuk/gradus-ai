@@ -175,7 +175,7 @@ def generate_linkedin_post(articles: list[dict]) -> str:
         "- Можна використати 1-2 emoji якщо доречно, але не перевантажувати\n"
         "- НЕ включай посилань та URL\n"
         "- НЕ використовуй markdown (зірочки, решітки тощо)\n"
-        "- Останній рядок ЗАВЖДИ: \"Детальніше на gradusmedia.org 👇\"\n"
+        "- Останній рядок ЗАВЖДИ: \"Детальніше на gradusmedia.org?utm_source=linkedin&utm_medium=social&utm_campaign=weekly_digest 👇\"\n"
         "- Після тексту постав хештеги у новому рядку: #HoReCa #Бар #Ресторан #GradusMedia\n\n"
         f"Новини для опрацювання:\n\n{news_block}"
     )
@@ -192,7 +192,7 @@ def generate_linkedin_post(articles: list[dict]) -> str:
         titles = " | ".join(a["title"] for a in articles[:3])
         return (
             f"HoReCa дайджест тижня:\n\n{titles}\n\n"
-            "Детальніше на gradusmedia.org 👇\n"
+            "Детальніше на gradusmedia.org?utm_source=linkedin&utm_medium=social&utm_campaign=weekly_digest 👇\n"
             "#HoReCa #Бар #Ресторан #GradusMedia"
         )
 
@@ -286,7 +286,7 @@ def post_first_comment(post_id: str) -> str | None:
 
     payload = {
         "actor":   author,
-        "message": {"text": "🔗 gradusmedia.org"},
+        "message": {"text": "🔗 gradusmedia.org?utm_source=linkedin&utm_medium=social&utm_campaign=weekly_digest"},
         "object":  post_id,
     }
 
