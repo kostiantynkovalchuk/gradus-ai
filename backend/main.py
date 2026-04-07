@@ -54,6 +54,7 @@ from routes.articles_api import router as articles_router
 from routes.admin_articles import router as admin_articles_router
 from routes.chat_endpoints import chat_router, chat_with_avatars, ChatRequest as AvatarChatRequest
 from routes.messenger_webhook import router as messenger_router
+from routes.alex_tg_webhook import router as alex_tg_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -171,6 +172,21 @@ async def lifespan(app: FastAPI):
             logger.error(f"Photo Report webhook setup failed: {e}")
     else:
         logger.info("Photo Report: PHOTO_REPORT_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
+
+    alex_gradus_token = os.environ.get("ALEX_GRADUS_BOT_TOKEN")
+    if alex_gradus_token and RENDER_URL:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as hclient:
+                resp = await hclient.post(
+                    f"https://api.telegram.org/bot{alex_gradus_token}/setWebhook",
+                    json={"url": f"{RENDER_URL}/webhook/alex-gradus"}
+                )
+                logger.info(f"🥃 Alex Gradus webhook: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Alex Gradus webhook setup failed: {e}")
+    else:
+        logger.info("Alex Gradus: ALEX_GRADUS_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
     yield
     
@@ -356,6 +372,7 @@ from solomon_router import router as solomon_router
 app.include_router(solomon_router)
 from routes.photo_report_webhook import router as photo_report_router
 app.include_router(photo_report_router)
+app.include_router(alex_tg_router)
 
 class ChatRequest(BaseModel):
     message: str

@@ -775,6 +775,30 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "035_alex_user_profiles_rate_limit",
+        "statements": [
+            "ALTER TABLE alex_user_profiles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
+            "ALTER TABLE alex_user_profiles ADD COLUMN IF NOT EXISTS daily_question_count INTEGER DEFAULT 0",
+            "ALTER TABLE alex_user_profiles ADD COLUMN IF NOT EXISTS daily_reset_date DATE",
+        ]
+    },
+    {
+        "version": "034_telegram_alex_users",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS telegram_alex_users (
+                telegram_user_id   BIGINT PRIMARY KEY,
+                email              VARCHAR(255),
+                subscription_tier  VARCHAR(50) DEFAULT 'free',
+                linked_at          TIMESTAMP DEFAULT NOW(),
+                last_active        TIMESTAMP,
+                trial_started_at   TIMESTAMP,
+                daily_question_count INTEGER DEFAULT 0,
+                daily_reset_date   DATE,
+                is_active          BOOLEAN DEFAULT TRUE
+            )""",
+        ]
+    },
+    {
         "version": "033_linkedin_posts_idx",
         "statements": [
             # Index to speed up the 30-day deduplication query

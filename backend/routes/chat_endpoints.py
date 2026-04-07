@@ -7,7 +7,7 @@ import re
 import logging
 import smtplib
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, date, timezone
 
 from services.avatar_personalities import (
     detect_avatar_role,
@@ -32,6 +32,91 @@ from services.alex_memory import (
 logger = logging.getLogger(__name__)
 
 chat_router = APIRouter(prefix="/chat", tags=["chat"])
+
+_FREE_DAILY_LIMIT = 5
+_TRIAL_DAYS = 7
+
+
+def _get_web_user_limits(email: str) -> dict:
+    """
+    Server-side rate limit check for web Alex chat.
+    Returns:
+      {"tier": str, "trial_expired": bool, "daily_limit_reached": bool}
+    Queries maya_users for authoritative tier, then alex_user_profiles for counters.
+    """
+    result = {"tier": "free", "trial_expired": False, "daily_limit_reached": False}
+    try:
+        import psycopg2
+        db_url = os.getenv("DATABASE_URL", "")
+        with psycopg2.connect(db_url) as conn, conn.cursor() as cur:
+            # Authoritative tier from maya_users
+            cur.execute(
+                "SELECT subscription_tier FROM maya_users WHERE email = %s",
+                (email,)
+            )
+            row = cur.fetchone()
+            tier = (row[0] if row else "free") or "free"
+            result["tier"] = tier
+
+            if tier in ("standard", "premium"):
+                return result  # paid — no limits to check
+
+            # Free tier: check trial + daily limit from alex_user_profiles
+            cur.execute(
+                """
+                SELECT created_at, daily_question_count, daily_reset_date
+                FROM alex_user_profiles
+                WHERE email = %s
+                """,
+                (email,)
+            )
+            profile = cur.fetchone()
+            if profile:
+                created_at, daily_count, reset_date = profile
+                # Trial check
+                if created_at:
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    delta = datetime.now(timezone.utc) - created_at
+                    if delta.days >= _TRIAL_DAYS:
+                        result["trial_expired"] = True
+                        return result
+                # Daily limit check
+                today = date.today()
+                if reset_date and reset_date < today:
+                    daily_count = 0  # stale — will be reset on save
+                if (daily_count or 0) >= _FREE_DAILY_LIMIT:
+                    result["daily_limit_reached"] = True
+    except Exception as e:
+        logger.warning(f"[WebRateLimit] Check failed for {email}: {e}")
+    return result
+
+
+def _increment_web_daily_count(email: str) -> None:
+    """Increment daily question count in alex_user_profiles. Reset if new day."""
+    try:
+        import psycopg2
+        db_url = os.getenv("DATABASE_URL", "")
+        today = date.today()
+        with psycopg2.connect(db_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO alex_user_profiles (email, daily_question_count, daily_reset_date)
+                VALUES (%s, 1, %s)
+                ON CONFLICT (email) DO UPDATE
+                    SET daily_question_count = CASE
+                            WHEN alex_user_profiles.daily_reset_date IS NULL
+                              OR alex_user_profiles.daily_reset_date < EXCLUDED.daily_reset_date
+                            THEN 1
+                            ELSE alex_user_profiles.daily_question_count + 1
+                        END,
+                        daily_reset_date = EXCLUDED.daily_reset_date
+                """,
+                (email, today)
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[WebRateLimit] Counter update failed for {email}: {e}")
 
 chat_claude = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -156,10 +241,44 @@ class ChatResponse(BaseModel):
 @chat_router.post("/")
 async def chat_with_avatars(request: ChatRequest):
     """Chat with Gradus AI avatars (Maya/Alex/General)"""
-    
+
     message = request.message
     history = request.conversation_history or []
-    
+
+    # ── Web-side rate limiting for Alex (free tier) ──────────────────────────
+    # Only enforce when email is known and avatar is alex, on website source.
+    _detected_avatar = detect_avatar_role(message, history, request.avatar or "")
+    if (
+        _detected_avatar == "alex"
+        and request.user_email
+        and request.source == "website"
+    ):
+        _limits = _get_web_user_limits(request.user_email)
+        if _limits["trial_expired"]:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "reason": "trial_expired",
+                    "message": (
+                        "Ваш 7-денний безкоштовний пробний доступ завершився. "
+                        "Перейдіть на платний тариф на gradusmedia.org/тарифи"
+                    ),
+                },
+            )
+        if _limits["daily_limit_reached"]:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "reason": "daily_limit",
+                    "message": (
+                        f"Ви використали {_FREE_DAILY_LIMIT} безкоштовних питань сьогодні. "
+                        "Повертайтесь завтра або перейдіть на платний тариф → gradusmedia.org/тарифи"
+                    ),
+                },
+            )
+        # Override tier from DB for memory eligibility
+        request = request.model_copy(update={"user_tier": _limits["tier"]})
+
     urls = extract_urls(message)
     
     if urls and is_ingestion_request(message) and PINECONE_AVAILABLE:
@@ -296,6 +415,15 @@ async def chat_with_avatars(request: ChatRequest):
                     )
             except Exception as e:
                 logger.warning(f"Memory save failed for {user_email}: {e}")
+
+        # ── Web free-tier counter ───────────────────────────────────────────
+        if (
+            avatar_role == "alex"
+            and not is_paid
+            and user_email
+            and request.source == "website"
+        ):
+            _increment_web_daily_count(user_email)
 
         return ChatResponse(
             response=assistant_message,
