@@ -20,11 +20,11 @@ import resend
 
 logger = logging.getLogger(__name__)
 
-# Photo URL — override via ALEX_EMAIL_PHOTO_URL env var if the default is
-# not publicly reachable (e.g. point to a Cloudinary or CDN URL).
+# Photo URL — served from Render backend static mount (/attached_assets/).
+# Override via ALEX_EMAIL_PHOTO_URL env var if needed.
 ALEX_PHOTO = os.environ.get(
     "ALEX_EMAIL_PHOTO_URL",
-    "https://gradus-ai.onrender.com/attached_assets/mayagradus.png",
+    "https://gradus-ai.onrender.com/attached_assets/alex_gradus.png",
 )
 FROM_ADDRESS = "Alex Gradus | GradusMedia <alex@gradusmedia.org>"
 REPLY_TO = "admin@gradusmedia.org"
