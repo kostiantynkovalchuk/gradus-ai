@@ -76,7 +76,11 @@ def _build_caption(article) -> str:
     """Build Telegram caption under 1024 chars."""
     title = article.translated_title or article.extra_metadata.get("title", "") if article.extra_metadata else ""
     content = article.translated_text or ""
-    link = f"{ARTICLE_BASE_URL}/{article.id}"
+    link = (
+        f"{ARTICLE_BASE_URL}/{article.id}"
+        f"?utm_source=telegram&utm_medium=social"
+        f"&utm_campaign=channel_post&utm_content=article_{article.id}"
+    )
 
     fixed = f"📌 <b>{title}</b>\n\n"
     suffix = f"\n\n👉 Читати повністю: {link}\n\n💬 Запитайте Alex детальніше → @alexgradus_bot{HASHTAGS}"
