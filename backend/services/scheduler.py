@@ -240,28 +240,60 @@ class ContentScheduler:
                     return
                 
                 translated_count = 0
-                
+
                 for article in draft_articles:
+                    article_id = article.id
                     try:
                         article_data = {
                             'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
                             'content': article.original_text
                         }
-                        
+
                         translation = translation_service.translate_article(article_data)
-                        
+
                         if translation and translation.get('title') and translation.get('content'):
                             article.translated_title = translation['title']
                             article.translated_text = translation['content']
                             article.status = 'pending_approval'
-                            translated_count += 1
-                            logger.info(f"[SCHEDULER] Translated article {article.id}: {article_data['title'][:50]}...")
+
+                            # Commit each article individually — prevents losing the
+                            # entire batch on SSL connection drop.
+                            try:
+                                db.commit()
+                                translated_count += 1
+                                logger.info(f"[SCHEDULER] Translated article {article_id}: {article_data['title'][:50]}...")
+                            except Exception as commit_err:
+                                # SSL drop or transient DB error — try to reconnect once
+                                logger.warning(f"[SCHEDULER] Commit failed for article {article_id} ({commit_err}), retrying...")
+                                try:
+                                    db.rollback()
+                                    db.close()
+                                    db = self._get_db_session()
+                                    # Re-fetch and re-apply translation on the fresh session
+                                    from models.content import ContentQueue as _CQ
+                                    fresh = db.query(_CQ).filter(_CQ.id == article_id).first()
+                                    if fresh:
+                                        fresh.translated_title = translation['title']
+                                        fresh.translated_text = translation['content']
+                                        fresh.status = 'pending_approval'
+                                        db.commit()
+                                        translated_count += 1
+                                        logger.info(f"[SCHEDULER] Retry commit OK for article {article_id}")
+                                except Exception as retry_err:
+                                    logger.error(f"[SCHEDULER] Retry commit failed for article {article_id}: {retry_err}")
+                                    try:
+                                        db.rollback()
+                                    except Exception:
+                                        pass
+
                     except Exception as e:
-                        logger.error(f"[SCHEDULER] Error translating article {article.id}: {e}")
-                        db.rollback()
+                        logger.error(f"[SCHEDULER] Error translating article {article_id}: {e}")
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
                         continue
-                
-                db.commit()
+
                 logger.info(f"✅ [SCHEDULER] Translated {translated_count} articles (notifications will be sent with images)")
             finally:
                 db.close()
