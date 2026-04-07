@@ -775,6 +775,13 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "033_linkedin_posts_idx",
+        "statements": [
+            # Index to speed up the 30-day deduplication query
+            "CREATE INDEX IF NOT EXISTS idx_linkedin_posts_posted_at ON linkedin_posts (posted_at)",
+        ]
+    },
+    {
         "version": "032_linkedin_posts_v2",
         "statements": [
             "ALTER TABLE linkedin_posts ADD COLUMN IF NOT EXISTS comment_id VARCHAR(255)",

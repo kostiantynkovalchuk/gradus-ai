@@ -52,37 +52,100 @@ def _get_conn():
 # 1. Fetch latest news
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_latest_news(limit: int = 5) -> list[dict]:
+def _get_used_article_ids(conn, days: int = 30) -> set[int]:
     """
-    Pulls the most recently posted approved articles from content_queue.
-    Returns list of dicts: id, title, text, source, source_url.
+    Returns the set of content_queue article IDs already used in LinkedIn
+    posts within the last `days` days. Reads the JSONB article_ids column.
     """
-    conn = _get_conn()
+    used: set[int] = set()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id,
-                       COALESCE(translated_title, source_title) AS title,
-                       COALESCE(translated_text, original_text)  AS body,
-                       source,
-                       source_url
-                FROM content_queue
-                WHERE status = 'posted'
-                  AND COALESCE(translated_title, source_title) IS NOT NULL
-                ORDER BY posted_at DESC NULLS LAST, created_at DESC
-                LIMIT %s
+                SELECT article_ids
+                FROM linkedin_posts
+                WHERE posted_at >= NOW() - (%s * INTERVAL '1 day')
+                  AND article_ids IS NOT NULL
                 """,
-                (limit,)
+                (days,)
             )
+            for (ids_json,) in cur.fetchall():
+                if isinstance(ids_json, list):
+                    used.update(int(i) for i in ids_json)
+    except Exception as e:
+        logger.warning(f"[LinkedInDigest] Could not fetch used article IDs: {e}")
+    return used
+
+
+def fetch_latest_news(limit: int = 5) -> list[dict]:
+    """
+    Pulls the most recently posted approved articles from content_queue,
+    excluding any article IDs already used in a LinkedIn post in the last
+    30 days to prevent duplicate content.
+
+    If fewer than `limit` fresh articles are available, uses what's there
+    and logs a warning — never skips the post entirely.
+    """
+    conn = _get_conn()
+    try:
+        used_ids = _get_used_article_ids(conn, days=30)
+
+        with conn.cursor() as cur:
+            if used_ids:
+                cur.execute(
+                    """
+                    SELECT id,
+                           COALESCE(translated_title, source_title) AS title,
+                           COALESCE(translated_text, original_text)  AS body,
+                           source,
+                           source_url
+                    FROM content_queue
+                    WHERE status = 'posted'
+                      AND COALESCE(translated_title, source_title) IS NOT NULL
+                      AND id != ALL(%s)
+                    ORDER BY posted_at DESC NULLS LAST, created_at DESC
+                    LIMIT %s
+                    """,
+                    (list(used_ids), limit)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id,
+                           COALESCE(translated_title, source_title) AS title,
+                           COALESCE(translated_text, original_text)  AS body,
+                           source,
+                           source_url
+                    FROM content_queue
+                    WHERE status = 'posted'
+                      AND COALESCE(translated_title, source_title) IS NOT NULL
+                    ORDER BY posted_at DESC NULLS LAST, created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,)
+                )
             rows = cur.fetchall()
     finally:
         conn.close()
 
-    return [
+    articles = [
         {"id": r[0], "title": r[1], "text": r[2], "source": r[3], "url": r[4]}
         for r in rows
     ]
+
+    if len(articles) < limit:
+        logger.warning(
+            f"[LinkedInDigest] Only {len(articles)} fresh articles available "
+            f"(wanted {limit}, {len(used_ids)} excluded as used in last 30 days) — "
+            "proceeding with available content"
+        )
+    else:
+        logger.info(
+            f"[LinkedInDigest] Fetched {len(articles)} fresh articles "
+            f"({len(used_ids)} excluded as used in last 30 days)"
+        )
+
+    return articles
 
 
 # ─────────────────────────────────────────────────────────────────────────────

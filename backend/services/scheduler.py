@@ -1324,12 +1324,12 @@ class ContentScheduler:
             replace_existing=True
         )
 
-        # LinkedIn daily news digest — 07:00 UTC daily (09:00 Kyiv)
+        # LinkedIn weekly news digest — Monday 07:00 UTC (09:00 Kyiv)
         self.scheduler.add_job(
             self._linkedin_digest_task,
-            CronTrigger(hour=7, minute=0),
-            id='linkedin_daily_digest',
-            name='LinkedIn daily HoReCa news digest',
+            CronTrigger(day_of_week='mon', hour=7, minute=0),
+            id='linkedin_weekly_digest',
+            name='LinkedIn weekly HoReCa news digest',
             replace_existing=True
         )
 
