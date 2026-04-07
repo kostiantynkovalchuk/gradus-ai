@@ -1,0 +1,55 @@
+Audit request: Two separate Alex AI products
+
+We are clarifying the architecture for two distinct AI assistants 
+that will coexist in the system. Before building anything, 
+audit the current codebase and answer all questions below.
+
+PRODUCT A — ALEX GRADUS (client-facing HoReCa assistant)
+- Current home: gradusmedia.org chat
+- Planned addition: Telegram bot for paid subscribers
+- Audience: HoReCa owners, bar managers
+- Model: Claude Sonnet
+- Gated by: $7/$10 subscription tiers
+
+PRODUCT B — ALEX AVTD (internal trade agent assistant)  
+- Current home: Telegram only
+- Audience: AVTD field trade agents
+- Purpose: Field support + photo reports (Alex Photo Report 
+  already live as separate bot)
+- Model: Claude Haiku
+- Gated by: internal access only, no subscription
+
+AUDIT QUESTIONS:
+
+1. ALEX GRADUS (web):
+   - Which file handles the chat API endpoint?
+   - What is the current system prompt for Alex Gradus?
+   - Is conversation history stored per user? Which table?
+   - What does the "move to Telegram" CTA on the web UI 
+     currently point to? Show the code.
+   - Is there any subscription tier checking on the chat endpoint?
+
+2. ALEX AVTD (internal):
+   - Is there an existing internal Alex bot separate from 
+     Alex Photo Report?
+   - Which bot token is used — @gradusai_bot or separate?
+   - Are there any existing trade agent commands or handlers?
+   - Is Alex Photo Report (@gradusai_bot) the same bot that 
+     would become Alex AVTD, or should they remain separate?
+
+3. SHARED INFRASTRUCTURE:
+   - Is there a shared conversation history table or separate 
+     per product?
+   - How is user identity tracked — Telegram user ID, email, 
+     or subscription ID?
+   - Are there any existing access control / subscription 
+     checking functions?
+
+4. CONFLICTS TO AVOID:
+   - Are there any existing Telegram handlers that would 
+     conflict with adding Alex Gradus to Telegram?
+   - Is @gradusai_bot already handling multiple products 
+     in the same codebase?
+
+Show relevant code sections for each point.
+Do not make any changes — audit and report only.
