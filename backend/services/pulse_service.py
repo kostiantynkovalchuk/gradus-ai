@@ -624,65 +624,147 @@ def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
         return []
 
 
+# Per-user meme session tracking: {chat_id: [list of shown meme IDs]}
+_meme_recently_sent: dict = {}
+
+
 async def send_pulse_meme(chat_id: int) -> bool:
     """
-    Send a random meme from pulse_memes table.
-    Returns True if a meme was sent, False if fallback text was used.
+    Send a random meme from pulse_memes table with session deduplication.
+
+    Carousel rules:
+    - Never repeat a meme until all have been shown (per user session).
+    - On the LAST meme: omit "Ще мем!" button, append end-of-session text,
+      then clear the session so next run starts fresh.
+    - Delivery: cached file_id → local file upload (caches returned file_id).
+
+    Returns True if a photo was sent, False if fallback text was used.
     """
     if not TELEGRAM_MAYA_BOT_TOKEN:
         return False
 
+    # ── 1. Fetch all active memes ─────────────────────────────────────────
     try:
         db = _models.SessionLocal()
         try:
-            row = db.execute(
-                text("SELECT id, file_id, file_url, caption FROM pulse_memes WHERE is_active = TRUE ORDER BY RANDOM() LIMIT 1")
-            ).fetchone()
+            rows = db.execute(
+                text("SELECT id, file_id, file_url, caption FROM pulse_memes WHERE is_active = TRUE ORDER BY id")
+            ).fetchall()
         finally:
             db.close()
     except Exception as e:
         logger.warning(f"[PULSE] send_pulse_meme DB error: {e}")
-        row = None
+        rows = []
 
-    meme_keyboard = {
-        "inline_keyboard": [
-            [{"text": "😄 Ще один мем", "callback_data": "hr_pulse:meme"}],
-        ]
-    }
+    if not rows:
+        fallback = "😄 Мем-терапія поки що готується! А поки що — зроби перерву на каву ☕"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": fallback},
+                )
+        except Exception as e:
+            logger.warning(f"[PULSE] Meme fallback failed: {e}")
+        return False
 
-    if row:
-        meme_id, file_id, file_url, caption = row
-        photo_src = file_id or file_url
-        caption_text = caption or "😄"
-        if photo_src:
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto",
-                        json={
-                            "chat_id": chat_id,
-                            "photo": photo_src,
-                            "caption": caption_text,
-                            "reply_markup": meme_keyboard,
-                        },
-                    )
-                if resp.status_code == 200:
-                    logger.info(f"[PULSE] Meme sent (id={meme_id}) to {chat_id}")
-                    return True
-                logger.warning(f"[PULSE] sendPhoto failed: {resp.status_code} {resp.text[:100]}")
-            except Exception as e:
-                logger.warning(f"[PULSE] Meme send error: {e}")
+    total = len(rows)
+    seen = _meme_recently_sent.get(chat_id, [])
 
+    # ── 2. Pick a meme from the unseen pool ───────────────────────────────
+    import random as _random
+    remaining = [r for r in rows if r[0] not in seen]
+    if not remaining:
+        _meme_recently_sent[chat_id] = []
+        seen = []
+        remaining = list(rows)
+
+    chosen = _random.choice(remaining)
+    meme_id, file_id, file_url, caption_text = chosen
+    caption_text = caption_text or "😄"
+
+    # Track this meme as seen
+    seen = seen + [meme_id]
+    _meme_recently_sent[chat_id] = seen
+    is_last = len(seen) >= total
+
+    # ── 3. Build caption + keyboard ───────────────────────────────────────
+    if is_last:
+        caption_text += "\n\nЦе всі меми на сьогодні 😊 Тримайся!"
+        _meme_recently_sent.pop(chat_id, None)
+        meme_keyboard = None
+    else:
+        meme_keyboard = {
+            "inline_keyboard": [
+                [{"text": "😄 Ще мем!", "callback_data": "hr_pulse:meme"}],
+            ]
+        }
+
+    # ── 4. Try local file upload (caches file_id for future sends) ────────
+    if not file_id and file_url and os.path.isfile(file_url):
+        try:
+            with open(file_url, "rb") as _f:
+                img_bytes = _f.read()
+            import json as _json
+            form_data = {"chat_id": str(chat_id), "caption": caption_text}
+            if meme_keyboard:
+                form_data["reply_markup"] = _json.dumps(meme_keyboard)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto",
+                    data=form_data,
+                    files={"photo": (os.path.basename(file_url), img_bytes, "image/png")},
+                )
+            if resp.status_code == 200:
+                try:
+                    returned_file_id = resp.json()["result"]["photo"][-1]["file_id"]
+                    db2 = _models.SessionLocal()
+                    try:
+                        db2.execute(
+                            text("UPDATE pulse_memes SET file_id=:fid WHERE id=:mid"),
+                            {"fid": returned_file_id, "mid": meme_id},
+                        )
+                        db2.commit()
+                    finally:
+                        db2.close()
+                    logger.info(f"[PULSE] Cached file_id for meme {meme_id}")
+                except Exception as _ce:
+                    logger.warning(f"[PULSE] file_id cache failed: {_ce}")
+                logger.info(f"[PULSE] Meme {meme_id} uploaded to {chat_id} (last={is_last})")
+                return True
+            logger.warning(f"[PULSE] sendPhoto (upload) failed: {resp.status_code} {resp.text[:150]}")
+        except Exception as e:
+            logger.warning(f"[PULSE] Meme file upload error: {e}")
+
+    # ── 5. Try cached file_id ─────────────────────────────────────────────
+    if file_id:
+        try:
+            post_json: dict = {
+                "chat_id": chat_id,
+                "photo": file_id,
+                "caption": caption_text,
+            }
+            if meme_keyboard:
+                post_json["reply_markup"] = meme_keyboard
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto",
+                    json=post_json,
+                )
+            if resp.status_code == 200:
+                logger.info(f"[PULSE] Meme {meme_id} sent via file_id to {chat_id} (last={is_last})")
+                return True
+            logger.warning(f"[PULSE] sendPhoto (file_id) failed: {resp.status_code} {resp.text[:100]}")
+        except Exception as e:
+            logger.warning(f"[PULSE] Meme send error: {e}")
+
+    # ── 6. Fallback text ──────────────────────────────────────────────────
     fallback = "😄 Мем-терапія поки що готується! А поки що — зроби перерву на каву ☕"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
                 f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": fallback,
-                    "reply_markup": meme_keyboard,
-                },
+                json={"chat_id": chat_id, "text": fallback},
             )
     except Exception as e:
         logger.warning(f"[PULSE] Meme fallback failed: {e}")

@@ -969,26 +969,30 @@ async def send_legal_document(chat_id: int, doc_id: str):
         return False
 
 
-async def edit_telegram_message(chat_id: int, message_id: int, text: str, keyboard: dict = None):
-    """Edit existing message"""
+async def edit_telegram_message(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    keyboard: dict = None,
+    parse_mode: str = "Markdown",
+):
+    """Edit existing message. Pass parse_mode=None for plain-text edits."""
     if not TELEGRAM_MAYA_BOT_TOKEN:
         return False
-    
+
     url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/editMessageText"
-    
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    
+
+    payload: dict = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     if keyboard:
         payload["reply_markup"] = keyboard
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=10.0)
+            if response.status_code != 200:
+                logger.warning(f"[edit_msg] {response.status_code}: {response.text[:120]}")
             return response.status_code == 200
     except Exception as e:
         logger.error(f"Error editing message: {e}")
@@ -1378,11 +1382,12 @@ async def handle_hr_callback(callback_query: dict):
                 telegram_user_id = callback_query.get('from', {}).get('id')
                 _emp_row = None
                 try:
+                    from sqlalchemy import text as _sa_text_prob
                     import models as _models_prob
                     _pdb2 = _models_prob.SessionLocal()
                     try:
                         _pdb2.execute(
-                            text(
+                            _sa_text_prob(
                                 "UPDATE pulse_surveys SET problem_category=:cat "
                                 "WHERE telegram_id=:tid AND survey_month=:mk"
                             ),
@@ -1410,9 +1415,10 @@ async def handle_hr_callback(callback_query: dict):
                     await answer_callback(callback_id, "Пишіть")
                     await edit_telegram_message(
                         chat_id, message_id,
-                        "❤️ *Пульс команди*\n\n"
+                        "❤️ Пульс команди\n\n"
                         "Опиши, будь ласка, своїми словами що відбувається.\n"
-                        "Я передам це HR конфіденційно."
+                        "Я передам це HR конфіденційно.",
+                        parse_mode=None,
                     )
                 else:
                     await answer_callback(callback_id, "Дякую 🤍")
