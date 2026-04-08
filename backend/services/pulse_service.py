@@ -624,7 +624,12 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
                         with open(video_path, "rb") as f:
                             resp = await client.post(
                                 f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo",
-                                data={"chat_id": str(chat_id), "supports_streaming": "true"},
+                                data={
+                                    "chat_id": str(chat_id),
+                                    "supports_streaming": "true",
+                                    "width": "1080",
+                                    "height": "1920",
+                                },
                                 files={"video": (video_file, f, "video/mp4")},
                             )
                     if resp.status_code == 200:
@@ -757,7 +762,45 @@ def _carousel_save_seen(chat_id: int, seen: list[int]) -> None:
 
 
 def _carousel_reset(chat_id: int) -> None:
-    """Clear the carousel state for a user (all memes shown)."""
+    """Mark carousel as DONE (all memes shown). Uses sentinel so stale taps can be detected."""
+    try:
+        db = _models.SessionLocal()
+        try:
+            db.execute(
+                text("""
+                    INSERT INTO pulse_meme_carousel (telegram_id, seen_ids, updated_at)
+                    VALUES (:tid, 'DONE', NOW())
+                    ON CONFLICT (telegram_id) DO UPDATE
+                        SET seen_ids = 'DONE', updated_at = NOW()
+                """),
+                {"tid": chat_id},
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] carousel reset error: {e}")
+
+
+def _carousel_is_done(chat_id: int) -> bool:
+    """Return True if this user just finished the carousel (DONE sentinel set)."""
+    try:
+        db = _models.SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT seen_ids FROM pulse_meme_carousel WHERE telegram_id = :tid"),
+                {"tid": chat_id},
+            ).fetchone()
+            return bool(row and row[0] == "DONE")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] carousel is_done check error: {e}")
+        return False
+
+
+def _carousel_clear_done(chat_id: int) -> None:
+    """Clear DONE sentinel so next carousel starts fresh."""
     try:
         db = _models.SessionLocal()
         try:
@@ -769,7 +812,7 @@ def _carousel_reset(chat_id: int) -> None:
         finally:
             db.close()
     except Exception as e:
-        logger.warning(f"[PULSE] carousel reset error: {e}")
+        logger.warning(f"[PULSE] carousel clear_done error: {e}")
 
 
 async def send_pulse_meme(chat_id: int) -> bool:
@@ -822,10 +865,9 @@ async def send_pulse_meme(chat_id: int) -> bool:
     seen = _carousel_get_seen(chat_id)
     remaining = [r for r in rows if r[0] not in seen]
     if not remaining:
-        # All memes shown — start fresh cycle
-        seen = []
-        remaining = list(rows)
-        _carousel_reset(chat_id)
+        # No unseen memes — stale button tap after cycle completed, return silently
+        logger.info(f"[PULSE] Meme carousel already exhausted for chat_id={chat_id}, skipping")
+        return False
 
     chosen = _random.choice(remaining)
     meme_id, file_id, file_url, caption_text = chosen

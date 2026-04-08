@@ -39,7 +39,7 @@ from services.pulse_service import (
     send_pulse_video, log_video_view, log_hr_action,
     update_risk_score, RISK_POINTS, get_risk_history,
     PULSE_AWAITING_TEXT, PROBLEM_CATEGORIES, send_pulse_meme,
-    TRIGGER_LABELS,
+    TRIGGER_LABELS, _carousel_is_done, _carousel_clear_done,
 )
 
 logger = logging.getLogger(__name__)
@@ -1363,8 +1363,13 @@ async def handle_hr_callback(callback_query: dict):
                 )
 
             elif action_part == 'meme':
-                await answer_callback(callback_id, "😄 Зараз буде")
-                asyncio.create_task(send_pulse_meme(chat_id))
+                if _carousel_is_done(chat_id):
+                    # User tapped old "Ще мем!" button after carousel completed
+                    _carousel_clear_done(chat_id)
+                    await answer_callback(callback_id, "Всі меми переглянуті 😊")
+                else:
+                    await answer_callback(callback_id, "😄 Зараз буде")
+                    asyncio.create_task(send_pulse_meme(chat_id))
 
             elif action_part == 'support':
                 await answer_callback(callback_id, "💙 Надсилаю відео")
