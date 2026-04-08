@@ -151,14 +151,20 @@ RISK_THRESHOLD_URGENT = 7
 # ── PULSE VIDEO MAPPING ───────────────────────────────────────────────────────
 
 PULSE_VIDEOS: dict[str, str] = {
-    "breathing": "pulse_breathing.mp4",
-    "conflict": "pulse_conflict.mp4",
-    "burnout": "pulse_burnout.mp4",
-    "decision": "pulse_decision.mp4",
+    "breathing":   "pulse_breathing.mp4",
+    "burnout":     "pulse_burnout.mp4",
+    "confident":   "pulse_confident.mp4",
+    "conflict":    "pulse_conflict.mp4",
+    "manager":     "pulse_manager.mp4",
+    "decision":    "pulse_decision.mp4",
     "resignation": "pulse_decision.mp4",
-    "rights": "pulse_conflict.mp4",
-    "stress": "pulse_burnout.mp4",
+    "rights":      "pulse_conflict.mp4",
+    "stress":      "pulse_burnout.mp4",
 }
+
+# In-memory file_id cache: {filename: telegram_file_id}
+# Populated after first upload so subsequent sends are instant (no re-upload).
+_video_file_id_cache: dict[str, str] = {}
 
 PULSE_VIDEO_FALLBACK_TEXT: dict[str, str] = {
     "breathing": (
@@ -184,6 +190,16 @@ PULSE_VIDEO_FALLBACK_TEXT: dict[str, str] = {
         "Візьми аркуш паперу. Зліва: що тримає мене тут. Справа: що штовхає звідси.\n"
         "Подивись через день, коли емоції вляжуться.\n"
         "Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
+    ),
+    "confident": (
+        "💪 Ти молодець\n\n"
+        "Іноді варто просто нагадати собі про те, чого вже досяг(ла).\n"
+        "Зроби один маленький крок сьогодні — і цього достатньо."
+    ),
+    "manager": (
+        "🤝 Про стосунки з керівником\n\n"
+        "Спробуй домовитись про коротку зустріч 1:1 — просто поговорити.\n"
+        "HR може допомогти, якщо потрібна нейтральна сторона."
     ),
 }
 
@@ -518,11 +534,16 @@ async def send_pulse_support(chat_id: int, trigger_type: str) -> None:
 async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
     """
     Send a support video for the given trigger type or video_id.
-    Falls back to a text message if the video file is not present.
+
+    Delivery chain:
+      1. Cached file_id (instant, no re-upload) → _video_file_id_cache
+      2. Local file upload (caches returned file_id for future sends)
+      3. Fallback text message if file missing or upload fails
     """
     if not TELEGRAM_MAYA_BOT_TOKEN:
         return
 
+    # Map Ukrainian trigger names → PULSE_VIDEOS keys
     fallback_key = trigger_or_video_id
     if fallback_key == "звільнення":
         fallback_key = "decision"
@@ -536,21 +557,57 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
 
     if video_file:
         import pathlib
-        video_path = pathlib.Path(__file__).parent.parent / "static" / "pulse_videos" / video_file
-        if video_path.exists():
+
+        # ── 1. Try cached file_id (instant, no bandwidth cost) ────────────
+        cached_file_id = _video_file_id_cache.get(video_file)
+        if cached_file_id:
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    with open(video_path, "rb") as f:
-                        resp = await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo",
-                            data={"chat_id": str(chat_id), "supports_streaming": "true"},
-                            files={"video": (video_file, f, "video/mp4")},
-                        )
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo",
+                        json={
+                            "chat_id": chat_id,
+                            "video": cached_file_id,
+                            "supports_streaming": True,
+                        },
+                    )
                 if resp.status_code == 200:
                     video_sent = True
-                    logger.info(f"[PULSE] Pulse video sent: {video_file} → {chat_id}")
+                    logger.info(f"[PULSE] Video sent via file_id cache: {video_file} → {chat_id}")
+                else:
+                    # Stale cache — clear and fall through to upload
+                    logger.warning(f"[PULSE] Cached file_id invalid ({resp.status_code}), clearing cache")
+                    _video_file_id_cache.pop(video_file, None)
             except Exception as e:
-                logger.warning(f"[PULSE] Pulse video send failed ({video_file}): {e}")
+                logger.warning(f"[PULSE] Cached file_id send failed: {e}")
+
+        # ── 2. Upload from local file and cache the returned file_id ──────
+        if not video_sent:
+            video_path = pathlib.Path(__file__).parent.parent / "static" / "pulse_videos" / video_file
+            if video_path.exists():
+                try:
+                    async with httpx.AsyncClient(timeout=120.0) as client:
+                        with open(video_path, "rb") as f:
+                            resp = await client.post(
+                                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendVideo",
+                                data={"chat_id": str(chat_id), "supports_streaming": "true"},
+                                files={"video": (video_file, f, "video/mp4")},
+                            )
+                    if resp.status_code == 200:
+                        video_sent = True
+                        logger.info(f"[PULSE] Video uploaded: {video_file} → {chat_id}")
+                        try:
+                            returned_file_id = resp.json()["result"]["video"]["file_id"]
+                            _video_file_id_cache[video_file] = returned_file_id
+                            logger.info(f"[PULSE] Cached file_id for {video_file}")
+                        except Exception as _ce:
+                            logger.warning(f"[PULSE] Could not cache file_id: {_ce}")
+                    else:
+                        logger.warning(f"[PULSE] Video upload failed: {resp.status_code} {resp.text[:100]}")
+                except Exception as e:
+                    logger.warning(f"[PULSE] Video upload error ({video_file}): {e}")
+            else:
+                logger.warning(f"[PULSE] Video file not found: {video_path}")
 
     if not video_sent:
         msg = PULSE_VIDEO_FALLBACK_TEXT.get(
@@ -563,9 +620,9 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
                     f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
                     json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
                 )
-            logger.info(f"[PULSE] Pulse video fallback text sent: {fallback_key} → {chat_id}")
+            logger.info(f"[PULSE] Video fallback text sent: {fallback_key} → {chat_id}")
         except Exception as e:
-            logger.warning(f"[PULSE] Pulse video fallback failed: {e}")
+            logger.warning(f"[PULSE] Video fallback failed: {e}")
 
 
 def log_video_view(telegram_id: int, video_id: str) -> None:
