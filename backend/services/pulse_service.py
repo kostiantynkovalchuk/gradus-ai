@@ -192,14 +192,14 @@ PULSE_VIDEO_FALLBACK_TEXT: dict[str, str] = {
         "Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
     ),
     "confident": (
-        "💪 Ти молодець\n\n"
-        "Іноді варто просто нагадати собі про те, чого вже досяг(ла).\n"
-        "Зроби один маленький крок сьогодні — і цього достатньо."
+        "💚 Так тримати!\n\n"
+        "Поки є ресурс — закривай найскладніші задачі. Потім буде легше. 💪"
     ),
     "manager": (
-        "🤝 Про стосунки з керівником\n\n"
-        "Спробуй домовитись про коротку зустріч 1:1 — просто поговорити.\n"
-        "HR може допомогти, якщо потрібна нейтральна сторона."
+        "👔 Поговори з керівником\n\n"
+        "Підготуйся: запиши що турбує, як впливає на роботу, і що пропонуєш.\n"
+        "Говори фактами, не емоціями.\n"
+        "HR може допомогти підготуватися до розмови."
     ),
 }
 
@@ -584,6 +584,7 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
         # ── 2. Upload from local file and cache the returned file_id ──────
         if not video_sent:
             video_path = pathlib.Path(__file__).parent.parent / "static" / "pulse_videos" / video_file
+            logger.info(f"[PULSE] Attempting to send video: {video_path}, exists={video_path.exists()}")
             if video_path.exists():
                 try:
                     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -758,6 +759,7 @@ async def send_pulse_meme(chat_id: int) -> bool:
         }
 
     # ── 4. Try local file upload (caches file_id for future sends) ────────
+    logger.info(f"[PULSE] Attempting to send meme: {file_url}, exists={os.path.isfile(file_url) if file_url else False}")
     if not file_id and file_url and os.path.isfile(file_url):
         try:
             with open(file_url, "rb") as _f:

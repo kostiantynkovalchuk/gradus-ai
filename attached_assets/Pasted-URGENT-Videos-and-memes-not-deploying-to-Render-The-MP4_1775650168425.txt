@@ -1,0 +1,56 @@
+URGENT — Videos and memes not deploying to Render.
+
+The MP4 and PNG files were uploaded to Replit filesystem but likely NOT committed to git.
+Render builds from GitHub — if files aren't in the repo, they don't exist on production.
+
+1. Check if video and meme files are in git:
+   git status backend/static/pulse_videos/
+   git status backend/static/pulse_memes/
+   ls -la backend/static/pulse_videos/
+   ls -la backend/static/pulse_memes/
+
+2. If files exist locally but are not tracked by git:
+   git add backend/static/pulse_videos/*.mp4
+   git add backend/static/pulse_memes/*.png
+   git commit -m "Add Team Pulse videos and memes"
+   git push
+
+3. Check .gitignore — is there a rule ignoring *.mp4 or *.png or static/?
+   grep -i "mp4\|png\|static\|video\|meme" .gitignore
+   If yes — add exceptions:
+   !backend/static/pulse_videos/
+   !backend/static/pulse_memes/
+
+4. Also check file sizes — git has a 100MB limit per file.
+   du -h backend/static/pulse_videos/*.mp4
+   du -h backend/static/pulse_memes/*.png
+   Files over 100MB need git-lfs. Under 100MB push normally.
+
+5. After push, verify on Render logs that files exist:
+   The next deploy should show the files in the build.
+
+Also add logging to send_pulse_meme and send_pulse_video:
+   logger.info(f"[PULSE] Attempting to send video: {file_path}, exists={os.path.exists(file_path)}")
+   logger.info(f"[PULSE] Attempting to send meme: {file_path}, exists={os.path.exists(file_path)}")
+
+This way we'll see in Render logs whether files are found on disk.
+
+6. Update fallback text messages to match approved scripts:
+
+breathing fallback:
+"🫁 Пауза для дихання\n\nВдихни на 4 рахунки… затримай на 4… видихни на 4… пауза на 4.\nПовтори 3 рази. Твоє тіло вже трохи розслабилось.\n\nЯкщо потрібна підтримка — напиши HR."
+
+conflict fallback:
+"🤝 Конфлікт — це не кінець\n\nСпробуй замінити «Ти завжди…» на «Я відчуваю… коли…».\nЦе не слабкість — це навичка.\nHR може допомогти як нейтральна сторона."
+
+burnout fallback:
+"🌿 Зупинись і подивись\n\nНазви 5 речей, які бачиш… 4 звуки… 3 дотики… 2 запахи… 1 смак.\nЩо забирає твою енергію сьогодні? Що її дає?\nІноді достатньо змінити одну маленьку річ."
+
+manager fallback:
+"👔 Поговори з керівником\n\nПідготуйся: запиши що турбує, як впливає на роботу, і що пропонуєш.\nГовори фактами, не емоціями.\nHR може допомогти підготуватися до розмови."
+
+confident fallback:
+"💚 Так тримати!\n\nПоки є ресурс — закривай найскладніші задачі. Потім буде легше. 💪"
+
+decision fallback (keep existing offboarding video, only text backup):
+"📋 Перед рішенням\n\nВізьми аркуш паперу. Зліва: що тримає мене тут. Справа: що штовхає звідси.\nПодивись через день, коли емоції вляжуться.\nПоговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
