@@ -1298,13 +1298,15 @@ async def handle_hr_callback(callback_query: dict):
                             "Клас, так і тримай! 💪\n"
                             "Порада: поки є ресурс — закривай найскладніші задачі. Потім буде легше."
                         )
+                        logger.info(f"[PULSE] score=3: calling send_pulse_video(confident) for chat_id={chat_id}")
+                        await send_pulse_video(chat_id, "confident")
                     elif score == 2:
                         await answer_callback(callback_id, "Дякую за чесність 🤍")
                         await edit_telegram_message(
                             chat_id, message_id,
                             "❤️ *Пульс команди*\n\n"
                             "💛 Нормально, буває різне\n\n"
-                            "Зрозуміло. Ти не один/одна в такому стані 🙂\n"
+                            "Зрозуміло. Ти не один/одна 🙂\n"
                             "Давай спробую допомогти:",
                             {
                                 "inline_keyboard": [
@@ -1373,7 +1375,9 @@ async def handle_hr_callback(callback_query: dict):
 
             elif action_part == 'support':
                 await answer_callback(callback_id, "💙 Надсилаю відео")
-                asyncio.create_task(send_pulse_video(chat_id, "breathing"))
+                logger.info(f"[PULSE] support handler: calling send_pulse_video(breathing) for chat_id={chat_id}")
+                await send_pulse_video(chat_id, "breathing")
+                logger.info(f"[PULSE] support handler: send_pulse_video returned")
 
             elif action_part == 'problem' and len(parts) >= 3:
                 category = parts[2]
