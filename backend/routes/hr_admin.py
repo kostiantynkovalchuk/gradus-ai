@@ -15,6 +15,7 @@ from typing import Optional
 
 from models import get_db
 from hunt_config import ROI_CONSTANTS
+from services.pulse_service import TRIGGER_LABELS as _TRIGGER_LABELS
 
 router = APIRouter(prefix="/hr", tags=["HR Admin"])
 security = HTTPBasic()
@@ -1253,10 +1254,11 @@ async def get_pulse_alerts(
                     "employee_id": r[0],
                     "employee_name": r[1] or "Невідомий",
                     "department": r[2] or "Невідомий відділ",
-                    "current_score": r[3],
+                    "current_score": min(r[3], 10) if r[3] is not None else 0,
                     "alert_status": r[4] or "red",
                     "last_trigger_at": r[5].isoformat() if r[5] else None,
                     "last_trigger_type": r[6],
+                    "last_trigger_label": _TRIGGER_LABELS.get(r[6] or "", r[6] or ""),
                     "last_trigger_text": r[7],
                     "last_trigger_id": r[8],
                 }
@@ -1315,7 +1317,11 @@ async def get_pulse_risk_history(
 ):
     """Return recent trigger history for a specific employee."""
     from services.pulse_service import get_risk_history as _get_risk_history
-    return {"history": _get_risk_history(employee_id)}
+    history = _get_risk_history(employee_id)
+    for h in history:
+        ttype = h.get("trigger_type", "")
+        h["trigger_label"] = _TRIGGER_LABELS.get(ttype, ttype)
+    return {"history": history}
 
 
 @router.post("/api/pulse-hr-action")

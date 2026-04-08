@@ -145,6 +145,21 @@ RISK_POINTS: dict[str, int] = {
     "права": 1,
 }
 
+TRIGGER_LABELS: dict[str, str] = {
+    "звільнення": "Звільнення",
+    "resignation": "Звільнення",
+    "conflict": "Конфлікт з колегами",
+    "конфлікт": "Конфлікт з колегами",
+    "burnout": "Вигорання / втома",
+    "вигорання": "Вигорання / втома",
+    "rights": "Питання про права",
+    "права": "Питання про права",
+    "survey_colleagues": "Опитування: проблема з колегами",
+    "survey_manager": "Опитування: проблема з керівником",
+    "survey_tasks": "Опитування: складність задач",
+    "survey_other": "Опитування: інше",
+}
+
 RISK_THRESHOLD_ALERT = 4
 RISK_THRESHOLD_URGENT = 7
 
@@ -298,16 +313,16 @@ def update_risk_score(
                     INSERT INTO pulse_risk_scores
                         (employee_id, employee_name, department, current_score,
                          last_trigger_at, last_calculated_at, alert_status)
-                    VALUES (:eid, :ename, :dept, :pts, NOW(), NOW(), 'none')
+                    VALUES (:eid, :ename, :dept, LEAST(:pts, 10), NOW(), NOW(), 'none')
                     ON CONFLICT (employee_id) DO UPDATE SET
-                        current_score = pulse_risk_scores.current_score + :pts,
+                        current_score = LEAST(pulse_risk_scores.current_score + :pts, 10),
                         employee_name = :ename,
                         department = :dept,
                         last_trigger_at = NOW(),
                         last_calculated_at = NOW(),
                         alert_status = CASE
-                            WHEN pulse_risk_scores.current_score + :pts >= :urgent THEN 'urgent'
-                            WHEN pulse_risk_scores.current_score + :pts >= :alert  THEN 'red'
+                            WHEN LEAST(pulse_risk_scores.current_score + :pts, 10) >= :urgent THEN 'urgent'
+                            WHEN LEAST(pulse_risk_scores.current_score + :pts, 10) >= :alert  THEN 'red'
                             ELSE pulse_risk_scores.alert_status
                         END
                 """),
@@ -322,7 +337,7 @@ def update_risk_score(
             )
             db.commit()
 
-            new_score = prev_score + points
+            new_score = min(prev_score + points, 10)
             crossed = prev_score < RISK_THRESHOLD_ALERT and new_score >= RISK_THRESHOLD_ALERT
             logger.info(
                 f"[PULSE] Risk score updated: emp={employee_id}, "
@@ -436,13 +451,13 @@ def record_mood(
                          last_trigger_at, last_calculated_at, alert_status)
                     VALUES (:eid, :ename, :dept, 2, NOW(), NOW(), 'red')
                     ON CONFLICT (employee_id) DO UPDATE SET
-                        current_score = pulse_risk_scores.current_score + 2,
+                        current_score = LEAST(pulse_risk_scores.current_score + 2, 10),
                         employee_name = :ename,
                         department = :dept,
                         last_trigger_at = NOW(),
                         last_calculated_at = NOW(),
                         alert_status = CASE
-                            WHEN pulse_risk_scores.current_score + 2 >= :urgent THEN 'urgent'
+                            WHEN LEAST(pulse_risk_scores.current_score + 2, 10) >= :urgent THEN 'urgent'
                             ELSE 'red'
                         END
                 """),

@@ -39,6 +39,7 @@ from services.pulse_service import (
     send_pulse_video, log_video_view, log_hr_action,
     update_risk_score, RISK_POINTS, get_risk_history,
     PULSE_AWAITING_TEXT, PROBLEM_CATEGORIES, send_pulse_meme,
+    TRIGGER_LABELS,
 )
 
 logger = logging.getLogger(__name__)
@@ -495,7 +496,9 @@ async def process_telegram_message(message: dict):
                     asyncio.create_task(alert_hr_team(trigger_type, _emp_dept))
             except Exception as _pe:
                 logger.warning(f"[PULSE] trigger processing error: {_pe}", exc_info=True)
-            asyncio.create_task(send_pulse_video(chat_id, trigger_type))
+            # Skip pulse video for resignation — preset q26 already sends the offboarding video
+            if trigger_type not in ("звільнення", "resignation"):
+                asyncio.create_task(send_pulse_video(chat_id, trigger_type))
 
         user_id = message.get("from", {}).get("id", 0)
         await handle_hr_question(chat_id, user_id, text)
@@ -583,6 +586,8 @@ async def alert_hr_team_identified(
         urgency_emoji = "🚨" if status == "urgent" else "🔴"
         dept_str = department or "Невідомий відділ"
         name_str = employee_name or "Невідомий"
+        trigger_label = TRIGGER_LABELS.get(trigger_type, trigger_type)
+        score_display = min(current_score, 10) if isinstance(current_score, int) else current_score
 
         # Build trigger history block
         history_lines = []
@@ -597,7 +602,7 @@ async def alert_hr_team_identified(
                 except Exception:
                     date_str = fired_at[:5] if fired_at else "?"
                 pts = h.get("risk_points", 1)
-                ttype = h.get("trigger_type", "")
+                ttype = TRIGGER_LABELS.get(h.get("trigger_type", ""), h.get("trigger_type", ""))
                 history_lines.append(f"  {sev_emoji} {date_str} — {ttype} (+{pts})")
         history_block = "\n".join(history_lines) if history_lines else "  (перший сигнал)"
 
@@ -605,8 +610,8 @@ async def alert_hr_team_identified(
             f"{urgency_emoji} *Пульс команди — Попередження*\n\n"
             f"👤 {name_str}\n"
             f"🏢 Відділ: {dept_str}\n"
-            f"⚠️ Рівень ризику: {current_score}/10\n"
-            f"📌 Тригер: {trigger_type}\n\n"
+            f"⚠️ Рівень ризику: {score_display}/10\n"
+            f"📌 Тригер: {trigger_label}\n\n"
             f"📊 Історія сигналів (30 днів):\n{history_block}\n\n"
             f"💬 Зверніться до співробітника конфіденційно"
         )
