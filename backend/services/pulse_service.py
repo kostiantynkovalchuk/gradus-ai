@@ -19,6 +19,19 @@ from sqlalchemy import text
 
 import models as _models
 
+# Absolute base = backend/ (one level up from services/)
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _get_meme_path(filename: str) -> str:
+    """Return absolute path to a pulse meme file."""
+    return os.path.join(_BASE_DIR, "static", "pulse_memes", filename)
+
+
+def _get_video_path(filename: str) -> str:
+    """Return absolute path to a pulse support video file."""
+    return os.path.join(_BASE_DIR, "static", "pulse_videos", filename)
+
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
@@ -602,9 +615,9 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
 
         # ── 2. Upload from local file and cache the returned file_id ──────
         if not video_sent:
-            video_path = pathlib.Path(__file__).parent.parent / "static" / "pulse_videos" / video_file
-            logger.info(f"[PULSE] Attempting to send video: {video_path}, exists={video_path.exists()}")
-            if video_path.exists():
+            video_path = _get_video_path(video_file)
+            logger.info(f"[PULSE] Attempting to send video: {video_path}, exists={os.path.isfile(video_path)}")
+            if os.path.isfile(video_path):
                 try:
                     async with httpx.AsyncClient(timeout=120.0) as client:
                         with open(video_path, "rb") as f:
@@ -778,10 +791,11 @@ async def send_pulse_meme(chat_id: int) -> bool:
         }
 
     # ── 4. Try local file upload (caches file_id for future sends) ────────
-    logger.info(f"[PULSE] Attempting to send meme: {file_url}, exists={os.path.isfile(file_url) if file_url else False}")
-    if not file_id and file_url and os.path.isfile(file_url):
+    full_path = _get_meme_path(file_url) if file_url else None
+    logger.info(f"[PULSE] Attempting to send meme: {full_path}, exists={os.path.isfile(full_path) if full_path else False}")
+    if not file_id and full_path and os.path.isfile(full_path):
         try:
-            with open(file_url, "rb") as _f:
+            with open(full_path, "rb") as _f:
                 img_bytes = _f.read()
             import json as _json
             form_data = {"chat_id": str(chat_id), "caption": caption_text}
@@ -791,7 +805,7 @@ async def send_pulse_meme(chat_id: int) -> bool:
                 resp = await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto",
                     data=form_data,
-                    files={"photo": (os.path.basename(file_url), img_bytes, "image/png")},
+                    files={"photo": (os.path.basename(full_path), img_bytes, "image/png")},
                 )
             if resp.status_code == 200:
                 try:
