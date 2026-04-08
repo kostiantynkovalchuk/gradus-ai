@@ -572,6 +572,7 @@ async def send_pulse_video(chat_id: int, trigger_or_video_id: str) -> None:
       2. Local file upload (caches returned file_id for future sends)
       3. Fallback text message if file missing or upload fails
     """
+    logger.info(f"[PULSE] send_pulse_video called: chat_id={chat_id}, video_id={trigger_or_video_id}")
     if not TELEGRAM_MAYA_BOT_TOKEN:
         return
 
@@ -715,7 +716,60 @@ def get_risk_history(employee_id: int, limit: int = 5) -> list[dict]:
 
 
 # Per-user meme session tracking: {chat_id: [list of shown meme IDs]}
-_meme_recently_sent: dict = {}
+def _carousel_get_seen(chat_id: int) -> list[int]:
+    """Read seen meme IDs for this user from DB (worker-safe)."""
+    try:
+        db = _models.SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT seen_ids FROM pulse_meme_carousel WHERE telegram_id = :tid"),
+                {"tid": chat_id},
+            ).fetchone()
+            if row and row[0]:
+                return [int(x) for x in row[0].split(",") if x.strip()]
+            return []
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] carousel read error: {e}")
+        return []
+
+
+def _carousel_save_seen(chat_id: int, seen: list[int]) -> None:
+    """Persist the seen list to DB (upsert)."""
+    try:
+        db = _models.SessionLocal()
+        try:
+            db.execute(
+                text("""
+                    INSERT INTO pulse_meme_carousel (telegram_id, seen_ids, updated_at)
+                    VALUES (:tid, :sids, NOW())
+                    ON CONFLICT (telegram_id) DO UPDATE
+                        SET seen_ids = :sids, updated_at = NOW()
+                """),
+                {"tid": chat_id, "sids": ",".join(str(i) for i in seen)},
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] carousel save error: {e}")
+
+
+def _carousel_reset(chat_id: int) -> None:
+    """Clear the carousel state for a user (all memes shown)."""
+    try:
+        db = _models.SessionLocal()
+        try:
+            db.execute(
+                text("DELETE FROM pulse_meme_carousel WHERE telegram_id = :tid"),
+                {"tid": chat_id},
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[PULSE] carousel reset error: {e}")
 
 
 async def send_pulse_meme(chat_id: int) -> bool:
@@ -723,13 +777,17 @@ async def send_pulse_meme(chat_id: int) -> bool:
     Send a random meme from pulse_memes table with session deduplication.
 
     Carousel rules:
+    - Seen state is persisted in pulse_meme_carousel table (worker-safe).
     - Never repeat a meme until all have been shown (per user session).
-    - On the LAST meme: omit "Ще мем!" button, append end-of-session text,
-      then clear the session so next run starts fresh.
-    - Delivery: cached file_id → local file upload (caches returned file_id).
+    - On the LAST meme: omit "Ще мем!" button, append farewell caption,
+      then clear the carousel so next run starts fresh.
+    - Delivery: local file upload (caches returned file_id) → cached file_id.
 
     Returns True if a photo was sent, False if fallback text was used.
     """
+    import random as _random
+    import json as _json
+
     if not TELEGRAM_MAYA_BOT_TOKEN:
         return False
 
@@ -759,45 +817,46 @@ async def send_pulse_meme(chat_id: int) -> bool:
         return False
 
     total = len(rows)
-    seen = _meme_recently_sent.get(chat_id, [])
 
-    # ── 2. Pick a meme from the unseen pool ───────────────────────────────
-    import random as _random
+    # ── 2. DB-backed seen list (safe across multiple Render workers) ───────
+    seen = _carousel_get_seen(chat_id)
     remaining = [r for r in rows if r[0] not in seen]
     if not remaining:
-        _meme_recently_sent[chat_id] = []
+        # All memes shown — start fresh cycle
         seen = []
         remaining = list(rows)
+        _carousel_reset(chat_id)
 
     chosen = _random.choice(remaining)
     meme_id, file_id, file_url, caption_text = chosen
     caption_text = caption_text or "😄"
 
-    # Track this meme as seen
-    seen = seen + [meme_id]
-    _meme_recently_sent[chat_id] = seen
-    is_last = len(seen) >= total
+    # Persist seen state BEFORE sending
+    new_seen = seen + [meme_id]
+    is_last = len(new_seen) >= total
 
-    # ── 3. Build caption + keyboard ───────────────────────────────────────
     if is_last:
+        # All memes delivered → clear carousel, no button
+        _carousel_reset(chat_id)
         caption_text += "\n\nЦе всі меми на сьогодні 😊 Тримайся!"
-        _meme_recently_sent.pop(chat_id, None)
         meme_keyboard = None
     else:
+        _carousel_save_seen(chat_id, new_seen)
         meme_keyboard = {
             "inline_keyboard": [
                 [{"text": "😄 Ще мем!", "callback_data": "hr_pulse:meme"}],
             ]
         }
 
-    # ── 4. Try local file upload (caches file_id for future sends) ────────
+    logger.info(f"[PULSE] Meme carousel: chat={chat_id}, seen={len(new_seen)}/{total}, is_last={is_last}, meme_id={meme_id}")
+
+    # ── 3. Try local file upload → caches file_id for future sends ────────
     full_path = _get_meme_path(file_url) if file_url else None
     logger.info(f"[PULSE] Attempting to send meme: {full_path}, exists={os.path.isfile(full_path) if full_path else False}")
     if not file_id and full_path and os.path.isfile(full_path):
         try:
             with open(full_path, "rb") as _f:
                 img_bytes = _f.read()
-            import json as _json
             form_data = {"chat_id": str(chat_id), "caption": caption_text}
             if meme_keyboard:
                 form_data["reply_markup"] = _json.dumps(meme_keyboard)
@@ -826,9 +885,9 @@ async def send_pulse_meme(chat_id: int) -> bool:
                 return True
             logger.warning(f"[PULSE] sendPhoto (upload) failed: {resp.status_code} {resp.text[:150]}")
         except Exception as e:
-            logger.warning(f"[PULSE] Meme file upload error: {e}")
+            logger.error(f"[PULSE] Meme upload failed for meme_id={meme_id}: {e}", exc_info=True)
 
-    # ── 5. Try cached file_id ─────────────────────────────────────────────
+    # ── 4. Try cached file_id ─────────────────────────────────────────────
     if file_id:
         try:
             post_json: dict = {
@@ -848,9 +907,9 @@ async def send_pulse_meme(chat_id: int) -> bool:
                 return True
             logger.warning(f"[PULSE] sendPhoto (file_id) failed: {resp.status_code} {resp.text[:100]}")
         except Exception as e:
-            logger.warning(f"[PULSE] Meme send error: {e}")
+            logger.error(f"[PULSE] Meme file_id send failed for meme_id={meme_id}: {e}", exc_info=True)
 
-    # ── 6. Fallback text ──────────────────────────────────────────────────
+    # ── 5. Fallback text ──────────────────────────────────────────────────
     fallback = "😄 Мем-терапія поки що готується! А поки що — зроби перерву на каву ☕"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

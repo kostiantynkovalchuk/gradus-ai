@@ -1367,19 +1367,8 @@ async def handle_hr_callback(callback_query: dict):
                 asyncio.create_task(send_pulse_meme(chat_id))
 
             elif action_part == 'support':
-                await answer_callback(callback_id, "💙 Надсилаю")
-                _support_text = (
-                    "💙 Психологічна підтримка\n\n"
-                    "Іноді «нормально, буває різне» — це сигнал, що варто зупинитись.\n\n"
-                    "Спробуй: 4 рази — вдих 4с, затримка 4с, видих 4с.\n\n"
-                    "Якщо відчуваєш, що потрібна розмова — HR тут:\n"
-                    "📩 @Natty_Reshetilova (Наталія) — конфіденційно."
-                )
-                async with httpx.AsyncClient(timeout=10.0) as _sc:
-                    await _sc.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
-                        json={"chat_id": chat_id, "text": _support_text},
-                    )
+                await answer_callback(callback_id, "💙 Надсилаю відео")
+                asyncio.create_task(send_pulse_video(chat_id, "breathing"))
 
             elif action_part == 'problem' and len(parts) >= 3:
                 category = parts[2]
@@ -1439,6 +1428,16 @@ async def handle_hr_callback(callback_query: dict):
                             f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/editMessageText",
                             json={"chat_id": chat_id, "message_id": message_id, "text": _prob_confirm},
                         )
+                    # Send support video mapped to problem category
+                    _PROBLEM_VIDEO_MAP = {
+                        "colleagues": "conflict",
+                        "manager": "manager",
+                        "tasks": "burnout",
+                    }
+                    _prob_video = _PROBLEM_VIDEO_MAP.get(category)
+                    if _prob_video:
+                        asyncio.create_task(send_pulse_video(chat_id, _prob_video))
+
                     try:
                         _trig_id = log_trigger(
                             department=_emp_dept,

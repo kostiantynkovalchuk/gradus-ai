@@ -775,6 +775,16 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "037_pulse_meme_carousel",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS pulse_meme_carousel (
+                telegram_id  BIGINT PRIMARY KEY,
+                seen_ids     TEXT NOT NULL DEFAULT '',
+                updated_at   TIMESTAMP DEFAULT NOW()
+            )""",
+        ]
+    },
+    {
         "version": "036_maya_users_onboarding",
         "statements": [
             "ALTER TABLE maya_users ADD COLUMN IF NOT EXISTS onboarding_step INTEGER DEFAULT 0",
