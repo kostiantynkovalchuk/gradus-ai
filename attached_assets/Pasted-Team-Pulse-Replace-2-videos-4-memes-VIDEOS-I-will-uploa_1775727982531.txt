@@ -1,0 +1,63 @@
+Team Pulse — Replace 2 videos + 4 memes.
+
+=== VIDEOS ===
+I will upload 2 new MP4 files to backend/static/pulse_videos/:
+- pulse_manager.mp4 (regenerated — replaces old)
+- pulse_burnout.mp4 (regenerated — replaces old)
+
+After I upload them, clear cached file_ids so Telegram re-uploads:
+
+Run SQL:
+DELETE FROM pulse_video_cache WHERE video_file IN ('pulse_manager.mp4', 'pulse_burnout.mp4');
+
+(If there's no pulse_video_cache table, the file_id cache might be 
+in-memory or in another table — find where file_ids are cached 
+for pulse videos and clear entries for manager and burnout.)
+
+=== MEMES — REPLACE 4 ===
+I will upload 4 new JPG files to backend/static/pulse_memes/:
+- raccoon.jpg (replaces capybara.png)
+- monkey.jpg (replaces cat_laptop.png) 
+- panda_office.jpg (replaces panda.png)
+- penguin.jpg (replaces dog_coffee.png)
+
+Update pulse_memes table — replace old rows:
+
+UPDATE pulse_memes SET file_url = 'raccoon.jpg', caption = 'Вдихни і порахуй комуналку 🦝', file_id = NULL 
+WHERE file_url = 'capybara.png';
+
+UPDATE pulse_memes SET file_url = 'monkey.jpg', caption = 'Не залишай начальника без радості 🐒', file_id = NULL 
+WHERE file_url = 'cat_laptop.png';
+
+UPDATE pulse_memes SET file_url = 'panda_office.jpg', caption = 'Від кого ховати свій обід 🐼', file_id = NULL 
+WHERE file_url = 'panda.png';
+
+UPDATE pulse_memes SET file_url = 'penguin.jpg', caption = 'Зарплата — найкращі ліки 🐧', file_id = NULL 
+WHERE file_url = 'dog_coffee.png';
+
+IMPORTANT: set file_id = NULL on all 4 rows so Telegram re-uploads new images.
+
+Also delete old files that are no longer used:
+rm backend/static/pulse_memes/capybara.png
+rm backend/static/pulse_memes/cat_laptop.png
+rm backend/static/pulse_memes/panda.png
+rm backend/static/pulse_memes/dog_coffee.png
+
+=== KEEP UNCHANGED (3 memes) ===
+- elephant.png — Цінний гвинтик 🐘
+- sloth.png — Команда підтримає 🦥
+- chameleon.png — Дзен-хамелеон 🦎
+
+=== AFTER CHANGES ===
+git add backend/static/pulse_memes/*.jpg
+git add backend/static/pulse_videos/pulse_manager.mp4
+git add backend/static/pulse_videos/pulse_burnout.mp4
+git rm backend/static/pulse_memes/capybara.png
+git rm backend/static/pulse_memes/cat_laptop.png
+git rm backend/static/pulse_memes/panda.png
+git rm backend/static/pulse_memes/dog_coffee.png
+git commit -m "Replace 2 pulse videos + 4 memes"
+git push
+
+Then reset meme carousel for testing:
+DELETE FROM pulse_meme_carousel;

@@ -1,0 +1,2 @@
+attached_assets/pulse_burnout_1775728514184.mp4 filter=lfs diff=lfs merge=lfs -text
+backend/static/pulse_videos/pulse_burnout.mp4 filter=lfs diff=lfs merge=lfs -text
