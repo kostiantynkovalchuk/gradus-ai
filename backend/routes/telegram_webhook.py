@@ -41,13 +41,26 @@ from services.pulse_service import (
     PULSE_AWAITING_TEXT, PROBLEM_CATEGORIES, send_pulse_meme,
     TRIGGER_LABELS, _carousel_is_done, _carousel_clear_done,
 )
+from services.broadcast_service import (
+    is_broadcast_group,
+    is_authorized_broadcaster,
+    create_broadcast_log,
+    send_confirmation_card,
+    execute_broadcast,
+    cancel_broadcast,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 HUNT_SUPERGROUP_ID = int(os.getenv("HUNT_TG_SUPERGROUP_ID", "0"))
+BROADCAST_GROUP_ID = int(os.getenv("MAYA_BROADCAST_GROUP_ID", "0"))
 API_BASE_URL = os.getenv("APP_URL", "http://localhost:8000")
+
+PENDING_BROADCASTS: dict = {}
+# Maps broadcast_id → original Telegram message dict
+# Cleared after broadcast executes or is cancelled
 
 HR_KEYWORDS = [
     'зарплата', 'зп', 'виплата', 'аванс', 'нарахування',
@@ -178,6 +191,9 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             elif callback_data.startswith('survey_'):
                 await handle_survey_callback(data['callback_query'])
                 return {"ok": True}
+            elif callback_data.startswith('broadcast_confirm_') or callback_data.startswith('broadcast_cancel_'):
+                result = await handle_broadcast_callback(data['callback_query'])
+                return result
             else:
                 result = telegram_webhook_handler.handle_callback_query(
                     data['callback_query'],
@@ -191,6 +207,67 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             logger.info(f"💬 Chat ID: {message.get('chat', {}).get('id')} | Type: {message.get('chat', {}).get('type')} | Text: {message.get('text', '')[:50]}")
             chat_id = message.get("chat", {}).get("id")
             text = message.get("text", "")
+
+            # ── BROADCAST GROUP INTERCEPT ─────────────────────────────────
+            if BROADCAST_GROUP_ID and int(chat_id) == BROADCAST_GROUP_ID:
+                sender_id   = message.get("from", {}).get("id", 0)
+                if not await is_authorized_broadcaster(sender_id):
+                    return JSONResponse({"ok": True})
+                sender_name = message.get("from", {}).get("first_name", "HR Admin")
+                content_type    = "text"
+                content_preview = ""
+                file_id         = None
+                if message.get("text"):
+                    content_type    = "text"
+                    content_preview = message["text"][:100]
+                elif message.get("photo"):
+                    content_type    = "photo"
+                    file_id         = message["photo"][-1]["file_id"]
+                    content_preview = message.get("caption", "")[:100]
+                elif message.get("video"):
+                    content_type    = "video"
+                    file_id         = message["video"]["file_id"]
+                    content_preview = message.get("caption", "")[:100]
+                elif message.get("document"):
+                    content_type    = "document"
+                    file_id         = message["document"]["file_id"]
+                    content_preview = message.get("caption", message["document"].get("file_name", ""))[:100]
+                elif message.get("audio"):
+                    content_type    = "audio"
+                    file_id         = message["audio"]["file_id"]
+                    content_preview = message.get("caption", "")[:100]
+                elif message.get("sticker"):
+                    content_type    = "sticker"
+                    file_id         = message["sticker"]["file_id"]
+                    content_preview = message["sticker"].get("emoji", "")
+                elif message.get("poll"):
+                    content_type    = "poll"
+                    content_preview = message["poll"]["question"][:100]
+                else:
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=10.0) as _c:
+                        await _c.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                            json={"chat_id": chat_id, "text": "⚠️ Цей тип контенту не підтримується для розсилки."},
+                        )
+                    return JSONResponse({"ok": True})
+                broadcast_id = await create_broadcast_log(
+                    initiated_by=sender_id,
+                    initiated_name=sender_name,
+                    content_type=content_type,
+                    content_preview=content_preview,
+                    file_id=file_id,
+                )
+                PENDING_BROADCASTS[broadcast_id] = message
+                await send_confirmation_card(
+                    broadcast_id=broadcast_id,
+                    content_type=content_type,
+                    content_preview=content_preview,
+                    sender_name=sender_name,
+                )
+                logger.info(f"[Broadcast] Confirmation card sent for broadcast_id={broadcast_id}")
+                return JSONResponse({"ok": True})
+            # ── END BROADCAST GROUP INTERCEPT ────────────────────────────
 
             logger.info(f"🔍 HUNT CHECK: chat_id={chat_id} (type={type(chat_id).__name__}) vs HUNT_ID={HUNT_SUPERGROUP_ID} (type={type(HUNT_SUPERGROUP_ID).__name__})")
             if HUNT_SUPERGROUP_ID and int(chat_id) == HUNT_SUPERGROUP_ID:
@@ -1047,6 +1124,52 @@ async def handle_admin_button_callback(callback_query: dict, db):
         await handle_adduser_command(chat_id, telegram_id, [], db)
     elif cmd == "listusers":
         await handle_listusers_command(chat_id, telegram_id, db)
+
+    return {"ok": True}
+
+
+async def handle_broadcast_callback(callback_query: dict):
+    """Handle broadcast confirm / cancel callbacks."""
+    callback_id   = callback_query.get("id")
+    callback_data = callback_query.get("data", "")
+    message       = callback_query.get("message", {})
+    chat_id       = message.get("chat", {}).get("id")
+    message_id    = message.get("message_id")
+    confirmer_id  = callback_query.get("from", {}).get("id", 0)
+
+    if not await is_authorized_broadcaster(confirmer_id):
+        await answer_callback(callback_id, "❌ Недостатньо прав")
+        return {"ok": True}
+
+    broadcast_id = int(callback_data.split("_")[-1])
+
+    if callback_data.startswith("broadcast_confirm_"):
+        original_message = PENDING_BROADCASTS.get(broadcast_id)
+        if not original_message:
+            await answer_callback(callback_id, "⚠️ Розсилка не знайдена або вже виконана")
+            return {"ok": True}
+        await answer_callback(callback_id, "⏳ Виконую розсилку...")
+        await edit_telegram_message(
+            chat_id, message_id,
+            "⏳ *Розсилка виконується...*\n\nБудь ласка, зачекайте."
+        )
+        result = await execute_broadcast(broadcast_id, original_message)
+        PENDING_BROADCASTS.pop(broadcast_id, None)
+        await edit_telegram_message(
+            chat_id, message_id,
+            f"✅ *Розсилку завершено*\n\n"
+            f"📤 Надіслано: {result['sent']}\n"
+            f"❌ Заблоковано: {result['failed']}\n"
+            f"👥 Всього: {result['sent'] + result['failed']}"
+        )
+        logger.info(f"[Broadcast] id={broadcast_id} confirmed by {confirmer_id}: sent={result['sent']} failed={result['failed']}")
+
+    elif callback_data.startswith("broadcast_cancel_"):
+        await cancel_broadcast(broadcast_id)
+        PENDING_BROADCASTS.pop(broadcast_id, None)
+        await edit_telegram_message(chat_id, message_id, "❌ *Розсилку скасовано*")
+        await answer_callback(callback_id, "Розсилку скасовано")
+        logger.info(f"[Broadcast] id={broadcast_id} cancelled by {confirmer_id}")
 
     return {"ok": True}
 

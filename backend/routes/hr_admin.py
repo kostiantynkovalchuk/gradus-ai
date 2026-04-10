@@ -1443,3 +1443,41 @@ async def close_survey_endpoint(
     return {"status": "closed", "survey_id": survey_id}
 
 
+
+@router.get("/api/broadcasts")
+async def get_broadcast_history(
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Return last 20 broadcast log entries."""
+    import psycopg2
+    import os
+    db_url = os.environ.get("DATABASE_URL", "")
+    try:
+        with psycopg2.connect(db_url) as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, initiated_name, content_type, content_preview,
+                       recipient_count, sent_count, failed_count,
+                       status, created_at, completed_at
+                FROM hr_broadcast_log
+                ORDER BY created_at DESC
+                LIMIT 20
+            """)
+            rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "initiated_name": r[1],
+                "content_type": r[2],
+                "content_preview": r[3],
+                "recipient_count": r[4],
+                "sent_count": r[5],
+                "failed_count": r[6],
+                "status": r[7],
+                "created_at": r[8].isoformat() if r[8] else None,
+                "completed_at": r[9].isoformat() if r[9] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"[Broadcasts] History fetch error: {e}")
+        return []

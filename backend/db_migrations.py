@@ -6,6 +6,26 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "038_hr_broadcast_log",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS hr_broadcast_log (
+                id                   SERIAL PRIMARY KEY,
+                initiated_by         BIGINT NOT NULL,
+                initiated_name       VARCHAR(255),
+                content_type         VARCHAR(32) NOT NULL,
+                content_preview      TEXT,
+                file_id              TEXT,
+                recipient_count      INTEGER DEFAULT 0,
+                sent_count           INTEGER DEFAULT 0,
+                failed_count         INTEGER DEFAULT 0,
+                status               VARCHAR(16) DEFAULT 'pending',
+                confirmation_msg_id  BIGINT,
+                created_at           TIMESTAMP DEFAULT NOW(),
+                completed_at         TIMESTAMP
+            )""",
+        ]
+    },
+    {
         "version": "001_initial_tables",
         "statements": [
             """CREATE TABLE IF NOT EXISTS content_queue (
