@@ -11,7 +11,7 @@ Architecture:
   - Memory (alex_conversations / alex_user_profiles) shared with web chat, keyed by email
 
 Access rules for free tier:
-  1. Trial expires 7 days after linking (trial_started_at)
+  1. Trial expires 14 days after linking (trial_started_at)
   2. Daily limit: 5 questions/day (resets at midnight)
   Paid tiers (standard / premium): unlimited, full memory
 """
@@ -64,7 +64,7 @@ _alex_app: Application | None = None
 _initialized: bool = False
 
 FREE_DAILY_LIMIT = 5
-TRIAL_DAYS = 7
+TRIAL_DAYS = 14
 DB_URL = os.environ.get("DATABASE_URL", "")
 
 
@@ -189,6 +189,7 @@ def _daily_limit_reached(user: dict) -> bool:
     today = date.today()
     reset_date = user.get("daily_reset_date")
     if reset_date and reset_date < today:
+        logger.info(f"[DailyReset] Counter reset for {user.get('email')} (last reset: {reset_date})")
         return False  # will be reset on next increment
     count = user.get("daily_question_count") or 0
     return count >= FREE_DAILY_LIMIT
@@ -258,7 +259,7 @@ async def handle_message(update: Update, context) -> None:
     # Paywall check 1 — trial expiry
     if _trial_expired(user):
         await update.message.reply_text(
-            "Ваш 7-денний безкоштовний період завершився 🕐\n\n"
+            "Ваш 14-денний безкоштовний період завершився 🕐\n\n"
             "Необмежений доступ до Alex від $7/міс\n"
             "→ gradusmedia.org/тарифи"
         )

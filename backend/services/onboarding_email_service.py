@@ -7,8 +7,8 @@ All emails use maya_users as the user registry.
 Sequence:
   Email 1 — Welcome       : step 0 → 1  (immediately on registration)
   Email 2 — Day 3         : step 1 → 2  (onboarding_scheduled_at + 3 days)
-  Email 3 — Day 6 urgency : step 2 → 3  (onboarding_scheduled_at + 6 days)
-  Email 4 — Day 8 win-back: step 3 → 4  (onboarding_scheduled_at + 8 days)
+  Email 3 — Day 12 urgency : step 2 → 3  (onboarding_scheduled_at + 12 days)
+  Email 4 — Day 15 win-back: step 3 → 4  (onboarding_scheduled_at + 15 days)
 
 Rules:
   - Never send to paid users (standard / premium)
@@ -89,7 +89,7 @@ def _build_welcome(name: str) -> str:
   Привіт, {first}! Я Alex Gradus 🥃
 </h2>
 <p style="margin:0 0 16px;">
-  Ваш 7-денний безкоштовний доступ активовано.<br>
+  Ваш 14-денний безкоштовний доступ активовано.<br>
   Я ваш AI-експерт з прибутковості бару — допомагаю власникам HoReCa-закладів
   заробляти більше на кожній склянці.
 </p>
@@ -159,7 +159,7 @@ def _build_day3(name: str) -> str:
 {_cta_button("Запитати Alex зараз →", CHAT_URL)}
 
 <p style="text-align:center;margin:24px 0 0;color:#888;font-size:13px;">
-  Залишилось 4 дні trial.
+  Залишилось 11 днів trial.
 </p>
 """
     return base_template(content)
@@ -373,14 +373,14 @@ def _process_user(
             _set_step(cur, email, 2)
             conn.commit()
 
-        elif step == 2 and now >= sched_at + timedelta(days=6):
+        elif step == 2 and now >= sched_at + timedelta(days=12):
             if _send_day6(email, name):
-                logger.info(f"[Onboarding] Day-6 email sent → {email}")
+                logger.info(f"[Onboarding] Day-12 email sent → {email}")
             _set_step(cur, email, 3)
             conn.commit()
 
-        elif step == 3 and now >= sched_at + timedelta(days=8):
+        elif step == 3 and now >= sched_at + timedelta(days=15):
             if _send_day8(email, name):
-                logger.info(f"[Onboarding] Day-8 email sent → {email}")
+                logger.info(f"[Onboarding] Day-15 email sent → {email}")
             _set_step(cur, email, 4)
             conn.commit()

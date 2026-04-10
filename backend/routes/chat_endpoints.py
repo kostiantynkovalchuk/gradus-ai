@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 chat_router = APIRouter(prefix="/chat", tags=["chat"])
 
 _FREE_DAILY_LIMIT = 5
-_TRIAL_DAYS = 7
+_TRIAL_DAYS = 14
 
 
 def _get_web_user_limits(email: str) -> dict:
@@ -84,6 +84,7 @@ def _get_web_user_limits(email: str) -> dict:
                 # Daily limit check
                 today = date.today()
                 if reset_date and reset_date < today:
+                    logger.info(f"[DailyReset] Counter reset for {email} (last reset: {reset_date})")
                     daily_count = 0  # stale — will be reset on save
                 if (daily_count or 0) >= _FREE_DAILY_LIMIT:
                     result["daily_limit_reached"] = True
@@ -260,7 +261,7 @@ async def chat_with_avatars(request: ChatRequest):
                 detail={
                     "reason": "trial_expired",
                     "message": (
-                        "Ваш 7-денний безкоштовний пробний доступ завершився. "
+                        "Ваш 14-денний безкоштовний пробний доступ завершився. "
                         "Перейдіть на платний тариф на gradusmedia.org/тарифи"
                     ),
                 },
