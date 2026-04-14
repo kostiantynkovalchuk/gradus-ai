@@ -1,0 +1,183 @@
+# REPLIT AGENT — Load employee phone directory into Maya HR knowledge base
+## Source: blitz_phones.xlsx (829 employees, already in project)
+
+---
+
+## CONFIRMED DATA STRUCTURE
+
+File: `blitz_phones.xlsx`, Sheet: `Лист1`, 829 rows, 2 columns:
+- `ФИО` — Full name in format "Прізвище Ім'я По-батькові" (Russian)
+- `Телехвон` — Phone string in format:
+  `(р) (067)357-74-88;(л) (067)357-74-88;`
+  where `(р)` = робочий (work), `(л)` = особистий (personal/mobile)
+  Empty phone = `(   )   -  -`
+
+Known examples from the file:
+- Решетилова Наталья Александровна → mobile: (067)984-33-97, work: empty
+- Баранец Ольга Геннадьевна → mobile: (099)500-65-92, work: empty
+
+---
+
+## STEP 0 — AUDIT FIRST
+
+Before writing any code, read and report:
+
+1. How does the RAG knowledge base work in this project?
+   - Is it a vector DB (pgvector, Chroma, Pinecone)?
+   - Or a text search (PostgreSQL full-text, ILIKE)?
+   - Which table/collection stores the knowledge base content?
+
+2. How are new documents/knowledge loaded into the RAG?
+   - Is there a script? An admin endpoint? A migration?
+   - What format does content need to be in (plain text chunks, JSON, embeddings)?
+
+3. Is there already a preset or RAG entry for phone/contact queries?
+   - Search for: "Баранец", "Решетилова", "телефон", "номер", "blitz"
+   - If found — show the existing entry
+
+4. What is the file path of blitz_phones.xlsx in the project?
+   - Check: project root, `/data/`, `/backend/`, `/scripts/`
+
+Report all findings before writing any code.
+
+---
+
+## STEP 1 — PARSE THE PHONE FILE
+
+Write a one-time Python script (do NOT add to production code yet)
+that reads `blitz_phones.xlsx` and produces clean structured data:
+
+```python
+import pandas as pd
+import re
+
+def parse_phone(phone_str):
+    """Extract work and mobile numbers from blitz format."""
+    if not phone_str:
+        return None, None
+    # Extract (р) work phone
+    work = re.search(r'\(р\)\s*(\(\d{3}\)\d{3}-\d{2}-\d{2})', phone_str)
+    # Extract (л) mobile phone  
+    mobile = re.search(r'\(л\)\s*(\(\d{3}\)\d{3}-\d{2}-\d{2})', phone_str)
+    work_num = work.group(1) if work else None
+    mobile_num = mobile.group(1) if mobile else None
+    return work_num, mobile_num
+
+df = pd.read_excel('blitz_phones.xlsx')
+employees = []
+for _, row in df.iterrows():
+    name = str(row['ФИО']).strip()
+    work, mobile = parse_phone(str(row['Телехвон']))
+    # Skip if both phones are empty
+    if not work and not mobile:
+        continue
+    employees.append({
+        'name': name,
+        'work': work,
+        'mobile': mobile
+    })
+
+print(f"Total employees with at least one phone: {len(employees)}")
+print("Sample:", employees[:3])
+```
+
+Run this script and show me the output (count + sample).
+
+---
+
+## STEP 2 — CHOOSE LOADING STRATEGY (based on Step 0 audit)
+
+### Option A — If RAG uses vector embeddings (pgvector):
+Convert each employee to a text chunk and embed it:
+```
+"Баранец Ольга Геннадьевна — мобільний: (099)500-65-92"
+```
+Load using the existing document loading function.
+
+### Option B — If RAG uses PostgreSQL full-text / ILIKE:
+Insert employees as rows into the knowledge base table directly.
+One row per employee.
+
+### Option C — If there is a dedicated contacts/presets table:
+Add a new preset that handles phone queries by looking up the contacts table.
+Create a `hr_contacts` table:
+```sql
+CREATE TABLE IF NOT EXISTS hr_contacts (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    name_search TSVECTOR,  -- for full-text search
+    work_phone VARCHAR(20),
+    mobile_phone VARCHAR(20),
+    department VARCHAR(100),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_hr_contacts_search ON hr_contacts USING GIN(name_search);
+```
+
+**Do not pick a strategy until the Step 0 audit is complete.**
+Report which option fits the existing architecture and why.
+
+---
+
+## STEP 3 — LOAD THE DATA
+
+Based on the chosen strategy:
+
+1. Write the loading script/migration
+2. Parse all 829 employees from blitz_phones.xlsx
+3. Skip employees with BOTH phones empty (no useful data)
+4. Load only employees who have at least one phone number
+5. Show count of rows loaded
+
+---
+
+## STEP 4 — WIRE UP THE QUERY HANDLER
+
+When an employee asks "Який телефон у Ольги Баранець?" or
+"Как позвонить Наталье Решетиловой?" — Maya must:
+
+1. Detect it's a phone/contact query
+2. Search the loaded contacts by name (fuzzy match — Ukrainian/Russian name variants)
+3. Return formatted response:
+
+```
+📞 Баранець Ольга Геннадьєвна
+Мобільний: (099)500-65-92
+```
+
+If work phone also exists:
+```
+📞 Решетилова Наталя Олександрівна
+Робочий: (067)xxx-xx-xx
+Мобільний: (067)984-33-97
+```
+
+If person not found:
+```
+❌ Не знайшла контакт для "[ім'я]". 
+Перевірте правильність прізвища або зверніться до HR: hr@vinkom.net
+```
+
+---
+
+## STEP 5 — TEST
+
+After loading, test these exact queries in the Maya HR bot:
+1. "Який телефон у Ольги Баранець?"
+2. "Как позвонить Наталье Решетиловой?"
+3. "Хто має внутрішній номер 107?" (this one may not be solvable from blitz_phones — report if so)
+
+Show bot responses for each.
+
+---
+
+## CONSTRAINTS
+
+- blitz_phones.xlsx is READ-ONLY source data — do not modify it
+- Follow the existing migration numbering (next is 041)
+- Use feminine verb forms in all Maya responses (знайшла, не знайшла)
+- Name matching must handle: Ukrainian/Russian variants, partial names,
+  first name only queries ("де телефон Ольги?")
+- Do NOT hardcode any phone numbers in code — always query from DB
+- If Step 0 reveals the RAG architecture makes this complex,
+  STOP and report before proceeding to Step 2

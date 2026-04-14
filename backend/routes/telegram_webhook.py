@@ -163,6 +163,77 @@ def _should_log_hr_query(text: str) -> bool:
     return True
 
 
+_PHONE_QUERY_KEYWORDS = re.compile(
+    r'телефон|номер|дзвони|зателефон|позвони|звони|контакт|зв.язат|'
+    r'як\s+зв.яз|як\s+дзвон|як\s+позвон|де\s+телеф|'
+    r'mobile|phone\s+number',
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _is_phone_contact_query(text: str) -> bool:
+    """Return True if the message is asking for someone's phone number/contact."""
+    return bool(_PHONE_QUERY_KEYWORDS.search(text))
+
+
+def _format_phone_display(norm: str | None) -> str | None:
+    """Format a 12-digit normalized phone (380XXXXXXXXX) for display."""
+    if not norm or len(norm) < 10:
+        return None
+    try:
+        from utils.phone_normalizer import format_for_display
+        return format_for_display(norm)
+    except Exception:
+        d = norm.lstrip('+')
+        if len(d) == 12 and d.startswith('380'):
+            return f"+38 ({d[2:5]}) {d[5:8]}-{d[8:10]}-{d[10:12]}"
+        return norm
+
+
+def _handle_phone_contact_query(query: str, db) -> str | None:
+    """
+    Try to answer a phone/contact query from hr_employee_phone_cache.
+    Returns a formatted string, or None if no match found.
+    """
+    try:
+        from services.hr_phone_cache_service import find_employee_by_name_sync
+        results = find_employee_by_name_sync(query, db)
+    except Exception as e:
+        logger.warning(f"Phone cache lookup error: {e}")
+        return None
+
+    if not results:
+        return None
+
+    if len(results) == 1:
+        emp = results[0]
+        work = _format_phone_display(emp["phone_work"])
+        mobile = _format_phone_display(emp["phone_mobile"])
+        lines = [f"📞 *{emp['full_name']}*"]
+        if work:
+            lines.append(f"Робочий: `{work}`")
+        if mobile:
+            lines.append(f"Мобільний: `{mobile}`")
+        if not work and not mobile:
+            lines.append("_(телефон не вказано)_")
+        return "\n".join(lines)
+
+    # Multiple matches — list them all
+    lines = ["📋 *Знайшла кількох співробітників:*\n"]
+    for emp in results[:5]:
+        work = _format_phone_display(emp["phone_work"])
+        mobile = _format_phone_display(emp["phone_mobile"])
+        phones = []
+        if work:
+            phones.append(f"роб: `{work}`")
+        if mobile:
+            phones.append(f"моб: `{mobile}`")
+        phone_str = ", ".join(phones) if phones else "_(немає)_"
+        lines.append(f"• *{emp['full_name']}* — {phone_str}")
+    lines.append("\n_Уточніть прізвище для точного пошуку._")
+    return "\n".join(lines)
+
+
 def is_hr_question(text: str) -> bool:
     """Check if text is HR-related question"""
     text_lower = text.lower()
@@ -1874,7 +1945,37 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
         if success:
             return
         logger.info(f"Video send failed, falling back to text response")
-    
+
+    # --- Phone / contact lookup (fast path, no RAG needed) ---
+    if _is_phone_contact_query(query):
+        try:
+            _db_gen = get_db()
+            _db = next(_db_gen)
+            try:
+                contact_reply = _handle_phone_contact_query(query, _db)
+            finally:
+                try:
+                    next(_db_gen)
+                except StopIteration:
+                    pass
+        except Exception as _e:
+            logger.warning(f"Phone contact lookup failed: {_e}")
+            contact_reply = None
+
+        if contact_reply:
+            await send_telegram_message_with_keyboard(
+                chat_id, contact_reply, create_main_menu_keyboard()
+            )
+            return
+        # Name not found in cache → send "not found" and return
+        await send_telegram_message_with_keyboard(
+            chat_id,
+            "❌ Не знайшла контакт за вашим запитом.\n"
+            "Перевірте правильність прізвища або зверніться до HR: hr@vinkom.net",
+            create_main_menu_keyboard(),
+        )
+        return
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(

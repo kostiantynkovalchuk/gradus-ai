@@ -129,6 +129,98 @@ def seed_from_xlsx_sync(xlsx_bytes: bytes, db) -> dict:
     }
 
 
+_PHONE_STOP_WORDS = {
+    'який', 'яка', 'яке', 'яку', 'якого', 'якій', 'які',
+    'де', 'як', 'що', 'коли', 'чий', 'чия', 'чиє',
+    'телефон', 'телефону', 'телефони', 'телефоном', 'телефонів',
+    'номер', 'номера', 'номерів', 'номери',
+    'дзвонити', 'дзвонив', 'зателефонувати', 'зателефонуй', 'зателефонуйте',
+    'позвонить', 'позвонить', 'звонить', 'как', 'позвоните',
+    'контакт', 'контакти', 'контакту', 'зв', 'язатись',
+    'у', 'в', 'до', 'з', 'на', 'по', 'про', 'за', 'для', 'від',
+    'і', 'та', 'але', 'або', 'чи', 'а', 'є', 'це', 'он', 'она',
+    'мені', 'мне', 'мой', 'моя', 'моє', 'моего', 'моей',
+    'потрібен', 'потрібна', 'потрібно', 'нужен', 'нужна',
+}
+
+
+def _extract_name_tokens(query: str) -> list[str]:
+    """Extract candidate name tokens from a phone query, filtering stop-words."""
+    tokens = re.sub(r'[^\w\s]', ' ', query.lower()).split()
+    return [t for t in tokens if len(t) >= 3 and t not in _PHONE_STOP_WORDS]
+
+
+def find_employee_by_name_sync(query: str, db) -> list[dict]:
+    """
+    Search hr_employee_phone_cache by name tokens extracted from a natural-language query.
+    Returns up to 5 matches ordered by match quality (number of tokens matched).
+    """
+    from sqlalchemy import text as _sa_text
+
+    tokens = _extract_name_tokens(query)
+    if not tokens:
+        return []
+
+    # Use first 4 chars of each token as a stem to handle Russian/Ukrainian
+    # name declensions: Ольга/Ольги → "ольг", Наталья/Наталье → "ната"
+    stems = [t[:4] for t in tokens if len(t) >= 4]
+    if not stems:
+        # All tokens too short — just use the longest one as-is
+        stems = [max(tokens, key=len)]
+
+    # Build WHERE: all stems must appear in full_name (ILIKE, case-insensitive)
+    conditions = " AND ".join(
+        f"LOWER(full_name) LIKE :t{i}" for i in range(len(stems))
+    )
+    params = {f"t{i}": f"%{s}%" for i, s in enumerate(stems)}
+
+    rows = db.execute(
+        _sa_text(f"""
+            SELECT full_name, phone_work_norm, phone_mobile_norm
+            FROM hr_employee_phone_cache
+            WHERE {conditions}
+            LIMIT 5
+        """),
+        params,
+    ).fetchall()
+
+    if rows:
+        logger.info(f"Name search '{query[:40]}' stems={stems} → {len(rows)} results")
+        return [
+            {
+                "full_name": r[0],
+                "phone_work": r[1],
+                "phone_mobile": r[2],
+            }
+            for r in rows
+        ]
+
+    # Fallback: try with just the longest stem alone (broadest search)
+    if len(stems) > 1:
+        longest = max(stems, key=len)
+        rows = db.execute(
+            _sa_text("""
+                SELECT full_name, phone_work_norm, phone_mobile_norm
+                FROM hr_employee_phone_cache
+                WHERE LOWER(full_name) LIKE :t
+                LIMIT 5
+            """),
+            {"t": f"%{longest}%"},
+        ).fetchall()
+        if rows:
+            logger.info(f"Name fallback stem '{longest}' → {len(rows)} results")
+            return [
+                {
+                    "full_name": r[0],
+                    "phone_work": r[1],
+                    "phone_mobile": r[2],
+                }
+                for r in rows
+            ]
+
+    return []
+
+
 def find_employee_by_phone_sync(phone: str, db) -> dict | None:
     from utils.phone_normalizer import normalize_phone
     from sqlalchemy import text
