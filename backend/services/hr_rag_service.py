@@ -116,12 +116,11 @@ def detect_domain_mismatch(query: str, result_content: str) -> bool:
 
 def format_not_found_response(query: str) -> str:
     return (
-        f"🔍 На жаль, я не знайшов точної інформації по запиту "
+        f"🔍 На жаль, я не знайшла точної інформації по запиту "
         f"*\"{query}\"* в базі знань TD AV.\n\n"
         f"Що можна зробити:\n"
         f"• Спробуйте переформулювати питання\n"
-        f"• Зверніться до HR-відділу: hr@vinkom.net\n"
-        f"• Або зателефонуйте Наталії Решетіловій"
+        f"• Зверніться до HR-відділу: hr@vinkom.net"
     )
 
 
