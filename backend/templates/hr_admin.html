@@ -2329,7 +2329,7 @@
                 document.getElementById('pulseResponseRate').textContent =
                     (kpi.response_rate || 0).toFixed(1) + '%';
                 document.getElementById('pulseAvgMood').textContent =
-                    kpi.overall_mood_avg ? kpi.overall_mood_avg.toFixed(2) + ' / 5' : '—';
+                    kpi.overall_mood_avg ? kpi.overall_mood_avg.toFixed(2) + ' / 3' : '—';
                 document.getElementById('pulseTriggerCount').textContent =
                     (kpi.triggers_this_month || 0).toLocaleString();
                 document.getElementById('pulseRespondents').textContent =
@@ -2363,7 +2363,7 @@
                         options: {
                             responsive: true,
                             scales: {
-                                y: { min: 1, max: 5, ticks: { stepSize: 1 } }
+                                y: { min: 1, max: 3, ticks: { stepSize: 0.5 } }
                             },
                             plugins: { legend: { display: false } }
                         }
@@ -2381,8 +2381,8 @@
                     deptEmpty.style.display = 'none';
                     const colors = deptMood.map(d => {
                         const s = d.avg_score;
-                        if (s >= 4) return 'rgba(34,197,94,0.7)';
-                        if (s >= 3) return 'rgba(245,158,11,0.7)';
+                        if (s >= 2.5) return 'rgba(34,197,94,0.7)';
+                        if (s >= 1.5) return 'rgba(245,158,11,0.7)';
                         return 'rgba(239,68,68,0.7)';
                     });
                     if (pulseDeptChart) pulseDeptChart.destroy();
@@ -2401,7 +2401,7 @@
                             responsive: true,
                             indexAxis: 'y',
                             scales: {
-                                x: { min: 1, max: 5 }
+                                x: { min: 1, max: 3 }
                             },
                             plugins: { legend: { display: false } }
                         }

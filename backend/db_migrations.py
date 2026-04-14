@@ -6,6 +6,13 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "039_pulse_score_constraint_fix",
+        "statements": [
+            "ALTER TABLE pulse_surveys DROP CONSTRAINT IF EXISTS pulse_surveys_score_check",
+            "ALTER TABLE pulse_surveys ADD CONSTRAINT pulse_surveys_score_check CHECK (score BETWEEN 1 AND 3)",
+        ]
+    },
+    {
         "version": "038_hr_broadcast_log",
         "statements": [
             """CREATE TABLE IF NOT EXISTS hr_broadcast_log (
