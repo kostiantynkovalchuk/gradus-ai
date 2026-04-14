@@ -188,6 +188,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Alex Gradus: ALEX_GRADUS_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
+    alex_avtd_token = os.environ.get("TELEGRAM_ALEX_AVTD_BOT_TOKEN")
+    if alex_avtd_token and RENDER_URL:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as hclient:
+                resp = await hclient.post(
+                    f"https://api.telegram.org/bot{alex_avtd_token}/setWebhook",
+                    json={"url": f"{RENDER_URL}/api/telegram/alex_avtd_webhook"}
+                )
+                logger.info(f"🤖 Alex AVTD webhook: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Alex AVTD webhook setup failed: {e}")
+    else:
+        logger.info("Alex AVTD: TELEGRAM_ALEX_AVTD_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
+
     # Main Telegram bot (content approval + notifications) → /api/telegram/webhook
     main_tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if main_tg_token and RENDER_URL:
@@ -389,6 +404,8 @@ app.include_router(solomon_router)
 from routes.photo_report_webhook import router as photo_report_router
 app.include_router(photo_report_router)
 app.include_router(alex_tg_router)
+from routes.alex_avtd_webhook import alex_avtd_router
+app.include_router(alex_avtd_router)
 
 class ChatRequest(BaseModel):
     message: str

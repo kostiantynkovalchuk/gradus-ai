@@ -149,10 +149,11 @@ class HRRagService:
     
     HR_NAMESPACE = "hr_docs"
     
-    def __init__(self, pinecone_index=None, db_session=None):
+    def __init__(self, pinecone_index=None, db_session=None, system_prompt_override: str = None):
         self.pinecone_index = pinecone_index
         self.db_session = db_session
         self._presets_cache = None
+        self.system_prompt_override = system_prompt_override
     
     def _attach_documents(self, query: str, answer_text: str) -> str:
         if not self.db_session:
@@ -456,7 +457,7 @@ class HRRagService:
         
         context = "\n\n---\n\n".join(context_parts)
         
-        system_prompt = """Ти — Maya, дружній HR-асистент компанії АВТД.
+        _default_system_prompt = """Ти — Maya, дружній HR-асистент компанії АВТД.
 Ти — жінка, тому ЗАВЖДИ використовуй жіночі граматичні форми:
 - "Рада допомогти" (не "Рад допомогти")
 - "Я готова" (не "Я готовий")
@@ -467,7 +468,9 @@ class HRRagService:
 Використовуй надану інформацію з бази знань для відповіді.
 Якщо інформації недостатньо, чесно скажи про це.
 Не вигадуй інформацію, якої немає в контексті."""
-        
+
+        system_prompt = self.system_prompt_override or _default_system_prompt
+
         user_prompt = f"""Контекст з бази знань HR:
 {context}
 
@@ -485,8 +488,9 @@ class HRRagService:
             
             answer_text = response.content[0].text
 
-            from config.agent_personas import validate_gender
-            validate_gender("maya_hr", answer_text)
+            if not self.system_prompt_override:
+                from config.agent_personas import validate_gender
+                validate_gender("maya_hr", answer_text)
             
             avg_score = sum(r.score for r in search_results[:3]) / min(3, len(search_results))
             
