@@ -1,0 +1,104 @@
+Audit and fix: route Alex AVTD bot analytics to /alex dashboard, 
+keep /hr dashboard clean (maya_hr only).
+
+## STEP 1 — AUDIT FIRST (read only, report findings)
+
+1. Find the file serving /alex dashboard API endpoints.
+   Likely: backend/routes/alex_routes.py or similar.
+   Report: does it have a recent-queries endpoint? 
+   What bot_source values does it filter by?
+
+2. Find the file serving /hr dashboard recent-queries endpoint.
+   Likely: backend/routes/hr_routes.py or hr_dashboard.py
+   Find the SELECT from hr_query_log.
+   Report: does it have WHERE bot_source filter? Paste the exact query.
+
+3. In backend/routes/alex_avtd_webhook.py find log_query().
+   Report: is user_name being inserted? Paste the exact INSERT.
+
+## STEP 2 — IMPLEMENT (after audit confirms findings)
+
+### Fix 1 — /hr recent-queries: filter to maya_hr only
+Find the SELECT that powers /hr/api/recent-queries.
+Add WHERE filter so alex_avtd entries never appear there:
+
+```sql
+WHERE bot_source = 'hr_maya' OR bot_source IS NULL
+ORDER BY created_at DESC
+LIMIT 50
+```
+
+### Fix 2 — /alex dashboard: add alex_avtd recent-queries endpoint
+In the file serving /alex routes, add:
+
+```python
+@alex_router.get("/alex/api/recent-queries")
+async def alex_avtd_recent_queries(limit: int = 50, db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    rows = db.execute(text("""
+        SELECT 
+            user_name,
+            query,
+            preset_matched,
+            response_time_ms,
+            created_at
+        FROM hr_query_log
+        WHERE bot_source = 'alex_avtd'
+        ORDER BY created_at DESC
+        LIMIT :limit
+    """), {"limit": limit}).fetchall()
+    return [
+        {
+            "user_name": r[0] or "Anonymous",
+            "query": r[1],
+            "preset_matched": r[2],
+            "response_time_ms": r[3],
+            "created_at": r[4].isoformat() if r[4] else None
+        }
+        for r in rows
+    ]
+```
+
+### Fix 3 — /alex dashboard HTML: add queries table
+In the /alex dashboard HTML (wherever the /alex page is rendered),
+add a chat log table section that calls /alex/api/recent-queries.
+Match the same table style already used in /hr dashboard.
+Columns: Час | Агент | Запит | Тип | Час відповіді
+
+### Fix 4 — user_name in alex_avtd logs
+In backend/routes/alex_avtd_webhook.py:
+
+After auth passes, fetch full_name from hr_users:
+```python
+row = db.execute(
+    text("SELECT full_name FROM hr_users WHERE telegram_id = :tid"),
+    {"tid": telegram_id}
+).fetchone()
+user_name = row[0] if row else "Unknown"
+```
+
+Update log_query() to accept and insert user_name:
+```python
+async def log_query(telegram_id, user_name, query, 
+                    preset_matched, response_time_ms, db):
+    db.execute(text("""
+        INSERT INTO hr_query_log 
+            (user_id, user_name, query, preset_matched, 
+             response_time_ms, bot_source, created_at)
+        VALUES 
+            (:uid, :name, :q, :pm, :rt, 'alex_avtd', NOW())
+    """), {
+        "uid": telegram_id, "name": user_name,
+        "q": query[:500], "pm": preset_matched, "rt": response_time_ms
+    })
+    db.commit()
+```
+
+Update all call sites of log_query() to pass user_name.
+
+## DO NOT TOUCH
+- telegram_webhook.py (Maya HR bot)
+- alex_tg_webhook.py (Alex Gradus public bot)
+- photo_report/ directory
+- Any Pinecone/embeddings code
+- Any existing /hr dashboard endpoints except the recent-queries filter

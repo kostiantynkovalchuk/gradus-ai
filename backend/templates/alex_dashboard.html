@@ -303,6 +303,12 @@
         <div id="patternsContainer"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
     </div>
 
+    <!-- Alex AVTD bot chat log -->
+    <div class="card">
+        <div class="section-title">💬 Запити агентів (Alex AVTD бот)</div>
+        <div id="queriesTable"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
+    </div>
+
     <!-- Usage hint -->
     <div class="hint-box">
         <h4>💡 Як залишити корекцію</h4>
@@ -456,7 +462,53 @@
         btn.textContent = on ? '⏳ Завантаження...' : '🔄 Оновити';
     }
 
-    document.addEventListener('DOMContentLoaded', loadData);
+    async function loadQueries() {
+        const container = document.getElementById('queriesTable');
+        try {
+            const resp = await fetch('/alex/api/recent-queries?limit=50');
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const rows = await resp.json();
+
+            if (!rows || rows.length === 0) {
+                container.innerHTML = '<div class="empty">Запитів ще не надходило.</div>';
+                return;
+            }
+
+            let html = '<table><thead><tr>' +
+                '<th>Час</th>' +
+                '<th>Агент</th>' +
+                '<th>Запит</th>' +
+                '<th>Тип</th>' +
+                '<th class="right">Час відповіді</th>' +
+                '</tr></thead><tbody>';
+
+            for (const r of rows) {
+                const dt  = r.created_at ? r.created_at.slice(0, 16).replace('T', ' ') : '—';
+                const typ = r.preset_hit
+                    ? '<span class="badge badge-success">Пресет</span>'
+                    : '<span class="badge badge-neutral">RAG / AI</span>';
+                const ms  = r.response_ms ? r.response_ms + ' мс' : '—';
+                const q   = (r.query || '').length > 80
+                    ? (r.query || '').slice(0, 80) + '…'
+                    : (r.query || '—');
+                html += `<tr>
+                    <td style="color:var(--gray-500);font-size:0.8rem;white-space:nowrap;">${dt}</td>
+                    <td style="color:var(--primary);font-weight:500;">${r.user || r.user_name || 'Unknown'}</td>
+                    <td>${q}</td>
+                    <td>${typ}</td>
+                    <td class="right">${ms}</td>
+                </tr>`;
+            }
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } catch (err) {
+            container.innerHTML = '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження запитів.</div>';
+            console.error('loadQueries error:', err);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => { loadData(); loadQueries(); });
 </script>
 </body>
 </html>
