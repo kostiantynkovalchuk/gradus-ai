@@ -2419,6 +2419,14 @@
                         'стрес': '😰 Стрес',
                         'плачу': '😢 Емоційний зрив',
                         'звільнення': '🚪 Думки про звільнення',
+                        'survey_colleagues': '👥 Комунікація з колегами',
+                        'survey_manager':    '👔 Стосунки з керівником',
+                        'survey_tasks':      '📋 Робоче навантаження',
+                        'survey_other':      '💬 Інше',
+                        'colleagues':        '👥 Комунікація з колегами',
+                        'manager':           '👔 Стосунки з керівником',
+                        'tasks':             '📋 Робоче навантаження',
+                        'other':             '💬 Інше',
                     };
                     triggerEl.innerHTML = triggers.map(tr => {
                         const label = triggerLabels[tr.trigger_type] || tr.trigger_type;
@@ -2440,7 +2448,21 @@
                             alertsEl.innerHTML = '<span style="color:var(--gray-400);">Активних попереджень немає 🟢</span>';
                         } else {
                             const statusLabels = { urgent: '🚨 КРИТИЧНО', red: '🔴 Підвищений ризик' };
-                            const trigTypeLabels = { 'вигорання': 'Вигорання', 'конфлікт': 'Конфлікт', 'стрес': 'Стрес', 'плачу': 'Емоційний стан', 'звільнення': 'Думки про звільнення' };
+                            const trigTypeLabels = {
+                                'вигорання':         'Вигорання',
+                                'конфлікт':          'Конфлікт',
+                                'стрес':             'Стрес',
+                                'плачу':             'Емоційний стан',
+                                'звільнення':        'Думки про звільнення',
+                                'survey_colleagues': 'Комунікація з колегами',
+                                'survey_manager':    'Стосунки з керівником',
+                                'survey_tasks':      'Робоче навантаження',
+                                'survey_other':      'Інше',
+                                'colleagues':        'Комунікація з колегами',
+                                'manager':           'Стосунки з керівником',
+                                'tasks':             'Робоче навантаження',
+                                'other':             'Інше',
+                            };
                             alertsEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
                                 <thead><tr style="background:var(--gray-50);">
                                     <th style="padding:8px 12px;text-align:left;color:var(--gray-600);font-weight:600;">Співробітник</th>
