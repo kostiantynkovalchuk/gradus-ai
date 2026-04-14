@@ -397,7 +397,7 @@ async def alex_avtd_webhook(request: Request):
 
         user_name = _get_user_name(telegram_id, db)
 
-        if msg_text in ("/start", "/menu", "/help"):
+        if msg_text in ("/start", "/menu"):
             await tg_send(
                 chat_id,
                 "👋 Привіт! Я *Alex* — твій асистент у полі.\n\n"
