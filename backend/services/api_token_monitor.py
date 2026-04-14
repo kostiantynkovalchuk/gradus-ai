@@ -14,11 +14,10 @@ Removed checks:
 import os
 import requests
 import logging
+import anthropic as _anthropic_module
 from typing import Dict, List, Optional
 from datetime import datetime
-from anthropic import Anthropic
 from openai import OpenAI
-from config.models import CLAUDE_MODEL_CHAT
 
 logger = logging.getLogger(__name__)
 
@@ -84,63 +83,141 @@ class APITokenMonitor:
         return results
     
     def check_anthropic_api(self) -> Dict:
-        """Check Claude API status and quota"""
-        
+        """
+        Check Claude API status via a real minimal API call.
+        Uses typed SDK exceptions — never string-matches error messages.
+        Timeout: 10 seconds. Model: claude-haiku-4-5-20251001 (cheapest/fastest).
+        """
+        _SVC = 'Claude AI (Anthropic)'
+        _CONSOLE = 'https://console.anthropic.com/settings/usage'
+        _KEYS_URL = 'https://console.anthropic.com/settings/keys'
+
         api_key = os.getenv('ANTHROPIC_API_KEY')
-        
         if not api_key:
+            logger.error("[APIMonitor] ANTHROPIC_API_KEY is not set")
             return {
                 'status': 'error',
-                'service_name': 'Claude AI (Anthropic)',
-                'error_message': 'No Anthropic API key configured'
+                'service_name': _SVC,
+                'error_type': 'NO_KEY',
+                'error_message': 'No Anthropic API key configured',
             }
-        
+
         try:
-            client = Anthropic(api_key=api_key)
-            
-            response = client.messages.create(
-                model=CLAUDE_MODEL_CHAT,
+            client = _anthropic_module.Anthropic(api_key=api_key, timeout=10.0)
+            client.messages.create(
+                model="claude-haiku-4-5-20251001",
                 max_tokens=10,
-                messages=[{"role": "user", "content": "test"}]
+                messages=[{"role": "user", "content": "ping"}],
             )
-            
+            logger.info("[APIMonitor] Anthropic check: healthy")
             return {
                 'status': 'healthy',
-                'service_name': 'Claude AI (Anthropic)',
+                'service_name': _SVC,
                 'is_valid': True,
                 'last_checked': datetime.now().isoformat(),
-                'console_url': 'https://console.anthropic.com/settings/usage',
-                'note': 'API key valid. Check usage at console.anthropic.com'
+                'console_url': _CONSOLE,
+                'note': 'API key valid. Check usage at console.anthropic.com',
             }
-            
-        except Exception as e:
-            error_msg = str(e)
-            
-            if 'invalid' in error_msg.lower() or 'authentication' in error_msg.lower():
+
+        except _anthropic_module.AuthenticationError as e:
+            logger.error(f"[APIMonitor] Anthropic 401 AuthenticationError: {e}")
+            return {
+                'status': 'error',
+                'service_name': _SVC,
+                'is_valid': False,
+                'error_type': 'AUTH_FAILURE',
+                'http_status': 401,
+                'error_message': 'API key invalid or expired (401 AuthenticationError)',
+                'action_required': 'Update ANTHROPIC_API_KEY in Replit Secrets',
+                'console_url': _KEYS_URL,
+            }
+
+        except _anthropic_module.RateLimitError as e:
+            logger.warning(f"[APIMonitor] Anthropic 429 RateLimitError: {e}")
+            return {
+                'status': 'warning',
+                'service_name': _SVC,
+                'warning': True,
+                'error_type': 'RATE_LIMITED',
+                'http_status': 429,
+                'warning_message': 'Claude API rate-limited (429) — key is valid, usage is high',
+                'action_required': 'Check usage at console.anthropic.com',
+                'console_url': _CONSOLE,
+            }
+
+        except _anthropic_module.InternalServerError as e:
+            http_status = getattr(e, 'status_code', None)
+            error_type = 'OVERLOADED' if http_status == 529 else 'SERVER_ERROR'
+            logger.warning(f"[APIMonitor] Anthropic InternalServerError ({http_status}): {e}")
+            return {
+                'status': 'warning',
+                'service_name': _SVC,
+                'warning': True,
+                'error_type': error_type,
+                'http_status': http_status,
+                'warning_message': (
+                    f'Claude API overloaded (529) — key is valid, Anthropic side issue'
+                    if http_status == 529 else
+                    f'Claude API server error ({http_status}) — key is valid, Anthropic side issue'
+                ),
+                'console_url': _CONSOLE,
+            }
+
+        except _anthropic_module.APITimeoutError as e:
+            logger.warning(f"[APIMonitor] Anthropic request timed out after 10s: {e}")
+            return {
+                'status': 'warning',
+                'service_name': _SVC,
+                'warning': True,
+                'error_type': 'TIMEOUT',
+                'warning_message': 'Claude API did not respond within 10s — key likely valid, network issue',
+                'console_url': _CONSOLE,
+            }
+
+        except _anthropic_module.APIConnectionError as e:
+            logger.error(f"[APIMonitor] Anthropic connection error: {e}")
+            return {
+                'status': 'warning',
+                'service_name': _SVC,
+                'warning': True,
+                'error_type': 'CONNECTION_ERROR',
+                'warning_message': f'Claude API connection failed — {str(e)[:100]}',
+                'console_url': _CONSOLE,
+            }
+
+        except _anthropic_module.APIStatusError as e:
+            http_status = e.status_code
+            raw_msg = str(e)
+            logger.error(f"[APIMonitor] Anthropic APIStatusError ({http_status}): {raw_msg[:200]}")
+            if http_status == 400 and 'credit balance' in raw_msg.lower():
                 return {
                     'status': 'error',
-                    'service_name': 'Claude AI (Anthropic)',
-                    'is_valid': False,
-                    'error_message': 'API key invalid or expired',
-                    'action_required': 'Update ANTHROPIC_API_KEY in Replit Secrets',
-                    'console_url': 'https://console.anthropic.com/settings/keys'
-                }
-            elif 'quota' in error_msg.lower() or 'limit' in error_msg.lower():
-                return {
-                    'status': 'warning',
-                    'service_name': 'Claude AI (Anthropic)',
+                    'service_name': _SVC,
                     'warning': True,
-                    'warning_message': 'API quota may be exhausted',
-                    'action_required': 'Add credits at console.anthropic.com',
-                    'console_url': 'https://console.anthropic.com/settings/usage'
+                    'error_type': 'BILLING_ERROR',
+                    'http_status': 400,
+                    'error_message': 'Anthropic credit balance is too low — top up at console.anthropic.com',
+                    'action_required': 'Add credits at console.anthropic.com/settings/billing',
+                    'console_url': 'https://console.anthropic.com/settings/billing',
                 }
-            else:
-                return {
-                    'status': 'error',
-                    'service_name': 'Claude AI (Anthropic)',
-                    'error_message': error_msg,
-                    'console_url': 'https://console.anthropic.com'
-                }
+            return {
+                'status': 'error',
+                'service_name': _SVC,
+                'error_type': f'HTTP_{http_status}',
+                'http_status': http_status,
+                'error_message': f'Unexpected Claude API error ({http_status}): {raw_msg[:120]}',
+                'console_url': _CONSOLE,
+            }
+
+        except Exception as e:
+            logger.error(f"[APIMonitor] Anthropic unexpected error ({type(e).__name__}): {e}")
+            return {
+                'status': 'error',
+                'service_name': _SVC,
+                'error_type': type(e).__name__,
+                'error_message': f'Unexpected error: {str(e)[:120]}',
+                'console_url': _CONSOLE,
+            }
     
     def check_openai_api(self) -> Dict:
         """Check OpenAI (DALL-E) API status and quota"""
