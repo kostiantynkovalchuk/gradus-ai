@@ -792,6 +792,7 @@
             <div class="nav-tab active" onclick="switchPage('analytics', event)" data-i18n="navAnalytics">📊 Аналітика</div>
             <div class="nav-tab" onclick="switchPage('hunt', event)" data-i18n="navHunt">🔍 Maya Hunt</div>
             <div class="nav-tab" onclick="switchPage('pulse', event)">💛 Пульс команди</div>
+            <div class="nav-tab" onclick="switchPage('rozsilka', event)">📋 Розсилка</div>
         </div>
     </div>
 
@@ -1157,50 +1158,6 @@
     <div class="page-content" id="page-pulse">
     <div class="container" style="max-width:1200px;">
 
-        <!-- Easter Survey Card -->
-        <div id="surveyCard" style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md);">
-                <h3 style="margin:0;font-size:1rem;color:var(--gray-700);">🐣 Опитування: Вихідний 13/04 (Великдень)</h3>
-                <span id="surveyBadge" style="padding:3px 10px;border-radius:12px;font-size:0.75rem;font-weight:600;background:#fef9c3;color:#92400e;">LIVE</span>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--space-md);margin-bottom:var(--space-md);">
-                <div style="text-align:center;">
-                    <div style="font-size:2rem;font-weight:700;color:#22c55e;" id="surveyYesCount">—</div>
-                    <div style="font-size:0.8rem;color:var(--gray-500);">✅ Так</div>
-                    <div style="font-size:0.9rem;font-weight:600;color:var(--gray-600);" id="surveyYesPct">—%</div>
-                </div>
-                <div style="text-align:center;border-left:1px solid var(--gray-200);border-right:1px solid var(--gray-200);">
-                    <div style="font-size:2rem;font-weight:700;color:var(--gray-700);" id="surveyTotalCount">—</div>
-                    <div style="font-size:0.8rem;color:var(--gray-500);">👥 Проголосувало</div>
-                    <div style="font-size:0.9rem;font-weight:600;color:var(--gray-600);" id="surveySentCount">з — розісланих</div>
-                </div>
-                <div style="text-align:center;">
-                    <div style="font-size:2rem;font-weight:700;color:#ef4444;" id="surveyNoCount">—</div>
-                    <div style="font-size:0.8rem;color:var(--gray-500);">❌ Ні</div>
-                    <div style="font-size:0.9rem;font-weight:600;color:var(--gray-600);" id="surveyNoPct">—%</div>
-                </div>
-            </div>
-            <!-- Progress bars -->
-            <div style="margin-bottom:var(--space-md);">
-                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--gray-500);margin-bottom:4px;">
-                    <span>✅ Так</span><span id="surveyYesPctBar">0%</span>
-                </div>
-                <div style="background:var(--gray-100);border-radius:4px;height:8px;overflow:hidden;">
-                    <div id="surveyYesBar" style="height:100%;background:#22c55e;border-radius:4px;transition:width 0.4s;width:0%;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--gray-500);margin-bottom:4px;margin-top:8px;">
-                    <span>❌ Ні</span><span id="surveyNoPctBar">0%</span>
-                </div>
-                <div style="background:var(--gray-100);border-radius:4px;height:8px;overflow:hidden;">
-                    <div id="surveyNoBar" style="height:100%;background:#ef4444;border-radius:4px;transition:width 0.4s;width:0%;"></div>
-                </div>
-            </div>
-            <div style="display:flex;gap:var(--space-sm);">
-                <button onclick="loadSurveyResults()" style="background:var(--gray-100);color:var(--gray-700);border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:0.85rem;">🔄 Оновити</button>
-                <button id="surveyCloseBtn" onclick="closeSurveyConfirm()" style="background:#fee2e2;color:#991b1b;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:0.85rem;">⏹ Закрити опитування</button>
-            </div>
-        </div>
-
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-md);margin-bottom:var(--space-xl);" id="pulseKpiGrid">
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseResponseRate">—</div>
@@ -1254,6 +1211,57 @@
             </div>
         </div>
 
+    </div>
+    </div>
+
+    <div class="page-content" id="page-rozsilka">
+    <div class="container" style="max-width:1200px;">
+
+        <!-- Easter Survey Card -->
+        <div id="surveyCard" style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);margin-bottom:var(--space-xl);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md);">
+                <h3 style="margin:0;font-size:1rem;color:var(--gray-700);">🐣 Опитування: Вихідний 13/04 (Великдень)</h3>
+                <span id="surveyBadge" style="padding:3px 10px;border-radius:12px;font-size:0.75rem;font-weight:600;background:#fef9c3;color:#92400e;">LIVE</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--space-md);margin-bottom:var(--space-md);">
+                <div style="text-align:center;">
+                    <div style="font-size:2rem;font-weight:700;color:#22c55e;" id="surveyYesCount">—</div>
+                    <div style="font-size:0.8rem;color:var(--gray-500);">✅ Так</div>
+                    <div style="font-size:0.9rem;font-weight:600;color:var(--gray-600);" id="surveyYesPct">—%</div>
+                </div>
+                <div style="text-align:center;border-left:1px solid var(--gray-200);border-right:1px solid var(--gray-200);">
+                    <div style="font-size:2rem;font-weight:700;color:var(--gray-700);" id="surveyTotalCount">—</div>
+                    <div style="font-size:0.8rem;color:var(--gray-500);">👥 Проголосувало</div>
+                    <div style="font-size:0.9rem;font-weight:600;color:var(--gray-600);" id="surveySentCount">з — розісланих</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:2rem;font-weight:700;color:#ef4444;" id="surveyNoCount">—</div>
+                    <div style="font-size:0.8rem;color:var(--gray-500);">❌ Ні</div>
+                    <div style="font-size:0.9rem;font-weight:600;color:var(--gray-600);" id="surveyNoPct">—%</div>
+                </div>
+            </div>
+            <!-- Progress bars -->
+            <div style="margin-bottom:var(--space-md);">
+                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--gray-500);margin-bottom:4px;">
+                    <span>✅ Так</span><span id="surveyYesPctBar">0%</span>
+                </div>
+                <div style="background:var(--gray-100);border-radius:4px;height:8px;overflow:hidden;">
+                    <div id="surveyYesBar" style="height:100%;background:#22c55e;border-radius:4px;transition:width 0.4s;width:0%;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--gray-500);margin-bottom:4px;margin-top:8px;">
+                    <span>❌ Ні</span><span id="surveyNoPctBar">0%</span>
+                </div>
+                <div style="background:var(--gray-100);border-radius:4px;height:8px;overflow:hidden;">
+                    <div id="surveyNoBar" style="height:100%;background:#ef4444;border-radius:4px;transition:width 0.4s;width:0%;"></div>
+                </div>
+            </div>
+            <div style="display:flex;gap:var(--space-sm);">
+                <button onclick="loadSurveyResults()" style="background:var(--gray-100);color:var(--gray-700);border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:0.85rem;">🔄 Оновити</button>
+                <button id="surveyCloseBtn" onclick="closeSurveyConfirm()" style="background:#fee2e2;color:#991b1b;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:0.85rem;">⏹ Закрити опитування</button>
+            </div>
+        </div>
+
+        <!-- Broadcast History -->
         <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);" id="broadcast-history">
             <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">📤 Історія розсилок</h3>
             <div style="overflow-x:auto;">
@@ -1273,36 +1281,6 @@
                 </table>
             </div>
         </div>
-
-        <script>
-        async function loadBroadcasts() {
-            try {
-                const res   = await fetch('/hr/api/broadcasts');
-                const data  = await res.json();
-                const tbody = document.getElementById('broadcast-tbody');
-                if (!data.length) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="padding:12px 10px;color:var(--gray-400);text-align:center;">Розсилок ще не було</td></tr>';
-                    return;
-                }
-                const statusIcon = { completed: '✅', cancelled: '❌', pending: '⏳', sending: '📤' };
-                tbody.innerHTML = data.map(b => {
-                    const time = b.created_at
-                        ? new Date(b.created_at).toLocaleString('uk-UA', { timeZone: 'Europe/Kiev' })
-                        : '—';
-                    const icon = statusIcon[b.status] || b.status;
-                    return '<tr style="border-bottom:1px solid var(--gray-100);">'
-                        + '<td style="padding:8px 10px;">' + time + '</td>'
-                        + '<td style="padding:8px 10px;">' + (b.content_type || '—') + '</td>'
-                        + '<td style="padding:8px 10px;">' + ((b.content_preview || '—').substring(0, 40)) + '</td>'
-                        + '<td style="padding:8px 10px;">' + (b.sent_count || 0) + ' / ' + (b.recipient_count || 0) + '</td>'
-                        + '<td style="padding:8px 10px;">' + icon + '</td>'
-                        + '</tr>';
-                }).join('');
-            } catch(e) { console.warn('loadBroadcasts error:', e); }
-        }
-        loadBroadcasts();
-        setInterval(loadBroadcasts, 30000);
-        </script>
 
     </div>
     </div>
@@ -1484,6 +1462,7 @@
         let huntDataCache = null;
         let huntReportCache = null;
         let huntRefreshTimer = null;
+        let rozsilkaRefreshTimer = null;
         let huntRole = '';
 
         function switchPage(page, evt) {
@@ -1494,6 +1473,7 @@
             if (evt && evt.target) evt.target.classList.add('active');
             else document.querySelector(`.nav-tab[onclick*="${page}"]`).classList.add('active');
             if (huntRefreshTimer) { clearInterval(huntRefreshTimer); huntRefreshTimer = null; }
+            if (rozsilkaRefreshTimer) { clearInterval(rozsilkaRefreshTimer); rozsilkaRefreshTimer = null; }
             if (page === 'hunt') {
                 loadRoleFilter();
                 loadHuntAnalytics();
@@ -1501,6 +1481,14 @@
             }
             if (page === 'pulse') {
                 loadPulseData();
+            }
+            if (page === 'rozsilka') {
+                loadSurveyResults();
+                loadBroadcasts();
+                rozsilkaRefreshTimer = setInterval(() => {
+                    loadSurveyResults();
+                    loadBroadcasts();
+                }, 30000);
             }
         }
 
@@ -2604,8 +2592,35 @@
             } catch(e) { console.error('closeSurveyConfirm error:', e); }
         }
 
-        loadSurveyResults();
-        setInterval(loadSurveyResults, 30000);
+        async function loadBroadcasts() {
+            try {
+                const res   = await fetch('/hr/api/broadcasts');
+                const data  = await res.json();
+                const tbody = document.getElementById('broadcast-tbody');
+                if (!data.length) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="padding:12px 10px;color:var(--gray-400);text-align:center;">Розсилок ще не було</td></tr>';
+                    return;
+                }
+                const statusIcon = { completed: '✅', cancelled: '❌', pending: '⏳', sending: '📤' };
+                tbody.innerHTML = data.map(b => {
+                    const dt = b.created_at ? new Date(b.created_at) : null;
+                    const time = dt
+                        ? dt.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev',
+                            day: '2-digit', month: '2-digit', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit' })
+                        : '—';
+                    const icon = statusIcon[b.status] || b.status;
+                    const preview = (b.content_preview || '—').substring(0, 60);
+                    return '<tr style="border-bottom:1px solid var(--gray-100);">'
+                        + '<td style="padding:8px 10px;white-space:nowrap;">' + time + '</td>'
+                        + '<td style="padding:8px 10px;">' + (b.content_type || '—') + '</td>'
+                        + '<td style="padding:8px 10px;">' + preview + '</td>'
+                        + '<td style="padding:8px 10px;white-space:nowrap;">' + (b.sent_count || 0) + ' / ' + (b.recipient_count || 0) + '</td>'
+                        + '<td style="padding:8px 10px;">' + icon + '</td>'
+                        + '</tr>';
+                }).join('');
+            } catch(e) { console.warn('loadBroadcasts error:', e); }
+        }
 
     </script>
 </body>
