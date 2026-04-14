@@ -61,6 +61,7 @@ class LogQueryRequest(BaseModel):
     preset_id: Optional[int] = None
     content_ids: Optional[List[str]] = None
     response_time_ms: Optional[int] = None
+    bot_source: Optional[str] = "hr_maya"
 
 
 class SearchResultModel(BaseModel):
@@ -307,7 +308,8 @@ async def log_query(request: LogQueryRequest):
             rag_used=request.rag_used,
             preset_id=request.preset_id,
             content_ids=request.content_ids or [],
-            response_time_ms=request.response_time_ms or 0
+            response_time_ms=request.response_time_ms or 0,
+            bot_source=request.bot_source or "hr_maya"
         )
         
         logger.info(

@@ -701,7 +701,8 @@ class HRRagService:
         content_ids: List[str] = None,
         response_time_ms: int = 0,
         user_name: str = None,
-        preset_id: int = None
+        preset_id: int = None,
+        bot_source: str = "hr_maya"
     ) -> Optional[int]:
         """Log query to database for analytics"""
         if not self.db_session:
@@ -717,12 +718,12 @@ class HRRagService:
                 INSERT INTO hr_query_log (
                     user_id, user_name, query, query_normalized,
                     preset_matched, preset_id, rag_used,
-                    content_ids, response_time_ms
+                    content_ids, response_time_ms, bot_source
                 )
                 VALUES (
                     :user_id, :user_name, :query, :query_normalized,
                     :preset_matched, :preset_id, :rag_used,
-                    :content_ids, :response_time_ms
+                    :content_ids, :response_time_ms, :bot_source
                 )
                 RETURNING id
             """), {
@@ -734,7 +735,8 @@ class HRRagService:
                 'preset_id': preset_id,
                 'rag_used': rag_used,
                 'content_ids': content_ids_str,
-                'response_time_ms': response_time_ms
+                'response_time_ms': response_time_ms,
+                'bot_source': bot_source or 'hr_maya'
             })
             
             log_id = result.scalar()

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime
 import os
+import re
 import asyncio
 import httpx
 import logging
@@ -143,6 +144,23 @@ def detect_video_content(query: str) -> tuple:
                 return content_id, caption
     
     return None, None
+
+
+def _should_log_hr_query(text: str) -> bool:
+    """
+    Returns True only if the message is worth logging as an HR query.
+    Filters out noise: single chars, emoji-only, bare email addresses.
+    URLs are intentionally NOT filtered — staff send links to orders,
+    invoices and tickets, and these are valid queries worth logging.
+    """
+    if not text or len(text.strip()) <= 3:
+        return False
+    if re.match(r'^[\w\.\-]+@[\w\.\-]+\.\w+$', text.strip()):
+        return False
+    ascii_only = re.sub(r'[^\x00-\x7F]+', '', text).strip()
+    if len(ascii_only) == 0 and len(text.strip()) <= 5:
+        return False
+    return True
 
 
 def is_hr_question(text: str) -> bool:
@@ -578,7 +596,7 @@ async def process_telegram_message(message: dict):
                 asyncio.create_task(send_pulse_video(chat_id, trigger_type))
 
         user_id = message.get("from", {}).get("id", 0)
-        await handle_hr_question(chat_id, user_id, text)
+        await handle_hr_question(chat_id, user_id, text, user_name)
         
     except Exception as e:
         logger.error(
@@ -1844,7 +1862,7 @@ async def send_video_only_response(chat_id: int, content_id: str, caption: str) 
         return False
 
 
-async def handle_hr_question(chat_id: int, user_id: int, query: str):
+async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: str = ""):
     """Process HR question via RAG system with logging"""
     await send_typing_action(chat_id)
     start_time = time.time()
@@ -1885,19 +1903,24 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str):
             rag_used = not is_preset and len(sources) > 0
             
             try:
-                log_response = await client.post(
-                    f"{API_BASE_URL}/api/hr/log-query",
-                    json={
-                        "user_id": user_id,
-                        "query": query,
-                        "preset_matched": is_preset,
-                        "rag_used": rag_used,
-                        "content_ids": [s.get('content_id') for s in sources] if sources else [],
-                        "response_time_ms": response_time_ms
-                    },
-                    timeout=5.0
-                )
-                if log_response.status_code == 200:
+                if _should_log_hr_query(query):
+                    log_response = await client.post(
+                        f"{API_BASE_URL}/api/hr/log-query",
+                        json={
+                            "user_id": user_id,
+                            "user_name": user_name or None,
+                            "query": query,
+                            "preset_matched": is_preset,
+                            "rag_used": rag_used,
+                            "content_ids": [s.get('content_id') for s in sources] if sources else [],
+                            "response_time_ms": response_time_ms,
+                            "bot_source": "hr_maya",
+                        },
+                        timeout=5.0
+                    )
+                else:
+                    log_response = None
+                if log_response and log_response.status_code == 200:
                     log_data = log_response.json()
                     log_id = log_data.get('log_id')
                 

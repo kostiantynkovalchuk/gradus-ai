@@ -933,6 +933,19 @@ MIGRATIONS = [
             """,
         ]
     },
+    {
+        "version": "040_hr_query_log_bot_source",
+        "statements": [
+            """
+            ALTER TABLE hr_query_log
+                ADD COLUMN IF NOT EXISTS bot_source VARCHAR(50) DEFAULT 'hr_maya'
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_hr_query_log_bot_source
+                ON hr_query_log(bot_source)
+            """,
+        ]
+    },
 ]
 
 

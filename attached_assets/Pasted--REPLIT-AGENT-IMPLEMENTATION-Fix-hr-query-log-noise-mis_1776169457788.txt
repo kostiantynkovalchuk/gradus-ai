@@ -1,0 +1,207 @@
+# REPLIT AGENT — IMPLEMENTATION
+## Fix: hr_query_log noise + missing user_name + bot_source column
+## Based on audit findings — 3 root causes confirmed
+
+---
+
+## CONFIRMED FACTS (do not re-audit)
+
+- Table: `hr_query_log` (migration 005)
+- Only one bot writes to this table: `TELEGRAM_MAYA_BOT_TOKEN` via `/webhook`
+- Logging happens at: `backend/routes/telegram_webhook.py` lines 1888–1899
+- `user_name` is defined in `LogQueryRequest` but never passed → all 190 rows NULL
+- No `bot_source` column exists
+- Telethon is NOT involved — safe
+- Next available migration number: **040**
+
+---
+
+## CHANGES REQUIRED — 4 FILES, NO NEW FILES
+
+### CHANGE 1 — Migration 040: add bot_source column
+**File:** `backend/db_migrations.py`
+
+Add migration `040_hr_query_log_bot_source` following the EXACT same pattern
+as existing migrations in this file.
+
+SQL to run:
+```sql
+ALTER TABLE hr_query_log
+    ADD COLUMN IF NOT EXISTS bot_source VARCHAR(50) DEFAULT 'hr_maya';
+
+CREATE INDEX IF NOT EXISTS idx_hr_query_log_bot_source
+    ON hr_query_log(bot_source);
+```
+
+After adding the migration, verify the migration runner picks it up on deploy.
+Do NOT run it manually — it runs automatically on startup.
+
+---
+
+### CHANGE 2 — Content guard before logging
+**File:** `backend/routes/telegram_webhook.py`
+
+Find the call site of `handle_hr_question` (around line 581) and the
+`/api/hr/log-query` POST call (around lines 1888–1899).
+
+Add a helper function (place it near the top of the file with other helpers):
+
+```python
+import re
+
+def _should_log_hr_query(text: str) -> bool:
+    """
+    Returns True only if the message is worth logging as an HR query.
+    Filters out noise: single chars, emoji-only, bare email addresses.
+    URLs are intentionally NOT filtered — staff send links to orders,
+    invoices and tickets, and these are valid queries worth logging.
+    """
+    if not text or len(text.strip()) <= 3:
+        return False
+        return False
+    if re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', text.strip()):
+        return False
+    # Emoji-only: if stripping all ASCII leaves nothing meaningful
+    ascii_only = re.sub(r'[^\x00-\x7F]+', '', text).strip()
+    if len(ascii_only) == 0 and len(text.strip()) <= 5:
+        return False
+    return True
+```
+
+Then wrap the `/api/hr/log-query` call:
+
+```python
+# BEFORE (current code):
+# always calls log-query unconditionally
+
+# AFTER:
+if _should_log_hr_query(text):
+    # existing log-query POST call here
+    pass
+# else: silently skip — do not log noise
+```
+
+Do NOT remove or restructure the existing log-query POST call.
+Only wrap it with the `if _should_log_hr_query(text):` guard.
+
+---
+
+### CHANGE 3 — Pass user_name to log endpoint
+**File:** `backend/routes/telegram_webhook.py`
+
+In `process_telegram_message()`, `user_name` is already extracted from
+`message["from"]["first_name"]` (or similar). Confirm the variable name.
+
+At the `/api/hr/log-query` POST call (lines 1888–1899), add `user_name`
+to the JSON body:
+
+```python
+# BEFORE (current):
+json={
+    "user_id": user_id,
+    "query": text,
+    "preset_matched": preset_matched,
+    "rag_used": rag_used,
+    "content_ids": content_ids,
+    "response_time_ms": response_time_ms,
+}
+
+# AFTER:
+json={
+    "user_id": user_id,
+    "user_name": user_name,   # ADD THIS LINE
+    "query": text,
+    "preset_matched": preset_matched,
+    "rag_used": rag_used,
+    "content_ids": content_ids,
+    "response_time_ms": response_time_ms,
+    "bot_source": "hr_maya",  # ADD THIS LINE
+}
+```
+
+`user_name` should come from `message["from"].get("first_name", "")` or
+whatever variable already holds the sender's name in `process_telegram_message`.
+Check the existing code — do not invent a new variable.
+
+---
+
+### CHANGE 4 — Update LogQueryRequest model to accept bot_source
+**File:** `backend/routes/hr_routes.py` (line ~57)
+
+Find the `LogQueryRequest` Pydantic model. Add `bot_source` field:
+
+```python
+class LogQueryRequest(BaseModel):
+    user_id: int
+    user_name: Optional[str] = None   # already exists — confirm
+    query: str
+    preset_matched: Optional[bool] = None
+    rag_used: Optional[bool] = None
+    content_ids: Optional[list] = None
+    response_time_ms: Optional[int] = None
+    bot_source: Optional[str] = "hr_maya"   # ADD THIS FIELD
+```
+
+Then find the INSERT in the log-query route handler and add `bot_source`
+to the INSERT statement:
+
+```sql
+-- BEFORE (current INSERT):
+INSERT INTO hr_query_log (user_id, user_name, query, ...)
+VALUES (:user_id, :user_name, :query, ...)
+
+-- AFTER:
+INSERT INTO hr_query_log (user_id, user_name, query, ..., bot_source)
+VALUES (:user_id, :user_name, :query, ..., :bot_source)
+```
+
+---
+
+## CLEANUP QUERY (run AFTER deploying, confirm with me first)
+
+Do NOT run this automatically. After deploy is confirmed working, I will
+approve this one-time cleanup:
+
+```sql
+-- Preview what will be deleted
+SELECT id, user_id, query, created_at
+FROM hr_query_log
+WHERE
+    LENGTH(TRIM(query)) <= 3
+    OR query ~* '^https?://'
+    OR query ~* '^[\w\.-]+@[\w\.-]+\.\w+$'
+ORDER BY created_at DESC;
+
+-- Count: should be ~17 rows per audit
+-- DELETE only after I confirm the SELECT looks correct
+```
+
+---
+
+## VERIFICATION STEPS (run after deploy)
+
+1. Send a test message to the Maya HR bot: "Який графік роботи?"
+   → Should appear in hr_query_log with `user_name` populated and `bot_source = 'hr_maya'`
+
+2. Send a short message: "+" or "ok"
+   → Should NOT appear in hr_query_log
+
+3. Send a URL: "https://example.com"
+   → Should NOT appear in hr_query_log
+
+4. Check dashboard at gradus-ai.onrender.com/hr
+   → User column should now show names instead of "Anonymous"
+
+5. Run: `SELECT bot_source, COUNT(*) FROM hr_query_log GROUP BY bot_source;`
+   → All existing rows should show `hr_maya` (default from migration)
+
+---
+
+## DO NOT TOUCH
+
+- `hunt_tg_scraper.py` — Telethon is clean, confirmed not involved
+- `alex_tg_webhook.py` — writes to separate table, not affected
+- `solomon_*` routes — separate webhook, not affected
+- Photo report webhook — separate route, not affected
+- Any other migration file — only add migration 040, do not modify existing ones
+- Do NOT delete any rows from hr_query_log — cleanup is a separate approved step
