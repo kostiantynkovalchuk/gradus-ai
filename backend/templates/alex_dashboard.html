@@ -94,6 +94,37 @@
         }
         .btn-primary:hover { background: #1d4ed8; }
 
+        /* ── Tabs ── */
+        .tab-bar {
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            display: flex;
+            gap: 0;
+            padding: 0 var(--space-xl);
+        }
+        .tab-btn {
+            padding: 14px 20px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--gray-500);
+            border: none;
+            border-bottom: 3px solid transparent;
+            background: transparent;
+            cursor: pointer;
+            border-radius: 0;
+            transition: color .15s, border-color .15s;
+            white-space: nowrap;
+        }
+        .tab-btn:hover { color: var(--primary); }
+        .tab-btn.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+
+        /* ── Tab panes ── */
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+
         /* ── Container ── */
         .container {
             max-width: 1100px;
@@ -187,6 +218,7 @@
         .badge-warning { background: var(--warning-light); color: #92400e; }
         .badge-danger  { background: var(--danger-light);  color: #991b1b; }
         .badge-neutral { background: var(--gray-100);      color: var(--gray-500); }
+        .badge-blue    { background: #dbeafe;               color: #1e40af; }
 
         /* ── Hint box ── */
         .hint-box {
@@ -231,6 +263,8 @@
             .kpi-grid { grid-template-columns: repeat(2, 1fr); }
             .header { padding: var(--space-md); }
             .container { padding: var(--space-md); }
+            .tab-bar { padding: 0 var(--space-md); }
+            .tab-btn { padding: 12px 14px; font-size: 0.82rem; }
         }
         @media (max-width: 480px) {
             .kpi-grid { grid-template-columns: 1fr 1fr; }
@@ -248,7 +282,7 @@
             <div class="header-subtitle">Панель адміністратора — точність AI</div>
         </div>
     </div>
-    <div class="header-controls">
+    <div class="header-controls" id="photoControls">
         <select id="daysSelector" onchange="loadData()">
             <option value="30" selected>30 днів</option>
             <option value="90">90 днів</option>
@@ -257,8 +291,21 @@
         </select>
         <button class="btn-primary" onclick="loadData()">🔄 Оновити</button>
     </div>
+    <div class="header-controls" id="queriesControls" style="display:none;">
+        <button class="btn-primary" onclick="loadQueries(true)">🔄 Оновити</button>
+    </div>
 </div>
 
+<!-- Tab bar -->
+<div class="tab-bar">
+    <button class="tab-btn active" id="tab-photo" onclick="switchTab('photo')">📷 Фотозвіт</button>
+    <button class="tab-btn" id="tab-queries" onclick="switchTab('queries')">💬 Запити агентів</button>
+</div>
+
+<!-- ════════════════════════════════════
+     TAB 1 — Photo report analytics
+     ════════════════════════════════════ -->
+<div class="tab-pane active" id="pane-photo">
 <div class="container">
 
     <!-- KPI cards -->
@@ -303,12 +350,6 @@
         <div id="patternsContainer"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
     </div>
 
-    <!-- Alex AVTD bot chat log -->
-    <div class="card">
-        <div class="section-title">💬 Запити агентів (Alex AVTD бот)</div>
-        <div id="queriesTable"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
-    </div>
-
     <!-- Usage hint -->
     <div class="hint-box">
         <h4>💡 Як залишити корекцію</h4>
@@ -321,6 +362,21 @@
     </div>
 
 </div>
+</div>
+
+<!-- ════════════════════════════════════
+     TAB 2 — AVTD bot query log
+     ════════════════════════════════════ -->
+<div class="tab-pane" id="pane-queries">
+<div class="container">
+
+    <div class="card">
+        <div class="section-title">💬 Запити агентів — Alex AVTD бот</div>
+        <div id="queriesTable"><div class="empty"><span class="spinner"></span>Завантаження...</div></div>
+    </div>
+
+</div>
+</div>
 
 <script>
     const CAT_NAMES = {
@@ -330,6 +386,24 @@
         sparkling: 'Ігристе',
     };
 
+    /* ── Tab switching ── */
+    let queriesLoaded = false;
+
+    function switchTab(name) {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+        document.getElementById('tab-' + name).classList.add('active');
+        document.getElementById('pane-' + name).classList.add('active');
+
+        document.getElementById('photoControls').style.display   = (name === 'photo')   ? 'flex' : 'none';
+        document.getElementById('queriesControls').style.display = (name === 'queries') ? 'flex' : 'none';
+
+        if (name === 'queries' && !queriesLoaded) {
+            loadQueries(false);
+        }
+    }
+
+    /* ── Photo report analytics ── */
     function accuracyBadge(err) {
         if (err == null) return '<span class="badge badge-neutral">—</span>';
         if (err <= 8)  return `<span class="badge badge-success">✅ Відмінно (±${err}%)</span>`;
@@ -339,15 +413,13 @@
 
     async function loadData() {
         const days = document.getElementById('daysSelector').value;
-
-        setLoading(true);
+        setPhotoLoading(true);
 
         try {
             const resp = await fetch(`/alex/api/accuracy?days=${days}`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const d = await resp.json();
 
-            // KPIs
             document.getElementById('kpiTotal').textContent     = d.total_reports ?? '—';
             document.getElementById('kpiCorrected').textContent = d.corrected_reports ?? '—';
             document.getElementById('kpiRate').textContent      =
@@ -355,7 +427,6 @@
             document.getElementById('kpiMae').textContent       =
                 d.avg_share_error_pct != null ? '±' + d.avg_share_error_pct + '%' : '—';
 
-            // Category table
             const byCat = d.by_category || {};
             if (Object.keys(byCat).length === 0) {
                 document.getElementById('catTable').innerHTML =
@@ -381,7 +452,6 @@
                 document.getElementById('catTable').innerHTML = html;
             }
 
-            // Recent corrections
             const recent = d.recent_corrections || [];
             if (recent.length === 0) {
                 document.getElementById('recentTable').innerHTML =
@@ -413,24 +483,20 @@
                 document.getElementById('recentTable').innerHTML = html;
             }
 
-        // Patterns
-        try {
-            const pr = await fetch(`/alex/api/patterns?days=${days}`);
-            if (pr.ok) {
-                const pd = await pr.json();
-                renderPatterns(pd);
+            try {
+                const pr = await fetch(`/alex/api/patterns?days=${days}`);
+                if (pr.ok) renderPatterns(await pr.json());
+            } catch (_) {
+                document.getElementById('patternsContainer').innerHTML =
+                    '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження патернів.</div>';
             }
-        } catch (pe) {
-            document.getElementById('patternsContainer').innerHTML =
-                '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження патернів.</div>';
-        }
 
         } catch (err) {
             console.error('loadData error:', err);
             document.getElementById('catTable').innerHTML =
                 '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження даних. Спробуйте оновити сторінку.</div>';
         } finally {
-            setLoading(false);
+            setPhotoLoading(false);
         }
     }
 
@@ -456,21 +522,32 @@
         container.innerHTML = html;
     }
 
-    function setLoading(on) {
-        const btn = document.querySelector('.btn-primary');
+    function setPhotoLoading(on) {
+        const btn = document.querySelector('#photoControls .btn-primary');
+        if (!btn) return;
         btn.disabled = on;
         btn.textContent = on ? '⏳ Завантаження...' : '🔄 Оновити';
     }
 
-    async function loadQueries() {
+    /* ── AVTD bot queries ── */
+    async function loadQueries(forceRefresh) {
         const container = document.getElementById('queriesTable');
+        if (!forceRefresh && queriesLoaded) return;
+
+        container.innerHTML = '<div class="empty"><span class="spinner"></span>Завантаження...</div>';
+
+        const btn = document.querySelector('#queriesControls .btn-primary');
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ Завантаження...'; }
+
         try {
             const resp = await fetch('/alex/api/recent-queries?limit=50');
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const rows = await resp.json();
+            const data = await resp.json();
+            const rows = data.queries || data;
 
             if (!rows || rows.length === 0) {
                 container.innerHTML = '<div class="empty">Запитів ще не надходило.</div>';
+                queriesLoaded = true;
                 return;
             }
 
@@ -479,22 +556,23 @@
                 '<th>Агент</th>' +
                 '<th>Запит</th>' +
                 '<th>Тип</th>' +
-                '<th class="right">Час відповіді</th>' +
+                '<th class="right">Відповідь (ms)</th>' +
                 '</tr></thead><tbody>';
 
             for (const r of rows) {
                 const dt  = r.created_at ? r.created_at.slice(0, 16).replace('T', ' ') : '—';
-                const typ = r.preset_hit
+                const typ = r.preset_hit || r.preset_matched
                     ? '<span class="badge badge-success">Пресет</span>'
-                    : '<span class="badge badge-neutral">RAG / AI</span>';
-                const ms  = r.response_ms ? r.response_ms + ' мс' : '—';
-                const q   = (r.query || '').length > 80
-                    ? (r.query || '').slice(0, 80) + '…'
-                    : (r.query || '—');
+                    : '<span class="badge badge-blue">RAG</span>';
+                const ms  = (r.response_ms || r.response_time_ms)
+                    ? (r.response_ms || r.response_time_ms) + ' мс' : '—';
+                const agent = r.user || r.user_name || 'Unknown';
+                const q = (r.query || '');
+                const qShort = q.length > 90 ? q.slice(0, 90) + '…' : (q || '—');
                 html += `<tr>
                     <td style="color:var(--gray-500);font-size:0.8rem;white-space:nowrap;">${dt}</td>
-                    <td style="color:var(--primary);font-weight:500;">${r.user || r.user_name || 'Unknown'}</td>
-                    <td>${q}</td>
+                    <td style="color:var(--primary);font-weight:500;">${agent}</td>
+                    <td title="${q.replace(/"/g, '&quot;')}">${qShort}</td>
                     <td>${typ}</td>
                     <td class="right">${ms}</td>
                 </tr>`;
@@ -502,13 +580,17 @@
 
             html += '</tbody></table>';
             container.innerHTML = html;
+            queriesLoaded = true;
+
         } catch (err) {
             container.innerHTML = '<div class="empty" style="color:var(--danger);">❌ Помилка завантаження запитів.</div>';
             console.error('loadQueries error:', err);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '🔄 Оновити'; }
         }
     }
 
-    document.addEventListener('DOMContentLoaded', () => { loadData(); loadQueries(); });
+    document.addEventListener('DOMContentLoaded', loadData);
 </script>
 </body>
 </html>
