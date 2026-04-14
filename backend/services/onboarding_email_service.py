@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 
 DB_URL = os.environ.get("DATABASE_URL", "")
 
-CHAT_URL    = "https://gradusmedia.org/чат"
+CHAT_URL    = "https://gradusmedia.org/chat"
 BOT_URL     = "https://t.me/alexgradus_bot"
-PRICING_URL = "https://gradusmedia.org/тарифи"
+PRICING_URL = "https://gradusmedia.org/pricing"
 
 HORECA_FALLBACK_HEADLINE = "Коктейльні тренди літа 2026 — читайте на gradusmedia.org"
 
@@ -109,7 +109,7 @@ def _build_welcome(name: str) -> str:
 </p>
 
 <p style="margin:0;color:#888;font-size:13px;text-align:center;">
-  У вас 5 питань на день протягом 7 днів.
+  У вас 5 питань на день протягом 14 днів.
 </p>
 """
     return base_template(content)
