@@ -279,16 +279,25 @@ def is_authorized(telegram_id: int, db: Session) -> bool:
     return result is not None
 
 
-def _get_user_name(telegram_id: int, db: Session) -> str:
-    """Fetch full_name from hr_users for logging."""
+def _get_user_name(telegram_id: int, db: Session, tg_from: dict = None) -> str:
+    """Resolve display name: hr_users DB first, then Telegram identity, then Unknown."""
     try:
         row = db.execute(
             _sa_text("SELECT full_name FROM hr_users WHERE telegram_id = :tid"),
             {"tid": telegram_id},
         ).fetchone()
-        return row[0] if row and row[0] else "Unknown"
+        if row and row[0]:
+            return row[0]
     except Exception:
-        return "Unknown"
+        pass
+    if tg_from:
+        parts = [tg_from.get("first_name", ""), tg_from.get("last_name", "")]
+        name = " ".join(p for p in parts if p).strip()
+        if name:
+            return name
+        if tg_from.get("username"):
+            return "@" + tg_from["username"]
+    return "Unknown"
 
 
 async def _log_query(telegram_id: int, query: str, preset_matched: bool,
@@ -341,8 +350,6 @@ async def alex_avtd_webhook(request: Request):
                 await tg_send(chat_id, "⛔ Доступ заборонено. Зверніться до HR.")
                 return {"ok": True}
 
-            user_name = _get_user_name(telegram_id, db)
-
             if data == "ax_menu":
                 await tg_edit(chat_id, message_id, "👋 Оберіть розділ:", main_menu_keyboard())
                 return {"ok": True}
@@ -368,10 +375,7 @@ async def alex_avtd_webhook(request: Request):
                 return {"ok": True}
 
             if data in PRESETS:
-                t0 = time.time()
                 await tg_edit(chat_id, message_id, PRESETS[data], back_keyboard())
-                elapsed = int((time.time() - t0) * 1000)
-                await _log_query(telegram_id, data, True, elapsed, db, user_name)
                 return {"ok": True}
 
             return {"ok": True}
@@ -395,7 +399,7 @@ async def alex_avtd_webhook(request: Request):
             )
             return {"ok": True}
 
-        user_name = _get_user_name(telegram_id, db)
+        user_name = _get_user_name(telegram_id, db, msg["from"])
 
         if msg_text in ("/start", "/menu"):
             await tg_send(
@@ -404,6 +408,9 @@ async def alex_avtd_webhook(request: Request):
                 "Обери розділ або напиши питання напряму 👇",
                 main_menu_keyboard(),
             )
+            return {"ok": True}
+
+        if msg_text.startswith("/"):
             return {"ok": True}
 
         t0 = time.time()
