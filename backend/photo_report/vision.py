@@ -393,7 +393,7 @@ def _call_claude_vision(
     client: anthropic.Anthropic,
     content: list,
     system: str,
-    max_tokens: int = 2048,
+    max_tokens: int = 4096,
     model: str = "claude-sonnet-4-20250514",
 ) -> str:
     response = client.messages.create(
@@ -403,6 +403,7 @@ def _call_claude_vision(
         messages=[{"role": "user", "content": content}],
     )
     raw = response.content[0].text.strip()
+    logger.debug(f"[PhotoReport] Claude raw response ({len(raw)} chars): {raw[:300]}")
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -459,7 +460,10 @@ def _analyze_focused_sync(
 
 
 def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set — cannot run Claude Vision analysis")
+    client = anthropic.Anthropic(api_key=api_key)
 
     content = []
 
@@ -520,7 +524,15 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
     content.append({"type": "text", "text": user_text})
 
     raw = _call_claude_vision(client, content, SYSTEM_PROMPT)
-    vision_result = json.loads(raw)
+    try:
+        vision_result = json.loads(raw)
+    except json.JSONDecodeError as parse_err:
+        logger.error(
+            f"[PhotoReport] JSON parse failed: {parse_err}\n"
+            f"  stop_reason={getattr(raw, 'stop_reason', 'unknown')}\n"
+            f"  raw ({len(raw)} chars): {raw[:500]}"
+        )
+        raise
 
     retried_categories: list[str] = []
     for category in ("vodka", "wine", "cognac", "sparkling"):
