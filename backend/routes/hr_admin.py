@@ -285,6 +285,7 @@ async def get_recent_queries(
                 satisfied,
                 created_at
             FROM hr_query_log
+            WHERE bot_source = 'hr_maya' OR bot_source IS NULL
             ORDER BY created_at DESC
             LIMIT :limit
         """), {'limit': limit})

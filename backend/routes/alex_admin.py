@@ -63,6 +63,60 @@ async def alex_accuracy(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/recent-queries")
+async def alex_recent_queries(
+    limit: int = Query(default=50, ge=1, le=200),
+    credentials: HTTPBasicCredentials = Depends(_verify_admin),
+):
+    """Recent queries from Alex AVTD field agents bot."""
+    try:
+        from models import get_db
+        from sqlalchemy import text as _sa_text
+
+        db = next(get_db())
+        try:
+            rows = db.execute(
+                _sa_text("""
+                    SELECT
+                        id,
+                        user_name,
+                        query,
+                        preset_matched,
+                        rag_used,
+                        response_time_ms,
+                        satisfied,
+                        created_at
+                    FROM hr_query_log
+                    WHERE bot_source = 'alex_avtd'
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                """),
+                {"limit": limit},
+            ).fetchall()
+        finally:
+            db.close()
+
+        return {
+            "queries": [
+                {
+                    "id": r[0],
+                    "user": r[1] or "Unknown",
+                    "query": r[2],
+                    "preset_hit": r[3],
+                    "rag_used": r[4],
+                    "response_ms": r[5] or 0,
+                    "satisfied": r[6],
+                    "created_at": r[7].isoformat() if r[7] else None,
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+    except Exception as e:
+        logger.error(f"[Alex] recent-queries error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/patterns")
 async def alex_patterns(
     days: int = Query(default=30, ge=1, le=365),

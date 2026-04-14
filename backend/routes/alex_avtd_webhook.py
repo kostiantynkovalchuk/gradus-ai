@@ -279,18 +279,31 @@ def is_authorized(telegram_id: int, db: Session) -> bool:
     return result is not None
 
 
+def _get_user_name(telegram_id: int, db: Session) -> str:
+    """Fetch full_name from hr_users for logging."""
+    try:
+        row = db.execute(
+            _sa_text("SELECT full_name FROM hr_users WHERE telegram_id = :tid"),
+            {"tid": telegram_id},
+        ).fetchone()
+        return row[0] if row and row[0] else "Unknown"
+    except Exception:
+        return "Unknown"
+
+
 async def _log_query(telegram_id: int, query: str, preset_matched: bool,
-                     response_time_ms: int, db: Session):
+                     response_time_ms: int, db: Session, user_name: str = "Unknown"):
     try:
         db.execute(
             _sa_text("""
                 INSERT INTO hr_query_log
-                    (user_id, query, preset_matched, response_time_ms, bot_source, created_at)
+                    (user_id, user_name, query, preset_matched, response_time_ms, bot_source, created_at)
                 VALUES
-                    (:uid, :q, :pm, :rt, 'alex_avtd', NOW())
+                    (:uid, :name, :q, :pm, :rt, 'alex_avtd', NOW())
             """),
             {
                 "uid": telegram_id,
+                "name": user_name,
                 "q": query[:500],
                 "pm": preset_matched,
                 "rt": response_time_ms,
@@ -328,6 +341,8 @@ async def alex_avtd_webhook(request: Request):
                 await tg_send(chat_id, "⛔ Доступ заборонено. Зверніться до HR.")
                 return {"ok": True}
 
+            user_name = _get_user_name(telegram_id, db)
+
             if data == "ax_menu":
                 await tg_edit(chat_id, message_id, "👋 Оберіть розділ:", main_menu_keyboard())
                 return {"ok": True}
@@ -356,7 +371,7 @@ async def alex_avtd_webhook(request: Request):
                 t0 = time.time()
                 await tg_edit(chat_id, message_id, PRESETS[data], back_keyboard())
                 elapsed = int((time.time() - t0) * 1000)
-                await _log_query(telegram_id, data, True, elapsed, db)
+                await _log_query(telegram_id, data, True, elapsed, db, user_name)
                 return {"ok": True}
 
             return {"ok": True}
@@ -380,7 +395,9 @@ async def alex_avtd_webhook(request: Request):
             )
             return {"ok": True}
 
-        if msg_text in ("/start", "/menu"):
+        user_name = _get_user_name(telegram_id, db)
+
+        if msg_text in ("/start", "/menu", "/help"):
             await tg_send(
                 chat_id,
                 "👋 Привіт! Я *Alex* — твій асистент у полі.\n\n"
@@ -417,7 +434,7 @@ async def alex_avtd_webhook(request: Request):
 
         elapsed_ms = int((time.time() - t0) * 1000)
         await tg_send(chat_id, response_text, back_keyboard())
-        await _log_query(telegram_id, msg_text, preset_matched, elapsed_ms, db)
+        await _log_query(telegram_id, msg_text, preset_matched, elapsed_ms, db, user_name)
 
     except Exception as e:
         logger.error(f"[ALEX_AVTD] Webhook error: {e}")
