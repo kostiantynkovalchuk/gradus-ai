@@ -1332,11 +1332,11 @@ class ContentScheduler:
             replace_existing=True
         )
 
-        # Team Pulse: daily check for monthly survey dispatch (days 13-17, weekday only)
-        # The function itself handles day/weekday validation and deduplication.
+        # Team Pulse: fires only on weekdays between the 13th-17th of each month at 07:00 UTC.
+        # DB dedup inside send_monthly_survey() is the second safety layer.
         self.scheduler.add_job(
             self._send_pulse_survey_task,
-            CronTrigger(hour=7, minute=0),
+            CronTrigger(day='13-17', hour=7, minute=0, day_of_week='mon-fri'),
             id='send_pulse_survey',
             name='Send monthly Team Pulse mood survey (15th of month)',
             replace_existing=True
