@@ -982,6 +982,24 @@ def send_monthly_survey() -> int:
         return 0
 
     month_key = today.strftime("%Y-%m")
+
+    # DB-backed dedup — survives server restarts (in-memory set alone is not enough)
+    _db_check = _models.SessionLocal()
+    try:
+        already_sent = _db_check.execute(
+            text("SELECT COUNT(*) FROM pulse_surveys WHERE survey_month = :mk"),
+            {"mk": month_key},
+        ).scalar() or 0
+        logger.info(f"[PULSE] Monthly check: already_sent={already_sent} for {month_key}")
+        if already_sent > 0:
+            logger.info(f"[PULSE] Survey already sent this month ({month_key}), skipping")
+            _PULSE_SURVEY_DISPATCHED.add(month_key)
+            return 0
+    except Exception as _e:
+        logger.warning(f"[PULSE] DB dedup check failed, falling back to in-memory: {_e}")
+    finally:
+        _db_check.close()
+
     if month_key in _PULSE_SURVEY_DISPATCHED:
         logger.info(f"[PULSE] Survey already dispatched for {month_key}, skipping")
         return 0
