@@ -13,6 +13,7 @@ import logging
 import os
 
 from models import get_db
+from config.models import CLAUDE_MODEL_CONTENT
 
 router = APIRouter(tags=["Admin"])
 logger = logging.getLogger(__name__)
@@ -462,7 +463,7 @@ async def generate_candidate_answer(candidate_id: int, request: Request):
         system += "\nЗгадай продукти AVTD: GREENDAY, HELSINKI, UKRAINKA (горілка), DOVBUSH, ADJARI (бренді), VILLA UA, KRISTI VALLEY (вино), FUNJU (соджу)."
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_MODEL_CONTENT,
             max_tokens=2000,
             system=system,
             messages=[{"role": "user", "content": question}]

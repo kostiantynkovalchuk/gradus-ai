@@ -4,6 +4,8 @@ import json
 import os
 import logging
 
+from config.models import CLAUDE_MODEL_CONTENT
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -394,7 +396,7 @@ def _call_claude_vision(
     content: list,
     system: str,
     max_tokens: int = 4096,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = CLAUDE_MODEL_CONTENT,
 ) -> str:
     response = client.messages.create(
         model=model,

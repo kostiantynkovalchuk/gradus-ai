@@ -28,12 +28,14 @@ import anthropic
 import psycopg2
 import requests
 
+from config.models import CLAUDE_MODEL_CONTENT
+
 logger = logging.getLogger(__name__)
 
 DB_URL      = os.environ.get("DATABASE_URL", "")
 LI_BASE     = "https://api.linkedin.com/v2"
 
-SONNET_MODEL = "claude-sonnet-4-20250514"
+SONNET_MODEL = CLAUDE_MODEL_CONTENT
 
 
 def _li_token() -> str:

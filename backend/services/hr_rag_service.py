@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass
 from openai import OpenAI
 from anthropic import Anthropic
+from config.models import CLAUDE_MODEL_TELEGRAM
 from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
@@ -480,7 +481,7 @@ class HRRagService:
         
         try:
             response = anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
+                model=CLAUDE_MODEL_TELEGRAM,
                 max_tokens=500,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}]

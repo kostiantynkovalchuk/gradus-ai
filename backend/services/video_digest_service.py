@@ -27,6 +27,8 @@ import anthropic
 import psycopg2
 import requests
 
+from config.models import CLAUDE_MODEL_CONTENT
+
 logger = logging.getLogger(__name__)
 
 # TODO: HoReCa Staff Search — blocked on Robota.ua CV fetch fix (see Maya Hunt architecture docs)
@@ -41,7 +43,7 @@ TELEGRAM_BOT_TOKEN  = os.environ.get("TELEGRAM_MAYA_BOT_TOKEN", "")
 LI_TOKEN            = os.environ.get("LINKEDIN_ACCESS_TOKEN", "")
 LI_ORG              = os.environ.get("LINKEDIN_ORGANIZATION_URN", "")
 
-SONNET_MODEL = "claude-sonnet-4-5"
+SONNET_MODEL = CLAUDE_MODEL_CONTENT
 
 
 def _get_conn():
