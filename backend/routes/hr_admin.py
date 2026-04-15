@@ -1390,13 +1390,12 @@ async def test_pulse_survey(
     tid: int = None,
     credentials: HTTPBasicCredentials = Depends(verify_admin),
 ):
-    """Send survey to one user (by telegram_id) or all active users if no tid given."""
-    from services.pulse_service import send_monthly_survey, send_survey_to_user
-    if tid:
-        count = await send_survey_to_user(tid)
-    else:
-        count = send_monthly_survey()
-    return {"sent_to": count}
+    """Send survey to ONE user by telegram_id. ?tid= is REQUIRED."""
+    if not tid:
+        return {"error": "Parameter ?tid= required. Will not send to all employees."}
+    from services.pulse_service import send_survey_to_user
+    count = await send_survey_to_user(tid)
+    return {"sent_to": count, "tid": tid}
 
 
 @router.get("/api/survey/{survey_id}/results")
