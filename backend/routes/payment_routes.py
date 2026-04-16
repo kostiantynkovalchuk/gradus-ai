@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 PRICES = {
     'standard': 7,
-    'premium': 10,
+    'premium': 15,
 }
 
 
