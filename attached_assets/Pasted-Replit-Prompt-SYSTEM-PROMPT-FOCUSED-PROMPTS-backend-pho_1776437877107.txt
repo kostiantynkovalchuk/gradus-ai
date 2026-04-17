@@ -1,20 +1,17 @@
-import anthropic
-import base64
-import json
-import os
-import logging
+Replit Prompt:
+Задача: Перекласти SYSTEM_PROMPT і _FOCUSED_PROMPTS в backend/photo_report/vision.py з української на англійську. Це покращить accuracy Claude Vision — англійські інструкції виконуються точніше.
+Правила перекладу:
 
-from config.models import CLAUDE_MODEL_CONTENT
+Перекласти ВСЕ на англійську — коментарі, інструкції, пояснення
+Назви брендів залишити як є: GreenDay, Ukrainka, Helsinki, ADJARI, Dovbush, Klinkov, Villa UA
+Кириличні назви зберегти в дужках: Ukrainka (Українка), Dovbush (Довбуш), Jean Jack (Жан-Жак)
+JSON ключі не змінювати
+Структуру кроків (STEP 1-12) зберегти, тільки КРОК → STEP
+_FOCUSED_PROMPTS теж перекласти повністю на англійську
+Залишити notes field format in Ukrainian — бот відповідає користувачу українською, тому notes можуть бути будь-якою мовою
 
-logger = logging.getLogger(__name__)
-
-try:
-    from .references.references import BRAND_REFERENCES
-except Exception as _ref_err:
-    logger.warning(f"[PhotoReport] Could not load brand references: {_ref_err}")
-    BRAND_REFERENCES = []
-
-SYSTEM_PROMPT = """You are an AI merchandising analyst for AVTD (Торговий Дім АВ).
+Ось повний переклад SYSTEM_PROMPT — замінити один на один:
+pythonSYSTEM_PROMPT = """You are an AI merchandising analyst for AVTD (Торговий Дім АВ).
 Analyze shelf photos and return ONLY valid JSON with no text before or after.
 Do not add score, passed, status — only facts about what is visible in the photo.
 
@@ -391,8 +388,8 @@ Return ONLY this JSON (no score, no passed, no status):
 
   "notes": ""
 }"""
-
-_FOCUSED_PROMPTS = {
+Also replace _FOCUSED_PROMPTS with English version:
+python_FOCUSED_PROMPTS = {
     "wine": (
         "IGNORE vodka and cognac. Look for ONLY wine bottles. "
         "Scan EVERY shelf row for standard wine bottles (750ml, taller and thinner than vodka). "
@@ -421,167 +418,3 @@ _FOCUSED_PROMPTS = {
         "Also count all competitor vodka (Nemiroff, Khortytsia, etc.). Scan EVERY row."
     ),
 }
-
-
-def _call_claude_vision(
-    client: anthropic.Anthropic,
-    content: list,
-    system: str,
-    max_tokens: int = 4096,
-    model: str = CLAUDE_MODEL_CONTENT,
-) -> str:
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": content}],
-    )
-    raw = response.content[0].text.strip()
-    logger.debug(f"[PhotoReport] Claude raw response ({len(raw)} chars): {raw[:300]}")
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return raw
-
-
-def _analyze_focused_sync(
-    client: anthropic.Anthropic,
-    photo_b64_list: list[str],
-    focus_category: str,
-) -> dict:
-    """Re-analyse photos focusing on a single category. Returns the category dict."""
-    focus_text = _FOCUSED_PROMPTS.get(focus_category, "")
-    if not focus_text:
-        return {}
-
-    content = []
-    for b64 in photo_b64_list[:5]:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-        })
-
-    cat_examples = {
-        "wine": '{"confidence": "medium", "villa_ua_facings": 2, "didi_lari_facings": 0, "kristi_valley_facings": 0, "kosher_facings": 0, "other_avtd_wine_facings": 0, "competitor_facings": 5, "total_wine_facings": 7}',
-        "cognac": '{"confidence": "medium", "adjari_facings": 3, "adjari_skus": ["3star"], "dovbush_facings": 0, "klinkov_facings": 0, "jean_jack_facings": 0, "other_avtd_cognac_facings": 0, "competitor_facings": 2, "competitor_brands": ["Aznauri"], "total_cognac_facings": 5}',
-        "sparkling": '{"confidence": "medium", "villa_ua_sparkling_facings": 0, "competitor_facings": 4, "total_sparkling_facings": 4}',
-        "vodka": '{"confidence": "medium", "greenday_facings": 4, "greenday_skus": ["Classic"], "ukrainka_facings": 3, "helsinki_facings": 1, "other_avtd_vodka_facings": 0, "competitor_facings": 6, "competitor_brands": ["Nemiroff"], "total_vodka_facings": 14, "volume_order_issues": []}',
-    }
-    example = cat_examples.get(focus_category, '{"confidence": "medium"}')
-
-    prompt = (
-        f"FOCUSED RE-ANALYSIS — {focus_category.upper()} ONLY\n\n"
-        f"{focus_text}\n\n"
-        f"Return ONLY a JSON object for the '{focus_category}' category. Example:\n{example}\n\n"
-        "Include 'confidence': 'high'|'medium'|'low' based on how clearly you can see the bottles. "
-        "If you still cannot reliably assess, set confidence to 'low' and counts to null."
-    )
-    content.append({"type": "text", "text": prompt})
-
-    try:
-        raw = _call_claude_vision(
-            client,
-            content,
-            system="You are a merchandising AI analyst. Return ONLY valid JSON, no other text.",
-            max_tokens=512,
-            model="claude-sonnet-4-6",
-        )
-        return json.loads(raw)
-    except Exception as e:
-        logger.warning(f"[PhotoReport] Focused retry failed for {focus_category}: {e}")
-        return {}
-
-
-def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set — cannot run Claude Vision analysis")
-    client = anthropic.Anthropic(api_key=api_key)
-
-    content = []
-
-    if BRAND_REFERENCES:
-        product_refs = [r for r in BRAND_REFERENCES if not r["is_shelf_ref"]]
-        shelf_refs = [r for r in BRAND_REFERENCES if r["is_shelf_ref"]]
-
-        if product_refs:
-            content.append({
-                "type": "text",
-                "text": (
-                    "REFERENCE — AVTD PRODUCTS: Memorize how each brand looks in the following photos:"
-                ),
-            })
-            for ref in product_refs:
-                content.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
-                })
-                content.append({"type": "text", "text": f"↑ {ref['label']}"})
-
-        if shelf_refs:
-            content.append({
-                "type": "text",
-                "text": (
-                    "REFERENCE — IDEAL SHELVES: Here is how AVTD products look on real store shelves "
-                    "(reference photos from the sales manager):"
-                ),
-            })
-            for ref in shelf_refs:
-                content.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
-                })
-                content.append({"type": "text", "text": f"↑ {ref['label']}"})
-
-        content.append({
-            "type": "text",
-            "text": (
-                "---\nNow analyze the following photos from a real agent store visit. "
-                "Find the AVTD brands you just learned about on the store shelves:"
-            ),
-        })
-
-    for b64 in photo_b64_list[:5]:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-        })
-
-    user_text = (
-        f"Analyze {len(photo_b64_list[:5])} photos from one store visit "
-        "according to AVTD merchandising standards. Combine data from all photos into one report."
-    )
-    if agent_comment:
-        user_text += f"\nAgent comment: {agent_comment}"
-    user_text += "\nReturn only JSON with facts."
-    content.append({"type": "text", "text": user_text})
-
-    raw = _call_claude_vision(client, content, SYSTEM_PROMPT)
-    try:
-        vision_result = json.loads(raw)
-    except json.JSONDecodeError as parse_err:
-        logger.error(
-            f"[PhotoReport] JSON parse failed: {parse_err}\n"
-            f"  stop_reason={getattr(raw, 'stop_reason', 'unknown')}\n"
-            f"  raw ({len(raw)} chars): {raw[:500]}"
-        )
-        raise
-
-    retried_categories: list[str] = []
-    for category in ("vodka", "wine", "cognac", "sparkling"):
-        cat_data = vision_result.get(category, {})
-        if cat_data.get("confidence") == "low":
-            logger.info(f"[PhotoReport] Low confidence on '{category}', running focused retry")
-            retry = _analyze_focused_sync(client, photo_b64_list, category)
-            if retry and retry.get("confidence") in ("high", "medium"):
-                vision_result[category] = retry
-                retried_categories.append(category)
-                logger.info(f"[PhotoReport] Retry improved '{category}' to confidence={retry['confidence']}")
-            else:
-                logger.info(f"[PhotoReport] Retry did not improve '{category}', keeping low-confidence result")
-
-    if retried_categories:
-        vision_result["retried_categories"] = retried_categories
-
-    return vision_result
