@@ -495,7 +495,7 @@ class HRRagService:
             
             avg_score = sum(r.score for r in search_results[:3]) / min(3, len(search_results))
             
-            if search_method == "rag" and top_score < RAG_HIGH_CONFIDENCE:
+            if search_method == "rag" and top_score < RAG_HIGH_CONFIDENCE and not self.system_prompt_override:
                 logger.info(f"⚠️ MEDIUM confidence ({top_score:.2f}) - adding disclaimer")
                 answer_text += "\n\n⚠️ _Рекомендую уточнити інформацію у HR-відділі._"
             
