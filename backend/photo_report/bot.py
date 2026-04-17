@@ -28,6 +28,7 @@ EXPERT_TG_IDS: set[int] = {
     441389791,   # Kostiantyn
     424503938,   # Natalia
     5253694737,  # Олена — reviewing expert
+    408894540,   # Олександр — reviewing expert
 }
 
 pending_reports = {}
