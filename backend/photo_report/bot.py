@@ -509,7 +509,8 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📋 Звітів: {total}\n"
         f"✅ Пройдено: {passed} ({rate}%)\n"
         f"⭐ Середній бал: {avg}/100",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=MAIN_MENU,
     )
 
 

@@ -1,0 +1,63 @@
+Audit and fix: Photo Report bot missing "Новий звіт" button on desktop Telegram.
+
+## CONTEXT
+
+@avtd_photo_report_bot previously had a persistent reply keyboard 
+with a "Новий звіт" button visible at the bottom of the chat.
+Users report it disappeared on Telegram desktop but still shows on mobile.
+This likely broke when alex_avtd_webhook.py was added to main.py —
+a webhook conflict or keyboard reset may have occurred.
+
+## STEP 1 — AUDIT (read only, report findings)
+
+1. Find the Photo Report bot handler file.
+   Likely: backend/photo_report/bot.py or similar.
+   Report:
+   - How is the "Новий звіт" persistent keyboard sent?
+     Look for ReplyKeyboardMarkup or reply_markup with "Новий звіт"
+   - Is it sent only on /start, or on every message?
+   - What triggers it to appear?
+
+2. Check if there is a webhook conflict.
+   In main.py or wherever webhooks are registered on startup:
+   - How many bots have webhooks registered?
+   - Does Photo Report bot use a webhook or polling?
+   - If polling — could the new alex_avtd webhook registration 
+     on startup be interfering with it?
+
+3. Check python-telegram-bot version and handler setup.
+   The Photo Report bot likely uses ConversationHandler.
+   Report: does any state or fallback handler send a 
+   ReplyKeyboardRemove() that could be clearing the keyboard?
+
+## STEP 2 — FIX
+
+Based on audit findings, most likely fixes:
+
+### If keyboard is only sent on /start:
+Add keyboard re-send to every conversation entry point and 
+after every completed report, so it reappears if dismissed:
+
+```python
+reply_markup = ReplyKeyboardMarkup(
+    [["📋 Новий звіт"]], 
+    resize_keyboard=True, 
+    persistent=True  # keeps keyboard visible on desktop
+)
+```
+
+Note: `persistent=True` was added in Bot API 6.3 — this is the 
+most likely reason desktop doesn't show it. Add this parameter.
+
+### If a ReplyKeyboardRemove() is being sent anywhere:
+Find it and remove it, or replace with the keyboard re-send.
+
+### If it's a webhook/polling conflict:
+Report the conflict — do not fix without confirming with me first.
+
+## DO NOT TOUCH
+- alex_avtd_webhook.py
+- telegram_webhook.py (Maya HR)
+- alex_tg_webhook.py (Alex Gradus)
+- Any database or migration files
+- Photo report analysis logic (vision.py or similar)
