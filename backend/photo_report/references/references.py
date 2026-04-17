@@ -20,7 +20,7 @@ Expected files in this directory:
     helsinki_lineup.jpg         — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
     ukrainka_lineup.jpg         — Full Ukrainka lineup (Traditional, Strong, Platinum)
 
-  Ideal shelf reference photos from Gotz (8):
+  Ideal shelf reference photos (10):
     shelf_ref_02.jpg — ADJARI cognac close-up + Helsinki + Ukrainka
     shelf_ref_05.jpg — Villa UA wine + GreenDay + Ukrainka
     shelf_ref_07.jpg — Villa UA Sparkling + ADJARI + GreenDay + Dovbush + Funju
@@ -29,6 +29,8 @@ Expected files in this directory:
     shelf_ref_16.jpg — Klinkov boxes + ADJARI varieties + GreenDay + Helsinki
     shelf_ref_17.jpg — ALL brand shelf-strips visible
     shelf_ref_19.jpg — Competitor POS vs Ukrainka + Villa UA
+    shelf_ref_21.jpg — Helsinki transparent bottles next to GreenDay; Klinkov boxes on top (NOT Helsinki)
+    shelf_ref_22.jpg — 6 Helsinki SKUs on top shelf + full AVTD shelf-strips
 """
 
 import base64
@@ -57,8 +59,24 @@ REFERENCE_LABELS: dict[str, str] = {
         "KEY IDENTIFIER: blue/icy color — unique among AVTD vodkas."
     ),
     "helsinki_lineup": (
-        "Helsinki full lineup: Ice Palace, Winter Capital, Ultramarin, Frosty Citrus, Salted Caramel. "
-        "All have blue/icy color scheme. Usually 1–3 bottles on shelf, not large groups."
+        "Helsinki FULL LINEUP — 5 SKUs: Ice Palace (light blue label), Winter Capital (grey), "
+        "Ultramarin (dark blue), Frosty Citrus (orange), Salted Caramel (brown). "
+        "ALL are TRANSPARENT bottles with mountain/winter scene on label. "
+        "CRITICAL: Do NOT confuse with Klinkov (dark boxes) or Nemiroff."
+    ),
+    "shelf_ref_21": (
+        "IDEAL SHELF: Helsinki TRANSPARENT bottles (NO BOXES) on 4th shelf from ground, "
+        "positioned NEXT TO GreenDay on the vodka shelf. "
+        "Top shelf has Klinkov BOXES (dark blue+gold) — these are NOT Helsinki, Klinkov is cognac. "
+        "ADJARI cognac on middle shelves. Key learning: Helsinki = transparent vodka bottles; "
+        "Klinkov = dark premium cognac boxes."
+    ),
+    "shelf_ref_22": (
+        "IDEAL SHELF: 6 Helsinki SKUs on top shelf RIGHT SIDE — transparent bottles, no boxes. "
+        "'HELSINKI' shelf-strip clearly visible. "
+        "All AVTD brands present with shelf-strips: KLINKOV, HELSINKI, ЖАН-ЖАК, УКРАINKA, "
+        "ДОВБУШ, GREENDAY, ADJARI, VILLA UA. "
+        "Best reference for identifying Helsinki transparent bottles and AVTD POS shelf-strips."
     ),
     "ukrainka_traditional_500": (
         "Ukrainka Traditional 500ml — vodka. Clear glass bottle with DIAMOND PATTERN texture. "
