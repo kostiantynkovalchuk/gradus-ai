@@ -465,7 +465,7 @@ def _analyze_focused_sync(
             content,
             system="You are a merchandising AI analyst. Return ONLY valid JSON, no other text.",
             max_tokens=512,
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-6-20250514",
         )
         return json.loads(raw)
     except Exception as e:
