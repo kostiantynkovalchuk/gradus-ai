@@ -203,7 +203,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Alex AVTD: TELEGRAM_ALEX_AVTD_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
-    # Main Telegram bot (content approval + notifications) → /api/telegram/webhook
+    # GradusMediaBot (content approval + notifications) → /api/telegram/webhook/gradus
     main_tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if main_tg_token and RENDER_URL:
         try:
@@ -211,9 +211,9 @@ async def lifespan(app: FastAPI):
             async with httpx.AsyncClient() as hclient:
                 resp = await hclient.post(
                     f"https://api.telegram.org/bot{main_tg_token}/setWebhook",
-                    json={"url": f"{RENDER_URL}/api/telegram/webhook"}
+                    json={"url": f"{RENDER_URL}/api/telegram/webhook/gradus"}
                 )
-                logger.info(f"📱 Main Telegram webhook: {resp.json()}")
+                logger.info(f"📱 GradusMediaBot webhook: {resp.json()}")
         except Exception as e:
             logger.error(f"Main Telegram webhook setup failed: {e}")
     else:

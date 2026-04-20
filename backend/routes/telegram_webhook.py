@@ -240,15 +240,66 @@ def is_hr_question(text: str) -> bool:
     return any(kw in text_lower for kw in HR_KEYWORDS)
 
 
+@router.post("/webhook/maya")
+async def handle_telegram_webhook_maya(request: Request, db: Session = Depends(get_db)):
+    """Maya HR Bot webhook — all HR, Hunt, Broadcast logic lives here."""
+    return await handle_telegram_webhook(request, db)
+
+
+@router.post("/webhook/gradus")
+async def handle_telegram_webhook_gradus(request: Request, db: Session = Depends(get_db)):
+    """
+    GradusMediaBot webhook — content approval callbacks only.
+    NEVER writes to hr_query_log. Group messages (HoReCa etc.) are silently dropped.
+    """
+    try:
+        data = await request.json()
+        logger.info(f"[GradusBot] Telegram webhook: {list(data.keys())}")
+
+        if "callback_query" in data:
+            callback_data = data["callback_query"].get("data", "")
+            logger.info(f"[GradusBot] Callback query: {callback_data}")
+            result = telegram_webhook_handler.handle_callback_query(
+                data["callback_query"], db
+            )
+            logger.info(f"[GradusBot] Callback processed: {result.get('status')}")
+            return result
+
+        elif "message" in data:
+            message = data["message"]
+            chat_id = message.get("chat", {}).get("id")
+            chat_type = message.get("chat", {}).get("type", "")
+            text_preview = message.get("text", "")[:50]
+            logger.info(
+                f"[GradusBot] Message ignored — chat_id={chat_id} type={chat_type} "
+                f"text='{text_preview}' (GradusBot handles callbacks only)"
+            )
+            return {"ok": True}
+
+        else:
+            logger.info(f"[GradusBot] Unknown update type: {list(data.keys())} — ignored")
+            return {"ok": True}
+
+    except Exception as e:
+        logger.error(f"[GradusBot] Webhook error: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+
 @router.post("/webhook")
 async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db)):
     """
     UNIFIED webhook handler for all Telegram updates
-    
+
+    ⚠️  DEPRECATED — use /webhook/maya or /webhook/gradus instead.
+    Kept for backwards compatibility until both bots are re-registered.
+
     Priority order:
     1. Callback queries (approval buttons) - Critical business logic
     2. Regular messages (Maya bot chat) - User interaction
     """
+    logger.warning(
+        "⚠️ Legacy /webhook hit — both bots should use /webhook/maya or /webhook/gradus"
+    )
     
     try:
         data = await request.json()

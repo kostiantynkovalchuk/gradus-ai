@@ -1,0 +1,188 @@
+# REPLIT AGENT — Fix: HoReCa group messages leaking into hr_query_log
+## Root cause confirmed: two bots share one webhook endpoint with no token discrimination
+
+---
+
+## CONFIRMED FACTS (do not re-investigate)
+
+- `TELEGRAM_BOT_TOKEN` = GradusMediaBot — admin in HoReCa group (-1003780525352)
+- `TELEGRAM_MAYA_BOT_TOKEN` = Maya HR bot — handles employee HR queries
+- Both bots are registered to the SAME webhook: `https://gradus-ai.onrender.com/api/telegram/webhook`
+- When owner writes in HoReCa group → GradusMediaBot receives it → sends to /api/telegram/webhook
+- Webhook does NOT check which bot token sent the request → logs everything to hr_query_log
+- Confirmed leaked row: user_id=441389791, query="Коллеги, велике прохання підписатися..."
+
+---
+
+## STEP 0 — AUDIT THE WEBHOOK HANDLER
+
+Read `backend/routes/telegram_webhook.py` and find the main webhook handler function.
+
+Report:
+1. How does Telegram send the bot token to the webhook?
+   - Is it in the URL path? e.g. `/api/telegram/webhook/{token}`
+   - Is it in a header? e.g. `X-Telegram-Bot-Api-Secret-Token`
+   - Or is there no token identification at all?
+
+2. At the top of the webhook handler — is there ANY check that identifies
+   which bot received the message before processing begins?
+
+3. Show me the first 30 lines of the webhook handler function.
+
+4. Is there a separate webhook route for GradusMediaBot / TELEGRAM_BOT_TOKEN?
+   Search for all routes with "webhook" in the path.
+   List every webhook route found with its path and handler function name.
+
+---
+
+## STEP 1 — SEPARATE THE WEBHOOK ENDPOINTS
+
+The fix is to give each bot its own webhook path so the handler knows
+which bot it's dealing with before doing anything else.
+
+### Option A — Path-based separation (PREFERRED)
+Register two separate routes:
+- `/api/telegram/webhook/maya` → handles TELEGRAM_MAYA_BOT_TOKEN only
+- `/api/telegram/webhook/gradus` → handles TELEGRAM_BOT_TOKEN only
+
+Then re-register webhooks with Telegram:
+```
+TELEGRAM_MAYA_BOT_TOKEN → https://gradus-ai.onrender.com/api/telegram/webhook/maya
+TELEGRAM_BOT_TOKEN      → https://gradus-ai.onrender.com/api/telegram/webhook/gradus
+```
+
+### Option B — Secret token header (if path separation is too invasive)
+Telegram supports `setWebhook` with `secret_token` parameter.
+The secret is sent as `X-Telegram-Bot-Api-Secret-Token` header on each request.
+Check which bot sent the request by reading this header.
+
+**Use Option A** unless the audit reveals a strong reason not to.
+
+---
+
+## STEP 2 — IMPLEMENT THE SEPARATION
+
+### 2a — Audit current routing logic first
+
+Before splitting, map what the current single webhook does for each message type:
+- Messages from Maya HR users (private chat with Maya bot) → goes to handle_hr_question
+- Messages from HUNT supergroup (-1003782695736) → goes to hunt handler
+- Messages from MAYA_BROADCAST_GROUP_ID → goes to broadcast handler
+- Messages from HoReCa group (-1003780525352) → should go to gradus handler ONLY
+
+Show me the routing if/elif chain in the current webhook handler.
+
+### 2b — Create `/api/telegram/webhook/maya` route
+
+This route handles ONLY Maya HR bot messages:
+- All existing Maya HR logic stays here unchanged
+- Add a guard at the very top:
+```python
+# Verify this request came from Maya HR bot
+# (Telegram doesn't send the token, but we know which endpoint was hit)
+# All logic below is Maya HR only — never log HoReCa group messages here
+```
+
+### 2c — Create `/api/telegram/webhook/gradus` route
+
+This route handles ONLY GradusMediaBot messages:
+- LinkedIn amplification notifications
+- HoReCa group admin functions
+- Alex Gradus bot interactions
+- NEVER writes to hr_query_log
+- Keep existing GradusMediaBot logic here
+
+### 2d — Keep old `/api/telegram/webhook` route temporarily
+
+Do NOT delete the old route yet. Add a deprecation log:
+```python
+logger.warning("⚠️ Legacy webhook hit — both bots should use separate endpoints")
+```
+This lets us verify traffic moves to new endpoints before removing.
+
+---
+
+## STEP 3 — RE-REGISTER WEBHOOKS WITH TELEGRAM
+
+After creating the new routes, register the correct URL for each bot.
+
+Write a one-time script (do not add to production code):
+```python
+import os, requests
+
+maya_token = os.environ['TELEGRAM_MAYA_BOT_TOKEN']
+gradus_token = os.environ['TELEGRAM_BOT_TOKEN']
+base = 'https://gradus-ai.onrender.com'
+
+# Register Maya HR bot
+r1 = requests.post(
+    f'https://api.telegram.org/bot{maya_token}/setWebhook',
+    json={'url': f'{base}/api/telegram/webhook/maya'}
+)
+print('Maya:', r1.json())
+
+# Register GradusMediaBot
+r2 = requests.post(
+    f'https://api.telegram.org/bot{gradus_token}/setWebhook',
+    json={'url': f'{base}/api/telegram/webhook/gradus'}
+)
+print('Gradus:', r2.json())
+```
+
+Run this script and show the output. Both should return `{"ok": true}`.
+
+---
+
+## STEP 4 — VERIFY
+
+1. Confirm webhook registrations:
+```
+GET https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/getWebhookInfo
+GET https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo
+```
+Each should show its own unique URL now.
+
+2. Test Maya HR bot — send "тест" to Maya HR bot in Telegram.
+   → Should appear in hr_query_log with correct user_name ✅
+
+3. Test HoReCa group — send "тест" in the HoReCa group.
+   → Should NOT appear in hr_query_log ✅
+   → Should be handled by gradus webhook handler ✅
+
+4. Run:
+```sql
+SELECT COUNT(*) FROM hr_query_log
+WHERE created_at > NOW() - INTERVAL '10 minutes'
+AND query = 'тест';
+```
+Should return 1 (only the Maya HR test), not 2.
+
+---
+
+## STEP 5 — CLEAN UP LEAKED ROWS
+
+After confirming the fix works, delete the confirmed leaked rows:
+
+```sql
+-- Preview first
+SELECT id, user_id, user_name, query, created_at
+FROM hr_query_log
+WHERE chat_id_source = -1003780525352  -- if chat_id was stored
+   OR query ILIKE '%підписатися на фб сторінку%'
+   OR query ILIKE '%телеграм канал та шерити%';
+
+-- Delete after preview confirmed
+-- (run only after I approve the SELECT output)
+```
+
+---
+
+## CONSTRAINTS
+
+- Do NOT delete the old `/api/telegram/webhook` route until new routes are verified working
+- Do NOT touch hr_query_log schema — no new columns needed
+- Do NOT change any Maya HR logic — only move it to a new route path
+- Do NOT change any GradusMediaBot logic — only move it to a new route path  
+- Migration NOT needed — this is routing code only
+- If Option A (path separation) would require changing more than 3 files, 
+  STOP and report before proceeding — use Option B instead
