@@ -34,10 +34,13 @@ UNSUBSCRIBE_URL = "https://gradusmedia.org/unsubscribe"
 
 def _cta_button(text: str, href: str) -> str:
     return (
-        f'<div style="text-align:center;margin:28px 0;">'
-        f'<a href="{href}" style="display:inline-block;padding:14px 32px;'
-        f'background-color:#c9a84c;color:#0f0f1a;text-decoration:none;'
-        f'border-radius:6px;font-weight:bold;font-size:16px;">{text}</a></div>'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        f' border="0" style="margin:28px 0;">'
+        f'<tr><td align="center">'
+        f'<a href="{href}" style="display:inline-block;padding:16px 32px;'
+        f'background-color:#c9a84c;color:#000000;text-decoration:none;'
+        f'border-radius:8px;font-weight:bold;font-size:16px;">{text}</a>'
+        f'</td></tr></table>'
     )
 
 
