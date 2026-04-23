@@ -342,10 +342,15 @@ def generate_alternatives(
             msg.usage.input_tokens, msg.usage.output_tokens, duration_ms,
         )
 
+        raw_alt = msg.content[0].text.strip()
+        # Strip markdown fences if model wraps response in ```json ... ```
+        if raw_alt.startswith("```"):
+            raw_alt = re.sub(r"^```(?:json)?\s*", "", raw_alt)
+            raw_alt = re.sub(r"\s*```$", "", raw_alt).strip()
         try:
-            result = json.loads(msg.content[0].text.strip())
+            result = json.loads(raw_alt)
         except json.JSONDecodeError:
-            logger.warning("[SolCon] Alternative JSON parse failed")
+            logger.warning(f"[SolCon] Alternative JSON parse failed, raw={raw_alt[:200]!r}")
             continue
 
         grounding = result.get("grounding_status", "ungrounded")
