@@ -223,6 +223,7 @@ def scan_document(
     if rejected_count:
         logger.info(f"[SolCon] Guardrail §10.1: rejected {rejected_count} finding(s) for doc={document_id}")
 
+    accepted = _remove_subsumed_findings(accepted)
     return accepted, rejected_count
 
 
@@ -324,7 +325,7 @@ def generate_alternatives(
         try:
             msg = client.messages.create(
                 model=ANTHROPIC_ALT_MODEL,
-                max_tokens=1024,
+                max_tokens=2048,
                 system=ALT_SYSTEM,
                 messages=[{"role": "user", "content": user_msg}],
             )
@@ -462,6 +463,54 @@ def generate_legal_opinion(
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+_RANGE_PARSE = re.compile(
+    r"^п?\.?\s*(\d{1,2})\.(\d{1,3})\s*[–\-]\s*(?:\d+\.)?(\d{1,3})"
+)
+_SUB_PARSE = re.compile(
+    r"^п?\.?\s*(\d{1,2})\.(\d{1,3})(?:[–\-]|$|\s)"
+)
+
+
+def _remove_subsumed_findings(findings: list[dict]) -> list[dict]:
+    """
+    Post-processing guardrail: if a finding's clause_ref is a specific sub-clause
+    (e.g. '9.6') that falls inside an already-reported range finding (e.g. '9.3–9.11'),
+    remove the duplicate.
+
+    This enforces the SCAN_SYSTEM instruction that penalty blocks must be reported
+    as ONE range finding, not as individual sub-clause findings.
+    """
+    ranges: list[tuple] = []  # (section, start_sub, end_sub)
+    for f in findings:
+        m = _RANGE_PARSE.match(f["clause_ref"].strip())
+        if m:
+            sec, start, end = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            ranges.append((sec, start, end))
+
+    if not ranges:
+        return findings
+
+    result = []
+    removed = 0
+    for f in findings:
+        ref = f["clause_ref"].strip()
+        if _RANGE_PARSE.match(ref):
+            result.append(f)
+            continue
+        m = _SUB_PARSE.match(ref)
+        if m:
+            sec, sub = int(m.group(1)), int(m.group(2))
+            if any(r_sec == sec and r_start <= sub <= r_end for r_sec, r_start, r_end in ranges):
+                logger.info(f"[SolCon] Removed subsumed finding: {ref!r} (covered by range)")
+                removed += 1
+                continue
+        result.append(f)
+
+    if removed:
+        logger.info(f"[SolCon] Range-subsumption filter: removed {removed} finding(s)")
+    return result
+
 
 def _safe_num(val) -> Optional[float]:
     if val is None:

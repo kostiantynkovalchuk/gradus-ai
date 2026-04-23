@@ -343,6 +343,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "EXW",
             "full_name": "Ex Works",
+            "ua_header": (
+                "EXW (Франко-завод) — умова INCOTERMS 2020\n"
+                "Місце: приміщення/завод продавця (склад, фабрика)\n"
+                "Ризик переходить: з моменту надання товару покупцю на складі продавця\n"
+                "Транспорт: будь-який вид транспорту"
+            ),
             "named_place": "at seller's premises or another named place (works, factory, warehouse)",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -355,6 +361,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "FCA",
             "full_name": "Free Carrier (seller's premises)",
+            "ua_header": (
+                "FCA (Франко-перевізник, місце продавця) — умова INCOTERMS 2020\n"
+                "Місце: приміщення продавця (завантаженим на транспорт)\n"
+                "Ризик переходить: з моменту завантаження товару на транспортний засіб перевізника\n"
+                "Транспорт: будь-який вид транспорту; рекомендовано для контейнерів замість FOB"
+            ),
             "named_place": "seller's premises",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -367,6 +379,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "FCA",
             "full_name": "Free Carrier (any other place)",
+            "ua_header": (
+                "FCA (Франко-перевізник, інше місце) — умова INCOTERMS 2020\n"
+                "Місце: погоджене місце, відмінне від приміщення продавця\n"
+                "Ризик переходить: з моменту доставки товару у погоджене місце (нерозвантаженим)\n"
+                "Транспорт: будь-який вид транспорту; рекомендовано для контейнерів замість FOB"
+            ),
             "named_place": "any other named place",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -379,6 +397,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "FAS",
             "full_name": "Free Alongside Ship",
+            "ua_header": (
+                "FAS (Франко вздовж борту судна) — умова INCOTERMS 2020\n"
+                "Місце: порт відвантаження (вздовж борту судна)\n"
+                "Ризик переходить: з моменту розміщення товару вздовж борту судна у порту\n"
+                "Транспорт: тільки морський та річковий транспорт"
+            ),
             "named_place": "named port of shipment",
             "transport_mode": "sea_only",
             "seller_must": (
@@ -390,6 +414,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "FOB",
             "full_name": "Free On Board",
+            "ua_header": (
+                "FOB (Франко на борту судна) — умова INCOTERMS 2020\n"
+                "Місце: порт відвантаження (на борту судна)\n"
+                "Ризик переходить: з моменту завантаження товару на борт судна\n"
+                "Транспорт: тільки морський та річковий транспорт; для контейнерів — використовуйте FCA"
+            ),
             "named_place": "named port of shipment",
             "transport_mode": "sea_only",
             "seller_must": (
@@ -402,6 +432,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "CFR",
             "full_name": "Cost and Freight",
+            "ua_header": (
+                "CFR (Вартість і фрахт) — умова INCOTERMS 2020\n"
+                "Місце: порт призначення (фрахт сплачений продавцем)\n"
+                "Ризик переходить: з моменту завантаження на борт у порту відвантаження\n"
+                "Транспорт: тільки морський та річковий транспорт; для контейнерів — використовуйте CPT"
+            ),
             "named_place": "named port of destination",
             "transport_mode": "sea_only",
             "seller_must": "Deliver the goods on board the vessel at the port of shipment.",
@@ -414,6 +450,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "CIF",
             "full_name": "Cost, Insurance and Freight",
+            "ua_header": (
+                "CIF (Вартість, страхування і фрахт) — умова INCOTERMS 2020\n"
+                "Місце: порт призначення (фрахт і мінімальне страхування сплачені продавцем)\n"
+                "Ризик переходить: з моменту завантаження на борт у порту відвантаження\n"
+                "Транспорт: тільки морський та річковий транспорт; страхування мінімальне (Clause C)"
+            ),
             "named_place": "named port of destination",
             "transport_mode": "sea_only",
             "seller_must": (
@@ -433,6 +475,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "CPT",
             "full_name": "Carriage Paid To",
+            "ua_header": (
+                "CPT (Перевезення сплачено до) — умова INCOTERMS 2020\n"
+                "Місце: погоджене місце призначення (фрахт сплачений продавцем)\n"
+                "Ризик переходить: з моменту передачі товару першому перевізнику\n"
+                "Транспорт: будь-який вид транспорту; рекомендовано для контейнерів замість CFR"
+            ),
             "named_place": "named place of destination",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -448,6 +496,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "CIP",
             "full_name": "Carriage and Insurance Paid To",
+            "ua_header": (
+                "CIP (Перевезення і страхування сплачено до) — умова INCOTERMS 2020\n"
+                "Місце: погоджене місце призначення (фрахт і максимальне страхування сплачені)\n"
+                "Ризик переходить: з моменту передачі товару першому перевізнику\n"
+                "Транспорт: будь-який вид транспорту; страхування максимальне (Clause A, ширше ніж CIF)"
+            ),
             "named_place": "named place of destination",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -467,6 +521,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "DAP",
             "full_name": "Delivered At Place",
+            "ua_header": (
+                "DAP (Поставка в місці призначення) — умова INCOTERMS 2020\n"
+                "Місце: погоджене місце призначення (нерозвантаженим, митниця покупця)\n"
+                "Ризик переходить: з моменту надання товару у розпорядження покупця нерозвантаженим\n"
+                "Транспорт: будь-який вид транспорту; митне оформлення на імпорт — обов'язок покупця"
+            ),
             "named_place": "named place of destination",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -482,6 +542,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "DPU",
             "full_name": "Delivered at Place Unloaded",
+            "ua_header": (
+                "DPU (Поставка з розвантаженням у місці призначення) — умова INCOTERMS 2020\n"
+                "Місце: погоджене місце призначення (розвантаженим, митниця покупця)\n"
+                "Ризик переходить: з моменту розвантаження товару у місці призначення\n"
+                "Транспорт: будь-який вид транспорту; єдина умова, де продавець зобов'язаний розвантажити товар"
+            ),
             "named_place": "named place of destination (unloaded)",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -500,6 +566,12 @@ def ingest_incoterms_summary(source_id: int) -> int:
         {
             "rule_code": "DDP",
             "full_name": "Delivered Duty Paid",
+            "ua_header": (
+                "DDP (Поставка зі сплатою мита) — умова INCOTERMS 2020\n"
+                "Місце: погоджене місце призначення (з митним оформленням продавця)\n"
+                "Ризик переходить: з моменту надання товару покупцю в місці призначення (очищено від мита)\n"
+                "Транспорт: будь-який вид транспорту; максимальні зобов'язання продавця"
+            ),
             "named_place": "named place of destination",
             "transport_mode": "any_mode",
             "seller_must": (
@@ -528,7 +600,7 @@ def ingest_incoterms_summary(source_id: int) -> int:
     vectors = []
     for i, rule in enumerate(RULES):
         mode_label = "Any mode of transport" if rule["transport_mode"] == "any_mode" else "Sea and inland waterway only"
-        chunk_text = (
+        english_body = (
             f"INCOTERMS 2020 — {rule['rule_code']} ({rule['full_name']})\n"
             f"Named place: {rule['named_place']}\n"
             f"Mode of transport: {mode_label}\n\n"
@@ -536,8 +608,11 @@ def ingest_incoterms_summary(source_id: int) -> int:
             f"Risk transfers to buyer:\n{rule['risk_transfer']}"
         )
         if rule["notes"]:
-            chunk_text += f"\n\nNote: {rule['notes']}"
-        chunk_text += PROVENANCE_FOOTER
+            english_body += f"\n\nNote: {rule['notes']}"
+        english_body += PROVENANCE_FOOTER
+        # Bilingual header: 4 Ukrainian summary lines prepended so the embedding
+        # bridges Ukrainian-language contract queries to the English content.
+        chunk_text = rule["ua_header"] + "\n\n" + english_body
 
         article_ref = f"INCOTERMS {rule['rule_code']} — {rule['full_name']}"
         vec = _embed(chunk_text)
