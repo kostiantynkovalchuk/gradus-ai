@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>СОЛОМОН — Пошук практики ВС</title>
+<title>СОЛОМОН — Правова аналітика</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -25,6 +25,10 @@
     --text-muted:  #7a8fa8;
     --text-dim:    #aab5c3;
     --accent-red:  #c0392b;
+    --sev-critical:#c0392b;
+    --sev-high:    #e06c00;
+    --sev-medium:  #b8892a;
+    --sev-low:     #3a4d6e;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -36,7 +40,6 @@
     min-height: 100vh;
   }
 
-  /* Top rule */
   body::before {
     content: '';
     display: block;
@@ -45,7 +48,7 @@
   }
 
   .page {
-    max-width: 860px;
+    max-width: 960px;
     margin: 0 auto;
     padding: 52px 28px 80px;
   }
@@ -55,352 +58,269 @@
     display: flex;
     align-items: center;
     gap: 24px;
-    margin-bottom: 52px;
-    padding-bottom: 36px;
+    margin-bottom: 32px;
+    padding-bottom: 28px;
     border-bottom: 1px solid var(--border);
     animation: fadeDown 0.6s ease both;
   }
 
-  .logo-wrap {
-    flex-shrink: 0;
-    width: 72px;
-    height: 72px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .logo-wrap img {
-    width: 72px;
-    height: 72px;
-    display: block;
-  }
-
+  .logo-wrap { flex-shrink: 0; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; }
+  .logo-wrap img { width: 64px; height: 64px; display: block; }
   .header-text { flex: 1; }
-
   h1 {
     font-family: 'Cormorant Garamond', serif;
-    font-size: 38px;
-    font-weight: 700;
-    letter-spacing: 5px;
-    color: var(--navy);
-    text-transform: uppercase;
-    line-height: 1;
-    margin-bottom: 6px;
+    font-size: 36px; font-weight: 700;
+    letter-spacing: 5px; color: var(--navy);
+    text-transform: uppercase; line-height: 1; margin-bottom: 4px;
   }
-
-  .tagline {
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--text-muted);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-  }
-
+  .tagline { font-size: 11px; font-weight: 400; color: var(--text-muted); letter-spacing: 2px; text-transform: uppercase; }
   .header-badge {
-    flex-shrink: 0;
-    padding: 6px 14px;
-    border: 1px solid var(--gold-border);
-    border-radius: 4px;
-    background: var(--gold-dim);
-    font-size: 11px;
-    color: var(--gold);
-    font-weight: 500;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
+    flex-shrink: 0; padding: 6px 14px; border: 1px solid var(--gold-border);
+    border-radius: 4px; background: var(--gold-dim); font-size: 11px;
+    color: var(--gold); font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase;
   }
 
-  /* ── Search ── */
-  .search-section {
-    margin-bottom: 40px;
-    animation: fadeUp 0.6s 0.1s ease both;
+  /* ── Tab navigation ── */
+  .tab-nav {
+    display: flex; gap: 0; margin-bottom: 36px;
+    border-bottom: 2px solid var(--border);
   }
-
-  .search-label {
-    font-size: 11px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 10px;
+  .tab-btn {
+    padding: 12px 24px; background: transparent; border: none;
+    font-family: 'DM Sans', sans-serif; font-size: 13px;
+    font-weight: 500; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent;
+    margin-bottom: -2px; transition: color 0.15s, border-color 0.15s;
   }
+  .tab-btn:hover { color: var(--navy); }
+  .tab-btn.active { color: var(--navy); border-bottom-color: var(--gold); font-weight: 600; }
 
+  /* ── Tab panels ── */
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; animation: fadeUp 0.25s ease both; }
+
+  /* ── Court search (existing styles) ── */
+  .search-section { margin-bottom: 40px; animation: fadeUp 0.6s 0.1s ease both; }
+  .search-label { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; }
   .search-wrap {
-    display: flex;
-    border: 1.5px solid var(--border-mid);
-    border-radius: 8px;
-    overflow: hidden;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    background: var(--bg);
-    margin-bottom: 14px;
+    display: flex; border: 1.5px solid var(--border-mid);
+    border-radius: 8px; overflow: hidden; transition: border-color 0.2s, box-shadow 0.2s;
+    background: var(--bg); margin-bottom: 14px;
   }
-
-  .search-wrap:focus-within {
-    border-color: var(--navy);
-    box-shadow: 0 0 0 3px #0d152810;
-  }
-
+  .search-wrap:focus-within { border-color: var(--navy); box-shadow: 0 0 0 3px #0d152810; }
   input[type=text] {
-    flex: 1;
-    padding: 15px 20px;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    font-size: 14.5px;
-    font-family: 'DM Sans', sans-serif;
-    font-weight: 300;
-    outline: none;
+    flex: 1; padding: 15px 20px; background: transparent; border: none;
+    color: var(--text); font-size: 14.5px; font-family: 'DM Sans', sans-serif;
+    font-weight: 300; outline: none;
   }
-
   input[type=text]::placeholder { color: var(--text-dim); }
-
   .search-btn {
-    padding: 0 28px;
-    background: var(--navy);
-    color: #fff;
-    border: none;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: background 0.2s;
-    white-space: nowrap;
+    padding: 0 28px; background: var(--navy); color: #fff; border: none;
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
+    letter-spacing: 2px; text-transform: uppercase; cursor: pointer;
+    transition: background 0.2s; white-space: nowrap;
   }
-
   .search-btn:hover { background: var(--navy-light); }
-  .search-btn:disabled {
-    background: var(--border-mid);
-    color: var(--text-dim);
-    cursor: not-allowed;
-  }
+  .search-btn:disabled { background: var(--border-mid); color: var(--text-dim); cursor: not-allowed; }
 
-  /* ── Chips ── */
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-  }
-
-  .chip-label {
-    font-size: 11px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    margin-right: 4px;
-    align-self: center;
-  }
-
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip-label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dim); margin-right: 4px; align-self: center; }
   .chip {
-    padding: 5px 13px;
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    color: var(--text-mid);
-    font-size: 12px;
-    font-family: 'DM Sans', sans-serif;
-    cursor: pointer;
-    transition: all 0.15s;
+    padding: 5px 13px; background: var(--bg-subtle); border: 1px solid var(--border);
+    border-radius: 20px; color: var(--text-mid); font-size: 12px;
+    font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.15s;
   }
+  .chip:hover { border-color: var(--navy); background: var(--navy); color: #fff; }
 
-  .chip:hover {
-    border-color: var(--navy);
-    background: var(--navy);
-    color: #fff;
-  }
-
-  /* ── Results ── */
-  .results-meta {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    margin-bottom: 20px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .results-count {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 26px;
-    font-weight: 600;
-    color: var(--navy);
-  }
-
-  .results-sub {
-    font-size: 12px;
-    color: var(--text-muted);
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
+  .results-meta { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+  .results-count { font-family: 'Cormorant Garamond', serif; font-size: 26px; font-weight: 600; color: var(--navy); }
+  .results-sub { font-size: 12px; color: var(--text-muted); letter-spacing: 1px; text-transform: uppercase; }
 
   .card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 22px 24px;
-    margin-bottom: 10px;
-    transition: border-color 0.15s, box-shadow 0.15s;
-    animation: fadeUp 0.3s ease both;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 22px 24px; margin-bottom: 10px;
+    transition: border-color 0.15s, box-shadow 0.15s; animation: fadeUp 0.3s ease both;
   }
-
-  .card:hover {
-    border-color: var(--border-mid);
-    box-shadow: 0 4px 20px #0d152808;
-  }
-
-  .card-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 6px;
-    gap: 12px;
-  }
-
-  .case-num {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--navy);
-  }
-
-  .case-date {
-    font-size: 12px;
-    color: var(--text-dim);
-    white-space: nowrap;
-    padding-top: 2px;
-    flex-shrink: 0;
-  }
-
-  .judge {
-    font-size: 12.5px;
-    color: var(--text-muted);
-    margin-bottom: 14px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .judge::before {
-    content: '';
-    display: inline-block;
-    width: 16px;
-    height: 1px;
-    background: var(--gold);
-    flex-shrink: 0;
-  }
-
+  .card:hover { border-color: var(--border-mid); box-shadow: 0 4px 20px #0d152808; }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; gap: 12px; }
+  .case-num { font-family: 'Cormorant Garamond', serif; font-size: 16px; font-weight: 600; color: var(--navy); }
+  .case-date { font-size: 12px; color: var(--text-dim); white-space: nowrap; padding-top: 2px; flex-shrink: 0; }
+  .judge { font-size: 12.5px; color: var(--text-muted); margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .judge::before { content: ''; display: inline-block; width: 16px; height: 1px; background: var(--gold); flex-shrink: 0; }
   .summary-text {
-    font-size: 13.5px;
-    color: var(--text-mid);
-    line-height: 1.7;
-    padding: 12px 16px;
-    background: var(--bg-subtle);
-    border-left: 2px solid var(--gold);
-    border-radius: 0 6px 6px 0;
-    margin-bottom: 14px;
-    font-style: italic;
+    font-size: 13.5px; color: var(--text-mid); line-height: 1.7;
+    padding: 12px 16px; background: var(--bg-subtle); border-left: 2px solid var(--gold);
+    border-radius: 0 6px 6px 0; margin-bottom: 14px; font-style: italic;
   }
-
-  .card-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .read-link {
-    font-size: 12px;
-    color: var(--text-muted);
-    text-decoration: none;
-    letter-spacing: 0.5px;
-    transition: color 0.15s;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-  }
-
+  .card-footer { display: flex; align-items: center; justify-content: space-between; }
+  .read-link { font-size: 12px; color: var(--text-muted); text-decoration: none; letter-spacing: 0.5px; transition: color 0.15s; display: inline-flex; align-items: center; gap: 5px; }
   .read-link:hover { color: var(--navy); }
-
-  .read-link::after {
-    content: '→';
-    transition: transform 0.15s;
-  }
-
+  .read-link::after { content: '→'; transition: transform 0.15s; }
   .read-link:hover::after { transform: translateX(3px); }
 
-  /* ── States ── */
-  .status {
-    text-align: center;
-    padding: 56px 0;
-  }
-
-  .loading-dots span {
-    display: inline-block;
-    width: 7px; height: 7px;
-    background: var(--navy);
-    border-radius: 50%;
-    margin: 0 3px;
-    animation: dot 1.2s ease-in-out infinite;
-  }
+  /* ── Shared state styles ── */
+  .status { text-align: center; padding: 56px 0; }
+  .loading-dots span { display: inline-block; width: 7px; height: 7px; background: var(--navy); border-radius: 50%; margin: 0 3px; animation: dot 1.2s ease-in-out infinite; }
   .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
   .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dot { 0%, 80%, 100% { transform: scale(0.5); opacity: 0.2; } 40% { transform: scale(1); opacity: 1; } }
+  .status-label { margin-top: 14px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); }
+  .empty-state { text-align: center; padding: 56px 0; color: var(--text-muted); font-size: 14px; }
+  .error-msg { padding: 20px 24px; background: #fdf2f2; border: 1px solid #f5c6c6; border-radius: 8px; color: var(--accent-red); font-size: 13.5px; }
 
-  @keyframes dot {
-    0%, 80%, 100% { transform: scale(0.5); opacity: 0.2; }
-    40% { transform: scale(1); opacity: 1; }
+  /* ── Contracts tab ── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
   }
-
-  .status-label {
-    margin-top: 14px;
-    font-size: 11px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--text-dim);
+  .section-title {
+    font-family: 'Cormorant Garamond', serif; font-size: 22px;
+    font-weight: 600; color: var(--navy);
   }
-
-  .empty-state {
-    text-align: center;
-    padding: 56px 0;
-    color: var(--text-muted);
-    font-size: 14px;
+  .btn {
+    padding: 8px 18px; border-radius: 6px; font-family: 'DM Sans', sans-serif;
+    font-size: 12px; font-weight: 500; letter-spacing: 1px; text-transform: uppercase;
+    cursor: pointer; transition: all 0.15s; border: none;
   }
+  .btn-primary { background: var(--navy); color: #fff; }
+  .btn-primary:hover { background: var(--navy-light); }
+  .btn-secondary { background: var(--bg-subtle); color: var(--text-mid); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--navy); color: var(--navy); }
+  .btn-danger { background: #fdf2f2; color: var(--accent-red); border: 1px solid #f5c6c6; }
+  .btn-sm { padding: 5px 12px; font-size: 11px; }
+  .btn-gold { background: var(--gold); color: #fff; }
+  .btn-gold:hover { background: var(--gold-light); }
 
-  .error-msg {
-    padding: 20px 24px;
-    background: #fdf2f2;
-    border: 1px solid #f5c6c6;
-    border-radius: 8px;
-    color: var(--accent-red);
-    font-size: 13.5px;
+  .eng-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 18px 22px; margin-bottom: 10px; cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .eng-card:hover { border-color: var(--gold-border); box-shadow: 0 4px 16px #0d152808; }
+  .eng-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .eng-name { font-family: 'Cormorant Garamond', serif; font-size: 17px; font-weight: 600; color: var(--navy); }
+  .eng-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 16px; flex-wrap: wrap; }
+  .eng-meta span::before { content: '· '; }
+  .eng-meta span:first-child::before { content: ''; }
+
+  .status-badge {
+    font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 20px; white-space: nowrap;
+  }
+  .status-triage       { background: #f0f4ff; color: var(--navy-light); }
+  .status-under_review { background: #fff8e1; color: #b8892a; }
+  .status-protocol_drafted { background: #e8f5e9; color: #2e7d32; }
+  .status-protocol_sent    { background: #e3f2fd; color: #1565c0; }
+  .status-agreed           { background: #e8f5e9; color: #1b5e20; }
+  .status-declined         { background: #fdf2f2; color: #c0392b; }
+  .status-archived         { background: var(--bg-subtle); color: var(--text-dim); }
+  .status-counterparty_responded { background: #f3e5f5; color: #6a1b9a; }
+
+  /* severity badges */
+  .sev { font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 2px 8px; border-radius: 3px; text-transform: uppercase; }
+  .sev-critical { background: #fdf2f2; color: var(--sev-critical); }
+  .sev-high     { background: #fff3e0; color: var(--sev-high); }
+  .sev-medium   { background: #fef9e7; color: var(--sev-medium); }
+  .sev-low      { background: #eaf1f8; color: var(--sev-low); }
+
+  /* finding card */
+  .finding-card {
+    border: 1px solid var(--border); border-radius: 6px; padding: 14px 18px;
+    margin-bottom: 8px; background: var(--bg-card);
+  }
+  .finding-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .finding-ref { font-family: 'Cormorant Garamond', serif; font-size: 15px; font-weight: 600; color: var(--navy); }
+  .finding-note { font-size: 13.5px; color: var(--text-mid); line-height: 1.65; margin-bottom: 10px; }
+  .finding-alt {
+    font-size: 12.5px; color: var(--text-mid); padding: 10px 14px;
+    background: var(--bg-subtle); border-left: 2px solid var(--gold); border-radius: 0 4px 4px 0;
+    margin-bottom: 8px; font-style: italic;
+  }
+  .finding-ai-tag { font-size: 10px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.5px; }
+  .finding-ungrounded { font-size: 11px; color: var(--accent-red); background: #fdf2f2; padding: 4px 10px; border-radius: 3px; }
+  .finding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border-mid); border-radius: 10px; padding: 40px;
+    text-align: center; cursor: pointer; transition: all 0.2s;
+    background: var(--bg-subtle);
+  }
+  .upload-zone:hover, .upload-zone.drag-over { border-color: var(--gold); background: var(--gold-dim); }
+  .upload-zone-label { font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+
+  /* Modal backdrop */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; background: #0d152860;
+    z-index: 100; align-items: center; justify-content: center;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--bg); border-radius: 10px; padding: 32px;
+    max-width: 520px; width: 90%; max-height: 90vh; overflow-y: auto;
+    box-shadow: 0 20px 60px #0d152830;
+    animation: fadeUp 0.2s ease both;
+  }
+  .modal-title { font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 700; color: var(--navy); margin-bottom: 20px; }
+  .form-row { margin-bottom: 16px; }
+  .form-label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; display: block; }
+  .form-input {
+    width: 100%; padding: 10px 14px; border: 1.5px solid var(--border-mid);
+    border-radius: 6px; font-family: 'DM Sans', sans-serif; font-size: 13.5px;
+    color: var(--text); background: var(--bg); outline: none; transition: border-color 0.15s;
+  }
+  .form-input:focus { border-color: var(--navy); }
+
+  /* workspace */
+  .workspace-header {
+    display: flex; align-items: center; gap: 14px; margin-bottom: 28px;
+    padding-bottom: 18px; border-bottom: 1px solid var(--border);
+  }
+  .workspace-back { cursor: pointer; color: var(--text-muted); font-size: 12px; letter-spacing: 1px; text-transform: uppercase; transition: color 0.15s; }
+  .workspace-back:hover { color: var(--navy); }
+  .workspace-title { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 700; color: var(--navy); }
+
+  .doc-list-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border: 1px solid var(--border); border-radius: 6px;
+    margin-bottom: 8px; background: var(--bg-card);
+  }
+  .doc-name { font-size: 13.5px; color: var(--navy); font-weight: 500; }
+  .doc-type { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .doc-analyzed { font-size: 11px; color: #2e7d32; margin-top: 2px; }
+  .doc-pending { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  .kpi-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .kpi { flex: 1; min-width: 100px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .kpi-val { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 700; color: var(--navy); line-height: 1; }
+  .kpi-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); margin-top: 4px; }
+
+  .disclaimer {
+    font-size: 11px; color: var(--text-dim); padding: 12px 16px;
+    background: var(--bg-subtle); border-radius: 6px; border-left: 2px solid var(--border-mid);
+    margin-top: 20px; font-style: italic;
   }
 
   /* ── Footer ── */
   footer {
-    margin-top: 64px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 11px;
-    color: var(--text-dim);
-    letter-spacing: 1px;
+    margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-dim); letter-spacing: 1px;
   }
 
   /* ── Animations ── */
-  @keyframes fadeDown {
-    from { opacity: 0; transform: translateY(-12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+  @keyframes fadeDown { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes fadeUp   { from { opacity: 0; transform: translateY(8px);  } to { opacity: 1; transform: translateY(0); } }
 
   @media (max-width: 600px) {
-    h1 { font-size: 28px; }
+    h1 { font-size: 26px; }
     .header-badge { display: none; }
     header { gap: 16px; }
-    .logo-wrap, .logo-wrap img { width: 52px; height: 52px; }
+    .logo-wrap, .logo-wrap img { width: 48px; height: 48px; }
+    .tab-btn { padding: 10px 14px; font-size: 11px; }
+    .modal { padding: 20px; }
+    .kpi-row { gap: 8px; }
+    .kpi-val { font-size: 22px; }
   }
 </style>
 </head>
@@ -409,40 +329,114 @@
 
   <header>
     <div class="logo-wrap">
-      <img src="data:image/png;base64,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" alt="Solomon">
+      <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAAB4CAIAAAC2BqGFAAAmfElEQVR42u2dZ3hU1fbw1z5leiZlkkx6IQTS6AmhJBTpBFAEEQUbiIoiNkBFsSBYURRUmoiioBTpIkrvhB5IIAnpPZNJps85u7wfJiBe7/0/93mcK9z7zvoSMpw5e5/fWWe1vc4OopSCT/7jgjgfg79FmA/03yQ+0D7QPtA+8YH2gfaB9iHwgfaB9okPtA+0D7RPfKB9oH3iA+0D7QPtEx9oH2if+ED7QPtA++S/AzRC6H+bkVcu0Aug3W73/zJmxlwu920GTSlFCJ06e2X/kVyEEPnfanoilCKEfjuSe/5yEULoL7Z0ecV0cHPf/hxjAgCMsf8VPWYIAGPy+nurRFG47aYDAUBcTPi5i9cWLfla4HlMyP8GaEwoz/Pz31t+/sKVmMiQv26pub+mywAAwUH+ye1i33p31S/7TyhEUcb4v52yjLFCFLbuPrjwg9XtEqL99X63WaMRQoQQlUqZ3C6OMDblqTdOncnzsGaUMIoZ/a9R8NYJMyJjrBDFwyfOPfrMAuC4pHZtFKKIMbmdGg0AlDIAyOiaCghcLnfOAy8eOnZOIYocL3C8yPEC/HdYbdY6YU5QiOIv+0+MnTwbE8o4rk9mZ6/4nr9q5jkOAcDAPulqlVJUCHaHY+TEZxcvmjuio1yTvysydXho8ihKZIR4uDPDbUYZoxwv1lze2nDtl/DU0d8fccx9/UOe5xWi6KdRDuyXfvMyb6dGcxxHKUtLSeiQkmC1OrRqhZMIW5c+fvWnJ7Gt4dK6+ypPr+J4EXEcMOYxJoxRYBTgtmg6A0YZ+92sIY7neLH8+JcXv71PttWX7Hhsz5rZGGk0atFitXXrnNwuIYZSynHcbdZoACCUiILwyKRRU09d0Ou1OhXkpNV3nLApsO3wsmPLCna+rNBH+kelK7XB6I/3lVHKgAFjAMwTwABCCNBf1n3W+qi3Pu8MAAFCCHEIcYDg1rM7LVUtlbmFe+cljf4otscTluKtEyofOV6bAAxkGU+bMpbjOBljgedvP2ie4yllk8YNXfnttguXrinUOrNLJdUccoZ2sdVedJjrc78YptBo9NHp/rGZfhFdNIb2Sv8IhSaI5xXoX8SwreqG0L//TgJjFBgDhDiO/weavwdt2C07TK7mMlvdleaKM9bKXGvtRdntZhRs1ecdLdXOmlNNdpEhobnFnN03/e6R/Smlf50yACCvvMNCCBEEIfdCwcAxT7oxSo0ks3pfCg1Qy0R715PfWhrKy86st1TmuppLsQSIA6VGpQ4IV/pHK/2MCm2ows+o8o9U6MIVfpFKvwiFxnDTxbfGLf8nbsYoAoRuPN2EyJKt3m2tdlkqXZYayd4oWauwrd5tq5Gs9W5bg+SwYRl4EakCYgNiM2PT79foQ7Z9Mkmnwk0t9k9OdLxUgfy1sH/birSkBIwxf4eARgjZ7PaDx86OuKvvtp8PPTTjDbNFCg/RGlQWiQ+b+dSjk+8boVMCAFBHVUt1XktNnqXmsqOpyG2tIa4WKlkRcSEAYIAQKLQGRUCsxpgW2GZQYJssdUAMAFCKEeLgz2rKGABDHA8A1vp8c/GvTcUH7bV5ruZKItkZA4oAcQIvanilTuEXrNRHaYMT9cYkv7BU/7AkUIQAQJONLFv1w7KV3wYrrfUObV2dNTREve7LBYOyuu/aezird7pWo/7rUYcXQHvM4ahJz82fPS2jc8qZiwUvvrZ4/5FzwCk0Kl6S3O3aRGX37tqnZ3pqSvvoqKgAHY9ufRicjfaWWqe1XrZUu5uLXY3XHI1X7fUFssOlCzKEpo0Jy5ihDevMGANGb1VtxijH8QBgLj1ceXxJQ8Euye5Q+AXqjKkaY6o2JEnpH6PQR6j9QrUBIcD9nnRggKZmV1Vldd6Vq4ePnfntcG5pebVSqXI6CcezIf3T35s/My054d..." />
     </div>
     <div class="header-text">
       <h1>Соломон</h1>
-      <p class="tagline">Верховний Суд України · Касаційна практика</p>
+      <p class="tagline">Правова аналітика · AVTD</p>
     </div>
-    <div class="header-badge">AI-пошук</div>
+    <div class="header-badge">AI-аналіз</div>
   </header>
 
-  <div class="search-section">
-    <div class="search-label">Запит природною мовою</div>
-    <div class="search-wrap">
-      <input type="text" id="query"
-        placeholder="Наприклад: скасування ППР нереальність операцій 2024-2025" />
-      <button class="search-btn" id="searchBtn" onclick="doSearch()">Шукати</button>
-    </div>
-    <div class="chips">
-      <span class="chip-label">Приклади:</span>
-      <button class="chip" onclick="setQuery(this)">скасування ППР нереальність операцій</button>
-      <button class="chip" onclick="setQuery(this)">АМКУ антиконкурентні дії господарські</button>
-      <button class="chip" onclick="setQuery(this)">стягнення збитків ДТП таксі</button>
-      <button class="chip" onclick="setQuery(this)">маркетинг документальна перевірка</button>
-    </div>
+  <!-- Tab navigation -->
+  <div class="tab-nav">
+    <button class="tab-btn" id="tab-court-btn" onclick="switchTab('court')">⚖ Судова практика</button>
+    <button class="tab-btn" id="tab-contracts-btn" onclick="switchTab('contracts')">📄 Договори поставки</button>
   </div>
 
-  <div id="results"></div>
+  <!-- ═══ TAB 1: Court search ═══ -->
+  <div class="tab-panel" id="tab-court">
+    <div class="search-section">
+      <div class="search-label">Запит природною мовою</div>
+      <div class="search-wrap">
+        <input type="text" id="query" placeholder="Наприклад: скасування ППР нереальність операцій 2024-2025" />
+        <button class="search-btn" id="searchBtn" onclick="doSearch()">Шукати</button>
+      </div>
+      <div class="chips">
+        <span class="chip-label">Приклади:</span>
+        <button class="chip" onclick="setQuery(this)">скасування ППР нереальність операцій</button>
+        <button class="chip" onclick="setQuery(this)">АМКУ антиконкурентні дії господарські</button>
+        <button class="chip" onclick="setQuery(this)">стягнення збитків ДТП таксі</button>
+        <button class="chip" onclick="setQuery(this)">маркетинг документальна перевірка</button>
+      </div>
+    </div>
+    <div id="results"></div>
+  </div>
+
+  <!-- ═══ TAB 2: Contracts ═══ -->
+  <div class="tab-panel" id="tab-contracts">
+    <div id="contracts-root"></div>
+  </div>
 
   <footer>
     <span>СОЛОМОН · Тільки для авторизованих користувачів</span>
-    <span>Касація · ВС України</span>
+    <span>AVTD · Правовий відділ</span>
   </footer>
 </div>
 
+<!-- New engagement modal -->
+<div class="modal-backdrop" id="new-eng-modal">
+  <div class="modal">
+    <div class="modal-title">Нова справа</div>
+    <div class="form-row">
+      <label class="form-label">Назва справи *</label>
+      <input class="form-input" id="eng-name" placeholder="Договір поставки — Levays 2026">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Контрагент (Покупець)</label>
+      <input class="form-input" id="eng-counterparty" placeholder="ТОВ «Назва»">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Наша юридична особа</label>
+      <input class="form-input" id="eng-entity" value="AVTD">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Дата договору</label>
+      <input class="form-input" id="eng-date" type="date">
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+      <button class="btn btn-secondary" onclick="closeModal('new-eng-modal')">Скасувати</button>
+      <button class="btn btn-primary" onclick="createEngagement()">Створити</button>
+    </div>
+  </div>
+</div>
+
 <script>
+// ══════════════════════════════════════════════════════════════
+//  TAB ROUTER
+// ══════════════════════════════════════════════════════════════
+const QP = new URLSearchParams(window.location.search);
+let _currentTab = QP.get('tab') || 'court';
+let _currentView = QP.get('view') || '';
+
+function switchTab(tab) {
+  _currentTab = tab;
+  _currentView = '';
+  history.pushState({}, '', '?tab=' + tab);
+  document.getElementById('tab-court').classList.toggle('active', tab === 'court');
+  document.getElementById('tab-contracts').classList.toggle('active', tab === 'contracts');
+  document.getElementById('tab-court-btn').classList.toggle('active', tab === 'court');
+  document.getElementById('tab-contracts-btn').classList.toggle('active', tab === 'contracts');
+  if (tab === 'contracts') renderContractsList();
+}
+
+function navigateTo(view, pushState = true) {
+  _currentView = view;
+  if (pushState) history.pushState({}, '', '?tab=contracts&view=' + encodeURIComponent(view));
+  renderContractsView(view);
+}
+
+window.addEventListener('popstate', () => {
+  const p = new URLSearchParams(window.location.search);
+  const t = p.get('tab') || 'court';
+  const v = p.get('view') || '';
+  if (t !== _currentTab) switchTab(t);
+  else if (v !== _currentView) { _currentView = v; renderContractsView(v); }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  COURT SEARCH (existing)
+// ══════════════════════════════════════════════════════════════
 function setQuery(el) {
   document.getElementById('query').value = el.textContent;
   doSearch();
@@ -455,70 +449,451 @@ document.getElementById('query').addEventListener('keydown', e => {
 async function doSearch() {
   const query = document.getElementById('query').value.trim();
   if (!query) return;
-
   const btn = document.getElementById('searchBtn');
   const out = document.getElementById('results');
-
-  btn.disabled = true;
-  btn.textContent = '…';
-  out.innerHTML = `
-    <div class="status">
-      <div class="loading-dots"><span></span><span></span><span></span></div>
-      <div class="status-label">Аналізую запит та шукаю рішення</div>
-    </div>`;
-
+  btn.disabled = true; btn.textContent = '…';
+  out.innerHTML = `<div class="status"><div class="loading-dots"><span></span><span></span><span></span></div><div class="status-label">Аналізую запит та шукаю рішення</div></div>`;
   try {
     const resp = await fetch('/law/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, summarize: true })
     });
     if (!resp.ok) throw new Error('Помилка сервера');
     const data = await resp.json();
-
     if (!data.results?.length) {
-      out.innerHTML = `<div class="empty-state">
-        Нічого не знайдено.<br>
-        <span style="font-size:12px; color:var(--text-dim); margin-top:6px; display:block;">
-          Спробуйте змінити формулювання або розширити часовий діапазон
-        </span>
-      </div>`;
+      out.innerHTML = `<div class="empty-state">Нічого не знайдено.<br><span style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;">Спробуйте змінити формулювання або розширити часовий діапазон</span></div>`;
       return;
     }
-
-    let html = `<div class="results-meta">
-      <span class="results-count">${data.count}</span>
-      <span class="results-sub">рішень · Верховний Суд · Касація</span>
-    </div>`;
-
+    let html = `<div class="results-meta"><span class="results-count">${data.count}</span><span class="results-sub">рішень · Верховний Суд · Касація</span></div>`;
     data.results.forEach((j, i) => {
       const date = (j.adjudication_date || '').substring(0,10);
-      const cause = j.cause_number || '—';
-      const judge = j.judge || '—';
-      const link = j.link || '#';
-      const summary = j.summary || '';
-      html += `
-        <div class="card" style="animation-delay:${i*0.07}s">
-          <div class="card-top">
-            <div class="case-num">Справа № ${cause}</div>
-            <div class="case-date">${date}</div>
-          </div>
-          <div class="judge">${judge}</div>
-          ${summary ? `<div class="summary-text">${summary}</div>` : ''}
-          <div class="card-footer">
-            <a class="read-link" href="${link}" target="_blank">Читати повністю</a>
-          </div>
-        </div>`;
+      const cause = j.cause_number || '—'; const judge = j.judge || '—';
+      const link = j.link || '#'; const summary = j.summary || '';
+      html += `<div class="card" style="animation-delay:${i*0.07}s">
+        <div class="card-top"><div class="case-num">Справа № ${cause}</div><div class="case-date">${date}</div></div>
+        <div class="judge">${judge}</div>
+        ${summary ? `<div class="summary-text">${summary}</div>` : ''}
+        <div class="card-footer"><a class="read-link" href="${link}" target="_blank">Читати повністю</a></div>
+      </div>`;
     });
-
     out.innerHTML = html;
   } catch(err) {
     out.innerHTML = `<div class="error-msg">⚠ ${err.message}</div>`;
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Шукати';
+    btn.disabled = false; btn.textContent = 'Шукати';
   }
 }
+
+// ══════════════════════════════════════════════════════════════
+//  CONTRACTS SPA
+// ══════════════════════════════════════════════════════════════
+let _engagements = [];
+let _currentEng = null;
+
+function renderContractsView(view) {
+  if (!view || view === 'list') renderContractsList();
+  else if (view === 'new') renderContractsList();
+  else if (view.startsWith('e/')) renderEngagementWorkspace(parseInt(view.slice(2)));
+  else if (view === 'buyers') renderBuyerProfiles();
+  else if (view === 'admin/eval') renderEvalPage();
+  else if (view === 'admin/audit') renderAuditPage();
+  else renderContractsList();
+}
+
+async function renderContractsList() {
+  const root = document.getElementById('contracts-root');
+  root.innerHTML = loadingHtml('Завантаження справ…');
+  try {
+    const r = await fetch('/api/contracts/engagements');
+    if (r.status === 401) { root.innerHTML = authPromptHtml(); return; }
+    _engagements = await r.json();
+    let html = `<div class="section-header">
+      <div class="section-title">Справи з договорів</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="navigateTo('buyers')">Покупці</button>
+        <button class="btn btn-secondary btn-sm" onclick="navigateTo('admin/eval')">Оцінка</button>
+        <button class="btn btn-primary btn-sm" onclick="openModal('new-eng-modal')">+ Нова справа</button>
+      </div>
+    </div>`;
+    if (!_engagements.length) {
+      html += `<div class="empty-state">Справ немає. Створіть першу.</div>`;
+    } else {
+      _engagements.forEach(e => {
+        const statusLabel = statusBadge(e.status);
+        html += `<div class="eng-card" onclick="navigateTo('e/${e.id}')">
+          <div class="eng-header">
+            <div class="eng-name">${esc(e.name)}</div>
+            ${statusLabel}
+          </div>
+          <div class="eng-meta">
+            <span>${esc(e.counterparty_name || '—')}</span>
+            <span>${e.doc_count || 0} документів</span>
+            <span>${e.finding_count || 0} ризиків</span>
+            <span>${fmtDate(e.created_at)}</span>
+          </div>
+        </div>`;
+      });
+    }
+    html += `<div class="disclaimer">Автоматичний аналіз Solomon. Підлягає перевірці юристом. Не є юридичною консультацією.</div>`;
+    root.innerHTML = html;
+  } catch(e) {
+    root.innerHTML = errorHtml(e.message);
+  }
+}
+
+async function renderEngagementWorkspace(eid) {
+  const root = document.getElementById('contracts-root');
+  root.innerHTML = loadingHtml('Завантаження справи…');
+  try {
+    const r = await fetch('/api/contracts/engagements/' + eid);
+    if (!r.ok) throw new Error('Справу не знайдено');
+    const data = await r.json();
+    _currentEng = data;
+    const eng = data.engagement;
+    const docs = data.documents || [];
+    const findings = data.findings || [];
+    const sevSum = data.severity_summary || {};
+
+    let html = `<div class="workspace-header">
+      <span class="workspace-back" onclick="navigateTo('list')">← Список справ</span>
+      <div>
+        <div class="workspace-title">${esc(eng.name)}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(eng.counterparty_name||'—')} · ${statusBadge(eng.status)}</div>
+      </div>
+    </div>`;
+
+    // KPIs
+    html += `<div class="kpi-row">
+      <div class="kpi"><div class="kpi-val">${docs.length}</div><div class="kpi-label">Документів</div></div>
+      <div class="kpi"><div class="kpi-val">${findings.length}</div><div class="kpi-label">Ризиків</div></div>
+      <div class="kpi" style="background:#fdf2f2"><div class="kpi-val" style="color:var(--sev-critical)">${sevSum.critical||0}</div><div class="kpi-label">Критичних</div></div>
+      <div class="kpi" style="background:#fff3e0"><div class="kpi-val" style="color:var(--sev-high)">${sevSum.high||0}</div><div class="kpi-label">Високих</div></div>
+    </div>`;
+
+    // Documents section
+    html += `<div class="section-header" style="margin-top:24px">
+      <div class="section-title" style="font-size:16px">Документи</div>
+      <button class="btn btn-secondary btn-sm" onclick="openUploadPanel(${eid})">+ Завантажити</button>
+    </div>`;
+    if (!docs.length) {
+      html += `<div class="empty-state" style="padding:30px 0">Завантажте документи для аналізу</div>`;
+    } else {
+      docs.forEach(d => {
+        const analyzed = d.analyzed_at ? `<div class="doc-analyzed">Проаналізовано ${fmtDate(d.analyzed_at)}</div>` : `<div class="doc-pending">Не проаналізовано</div>`;
+        html += `<div class="doc-list-item">
+          <div>
+            <div class="doc-name">${esc(d.original_filename)}</div>
+            <div class="doc-type">${docTypeLabel(d.document_type)}</div>
+            ${analyzed}
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="setIncludeAll(${d.id}, ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='triage').length > 0})">Протокол</button>
+          </div>
+        </div>`;
+      });
+    }
+
+    // Analyze button
+    const unanalyzed = docs.filter(d => !d.analyzed_at && ['main_contract','additional_agreement'].includes(d.document_type));
+    if (unanalyzed.length) {
+      html += `<div style="margin:16px 0">
+        <button class="btn btn-gold" onclick="startAnalysis(${eid})">🔍 Запустити аналіз (${unanalyzed.length} документ${unanalyzed.length===1?'':'ів'})</button>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:12px">~60-120 секунд</span>
+      </div>`;
+    }
+
+    // Findings
+    if (findings.length) {
+      html += `<div class="section-header" style="margin-top:28px">
+        <div class="section-title" style="font-size:16px">Ризики</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" onclick="downloadRiskNote(${eid})">↓ Ризики DOCX</button>
+          <button class="btn btn-secondary btn-sm" onclick="genOpinion(${eid})">Правовий висновок</button>
+        </div>
+      </div>`;
+
+      findings.forEach(f => {
+        const altHtml = f.proposed_alternative
+          ? `<div class="finding-alt">
+              <span class="finding-ai-tag">💡 AI suggestion — requires lawyer review:</span><br>
+              ${esc(f.proposed_alternative)}
+              ${f.legal_citations ? `<br><span style="font-size:11px;color:var(--text-muted)">${formatCitations(f.legal_citations)}</span>` : ''}
+            </div>`
+          : (f.grounding_status === 'ungrounded' && f.severity !== 'low'
+              ? `<div class="finding-ungrounded">⚠ Альтернатива не обґрунтована — правова база не знайдена</div>` : '');
+
+        html += `<div class="finding-card">
+          <div class="finding-header">
+            <span class="finding-ref">${esc(f.clause_ref)}</span>
+            <span class="sev sev-${f.severity}">${f.severity}</span>
+            <span style="font-size:11px;color:var(--text-muted)">${catLabel(f.category)}</span>
+            <span style="font-size:11px;color:var(--text-dim)">${esc(f.doc_name||'')}</span>
+          </div>
+          <div class="finding-note">${esc(f.short_note)}</div>
+          ${f.monetary_exposure_uah ? `<div style="font-size:12px;color:var(--sev-high);margin-bottom:8px">≈ ${Number(f.monetary_exposure_uah).toLocaleString('uk-UA')} грн</div>` : ''}
+          ${altHtml}
+          <div class="finding-actions">
+            <select class="form-input" style="width:auto;padding:4px 8px;font-size:11px" onchange="updateFindingState(${f.id}, this.value)">
+              ${stateOptions(f.workflow_state)}
+            </select>
+          </div>
+        </div>`;
+      });
+    } else if (docs.some(d => d.analyzed_at)) {
+      html += `<div class="empty-state" style="padding:30px 0">Ризиків не виявлено</div>`;
+    }
+
+    html += `<div class="disclaimer">Автоматичний аналіз Solomon. Підлягає перевірці юристом. Не є юридичною консультацією.</div>`;
+    root.innerHTML = html;
+
+    // Inline upload panel
+    window._uploadEid = eid;
+  } catch(e) {
+    root.innerHTML = errorHtml(e.message);
+  }
+}
+
+async function renderBuyerProfiles() {
+  const root = document.getElementById('contracts-root');
+  root.innerHTML = loadingHtml('Завантаження профілів…');
+  try {
+    const r = await fetch('/api/contracts/buyers');
+    const buyers = await r.json();
+    let html = `<div class="section-header">
+      <div class="section-title">Профілі покупців</div>
+      <button class="btn btn-secondary btn-sm" onclick="navigateTo('list')">← Назад</button>
+    </div>`;
+    if (!buyers.length) html += `<div class="empty-state">Профілів немає</div>`;
+    else {
+      buyers.forEach(b => {
+        html += `<div class="doc-list-item">
+          <div><div class="doc-name">${esc(b.buyer_name)}</div>
+          <div class="doc-type">${esc(b.legal_entity||'')} ${b.edrpou ? '· ЄДРПОУ ' + esc(b.edrpou) : ''}</div></div>
+        </div>`;
+      });
+    }
+    root.innerHTML = html;
+  } catch(e) { root.innerHTML = errorHtml(e.message); }
+}
+
+async function renderEvalPage() {
+  const root = document.getElementById('contracts-root');
+  root.innerHTML = loadingHtml('Завантаження оцінки…');
+  try {
+    const r = await fetch('/api/contracts/admin/eval');
+    const data = await r.json();
+    const c = data.counts || {};
+    const prec = data.precision != null ? (data.precision * 100).toFixed(1) + '%' : 'N/A';
+    let html = `<div class="section-header">
+      <div class="section-title">Eval Harness — §13</div>
+      <button class="btn btn-secondary btn-sm" onclick="navigateTo('list')">← Назад</button>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-val">${prec}</div><div class="kpi-label">Precision</div></div>
+      <div class="kpi"><div class="kpi-val">${c.true_positive||0}</div><div class="kpi-label">True Positive</div></div>
+      <div class="kpi"><div class="kpi-val">${c.false_positive||0}</div><div class="kpi-label">False Positive</div></div>
+      <div class="kpi"><div class="kpi-val">${c.wrong_category||0}</div><div class="kpi-label">Wrong Category</div></div>
+    </div>`;
+    if (data.judgments?.length) {
+      html += `<div class="section-title" style="font-size:15px;margin:20px 0 12px">Оцінки</div>`;
+      data.judgments.forEach(j => {
+        html += `<div class="doc-list-item">
+          <div><div class="doc-name">${esc(j.clause_ref)} · <span class="sev sev-${j.severity}">${j.severity}</span></div>
+          <div class="doc-type">${esc(j.short_note?.slice(0,80)||'')}</div></div>
+          <div class="sev sev-${j.judgment==='true_positive'?'low':'critical'}">${j.judgment}</div>
+        </div>`;
+      });
+    }
+    html += `<div class="disclaimer">Targets: Precision ≥ 0.75 · Recall ≥ 0.70 · Clause-ref accuracy = 1.0 · Grounding rate ≥ 0.60</div>`;
+    root.innerHTML = html;
+  } catch(e) { root.innerHTML = errorHtml(e.message); }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ACTIONS
+// ══════════════════════════════════════════════════════════════
+
+async function createEngagement() {
+  const name = document.getElementById('eng-name').value.trim();
+  if (!name) { alert('Введіть назву справи'); return; }
+  const body = {
+    name, counterparty_name: document.getElementById('eng-counterparty').value.trim(),
+    our_entity: document.getElementById('eng-entity').value.trim(),
+    engagement_date: document.getElementById('eng-date').value || null,
+  };
+  const r = await fetch('/api/contracts/engagements', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if (!r.ok) { alert('Помилка створення'); return; }
+  const data = await r.json();
+  closeModal('new-eng-modal');
+  navigateTo('e/' + data.id);
+}
+
+function openUploadPanel(eid) {
+  const root = document.getElementById('contracts-root');
+  const existing = document.getElementById('upload-panel');
+  if (existing) { existing.remove(); return; }
+  const panel = document.createElement('div');
+  panel.id = 'upload-panel';
+  panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:2px solid var(--gold);padding:20px 32px;z-index:50;box-shadow:0 -8px 32px #0d152820';
+  panel.innerHTML = `<div style="max-width:600px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <span style="font-weight:600;color:var(--navy)">Завантажити документ</span>
+      <span style="cursor:pointer;color:var(--text-muted)" onclick="this.parentElement.parentElement.parentElement.remove()">✕</span>
+    </div>
+    <input type="file" id="upload-file" accept=".doc,.docx,.pdf,.xls,.xlsx,.zip" style="margin-bottom:10px;width:100%">
+    <input class="form-input" id="upload-prefix" placeholder="Префікс додатку (напр. Дод.1)" style="margin-bottom:10px">
+    <button class="btn btn-primary" style="width:100%" onclick="doUpload(${eid})">Завантажити</button>
+    <div id="upload-status" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+  </div>`;
+  document.body.appendChild(panel);
+}
+
+async function doUpload(eid) {
+  const fileInput = document.getElementById('upload-file');
+  const prefix = document.getElementById('upload-prefix').value;
+  const status = document.getElementById('upload-status');
+  if (!fileInput.files.length) { alert('Оберіть файл'); return; }
+  status.textContent = 'Завантаження…';
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  fd.append('appendix_prefix', prefix);
+  const r = await fetch('/api/contracts/engagements/' + eid + '/upload', { method:'POST', body:fd });
+  if (!r.ok) { status.textContent = 'Помилка: ' + r.statusText; return; }
+  const data = await r.json();
+  status.textContent = `Завантажено ${data.created.length} документ(ів)`;
+  setTimeout(() => { document.getElementById('upload-panel')?.remove(); renderEngagementWorkspace(eid); }, 1000);
+}
+
+async function startAnalysis(eid) {
+  const r = await fetch('/api/contracts/engagements/' + eid + '/analyze', { method:'POST' });
+  if (!r.ok) { alert('Помилка запуску аналізу'); return; }
+  const data = await r.json();
+  alert(`Аналіз розпочато для ${data.document_count} документ(ів). Зачекайте 60-120 сек і оновіть сторінку.`);
+}
+
+async function updateFindingState(fid, state) {
+  await fetch('/api/contracts/findings/' + fid + '/state', {
+    method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ workflow_state: state })
+  });
+}
+
+async function downloadRiskNote(eid) {
+  window.open('/api/contracts/engagements/' + eid + '/risk-note.docx', '_blank');
+}
+
+async function genOpinion(eid) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Генерація…';
+  const r = await fetch('/api/contracts/engagements/' + eid + '/legal-opinion', { method:'POST' });
+  btn.disabled = false; btn.textContent = 'Правовий висновок';
+  if (!r.ok) { alert('Помилка генерації'); return; }
+  const data = await r.json();
+  window.open('/api/contracts/engagements/' + eid + '/legal-opinion/' + data.version + '.docx', '_blank');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODAL HELPERS
+// ══════════════════════════════════════════════════════════════
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-backdrop').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+});
+
+// ══════════════════════════════════════════════════════════════
+//  RENDERING HELPERS
+// ══════════════════════════════════════════════════════════════
+function loadingHtml(msg) {
+  return `<div class="status"><div class="loading-dots"><span></span><span></span><span></span></div><div class="status-label">${msg}</div></div>`;
+}
+function errorHtml(msg) { return `<div class="error-msg">⚠ ${esc(msg)}</div>`; }
+function authPromptHtml() {
+  return `<div style="max-width:360px;margin:60px auto">
+    <div class="modal-title" style="margin-bottom:20px">Вхід у Соломон · Договори</div>
+    <div class="form-row">
+      <label class="form-label">Логін</label>
+      <input class="form-input" id="login-user" placeholder="solomon" autocomplete="username">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Пароль</label>
+      <input class="form-input" id="login-pass" type="password" autocomplete="current-password"
+        onkeydown="if(event.key==='Enter') doLogin()">
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="doLogin()">Увійти</button>
+    <div id="login-error" style="color:var(--accent-red);font-size:12px;margin-top:8px;display:none">Невірні дані</div>
+  </div>`;
+}
+
+function doLogin() {
+  const u = (document.getElementById('login-user')?.value || '').trim();
+  const p = (document.getElementById('login-pass')?.value || '').trim();
+  if (!u || !p) return;
+  const token = btoa(u + ':' + p);
+  document.cookie = 'solcon_auth=' + token + '; path=/; SameSite=Lax';
+  renderContractsList();
+}
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString('uk-UA') : '—'; }
+
+function statusBadge(s) {
+  return `<span class="status-badge status-${s||'triage'}">${statusLabel(s)}</span>`;
+}
+function statusLabel(s) {
+  const m = {triage:'Огляд',under_review:'Аналіз',protocol_drafted:'Протокол готовий',
+    protocol_sent:'Протокол надіслано',counterparty_responded:'Відповідь отримана',
+    agreed:'Узгоджено',declined:'Відхилено',archived:'Архів'};
+  return m[s] || s;
+}
+function catLabel(c) {
+  const m = {penalty:'Штрафи',payment_terms:'Оплата',liability_shift:'Відповідальність',
+    ip_rights:'ІВ',force_majeure:'Форс-мажор',termination:'Розірвання',
+    returns_refusal:'Повернення',audit_rights:'Аудит',set_off:'Залік вимог',
+    tax_invoicing:'Податкова накл.',quality_acceptance:'Якість',
+    delivery_terms:'Доставка',other:'Інше'};
+  return m[c] || c;
+}
+function docTypeLabel(t) {
+  const m = {main_contract:'Договір поставки',additional_agreement:'Додаткова угода',
+    commercial_code:'Кодекс',specification:'Специфікація',price_list:'Прайс',
+    risks_note:'Ризики',legal_opinion:'Правовий висновок',
+    protocol_draft:'Протокол (чернетка)',protocol_returned:'Протокол (відповідь)',
+    protocol_agreed:'Протокол (узгоджений)',other:'Інше'};
+  return m[t] || t;
+}
+function stateOptions(current) {
+  const opts = [
+    ['triage','Огляд'],['included_in_protocol','До протоколу'],['excluded','Виключити'],
+    ['sent_to_counterparty','Надіслано контрагенту'],['counterparty_accepted','Прийнято'],
+    ['counterparty_rejected','Відхилено контрагентом'],['agreed','Узгоджено'],
+  ];
+  return opts.map(([v,l]) => `<option value="${v}" ${v===current?'selected':''}>${l}</option>`).join('');
+}
+function formatCitations(citsJson) {
+  try {
+    const cits = typeof citsJson === 'string' ? JSON.parse(citsJson) : citsJson;
+    if (!cits?.length) return '';
+    return cits.map(c => `<a href="${esc(c.official_url)}" target="_blank" style="color:var(--navy-light)">${esc(c.article_ref||c.source_title)}</a>`).join(' · ');
+  } catch { return ''; }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════════════════════
+(function init() {
+  const tab = new URLSearchParams(window.location.search).get('tab') || 'court';
+  document.getElementById('tab-court').classList.toggle('active', tab === 'court');
+  document.getElementById('tab-contracts').classList.toggle('active', tab === 'contracts');
+  document.getElementById('tab-court-btn').classList.toggle('active', tab === 'court');
+  document.getElementById('tab-contracts-btn').classList.toggle('active', tab === 'contracts');
+  if (tab === 'contracts') {
+    const view = new URLSearchParams(window.location.search).get('view') || 'list';
+    _currentView = view;
+    renderContractsView(view);
+  }
+})();
 </script>
 </body>
 </html>

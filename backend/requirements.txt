@@ -31,3 +31,4 @@ unidecode>=1.4.0
 uvicorn>=0.38.0
 tzdata
 Pillow>=10.0.0
+pdfplumber>=0.11.0

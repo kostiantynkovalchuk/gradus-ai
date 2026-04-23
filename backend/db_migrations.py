@@ -946,6 +946,167 @@ MIGRATIONS = [
             """,
         ]
     },
+    {
+        "version": "041_solomon_contracts",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS solcon_buyer_profiles (
+                id BIGSERIAL PRIMARY KEY,
+                buyer_name TEXT NOT NULL UNIQUE,
+                legal_entity TEXT,
+                edrpou TEXT,
+                known_risk_profile JSONB NOT NULL DEFAULT '[]',
+                notes TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_templates (
+                id BIGSERIAL PRIMARY KEY,
+                template_name TEXT NOT NULL,
+                owner_entity TEXT NOT NULL,
+                version TEXT,
+                canonical_text TEXT NOT NULL,
+                canonical_clauses JSONB NOT NULL DEFAULT '[]',
+                placeholder_fields JSONB NOT NULL DEFAULT '[]',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_engagements (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                buyer_profile_id BIGINT REFERENCES solcon_buyer_profiles(id),
+                counterparty_name TEXT,
+                our_entity TEXT,
+                engagement_date DATE,
+                status TEXT NOT NULL DEFAULT 'triage'
+                    CHECK (status IN ('triage','under_review','protocol_drafted',
+                                      'protocol_sent','counterparty_responded',
+                                      'agreed','declined','archived')),
+                created_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_eng_buyer ON solcon_engagements(buyer_profile_id)",
+            """CREATE TABLE IF NOT EXISTS solcon_documents (
+                id BIGSERIAL PRIMARY KEY,
+                engagement_id BIGINT NOT NULL REFERENCES solcon_engagements(id) ON DELETE CASCADE,
+                document_type TEXT NOT NULL
+                    CHECK (document_type IN (
+                        'main_contract','additional_agreement','commercial_code',
+                        'specification','price_list','risks_note','legal_opinion',
+                        'protocol_draft','protocol_returned','protocol_agreed','other'
+                    )),
+                original_filename TEXT NOT NULL,
+                mime_type TEXT,
+                storage_path TEXT NOT NULL,
+                raw_text TEXT NOT NULL,
+                clauses JSONB NOT NULL DEFAULT '[]',
+                parent_document_id BIGINT REFERENCES solcon_documents(id),
+                appendix_number TEXT,
+                analyzed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_doc_eng ON solcon_documents(engagement_id)",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_doc_parent ON solcon_documents(parent_document_id)",
+            """CREATE TABLE IF NOT EXISTS solcon_findings (
+                id BIGSERIAL PRIMARY KEY,
+                document_id BIGINT NOT NULL REFERENCES solcon_documents(id) ON DELETE CASCADE,
+                engagement_id BIGINT NOT NULL REFERENCES solcon_engagements(id) ON DELETE CASCADE,
+                clause_ref TEXT NOT NULL,
+                clause_text TEXT NOT NULL,
+                category TEXT NOT NULL
+                    CHECK (category IN (
+                        'penalty','payment_terms','liability_shift','ip_rights',
+                        'force_majeure','termination','returns_refusal','audit_rights',
+                        'set_off','tax_invoicing','quality_acceptance','delivery_terms','other'
+                    )),
+                severity TEXT NOT NULL CHECK (severity IN ('low','medium','high','critical')),
+                monetary_exposure_uah NUMERIC,
+                short_note TEXT NOT NULL,
+                proposed_alternative TEXT,
+                grounding_status TEXT NOT NULL DEFAULT 'ungrounded'
+                    CHECK (grounding_status IN ('grounded','ungrounded','not_applicable')),
+                legal_citations JSONB NOT NULL DEFAULT '[]',
+                workflow_state TEXT NOT NULL DEFAULT 'triage'
+                    CHECK (workflow_state IN (
+                        'triage','included_in_protocol','excluded',
+                        'sent_to_counterparty','counterparty_accepted',
+                        'counterparty_rejected','counterparty_modified','agreed'
+                    )),
+                lawyer_notes TEXT,
+                detected_by TEXT NOT NULL
+                    CHECK (detected_by IN ('llm_scan','buyer_profile','template_diff','manual')),
+                confidence NUMERIC,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_find_doc ON solcon_findings(document_id)",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_find_eng ON solcon_findings(engagement_id)",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_find_state ON solcon_findings(workflow_state)",
+            """CREATE TABLE IF NOT EXISTS solcon_protocols (
+                id BIGSERIAL PRIMARY KEY,
+                document_id BIGINT NOT NULL REFERENCES solcon_documents(id),
+                engagement_id BIGINT NOT NULL REFERENCES solcon_engagements(id),
+                version INTEGER NOT NULL DEFAULT 1,
+                finding_ids JSONB NOT NULL,
+                docx_storage_path TEXT,
+                generated_at TIMESTAMPTZ DEFAULT NOW(),
+                generated_by TEXT,
+                UNIQUE(document_id, version)
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_legal_opinions (
+                id BIGSERIAL PRIMARY KEY,
+                engagement_id BIGINT NOT NULL REFERENCES solcon_engagements(id),
+                version INTEGER NOT NULL DEFAULT 1,
+                content_md TEXT NOT NULL,
+                docx_storage_path TEXT,
+                generated_at TIMESTAMPTZ DEFAULT NOW(),
+                generated_by TEXT,
+                UNIQUE(engagement_id, version)
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_corpus_sources (
+                id BIGSERIAL PRIMARY KEY,
+                source_type TEXT NOT NULL
+                    CHECK (source_type IN ('ukr_law','incoterms_2020','case_law','other')),
+                title TEXT NOT NULL,
+                official_url TEXT,
+                version_date DATE,
+                chunk_count INTEGER DEFAULT 0,
+                last_ingested_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_llm_audit (
+                id BIGSERIAL PRIMARY KEY,
+                engagement_id BIGINT,
+                document_id BIGINT,
+                mode TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                duration_ms INTEGER,
+                result_status TEXT NOT NULL DEFAULT 'ok',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_retrieval_audit (
+                id BIGSERIAL PRIMARY KEY,
+                finding_id BIGINT,
+                query_hash TEXT,
+                top_k_results JSONB NOT NULL DEFAULT '[]',
+                used_citations JSONB NOT NULL DEFAULT '[]',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS solcon_eval_judgments (
+                id BIGSERIAL PRIMARY KEY,
+                finding_id BIGINT NOT NULL REFERENCES solcon_findings(id),
+                judgment TEXT NOT NULL
+                    CHECK (judgment IN ('true_positive','false_positive',
+                                        'wrong_category','wrong_severity')),
+                judged_by TEXT,
+                notes TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )""",
+        ]
+    },
 ]
 
 

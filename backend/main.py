@@ -401,6 +401,8 @@ from routes.admin_routes import router as admin_router
 app.include_router(admin_router)
 from solomon_router import router as solomon_router
 app.include_router(solomon_router)
+from solomon_contracts.router import router as solomon_contracts_router
+app.include_router(solomon_contracts_router)
 from routes.photo_report_webhook import router as photo_report_router
 app.include_router(photo_report_router)
 app.include_router(alex_tg_router)
