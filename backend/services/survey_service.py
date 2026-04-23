@@ -165,7 +165,7 @@ async def get_results(survey_id: str) -> dict:
 
 async def _build_scoreboard_text(survey_id: str) -> str:
     r = await get_results(survey_id)
-    kyiv_time = datetime.now(ZoneInfo("Europe/Kiev")).strftime("%H:%M")
+    kyiv_time = datetime.now(ZoneInfo("Europe/Kyiv")).strftime("%H:%M")
 
     def bar(pct: float) -> str:
         filled = int(pct / 10)
