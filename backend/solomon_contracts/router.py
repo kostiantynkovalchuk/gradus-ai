@@ -28,47 +28,132 @@ router = APIRouter(prefix="/api/contracts", tags=["solomon-contracts"])
 SOLOMON_USER = "solomon"
 SOLOMON_PASS = "gradus2026"
 
-# §8.1 — full list confirmed by head of law department 2026-04-23 (15 sources)
+# §8.1 — full list confirmed by head of law department 2026-04-23 (15 sources).
+#
+# article_filter:     list of (from_art, to_art) int ranges.  None = whole doc.
+# sub_article_filter: dict art_num → list of sub-article ID strings.
+#                     Used for Art 14 of the Tax Code (definition filtering).
+# URLs marked [UNVERIFIED] were assigned by pattern — redirect tracking in
+# rebuild will correct them and update official_url in solcon_corpus_sources.
 LAW_SOURCES = [
-    # Codes
-    {"title": "Цивільний кодекс України",
-     "url": "https://zakon.rada.gov.ua/laws/show/435-15"},
-    {"title": "Господарський кодекс України",
-     "url": "https://zakon.rada.gov.ua/laws/show/436-15"},
-    {"title": "Податковий кодекс України",
-     "url": "https://zakon.rada.gov.ua/laws/show/2755-17"},
-    # Consumer and food
-    {"title": "Закон України «Про захист прав споживачів»",
-     "url": "https://zakon.rada.gov.ua/laws/show/1023-12"},
-    {"title": "Закон України «Про основні принципи та вимоги до безпечності та якості харчових продуктів»",
-     "url": "https://zakon.rada.gov.ua/laws/show/771/97-%D0%B2%D1%80"},
-    {"title": "Закон України «Про інформацію для споживачів щодо харчових продуктів»",
-     "url": "https://zakon.rada.gov.ua/laws/show/2639-19"},
-    # Alcohol / spirits regulation (AVTD-specific)
-    {"title": "Закон України «Про державне регулювання виробництва і обігу спирту етилового, коньячного і плодового, алкогольних напоїв та тютюнових виробів»",
-     "url": "https://zakon.rada.gov.ua/laws/show/481/95-%D0%B2%D1%80"},
-    # Corporate
-    {"title": "Закон України «Про товариства з обмеженою та додатковою відповідальністю»",
-     "url": "https://zakon.rada.gov.ua/laws/show/2275-19"},
-    # E-documents
-    {"title": "Закон України «Про електронні документи та електронний документообіг»",
-     "url": "https://zakon.rada.gov.ua/laws/show/851-15"},
-    # IP
-    {"title": "Закон України «Про авторське право і суміжні права»",
-     "url": "https://zakon.rada.gov.ua/laws/show/3792-12"},
-    # Competition and trade
-    {"title": "Закон України «Про рекламу»",
-     "url": "https://zakon.rada.gov.ua/laws/show/270/96-%D0%B2%D1%80"},
-    {"title": "Закон України «Про захист від недобросовісної конкуренції»",
-     "url": "https://zakon.rada.gov.ua/laws/show/236/96-%D0%B2%D1%80"},
-    {"title": "Закон України «Про захист економічної конкуренції»",
-     "url": "https://zakon.rada.gov.ua/laws/show/2210-14"},
-    # Accounting
-    {"title": "Закон України «Про бухгалтерський облік та фінансову звітність в Україні»",
-     "url": "https://zakon.rada.gov.ua/laws/show/996-14"},
-    # Wartime restriction
-    {"title": "Постанова КМУ №187 «Про забезпечення захисту національної безпеки в сфері економіки»",
-     "url": "https://zakon.rada.gov.ua/laws/show/187-2022-%D0%BF"},
+    # ── Three codes: article-range whitelisted ─────────────────────────────────
+    {
+        "title": "Цивільний кодекс України",
+        "url": "https://zakon.rada.gov.ua/laws/show/435-15",
+        # Supply-contract-relevant articles only.
+        # Excluded: Books I-II (persons/family/objects), Book VI (inheritance).
+        "article_filter": [
+            (3,   21),    # General principles: good faith, pacta sunt servanda
+            (202, 241),   # Transactions — validity and invalidity
+            (509, 558),   # Obligations: general + security (penalty, surety)
+            (610, 654),   # Breach & liability; general contract provisions
+            (655, 726),   # Purchase-sale + supply (постачання) contracts
+            (901, 966),   # Service contracts (послуги)
+        ],
+        "sub_article_filter": None,
+    },
+    {
+        "title": "Господарський кодекс України",
+        "url": "https://zakon.rada.gov.ua/laws/show/436-15",
+        # Commercial supply + economic sanctions only.
+        "article_filter": [
+            (173, 199),   # Commercial obligations: general
+            (200, 212),   # Security of commercial obligations
+            (230, 241),   # Economic sanctions and liability
+            (264, 291),   # Commercial purchase-sale and supply
+        ],
+        "sub_article_filter": None,
+    },
+    {
+        "title": "Податковий кодекс України",
+        "url": "https://zakon.rada.gov.ua/laws/show/2755-17",
+        # Art 14 (definitions) → sub_article_filter keeps only the ~12 definitions
+        # that appear in actual supply-contract risk notes.
+        # Arts 134-141 (profit tax) and 185-201 (VAT) → chunked whole.
+        "article_filter": [
+            (14,  14),    # Definitions — sub_article_filter applied below
+            (134, 141),   # Profit tax: deductible costs, supply-related
+            (185, 201),   # VAT: taxable supply, base, rate, tax credit, tax invoice
+        ],
+        "sub_article_filter": {
+            14: [
+                "14.1.54",   # господарська діяльність
+                "14.1.71",   # дата виникнення права
+                "14.1.122",  # місце постачання товарів
+                "14.1.136",  # нерезидент
+                "14.1.139",  # особа (платник ПДВ)
+                "14.1.156",  # податкове зобов'язання
+                "14.1.159",  # податковий кредит
+                "14.1.162",  # поставка (для ПДВ)
+                "14.1.180",  # резидент
+                "14.1.185",  # розумна економічна причина
+                "14.1.191",  # постачання товарів
+                "14.1.202",  # товари
+            ],
+        },
+    },
+
+    # ── Twelve remaining laws: whole-document, preamble-stripped ──────────────
+    {
+        "title": "Закон України «Про захист прав споживачів»",
+        "url": "https://zakon.rada.gov.ua/laws/show/1023-12",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про основні принципи та вимоги до безпечності та якості харчових продуктів»",
+        "url": "https://zakon.rada.gov.ua/laws/show/771/97-%D0%B2%D1%80",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про інформацію для споживачів щодо харчових продуктів»",  # [UNVERIFIED URL]
+        "url": "https://zakon.rada.gov.ua/laws/show/2639-19",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про державне регулювання виробництва і обігу спирту етилового, коньячного і плодового, алкогольних напоїв та тютюнових виробів»",
+        "url": "https://zakon.rada.gov.ua/laws/show/481/95-%D0%B2%D1%80",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про товариства з обмеженою та додатковою відповідальністю»",
+        "url": "https://zakon.rada.gov.ua/laws/show/2275-19",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про електронні документи та електронний документообіг»",
+        "url": "https://zakon.rada.gov.ua/laws/show/851-15",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про авторське право і суміжні права»",  # [UNVERIFIED URL]
+        "url": "https://zakon.rada.gov.ua/laws/show/3792-12",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про рекламу»",
+        "url": "https://zakon.rada.gov.ua/laws/show/270/96-%D0%B2%D1%80",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про захист від недобросовісної конкуренції»",
+        "url": "https://zakon.rada.gov.ua/laws/show/236/96-%D0%B2%D1%80",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про захист економічної конкуренції»",
+        "url": "https://zakon.rada.gov.ua/laws/show/2210-14",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Закон України «Про бухгалтерський облік та фінансову звітність в Україні»",
+        "url": "https://zakon.rada.gov.ua/laws/show/996-14",
+        "article_filter": None, "sub_article_filter": None,
+    },
+    {
+        "title": "Постанова КМУ №187 «Про забезпечення захисту національної безпеки в сфері економіки»",
+        "url": "https://zakon.rada.gov.ua/laws/show/187-2022-%D0%BF",
+        "article_filter": None, "sub_article_filter": None,
+    },
 ]
 
 
@@ -659,7 +744,17 @@ async def rebuild_corpus(request: Request):
     def _do_rebuild():
         _corpus_jobs[job_id]["status"] = "running"
         try:
-            total = rebuild_corpus_namespace(on_progress=_progress)
+            # Build filter lookup keyed by both URL and title so rebuild can
+            # match even after canonical-URL redirect tracking updates the DB.
+            law_filters: dict = {}
+            for src in LAW_SOURCES:
+                entry = {
+                    "article_filter": src.get("article_filter"),
+                    "sub_article_filter": src.get("sub_article_filter"),
+                }
+                law_filters[src["url"]] = entry
+                law_filters[src["title"]] = entry
+            total = rebuild_corpus_namespace(on_progress=_progress, law_filters=law_filters)
             _job_progress(job_id, f"Rebuild complete — {total} chunks ingested. Running sanity queries…")
             sanity = run_sanity_queries()
             _job_done(job_id, {
@@ -670,8 +765,11 @@ async def rebuild_corpus(request: Request):
         except Exception as exc:
             _job_error(job_id, str(exc))
 
-    loop = asyncio.get_event_loop()
-    asyncio.create_task(loop.run_in_executor(None, _do_rebuild))
+    async def _async_rebuild():
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _do_rebuild)
+
+    asyncio.create_task(_async_rebuild())
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -778,8 +876,11 @@ async def upload_incoterms(request: Request, file: UploadFile = File(None)):
         except Exception as exc:
             _job_error(job_id, str(exc))
 
-    loop = asyncio.get_event_loop()
-    asyncio.create_task(loop.run_in_executor(None, _do_incoterms))
+    async def _async_incoterms():
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _do_incoterms)
+
+    asyncio.create_task(_async_incoterms())
     return {"job_id": job_id, "status": "queued"}
 
 
