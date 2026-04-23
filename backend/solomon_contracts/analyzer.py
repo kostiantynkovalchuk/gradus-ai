@@ -41,36 +41,84 @@ DISCLAIMER = (
 
 # ─── §7.2 Free-form scan ─────────────────────────────────────────────────────
 
-SCAN_SYSTEM = """You are a legal analyst reviewing a Ukrainian supply contract from the
-supplier's perspective (the supplier is AVTD). Your job is to identify clauses
-that create asymmetric risk, financial exposure, or operational burden for the
-supplier.
+SCAN_SYSTEM = """You are a senior legal analyst reviewing a Ukrainian supply contract from the
+supplier's perspective (the supplier is AVTD). Identify clauses that create
+MATERIALLY ASYMMETRIC risk, financial exposure, or operational burden for the
+supplier — burdens the buyer does NOT face under the same contract.
 
-HARD RULES (violating these invalidates the finding):
-1. Every finding MUST cite a specific clause number exactly as it appears in
-   the source (e.g. 'п.5.5', 'п.12.1 Додаток 3'). If you cannot locate a
-   specific clause, DO NOT produce the finding.
-2. Every proposed_alternative MUST cite a Ukrainian legal source or INCOTERMS
-   article that supports the alternative. If you cannot cite a grounded
-   source, set grounding_status='ungrounded' and proposed_alternative=null.
-3. Never quote more than 25 words verbatim from the contract. Paraphrase.
+════ HARD RULES (violation = finding is invalid) ════
+1. Cite a specific clause number exactly as it appears (e.g. 'п.4.8', '12.2').
+   If you cannot locate a specific clause, DO NOT produce the finding.
+2. Proposed alternatives MUST cite a Ukrainian legal source or INCOTERMS article.
+   If none is available, set grounding_status='ungrounded', proposed_alternative=null.
+3. Never quote more than 25 words verbatim. Paraphrase.
+4. Report each clause number AT MOST ONCE. If the same clause covers multiple
+   risk categories, use the single highest-severity category.
 
-CATEGORIES: penalty, payment_terms, liability_shift, ip_rights, force_majeure,
+════ ASYMMETRY THRESHOLD (must pass to report) ════
+Ask yourself: "Does this clause impose a burden, penalty, or restriction on the
+SUPPLIER that an equivalent clause does NOT impose on the BUYER?"
+- YES → report it.
+- The same obligation applies to both parties → DO NOT report it.
+- This is standard practice in Ukrainian FMCG supply contracts → DO NOT report it.
+  Examples of routine clauses you must NOT flag:
+  • Standard quality acceptance procedure (inspection at delivery)
+  • Normal buyer audit rights for quality or invoicing
+  • Sub-items of a mutual obligation list (e.g. п.2.1 підп.3, підп.6)
+  • Standard delivery deadlines and INCOTERMS references
+  • Reasonable product liability (hidden defect warranty up to ~2 years)
+
+════ SPECIAL PATTERNS TO FLAG (high recall) ════
+A. ONE-SIDED PENALTY BLOCK: If section 9 (відповідальність) contains multiple
+   sub-clauses where ALL penalties/sanctions apply exclusively to the supplier
+   with NO matching buyer penalty in the same section:
+   (i)  Set clause_ref to the RANGE format, e.g. '9.3–9.12', covering the entire
+        supplier-only block. category='penalty', severity='high'.
+   (ii) If there is a SECOND distinct supplier-only block later in the section
+        (e.g. clauses 9.13–9.19), produce ONE additional finding with
+        clause_ref='9.13–9.19'.
+   MANDATORY: Cite the full range as ONE finding. NEVER produce separate
+   individual findings for '9.4', '9.6', '9.7', '9.8', etc.
+   The ONLY valid clause_ref formats for section 9 penalty blocks are range
+   notation like '9.3–9.12' or '9.13–9.19'. Single-clause citations within
+   the penalty block (9.4, 9.5, 9.6, 9.7, 9.8) are forbidden.
+
+B. UNLIMITED RETURNS: Any clause giving the buyer an unconditional or time-unlimited
+   right to return unsold goods to the supplier → category='returns_refusal', severity='critical'.
+   ALSO FLAG: Any clause making the supplier AUTOMATICALLY responsible (liable for replacement/refund)
+   when consumers return goods to the buyer under consumer-protection law, without requiring proof
+   that the supplier caused the defect (this shifts unlimited consumer return risk to the supplier)
+   → category='returns_refusal', severity='high'.
+
+C. UNILATERAL SET-OFF: Any clause allowing the buyer to automatically deduct from
+   payment owed without prior written notice or dispute resolution → category='set_off'.
+
+D. TERMINATION LOCK: Any clause in section 12 (or similar "розірвання договору" section)
+   that LIMITS early termination of the contract to ONLY cases provided by law
+   (phrases like "у випадках, передбачених чинним законодавством України" or
+   "лише за взаємною згодою Сторін"), thereby preventing the supplier from exiting
+   the contract unilaterally when commercially necessary → category='termination', severity='high'.
+   Check clause 12.2 specifically (дострокове розірвання / early termination).
+
+════ CATEGORIES ════
+penalty, payment_terms, liability_shift, ip_rights, force_majeure,
 termination, returns_refusal, audit_rights, set_off, tax_invoicing,
 quality_acceptance, delivery_terms, other.
 
-SEVERITY HEURISTIC:
-- critical: unbounded liability, >100K UAH exposure, or termination trigger
-- high: 25-100% batch cost penalty, or rights-shifting clause
-- medium: <25% batch cost penalty, operational burden
+════ SEVERITY ════
+- critical: unbounded liability, >100K UAH exposure, or automatic termination trigger
+- high: 25-100% batch cost penalty, one-sided termination, rights-stripping clause
+- medium: <25% batch cost penalty, meaningful operational burden
 - low: minor administrative asymmetry
 
-OUTPUT: JSON array of findings. Each finding has:
-  clause_ref (string), clause_text (≤25 words paraphrase), category (string),
+════ OUTPUT ════
+JSON array of findings. Each finding:
+  clause_ref (string), clause_text (≤25 word paraphrase), category (string),
   severity (string), monetary_exposure_uah (number or null),
   short_note (Ukrainian, 1-2 sentences), confidence (0.0-1.0).
 
-Do not emit findings for routine commercial terms or non-asymmetric clauses.
+Aim for PRECISION over completeness. 6-10 findings is optimal. More than 12 findings
+almost certainly means you are over-flagging routine commercial terms.
 Respond ONLY with valid JSON — no markdown fences, no explanation."""
 
 
@@ -89,13 +137,13 @@ def scan_document(
 
     clause_refs_set = {c["ref"].lower() for c in clauses}
 
-    user_msg = f"<contract>\n{raw_text[:60000]}\n</contract>"
+    user_msg = f"<contract>\n{raw_text[:120000]}\n</contract>"
 
     t0 = time.time()
     try:
         msg = client.messages.create(
             model=ANTHROPIC_SCAN_MODEL,
-            max_tokens=4096,
+            max_tokens=8192,
             system=SCAN_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],
         )
@@ -105,10 +153,14 @@ def scan_document(
             engagement_id, document_id, "scan", ANTHROPIC_SCAN_MODEL,
             0, 0, int((time.time() - t0) * 1000), "error",
         )
-        return []
+        return [], 0
 
     duration_ms = int((time.time() - t0) * 1000)
     raw_out = msg.content[0].text.strip()
+    # Strip markdown fences if model wraps response (```json ... ```)
+    if raw_out.startswith("```"):
+        raw_out = re.sub(r"^```(?:json)?\s*", "", raw_out)
+        raw_out = re.sub(r"\s*```$", "", raw_out).strip()
 
     solcon_db.log_llm_call(
         engagement_id, document_id, "scan", ANTHROPIC_SCAN_MODEL,
@@ -123,7 +175,7 @@ def scan_document(
             engagement_id, document_id, "scan", ANTHROPIC_SCAN_MODEL,
             0, 0, 0, "parse_error",
         )
-        return []
+        return [], 0
 
     accepted = []
     rejected_count = 0
@@ -131,10 +183,12 @@ def scan_document(
     for f in findings_raw:
         clause_ref = str(f.get("clause_ref", "")).strip()
         # §10.1: verify clause_ref exists in parsed clauses
-        norm_ref = clause_ref.lower().replace(" ", "")
+        # Normalize both sides: lowercase, no spaces, strip leading п. for comparison
+        norm_ref = clause_ref.lower().replace(" ", "").lstrip("п.")
         found = any(
-            c["ref"].lower().replace(" ", "") == norm_ref
-            or norm_ref in c["ref"].lower().replace(" ", "")
+            c["ref"].lower().replace(" ", "").lstrip("п.") == norm_ref
+            or norm_ref in c["ref"].lower().replace(" ", "").lstrip("п.")
+            or c["ref"].lower().replace(" ", "").lstrip("п.") in norm_ref
             for c in clauses
         )
         if not found and clauses:

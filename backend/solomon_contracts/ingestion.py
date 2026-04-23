@@ -62,7 +62,18 @@ def extract_text_from_docx(path: Path) -> str:
 
 
 def extract_text_from_doc(path: Path) -> str:
-    """Try LibreOffice conversion first, fall back to python-docx."""
+    """Try antiword → LibreOffice → python-docx fallback chain."""
+    # 1. antiword (fastest, no headless overhead)
+    try:
+        result = subprocess.run(
+            ["antiword", str(path)],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    # 2. LibreOffice headless conversion
     try:
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
@@ -74,6 +85,7 @@ def extract_text_from_doc(path: Path) -> str:
                 return extract_text_from_docx(converted[0])
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
+    # 3. python-docx last-ditch (works on some .doc that are actually .docx-zipped)
     try:
         return extract_text_from_docx(path)
     except Exception:
@@ -176,6 +188,38 @@ def classify_document(filename: str, raw_text: str) -> str:
 
 
 # ─── Clause parsing ──────────────────────────────────────────────────────────
+
+CLAUSE_ANYWHERE_RE = re.compile(
+    r"(?:п\.\s*)?(?<!\d)(\d{1,2}\.\d{1,2}(?:\.\d{1,2}){0,2})(?!\d)"
+)
+
+def scan_all_refs(raw_text: str, appendix_prefix: str = "") -> list[dict]:
+    """
+    Find all X.Y[.Z] clause refs mentioned ANYWHERE in the text (cross-refs, etc.)
+    Used to supplement line-start parsing for table-formatted documents.
+    Returns list of {ref, text, parent_ref} with empty text (ref-only entries).
+    Filters out obvious dates (dd.mm.yyyy pattern).
+    """
+    DATE_RE = re.compile(r"\d{2}\.\d{2}\.\d{4}")
+    date_spans = {m.span() for m in DATE_RE.finditer(raw_text)}
+
+    seen = set()
+    clauses = []
+    for m in CLAUSE_ANYWHERE_RE.finditer(raw_text):
+        if m.span() in date_spans:
+            continue
+        ref = m.group(0).strip()
+        norm = re.sub(r"п\.\s*", "п.", ref).rstrip(".")
+        if norm in seen:
+            continue
+        seen.add(norm)
+        clauses.append({
+            "ref": appendix_prefix + norm,
+            "text": "",
+            "parent_ref": _parent_ref(norm),
+        })
+    return clauses
+
 
 def parse_clauses(raw_text: str, appendix_prefix: str = "") -> list[dict]:
     """

@@ -1,0 +1,103 @@
+{
+  "targets": {
+    "precision": {
+      "value": 0.875,
+      "target": 0.75,
+      "pass": true
+    },
+    "recall": {
+      "value": 0.875,
+      "target": 0.7,
+      "pass": true
+    },
+    "clause_ref_accuracy": {
+      "value": 1.0,
+      "target": 1.0,
+      "pass": true
+    }
+  },
+  "counts": {
+    "solomon_findings": 8,
+    "gt_findings": 8,
+    "true_positives": 7,
+    "false_positives": 1,
+    "missed_by_solomon": 1,
+    "rejected_by_guardrail": 0,
+    "clause_refs_invalid": 0
+  },
+  "missed_gt_refs": [
+    "п.9.13"
+  ],
+  "per_finding": [
+    {
+      "clause_ref": "4.8",
+      "category": "returns_refusal",
+      "severity": "critical",
+      "in_contract": true,
+      "gt_match": "4.8",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "6.3",
+      "category": "returns_refusal",
+      "severity": "high",
+      "in_contract": true,
+      "gt_match": "6.3",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "8.1",
+      "category": "payment_terms",
+      "severity": "critical",
+      "in_contract": true,
+      "gt_match": "8.1",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "8.3",
+      "category": "payment_terms",
+      "severity": "high",
+      "in_contract": true,
+      "gt_match": "8.3",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "8.4",
+      "category": "set_off",
+      "severity": "high",
+      "in_contract": true,
+      "gt_match": "8.4",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "9.3–9.11",
+      "category": "penalty",
+      "severity": "high",
+      "in_contract": true,
+      "gt_match": "п.9.3",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "12.2",
+      "category": "termination",
+      "severity": "high",
+      "in_contract": true,
+      "gt_match": "12.2",
+      "is_tp": true
+    },
+    {
+      "clause_ref": "2.1 підп.3",
+      "category": "payment_terms",
+      "severity": "medium",
+      "in_contract": true,
+      "gt_match": null,
+      "is_tp": false
+    }
+  ],
+  "metadata": {
+    "eval_timestamp": "2026-04-23T16:40:37Z",
+    "gold_set": "Levays",
+    "grounding_measured": false,
+    "note": "Grounding rate skipped — legal corpus not yet seeded. Re-run after task #7."
+  }
+}
