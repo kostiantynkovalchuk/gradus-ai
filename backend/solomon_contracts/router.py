@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -16,7 +18,7 @@ from pydantic import BaseModel
 from . import db as solcon_db
 from .analyzer import generate_alternatives, generate_legal_opinion, scan_document
 from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
-from .corpus import ingest_incoterms_pdf, ingest_law_text, rebuild_corpus_namespace
+from .corpus import ingest_incoterms_pdf, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
 from .ingestion import ingest_file, process_zip
 
 logger = logging.getLogger(__name__)
@@ -26,17 +28,47 @@ router = APIRouter(prefix="/api/contracts", tags=["solomon-contracts"])
 SOLOMON_USER = "solomon"
 SOLOMON_PASS = "gradus2026"
 
+# §8.1 — full list confirmed by head of law department 2026-04-23 (15 sources)
 LAW_SOURCES = [
-    {"title": "Цивільний кодекс України", "url": "https://zakon.rada.gov.ua/laws/show/435-15"},
-    {"title": "Господарський кодекс України", "url": "https://zakon.rada.gov.ua/laws/show/436-15"},
-    {"title": "Закон України «Про захист прав споживачів»", "url": "https://zakon.rada.gov.ua/laws/show/1023-12"},
-    {"title": "Закон України «Про безпечність та якість харчових продуктів»", "url": "https://zakon.rada.gov.ua/laws/show/771/97-%D0%B2%D1%80"},
-    {"title": "Закон України «Про товариства з обмеженою та додатковою відповідальністю»", "url": "https://zakon.rada.gov.ua/laws/show/2275-19"},
-    {"title": "Закон України «Про електронні документи та електронний документообіг»", "url": "https://zakon.rada.gov.ua/laws/show/851-15"},
-    {"title": "Закон України «Про авторське право і суміжні права»", "url": "https://zakon.rada.gov.ua/laws/show/3792-12"},
-    {"title": "Закон України «Про рекламу»", "url": "https://zakon.rada.gov.ua/laws/show/270/96-%D0%B2%D1%80"},
-    {"title": "Закон України «Про захист від недобросовісної конкуренції»", "url": "https://zakon.rada.gov.ua/laws/show/236/96-%D0%B2%D1%80"},
-    {"title": "Закон України «Про бухгалтерський облік та фінансову звітність в Україні»", "url": "https://zakon.rada.gov.ua/laws/show/996-14"},
+    # Codes
+    {"title": "Цивільний кодекс України",
+     "url": "https://zakon.rada.gov.ua/laws/show/435-15"},
+    {"title": "Господарський кодекс України",
+     "url": "https://zakon.rada.gov.ua/laws/show/436-15"},
+    {"title": "Податковий кодекс України",
+     "url": "https://zakon.rada.gov.ua/laws/show/2755-17"},
+    # Consumer and food
+    {"title": "Закон України «Про захист прав споживачів»",
+     "url": "https://zakon.rada.gov.ua/laws/show/1023-12"},
+    {"title": "Закон України «Про основні принципи та вимоги до безпечності та якості харчових продуктів»",
+     "url": "https://zakon.rada.gov.ua/laws/show/771/97-%D0%B2%D1%80"},
+    {"title": "Закон України «Про інформацію для споживачів щодо харчових продуктів»",
+     "url": "https://zakon.rada.gov.ua/laws/show/2639-19"},
+    # Alcohol / spirits regulation (AVTD-specific)
+    {"title": "Закон України «Про державне регулювання виробництва і обігу спирту етилового, коньячного і плодового, алкогольних напоїв та тютюнових виробів»",
+     "url": "https://zakon.rada.gov.ua/laws/show/481/95-%D0%B2%D1%80"},
+    # Corporate
+    {"title": "Закон України «Про товариства з обмеженою та додатковою відповідальністю»",
+     "url": "https://zakon.rada.gov.ua/laws/show/2275-19"},
+    # E-documents
+    {"title": "Закон України «Про електронні документи та електронний документообіг»",
+     "url": "https://zakon.rada.gov.ua/laws/show/851-15"},
+    # IP
+    {"title": "Закон України «Про авторське право і суміжні права»",
+     "url": "https://zakon.rada.gov.ua/laws/show/3792-12"},
+    # Competition and trade
+    {"title": "Закон України «Про рекламу»",
+     "url": "https://zakon.rada.gov.ua/laws/show/270/96-%D0%B2%D1%80"},
+    {"title": "Закон України «Про захист від недобросовісної конкуренції»",
+     "url": "https://zakon.rada.gov.ua/laws/show/236/96-%D0%B2%D1%80"},
+    {"title": "Закон України «Про захист економічної конкуренції»",
+     "url": "https://zakon.rada.gov.ua/laws/show/2210-14"},
+    # Accounting
+    {"title": "Закон України «Про бухгалтерський облік та фінансову звітність в Україні»",
+     "url": "https://zakon.rada.gov.ua/laws/show/996-14"},
+    # Wartime restriction
+    {"title": "Постанова КМУ №187 «Про забезпечення захисту національної безпеки в сфері економіки»",
+     "url": "https://zakon.rada.gov.ua/laws/show/187-2022-%D0%BF"},
 ]
 
 
@@ -520,63 +552,235 @@ async def create_buyer(request: Request, body: BuyerCreate):
     return {"id": result["id"]}
 
 
-# ─── Corpus admin ─────────────────────────────────────────────────────────────
+# ─── Corpus admin: background job registry ────────────────────────────────────
+# Per §4.1: all corpus operations run as background jobs → 202 + job_id.
+# In-memory dict is sufficient — these are ephemeral admin ops on a
+# single-server Render deployment.
+_corpus_jobs: dict[str, dict] = {}
 
-@router.post("/admin/corpus/seed-sources")
+
+def _new_job(op: str) -> str:
+    job_id = uuid.uuid4().hex[:10]
+    _corpus_jobs[job_id] = {
+        "job_id": job_id,
+        "op": op,
+        "status": "queued",
+        "progress": [],
+        "result": None,
+        "error": None,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+    }
+    return job_id
+
+
+def _job_progress(job_id: str, msg: str):
+    if job_id in _corpus_jobs:
+        _corpus_jobs[job_id]["progress"].append(msg)
+        logger.info(f"[CorpusJob {job_id}] {msg}")
+
+
+def _job_done(job_id: str, result: dict):
+    if job_id in _corpus_jobs:
+        _corpus_jobs[job_id]["status"] = "done"
+        _corpus_jobs[job_id]["result"] = result
+        _corpus_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _job_error(job_id: str, error: str):
+    if job_id in _corpus_jobs:
+        _corpus_jobs[job_id]["status"] = "error"
+        _corpus_jobs[job_id]["error"] = error
+        _corpus_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.get("/admin/corpus/jobs/{job_id}")
+async def get_corpus_job(request: Request, job_id: str):
+    """Poll the status of a background corpus job."""
+    _auth_check(request)
+    job = _corpus_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+# ─── Corpus admin: endpoints (202 + job_id) ───────────────────────────────────
+
+@router.post("/admin/corpus/seed-sources", status_code=202)
 async def seed_corpus_sources(request: Request):
-    """Seed the known law sources into solcon_corpus_sources (idempotent)."""
+    """
+    Seed all 15 Ukrainian law sources (§8.1) into solcon_corpus_sources.
+    Idempotent. Returns 202 + job_id; poll GET …/jobs/{id}.
+    """
     _auth_check(request)
-    inserted = 0
-    for src in LAW_SOURCES:
-        existing = solcon_db.fetchone(
-            "SELECT id FROM solcon_corpus_sources WHERE official_url=%s", (src["url"],)
-        )
-        if not existing:
-            solcon_db.execute(
-                """INSERT INTO solcon_corpus_sources (source_type, title, official_url)
-                   VALUES ('ukr_law', %s, %s)""",
-                (src["title"], src["url"]),
-            )
-            inserted += 1
-    return {"seeded": inserted, "total": len(LAW_SOURCES)}
+    job_id = _new_job("seed-sources")
+
+    async def _run():
+        _corpus_jobs[job_id]["status"] = "running"
+        try:
+            inserted = 0
+            skipped = 0
+            for src in LAW_SOURCES:
+                existing = solcon_db.fetchone(
+                    "SELECT id FROM solcon_corpus_sources WHERE official_url=%s",
+                    (src["url"],),
+                )
+                if not existing:
+                    solcon_db.execute(
+                        """INSERT INTO solcon_corpus_sources (source_type, title, official_url)
+                           VALUES ('ukr_law', %s, %s)""",
+                        (src["title"], src["url"]),
+                    )
+                    inserted += 1
+                    _job_progress(job_id, f"Inserted: {src['title']}")
+                else:
+                    skipped += 1
+            _job_done(job_id, {"inserted": inserted, "skipped": skipped, "total": len(LAW_SOURCES)})
+        except Exception as exc:
+            _job_error(job_id, str(exc))
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id, "status": "queued"}
 
 
-@router.post("/admin/corpus/rebuild")
+@router.post("/admin/corpus/rebuild", status_code=202)
 async def rebuild_corpus(request: Request):
+    """
+    Re-fetch all 15 laws from zakon.rada.gov.ua, re-chunk, re-embed, upsert to
+    Pinecone. Clears the namespace first (idempotent). Runs sanity queries after.
+    Returns 202 + job_id; poll GET …/jobs/{id}.
+    """
     _auth_check(request)
+    job_id = _new_job("rebuild")
+
+    def _progress(msg: str):
+        _job_progress(job_id, msg)
+
+    def _do_rebuild():
+        _corpus_jobs[job_id]["status"] = "running"
+        try:
+            total = rebuild_corpus_namespace(on_progress=_progress)
+            _job_progress(job_id, f"Rebuild complete — {total} chunks ingested. Running sanity queries…")
+            sanity = run_sanity_queries()
+            _job_done(job_id, {
+                "chunks_ingested": total,
+                "sanity": sanity,
+                "sanity_ok": sanity.get("_summary", {}).get("ok", False),
+            })
+        except Exception as exc:
+            _job_error(job_id, str(exc))
+
     loop = asyncio.get_event_loop()
-    asyncio.create_task(loop.run_in_executor(None, rebuild_corpus_namespace))
-    return {"message": "Corpus rebuild started in background"}
+    asyncio.create_task(loop.run_in_executor(None, _do_rebuild))
+    return {"job_id": job_id, "status": "queued"}
 
 
-@router.post("/admin/corpus/incoterms")
-async def upload_incoterms(request: Request, file: UploadFile = File(...)):
+@router.post("/admin/corpus/incoterms", status_code=202)
+async def upload_incoterms(request: Request, file: UploadFile = File(None)):
+    """
+    INCOTERMS 2020 ingestion — three-tier fallback per §3.4:
+      Tier 1 (PDF):  upload a .pdf file → pdfplumber extraction + chunk + embed
+      Tier 2 (text): upload a .txt file → plain-text chunk + embed
+      Tier 3 (defer): no file → mark source as 'pending' in DB, skip embedding
+    Returns 202 + job_id; poll GET …/jobs/{id}.
+    """
     _auth_check(request)
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="PDF required")
-    data = await file.read()
 
-    existing = solcon_db.fetchone(
-        "SELECT id FROM solcon_corpus_sources WHERE source_type='incoterms_2020'"
-    )
-    if existing:
-        source_id = existing["id"]
+    # Determine tier before reading the file
+    if file and file.filename:
+        fname = file.filename.lower()
+        if fname.endswith(".pdf"):
+            tier = "pdf"
+        elif fname.endswith(".txt"):
+            tier = "txt"
+        else:
+            raise HTTPException(status_code=400, detail="Upload a .pdf or .txt file, or omit file to defer.")
+        data = await file.read()
     else:
-        result = solcon_db.fetchone(
-            """INSERT INTO solcon_corpus_sources
-               (source_type, title, official_url)
+        tier = "defer"
+        data = b""
+
+    job_id = _new_job(f"incoterms-{tier}")
+
+    def _ensure_source() -> int:
+        existing = solcon_db.fetchone(
+            "SELECT id FROM solcon_corpus_sources WHERE source_type='incoterms_2020'"
+        )
+        if existing:
+            return existing["id"]
+        row = solcon_db.fetchone(
+            """INSERT INTO solcon_corpus_sources (source_type, title, official_url)
                VALUES ('incoterms_2020', 'INCOTERMS 2020', '')
                RETURNING id"""
         )
-        source_id = result["id"]
+        return row["id"]
+
+    def _do_incoterms():
+        _corpus_jobs[job_id]["status"] = "running"
+        try:
+            source_id = _ensure_source()
+            if tier == "pdf":
+                _job_progress(job_id, "Tier 1: parsing PDF with pdfplumber…")
+                count = ingest_incoterms_pdf(source_id, data)
+                solcon_db.execute(
+                    "UPDATE solcon_corpus_sources SET chunk_count=%s, last_ingested_at=NOW() WHERE id=%s",
+                    (count, source_id),
+                )
+                _job_done(job_id, {"tier": "pdf", "chunks_ingested": count, "source_id": source_id})
+
+            elif tier == "txt":
+                _job_progress(job_id, "Tier 2: ingesting plain text…")
+                from .corpus import _chunk_incoterms, _embed, _pinecone_index, CORPUS_NS
+                import re
+                text = data.decode("utf-8", errors="replace")
+                chunks = _chunk_incoterms(text)
+                idx = _pinecone_index()
+                rules = ["EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF"]
+                vectors = []
+                for i, chunk in enumerate(chunks):
+                    rule_match = next((r for r in rules if re.search(rf"\b{r}\b", chunk[:50])), None)
+                    article_ref = f"INCOTERMS {rule_match}" if rule_match else f"INCOTERMS chunk_{i}"
+                    vec = _embed(chunk)
+                    vectors.append({
+                        "id": f"incoterms_{source_id}_{i}",
+                        "values": vec,
+                        "metadata": {
+                            "source_id": source_id,
+                            "source_type": "incoterms_2020",
+                            "source_title": "INCOTERMS 2020",
+                            "article_ref": article_ref,
+                            "official_url": "",
+                            "chunk_text": chunk[:1000],
+                        },
+                    })
+                    if len(vectors) >= 50:
+                        idx.upsert(vectors=vectors, namespace=CORPUS_NS)
+                        vectors = []
+                if vectors:
+                    idx.upsert(vectors=vectors, namespace=CORPUS_NS)
+                count = len(chunks)
+                solcon_db.execute(
+                    "UPDATE solcon_corpus_sources SET chunk_count=%s, last_ingested_at=NOW() WHERE id=%s",
+                    (count, source_id),
+                )
+                _job_done(job_id, {"tier": "txt", "chunks_ingested": count, "source_id": source_id})
+
+            else:
+                # Tier 3: defer — mark source as present but not yet ingested
+                _job_progress(job_id, "Tier 3: deferring INCOTERMS — marked pending in DB.")
+                solcon_db.execute(
+                    "UPDATE solcon_corpus_sources SET last_ingested_at=NULL WHERE id=%s",
+                    (source_id,),
+                )
+                _job_done(job_id, {"tier": "defer", "chunks_ingested": 0, "source_id": source_id,
+                                   "note": "INCOTERMS not yet ingested — upload PDF or TXT to complete."})
+
+        except Exception as exc:
+            _job_error(job_id, str(exc))
 
     loop = asyncio.get_event_loop()
-    count = await loop.run_in_executor(None, ingest_incoterms_pdf, source_id, data)
-    solcon_db.execute(
-        "UPDATE solcon_corpus_sources SET chunk_count=%s, last_ingested_at=NOW() WHERE id=%s",
-        (count, source_id),
-    )
-    return {"chunks_ingested": count}
+    asyncio.create_task(loop.run_in_executor(None, _do_incoterms))
+    return {"job_id": job_id, "status": "queued"}
 
 
 # ─── Audit & eval ─────────────────────────────────────────────────────────────

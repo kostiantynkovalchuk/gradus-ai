@@ -167,17 +167,28 @@ def ingest_incoterms_pdf(source_id: int, pdf_bytes: bytes) -> int:
     return len(chunks)
 
 
-def rebuild_corpus_namespace():
-    """Delete and rebuild the entire corpus namespace from solcon_corpus_sources."""
+def rebuild_corpus_namespace(on_progress=None) -> int:
+    """
+    Delete and rebuild the entire corpus namespace from solcon_corpus_sources.
+    Laws are fetched from zakon.rada.gov.ua with redirect-following.
+    INCOTERMS are skipped here — upload separately via the incoterms endpoint.
+    on_progress: optional callable(str) for progress reporting.
+    Returns total chunks ingested.
+    """
     from . import db as solcon_db
     import requests
+
+    def _prog(msg: str):
+        logger.info(f"[SolCon] {msg}")
+        if on_progress:
+            on_progress(msg)
 
     idx = _pinecone_index()
     try:
         idx.delete(delete_all=True, namespace=CORPUS_NS)
-        logger.info("[SolCon] Corpus namespace cleared")
+        _prog("Corpus namespace cleared")
     except Exception as e:
-        logger.warning(f"[SolCon] Namespace clear failed: {e}")
+        _prog(f"Namespace clear warning: {e}")
 
     sources = solcon_db.fetchall(
         "SELECT id, title, official_url, source_type FROM solcon_corpus_sources"
@@ -186,20 +197,76 @@ def rebuild_corpus_namespace():
     for src in sources:
         try:
             if src["source_type"] == "incoterms_2020":
-                logger.info(f"[SolCon] Skipping INCOTERMS (PDF needed separately): {src['title']}")
+                _prog(f"Skipping INCOTERMS (upload separately): {src['title']}")
                 continue
-            resp = requests.get(src["official_url"], timeout=30, headers={"Accept": "text/html"})
+            _prog(f"Fetching: {src['title']} …")
+            resp = requests.get(
+                src["official_url"],
+                timeout=60,
+                headers={"Accept": "text/html", "User-Agent": "SolomonContracts/1.0"},
+                allow_redirects=True,
+            )
+            if resp.status_code != 200:
+                _prog(f"HTTP {resp.status_code} for {src['title']} — skipping")
+                continue
+            # Record canonical URL if redirect occurred
+            if resp.url != src["official_url"]:
+                solcon_db.execute(
+                    "UPDATE solcon_corpus_sources SET official_url=%s WHERE id=%s",
+                    (resp.url, src["id"]),
+                )
             text = _strip_html(resp.text)
-            count = ingest_law_text(src["id"], src["title"], src["official_url"], text, src["source_type"])
+            count = ingest_law_text(src["id"], src["title"], resp.url, text, src["source_type"])
             solcon_db.execute(
                 "UPDATE solcon_corpus_sources SET chunk_count=%s, last_ingested_at=NOW() WHERE id=%s",
                 (count, src["id"]),
             )
             total += count
-            logger.info(f"[SolCon] Ingested {count} chunks for: {src['title']}")
+            _prog(f"Ingested {count} chunks: {src['title']}")
         except Exception as e:
-            logger.error(f"[SolCon] Failed to ingest {src['title']}: {e}")
+            _prog(f"Failed to ingest {src['title']}: {e}")
     return total
+
+
+# ─── §7 Sanity queries (auto-run after rebuild) ───────────────────────────────
+
+SANITY_QUERIES = [
+    ("штраф за порушення умов поставки товару постачальником", "penalty_check"),
+    ("повернення товару покупцем права споживача", "returns_check"),
+    ("розірвання договору постачання дострокове одностороннє", "termination_check"),
+    ("відповідальність за якість безпечність харчових продуктів", "quality_check"),
+    ("INCOTERMS DDP зобов'язання постачальника умови доставки", "incoterms_check"),
+]
+
+
+def run_sanity_queries() -> dict:
+    """
+    Run 5 representative queries against the corpus and return plausibility scores.
+    A query is considered 'passed' if: hit_count >= 3 AND top_score >= 0.35.
+    Overall sanity passes when at least 4 of 5 queries pass.
+    """
+    results: dict = {}
+    for query, name in SANITY_QUERIES:
+        hits = retrieve_similar(query, top_k=5)
+        top_score = hits[0]["score"] if hits else 0.0
+        hit_count = len(hits)
+        passed = hit_count >= 3 and top_score >= 0.35
+        results[name] = {
+            "query": query,
+            "hit_count": hit_count,
+            "top_score": round(top_score, 4),
+            "top_source": hits[0]["source_title"] if hits else None,
+            "top_article": hits[0]["article_ref"] if hits else None,
+            "passed": passed,
+        }
+    passing = sum(1 for v in results.values() if v.get("passed", False))
+    results["_summary"] = {
+        "passing": passing,
+        "total": len(SANITY_QUERIES),
+        "ok": passing >= 4,
+    }
+    logger.info(f"[SolCon] Sanity queries: {passing}/{len(SANITY_QUERIES)} passed")
+    return results
 
 
 def _strip_html(html: str) -> str:
