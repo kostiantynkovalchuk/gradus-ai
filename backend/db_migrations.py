@@ -1107,6 +1107,30 @@ MIGRATIONS = [
             )""",
         ]
     },
+    {
+        "version": "042_incoterms_summary_schema",
+        "statements": [
+            # Add provenance_note column for corpus source attribution
+            """ALTER TABLE solcon_corpus_sources
+               ADD COLUMN IF NOT EXISTS provenance_note TEXT""",
+            # Extend source_type CHECK to include incoterms_2020_summary
+            """ALTER TABLE solcon_corpus_sources
+               DROP CONSTRAINT IF EXISTS solcon_corpus_sources_source_type_check""",
+            """ALTER TABLE solcon_corpus_sources
+               ADD CONSTRAINT solcon_corpus_sources_source_type_check
+               CHECK (source_type = ANY (
+                   ARRAY['ukr_law','incoterms_2020','incoterms_2020_summary','case_law','other']
+               ))""",
+            # Extend grounding_status CHECK to include awaiting_incoterms_primary_source
+            """ALTER TABLE solcon_findings
+               DROP CONSTRAINT IF EXISTS solcon_findings_grounding_status_check""",
+            """ALTER TABLE solcon_findings
+               ADD CONSTRAINT solcon_findings_grounding_status_check
+               CHECK (grounding_status IN (
+                   'grounded','ungrounded','not_applicable','awaiting_incoterms_primary_source'
+               ))""",
+        ]
+    },
 ]
 
 

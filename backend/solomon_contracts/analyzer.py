@@ -27,7 +27,7 @@ VALID_CATEGORIES = {
     "set_off", "tax_invoicing", "quality_acceptance", "delivery_terms", "other",
 }
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
-VALID_GROUNDING = {"grounded", "ungrounded", "not_applicable"}
+VALID_GROUNDING = {"grounded", "ungrounded", "not_applicable", "awaiting_incoterms_primary_source"}
 
 GROUNDED_URL_RE = re.compile(
     r"https?://(zakon\.rada\.gov\.ua|iccwbo\.org|incoterms|solcon_static)"
@@ -242,9 +242,36 @@ HARD RULES:
 3. Tag every alternative with 'AI suggestion — requires lawyer review'.
 4. Never fabricate URLs. Only cite URLs from the retrieved sources list.
 
+════ INCOTERMS 2020 SUMMARY SOURCES ════
+Some retrieved sources may have source_type='incoterms_2020_summary'.
+This source is an HDI Global SE summary card — it covers rule codes, risk-transfer
+points, and mode-of-transport selection ONLY. It does NOT include the full A1-A10 /
+B1-B10 obligation text from the official ICC publication.
+
+When an incoterms_2020_summary source is relevant:
+• You MAY recommend which INCOTERMS rule to adopt (e.g. "consider CIP rather than CIF
+  for container shipment") and cite the risk-transfer point or mode-of-transport rule.
+• You MUST NOT quote or imply any specific A-article or B-article obligation text as if
+  from the ICC primary source.
+• Every citation to this source must include the phrase:
+  "per INCOTERMS 2020 summary (HDI Global SE). Full rule text should be consulted
+  before adoption."
+• Set official_url to "" for incoterms_2020_summary citations (no canonical URL).
+
+When the finding SPECIFICALLY requires citing A-article or B-article obligation detail
+(e.g. exact insurance coverage level under CIF/CIP, precise cost allocation, named
+obligation from A4/A5/B4/B5), and only the summary source is available:
+  → Set grounding_status to "awaiting_incoterms_primary_source"
+  → Still provide the best-effort alternative text with the summary-level guidance
+  → Add a note in the alternative: "(Потребує перевірки за повним текстом ICC INCOTERMS 2020)"
+  → Citations may still reference the summary.
+
+For general rule recommendation (which term to use, where risk transfers):
+  → grounding_status = "grounded" is correct even with only the summary source.
+
 OUTPUT: JSON object:
 {
-  "grounding_status": "grounded" | "ungrounded",
+  "grounding_status": "grounded" | "ungrounded" | "awaiting_incoterms_primary_source",
   "alternative": "<clause text in Ukrainian or null>",
   "citations": [{"article_ref": "...", "official_url": "...", "source_title": "..."}]
 }
@@ -279,6 +306,7 @@ def generate_alternatives(
 
         sources_text = "\n\n".join(
             f"[{i+1}] {s['article_ref']} — {s['source_title']}\n"
+            f"source_type: {s.get('source_type', 'ukr_law')}\n"
             f"URL: {s['official_url']}\n"
             f"{s['chunk_text'][:600]}"
             for i, s in enumerate(top_sources)

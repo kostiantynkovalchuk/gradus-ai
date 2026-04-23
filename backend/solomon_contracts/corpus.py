@@ -214,6 +214,7 @@ def retrieve_similar(query: str, top_k: int = 5, namespace: str = CORPUS_NS) -> 
             {
                 "id": m.id,
                 "score": m.score,
+                "source_type": m.metadata.get("source_type", ""),
                 "source_title": m.metadata.get("source_title", ""),
                 "article_ref": m.metadata.get("article_ref", ""),
                 "official_url": m.metadata.get("official_url", ""),
@@ -323,6 +324,243 @@ def ingest_incoterms_pdf(source_id: int, pdf_bytes: bytes) -> int:
     return len(chunks)
 
 
+def ingest_incoterms_summary(source_id: int) -> int:
+    """
+    Ingest the HDI Global SE INCOTERMS 2020 summary card.
+
+    Source type: 'incoterms_2020_summary'
+    One chunk per rule (12 chunks: FCA has two place-variants).
+    Metadata fields:
+      rule_code     — e.g. 'EXW'
+      transport_mode — 'any_mode' | 'sea_only'
+      source_type   — 'incoterms_2020_summary'
+
+    Citation restriction: this source covers risk-transfer points and
+    mode-of-transport selection ONLY. It does NOT include A1-A10/B1-B10
+    obligation text.
+    """
+    RULES = [
+        {
+            "rule_code": "EXW",
+            "full_name": "Ex Works",
+            "named_place": "at seller's premises or another named place (works, factory, warehouse)",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Place the goods at the disposal of the buyer at the seller's premises, "
+                "not loaded on any collecting vehicle."
+            ),
+            "risk_transfer": "When the goods have been placed at the seller's premises.",
+            "notes": "",
+        },
+        {
+            "rule_code": "FCA",
+            "full_name": "Free Carrier (seller's premises)",
+            "named_place": "seller's premises",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Deliver the goods to the named carrier at the seller's premises and load them "
+                "on the means of transport provided by the carrier, cleared for export."
+            ),
+            "risk_transfer": "When the goods have been delivered to the carrier at the named place (loaded vehicle).",
+            "notes": "Recommended for containers and RO/RO instead of FAS or FOB.",
+        },
+        {
+            "rule_code": "FCA",
+            "full_name": "Free Carrier (any other place)",
+            "named_place": "any other named place",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Deliver the goods to the named carrier at any other place, cleared for export. "
+                "The seller is not responsible for unloading."
+            ),
+            "risk_transfer": "When the goods have been delivered unloaded at the carrier.",
+            "notes": "Recommended for containers and RO/RO instead of FAS or FOB.",
+        },
+        {
+            "rule_code": "FAS",
+            "full_name": "Free Alongside Ship",
+            "named_place": "named port of shipment",
+            "transport_mode": "sea_only",
+            "seller_must": (
+                "Place the goods alongside the vessel at the named port of shipment, cleared for export."
+            ),
+            "risk_transfer": "When the goods have been delivered alongside the vessel at the named port of shipment.",
+            "notes": "For RO/RO and containers, use FCA instead of FAS.",
+        },
+        {
+            "rule_code": "FOB",
+            "full_name": "Free On Board",
+            "named_place": "named port of shipment",
+            "transport_mode": "sea_only",
+            "seller_must": (
+                "Deliver the goods on board the vessel at the named port of shipment and bear all "
+                "risks of loss of or damage until that moment."
+            ),
+            "risk_transfer": "When the goods are on board the vessel nominated by the buyer.",
+            "notes": "For RO/RO and containers, use FCA instead of FOB.",
+        },
+        {
+            "rule_code": "CFR",
+            "full_name": "Cost and Freight",
+            "named_place": "named port of destination",
+            "transport_mode": "sea_only",
+            "seller_must": "Deliver the goods on board the vessel at the port of shipment.",
+            "risk_transfer": (
+                "When the goods are on board at the port of shipment; buyer receives goods "
+                "from the carrier at the named port of destination."
+            ),
+            "notes": "For RO/RO and containers, use CPT instead of CFR.",
+        },
+        {
+            "rule_code": "CIF",
+            "full_name": "Cost, Insurance and Freight",
+            "named_place": "named port of destination",
+            "transport_mode": "sea_only",
+            "seller_must": (
+                "In addition to CFR: procure marine insurance (minimum cover — Institute Cargo Clause C "
+                "including 10% anticipated profit) during the carriage. "
+                "If RESTRICTIONS or SANCTIONS prevent obtaining insurance cover, use CFR instead."
+            ),
+            "risk_transfer": (
+                "When the goods are on board at the port of shipment; buyer receives goods "
+                "from the carrier at the named port of destination."
+            ),
+            "notes": (
+                "Insurance under CIF is minimum cover (Clause C) only. "
+                "For RO/RO and containers, use CIP instead of CIF."
+            ),
+        },
+        {
+            "rule_code": "CPT",
+            "full_name": "Carriage Paid To",
+            "named_place": "named place of destination",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Deliver to the carrier nominated by the seller and pay the costs of carriage "
+                "necessary to bring the goods to the named place of destination."
+            ),
+            "risk_transfer": (
+                "When the goods have been delivered to the carrier; buyer receives them "
+                "from the carrier at the named place."
+            ),
+            "notes": "Any mode of transport. For RO/RO and containers, use CPT instead of CFR.",
+        },
+        {
+            "rule_code": "CIP",
+            "full_name": "Carriage and Insurance Paid To",
+            "named_place": "named place of destination",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "In addition to CPT: procure cargo insurance (maximum cover — Institute Cargo Clause A "
+                "including 10% anticipated profit) during the carriage. "
+                "If RESTRICTIONS or SANCTIONS prevent obtaining insurance cover, use CPT instead."
+            ),
+            "risk_transfer": (
+                "When the goods have been delivered to the carrier; buyer receives them "
+                "from the carrier at the named place."
+            ),
+            "notes": (
+                "Insurance under CIP is maximum cover (Clause A) — broader than CIF. "
+                "Any mode of transport. For RO/RO and containers, use CIP instead of CIF."
+            ),
+        },
+        {
+            "rule_code": "DAP",
+            "full_name": "Delivered At Place",
+            "named_place": "named place of destination",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Bear costs and risks until the goods are placed at the disposal of the buyer "
+                "on the arriving means of transport, ready for unloading at the named place of destination."
+            ),
+            "risk_transfer": (
+                "When the goods (not cleared for import) have been placed, "
+                "not unloaded from any arriving means of transport."
+            ),
+            "notes": "Any mode of transport. Buyer responsible for import clearance.",
+        },
+        {
+            "rule_code": "DPU",
+            "full_name": "Delivered at Place Unloaded",
+            "named_place": "named place of destination (unloaded)",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Place the goods — unloaded from the arriving means of transport — "
+                "at the named place of destination."
+            ),
+            "risk_transfer": (
+                "When the goods (not cleared for import) have been placed at the named "
+                "place of destination, unloaded from the arriving means of transport."
+            ),
+            "notes": (
+                "Any mode of transport. The only rule where seller must unload at destination. "
+                "Buyer responsible for import clearance."
+            ),
+        },
+        {
+            "rule_code": "DDP",
+            "full_name": "Delivered Duty Paid",
+            "named_place": "named place of destination",
+            "transport_mode": "any_mode",
+            "seller_must": (
+                "Bear all costs and risks (including import duty) involved in bringing the goods "
+                "to the named place in the country of destination."
+            ),
+            "risk_transfer": (
+                "When the goods (cleared for import) have been placed at the named "
+                "place of destination, not unloaded from any arriving means of transport."
+            ),
+            "notes": (
+                "Any mode of transport. Maximum seller obligation — seller clears goods for import. "
+                "Highest risk and cost exposure for the seller."
+            ),
+        },
+    ]
+
+    PROVENANCE_FOOTER = (
+        "\n\n[Source: INCOTERMS 2020 Summary — HDI Global SE. "
+        "Covers rule codes, risk transfer points, and mode-of-transport selection. "
+        "Does NOT include A1-A10/B1-B10 obligation text. "
+        "Full ICC rule text should be consulted before adoption.]"
+    )
+
+    idx = _pinecone_index()
+    vectors = []
+    for i, rule in enumerate(RULES):
+        mode_label = "Any mode of transport" if rule["transport_mode"] == "any_mode" else "Sea and inland waterway only"
+        chunk_text = (
+            f"INCOTERMS 2020 — {rule['rule_code']} ({rule['full_name']})\n"
+            f"Named place: {rule['named_place']}\n"
+            f"Mode of transport: {mode_label}\n\n"
+            f"Seller's obligations:\n{rule['seller_must']}\n\n"
+            f"Risk transfers to buyer:\n{rule['risk_transfer']}"
+        )
+        if rule["notes"]:
+            chunk_text += f"\n\nNote: {rule['notes']}"
+        chunk_text += PROVENANCE_FOOTER
+
+        article_ref = f"INCOTERMS {rule['rule_code']} — {rule['full_name']}"
+        vec = _embed(chunk_text)
+        vectors.append({
+            "id": f"incoterms_summary_{source_id}_{i}",
+            "values": vec,
+            "metadata": {
+                "source_id": source_id,
+                "source_type": "incoterms_2020_summary",
+                "source_title": "INCOTERMS 2020 — Summary (HDI Global SE)",
+                "article_ref": article_ref,
+                "rule_code": rule["rule_code"],
+                "transport_mode": rule["transport_mode"],
+                "official_url": "",
+                "chunk_text": chunk_text[:1000],
+            },
+        })
+
+    if vectors:
+        idx.upsert(vectors=vectors, namespace=CORPUS_NS)
+    return len(vectors)
+
+
 def rebuild_corpus_namespace(on_progress=None, law_filters: dict = None) -> int:
     """
     Delete and rebuild the entire corpus namespace from solcon_corpus_sources.
@@ -364,8 +602,8 @@ def rebuild_corpus_namespace(on_progress=None, law_filters: dict = None) -> int:
     total = 0
     for src in sources:
         try:
-            if src["source_type"] == "incoterms_2020":
-                _prog(f"Skipping INCOTERMS (upload separately): {src['title']}")
+            if src["source_type"] in ("incoterms_2020", "incoterms_2020_summary"):
+                _prog(f"Skipping INCOTERMS source (preserve existing vectors): {src['title']}")
                 continue
             _prog(f"Fetching: {src['title']} …")
             # zakon.rada.gov.ua base URLs return a JS-SPA shell (~5KB).
@@ -442,6 +680,7 @@ def run_sanity_queries() -> dict:
             "hit_count": hit_count,
             "top_score": round(top_score, 4),
             "top_source": hits[0]["source_title"] if hits else None,
+            "top_source_type": hits[0].get("source_type", "") if hits else None,
             "top_article": hits[0]["article_ref"] if hits else None,
             "passed": passed,
         }
