@@ -16,6 +16,7 @@ import requests
 import logging
 import anthropic as _anthropic_module
 from typing import Dict, List, Optional
+from services.ai_models import HAIKU
 from datetime import datetime
 from openai import OpenAI
 
@@ -86,7 +87,7 @@ class APITokenMonitor:
         """
         Check Claude API status via a real minimal API call.
         Uses typed SDK exceptions — never string-matches error messages.
-        Timeout: 10 seconds. Model: claude-haiku-4-5-20251001 (cheapest/fastest).
+        Timeout: 10 seconds. Model: HAIKU (cheapest/fastest).
         """
         _SVC = 'Claude AI (Anthropic)'
         _CONSOLE = 'https://console.anthropic.com/settings/usage'
@@ -105,7 +106,7 @@ class APITokenMonitor:
         try:
             client = _anthropic_module.Anthropic(api_key=api_key, timeout=10.0)
             client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=HAIKU,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "ping"}],
             )

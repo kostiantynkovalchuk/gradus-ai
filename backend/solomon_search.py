@@ -4,6 +4,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from anthropic import Anthropic
 import os
+from services.ai_models import HAIKU
 
 logger = logging.getLogger(__name__)
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -82,7 +83,7 @@ search_text:
 
 def parse_query(user_text: str) -> dict:
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=HAIKU,
         max_tokens=300,
         system=PARSE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_text}]
@@ -244,7 +245,7 @@ def cap_summary(text: str) -> str:
 def summarize_decision(text: str) -> str:
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=HAIKU,
             max_tokens=90,
             system="""Ти юридичний помічник. Коротко (1 речення, до 150 символів) вкажи результат рішення суду за шаблоном: "Суд [задовольнив/відмовив/скасував] [що саме], бо [причина]." Без вступів, заголовків, лапок.
 

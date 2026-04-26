@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import anthropic
+from services.ai_models import HAIKU
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ def _classify_via_llm(filename: str, text_snippet: str) -> str:
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     t0 = time.time()
     msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=HAIKU,
         max_tokens=64,
         system=(
             "You classify Ukrainian legal documents. "
@@ -172,7 +173,7 @@ def _classify_via_llm(filename: str, text_snippet: str) -> str:
     result = msg.content[0].text.strip().lower()
     from . import db as solcon_db
     solcon_db.log_llm_call(
-        None, None, "classify", "claude-haiku-4-5-20251001",
+        None, None, "classify", HAIKU,
         msg.usage.input_tokens, msg.usage.output_tokens, duration_ms,
     )
     return result if result in VALID_DOC_TYPES else "other"

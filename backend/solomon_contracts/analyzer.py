@@ -14,12 +14,13 @@ import anthropic
 
 from . import db as solcon_db
 from .corpus import retrieve_similar
+from services.ai_models import SONNET
 
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_SCAN_MODEL = "claude-sonnet-4-5"
-ANTHROPIC_ALT_MODEL = "claude-sonnet-4-5"
-ANTHROPIC_OPINION_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_SCAN_MODEL = SONNET
+ANTHROPIC_ALT_MODEL = SONNET
+ANTHROPIC_OPINION_MODEL = SONNET
 
 VALID_CATEGORIES = {
     "penalty", "payment_terms", "liability_shift", "ip_rights",

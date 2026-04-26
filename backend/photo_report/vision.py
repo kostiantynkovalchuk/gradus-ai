@@ -5,6 +5,7 @@ import os
 import logging
 
 from config.models import CLAUDE_MODEL_CONTENT
+from services.ai_models import VISION
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +486,7 @@ def _analyze_focused_sync(
             content,
             system="You are a merchandising AI analyst. Return ONLY valid JSON, no other text.",
             max_tokens=512,
-            model="claude-sonnet-4-6",
+            model=VISION,
         )
         return json.loads(raw)
     except Exception as e:
