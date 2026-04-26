@@ -1148,6 +1148,25 @@ MIGRATIONS = [
                ))""",
         ]
     },
+    {
+        "version": "044_model_deprecation_state",
+        "statements": [
+            # Single-row state table for content-based alert deduplication.
+            # Does NOT log history — stores only the last known check result.
+            """CREATE TABLE IF NOT EXISTS model_deprecation_state (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                last_check_at TIMESTAMPTZ,
+                last_status TEXT,
+                last_flagged_models JSONB,
+                last_alert_sent_at TIMESTAMPTZ,
+                CONSTRAINT model_deprecation_state_single_row CHECK (id = 1)
+            )""",
+            # Seed the single row so UPDATE-based writes always find a row.
+            """INSERT INTO model_deprecation_state (id)
+               VALUES (1)
+               ON CONFLICT (id) DO NOTHING""",
+        ]
+    },
 ]
 
 

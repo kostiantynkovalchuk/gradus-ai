@@ -715,7 +715,25 @@ class ContentScheduler:
                 
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] API monitoring failed: {e}")
-    
+
+    def _check_model_deprecation_task(self):
+        """
+        Task: Monthly Claude model-deprecation scan.
+        Fetches Anthropic's deprecation docs page and alerts admin via
+        notification_service when the set of flagged models changes.
+        Runs: 1st of every month at 09:05 UTC.
+        """
+        logger.info("[SCHEDULER] Monthly model deprecation check starting...")
+        try:
+            from services.model_deprecation_check import check_model_deprecations
+            result = check_model_deprecations()
+            logger.info(
+                "[SCHEDULER] Model deprecation check done: status=%s flagged=%s alert_sent=%s",
+                result.get("status"), result.get("flagged"), result.get("alert_sent"),
+            )
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Model deprecation check failed: {e}", exc_info=True)
+
     def detect_knowledge_gaps_task(self):
         """
         Task: Detect HR knowledge gaps and send report to admins
@@ -1296,7 +1314,18 @@ class ContentScheduler:
             name='Check all API services',
             replace_existing=True
         )
-        
+
+        # Model deprecation check: 1st of every month at 09:05 UTC
+        self.scheduler.add_job(
+            self._check_model_deprecation_task,
+            CronTrigger(day=1, hour=9, minute=5),
+            id='model_deprecation_check',
+            name='Monthly Claude model deprecation check',
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=7200,
+        )
+
         self.scheduler.add_job(
             self.detect_knowledge_gaps_task,
             CronTrigger(hour=7, minute=0),

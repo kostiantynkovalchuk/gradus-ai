@@ -1,0 +1,155 @@
+Proceed with implementation. Audit confirmed in SCHEDULER_AUDIT.md.
+
+Before writing model_deprecation_check.py, verify ONE thing:
+Is notification_service.send_custom_notification() defined as 
+`async def` or regular `def`? Report which, then proceed accordingly:
+- If async: the job function needs to wrap the call in asyncio.run() 
+  since APScheduler BackgroundScheduler runs in threads.
+- If sync: call it directly.
+
+Then implement:
+
+==================================================
+1. Migration 021 — model_deprecation_state
+==================================================
+Single-row table to persist the last alert state for content-based 
+deduplication. NOT a log table (we don't need history; we need 
+"what did we last alert about").
+
+CREATE TABLE IF NOT EXISTS model_deprecation_state (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    last_check_at TIMESTAMPTZ,
+    last_status TEXT,                    -- 'ok' | 'flagged' | 'fetch_failed'
+    last_flagged_models JSONB,           -- ["claude-sonnet-4-6", ...] or []
+    last_alert_sent_at TIMESTAMPTZ,      -- only set when alert actually fired
+    CONSTRAINT single_row CHECK (id = 1)
+);
+
+INSERT INTO model_deprecation_state (id) VALUES (1) 
+ON CONFLICT (id) DO NOTHING;
+
+==================================================
+2. backend/services/model_deprecation_check.py
+==================================================
+
+Behavior contract:
+- Fetch https://docs.claude.com/en/docs/about-claude/model-deprecations
+- Scan for ai_models.SONNET, HAIKU, OPUS in the page
+- For each match, check ±250 chars for retirement keywords:
+  ["deprecat", "retire", "sunset", "end of life", "end-of-life"]
+- Compare flagged set to last_flagged_models in DB
+- Alert ONLY when the flagged set CHANGES, specifically:
+  a) ok → flagged (new alert): "⚠️ Models newly flagged: [...]"
+  b) flagged → flagged with NEW additions: "⚠️ Additional models flagged: [...]"
+  c) flagged → ok (recovery): "✅ All previously-flagged models are clear"
+  d) flagged → flagged with same set: silent, just update last_check_at
+- On fetch failure: log only, do NOT alert, do NOT update last_status 
+  (preserves the previous known state). If fetch fails 3+ months running, 
+  that's caught by the OpenAI/Anthropic ping in api_token_monitor anyway.
+- Always update last_check_at, even on fetch failure
+- Update last_alert_sent_at only when an alert actually fires
+
+Telegram message format (use existing notification_service style — 
+plain text, no Markdown unless audit confirms it's supported):
+
+⚠️ Claude model deprecation check
+
+Active models flagged on Anthropic's deprecation page:
+- SONNET = claude-sonnet-4-6
+- OPUS = claude-opus-4-6
+
+Review: https://docs.claude.com/en/docs/about-claude/model-deprecations
+Update backend/services/ai_models.py to migrate.
+
+==================================================
+3. Register in backend/services/scheduler.py start()
+==================================================
+
+scheduler.add_job(
+    run_model_deprecation_check,   # sync wrapper if notification_service is async
+    trigger=CronTrigger(day=1, hour=9, minute=5),
+    id="model_deprecation_check",
+    replace_existing=True,
+    coalesce=True,
+    misfire_grace_time=7200,        # 2hr, matches existing pattern
+)
+
+Place it next to api_token_monitor's registration so future readers 
+see they're related monitoring jobs.
+
+==================================================
+4. Manual trigger endpoint
+==================================================
+
+Add to whichever admin router api_token_monitor's manual trigger 
+lives in (find this — there should be one). Use the same auth pattern.
+
+POST /admin/check-model-deprecations
+→ runs the check synchronously, returns the result dict, useful for 
+  testing without waiting for the 1st of the month.
+
+If api_token_monitor doesn't have a manual trigger endpoint, skip 
+this — don't introduce a new pattern.
+
+==================================================
+5. Documentation
+==================================================
+
+Update gradus_ai_platform_handover.md — add to section 5 (Critical 
+Architectural Decisions) or section 8 (Immediate Next Actions), 
+whichever is more appropriate:
+
+  ### 5.X Model Deprecation Monitoring
+  Monthly scheduled check (1st of month, 09:05 UTC) at 
+  backend/services/model_deprecation_check.py fetches Anthropic's 
+  deprecation page and alerts admin via notification_service if any 
+  model in ai_models.py is flagged for retirement. Content-based 
+  deduplication: alerts only fire when the flagged set changes. 
+  Manual trigger: POST /admin/check-model-deprecations (if implemented).
+  
+  When alerted: update backend/services/ai_models.py. All call sites 
+  pick up the change automatically since model strings live in one place.
+
+==================================================
+6. Verification
+==================================================
+
+a) Unit-test the dedup logic without hitting the network. Mock the 
+   page fetch with three scenarios:
+   - First run, page is clean → status 'ok', no alert
+   - Second run, page now flags SONNET → alert fires, state updated
+   - Third run, same state → no alert (this is the key test)
+   - Fourth run, page now flags SONNET + OPUS → alert fires (new addition)
+   - Fifth run, page is clean again → recovery alert fires
+
+b) Run the manual trigger endpoint once after deploy with the real URL. 
+   Expected current state: 'ok', no flagged models. If anything else, 
+   stop and investigate.
+
+c) Verify scheduler registration: 
+   curl http://localhost:8000/admin/scheduler-status (or however 
+   api_token_monitor's status is checked) — should show 22 jobs 
+   instead of 21.
+
+==================================================
+7. Commit
+==================================================
+
+git add -A
+git commit -m "feat: monthly Claude model deprecation monitoring
+
+- New backend/services/model_deprecation_check.py
+- Migration 021: model_deprecation_state (single-row dedup table)
+- Registered in scheduler: 1st of month, 09:05 UTC
+- Reuses notification_service.send_custom_notification (same pattern as
+  api_token_monitor)
+- Content-based deduplication: only alerts on state changes, not on 
+  every check while a model stays flagged
+- Manual trigger: POST /admin/check-model-deprecations
+- Updates handover doc
+
+Closes the loop on the 1M context beta retirement migration: 
+ai_models.py centralization + pre-commit hook prevent regressions, 
+this gives 30+ day lead time on future Anthropic deprecations."
+
+Stage the commit, show the diff. Do not push until I review.
