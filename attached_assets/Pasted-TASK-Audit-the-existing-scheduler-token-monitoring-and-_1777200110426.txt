@@ -1,0 +1,93 @@
+TASK: Audit the existing scheduler, token monitoring, and Telegram 
+admin notification pipeline so we can add a monthly Claude model 
+deprecation check using the same rails. Report only — no file changes.
+
+CONTEXT:
+We just migrated all Claude model references to a centralized 
+backend/services/ai_models.py. We want a monthly job that hits 
+Anthropic's deprecation docs page and pings admin via the existing 
+Telegram bot if any active model is flagged for retirement.
+
+The system already has:
+- A scheduler (used for content posting, possibly other jobs)
+- backend/services/api_token_monitor.py (monitors API token health/expiry)
+- A Telegram admin notification mechanism (used somewhere — find it)
+
+Produce SCHEDULER_AUDIT.md with these sections:
+
+==================================================
+SECTION 1 — Scheduler infrastructure
+==================================================
+Find and document:
+- Which scheduler library is in use (APScheduler, Celery, 
+  python-crontab, Render cron, custom asyncio loop, etc.)
+- Where jobs are registered (single file? decorators? config?)
+- File path of the main scheduler entry point
+- How frequencies are specified (cron expression, interval, etc.)
+- List ALL currently scheduled jobs with: name, frequency, 
+  what they do, file path of the job function
+- Whether the scheduler runs in the same process as FastAPI 
+  or a separate worker
+- Any DB row-locking pattern used (handover doc §5.5 mentions 
+  this for multi-container Render)
+
+==================================================  
+SECTION 2 — api_token_monitor.py deep read
+==================================================
+Read backend/services/api_token_monitor.py end-to-end. Document:
+- What tokens/APIs it currently monitors
+- How it detects expiry / health issues
+- How frequently it runs
+- What it does on failure detection (log? notify? auto-renew?)
+- The exact notification call signature (function name, params, 
+  return type)
+- Whether it has retry logic, error handling, fallback behavior
+- Whether results are persisted to DB
+
+==================================================
+SECTION 3 — Telegram admin notification pipeline
+==================================================
+Find the function used to send admin notifications via Telegram. 
+Likely candidates: send_admin_message, notify_admin, 
+post_to_admin_channel, or similar. Trace from api_token_monitor.py 
+backward to find it.
+
+Document:
+- Function signature and file path
+- Which bot token env var it uses 
+  (TELEGRAM_BOT_TOKEN? TELEGRAM_MAYA_BOT_TOKEN? a separate admin one?)
+- Which chat/channel ID it posts to (env var name + actual ID 
+  if visible in code)
+- Message format (plain text? Markdown? HTML?)
+- Whether it handles failures gracefully (Telegram API down, 
+  rate limits)
+- Whether there's a deduplication mechanism (don't spam the same 
+  alert daily)
+
+==================================================
+SECTION 4 — Existing patterns we should mirror  
+==================================================
+Based on sections 1-3, propose how the model deprecation check 
+should integrate. Specifically:
+- Where to put backend/services/model_deprecation_check.py
+- How to register it with the existing scheduler
+- Which notification function to call
+- Whether to use the same DB patterns as api_token_monitor 
+  (e.g., should we persist deprecation_check_log entries?)
+- Frequency recommendation given how often Anthropic updates 
+  the deprecation page (monthly is the proposal — agree or 
+  suggest different?)
+
+==================================================
+SECTION 5 — Risks and gotchas
+==================================================
+- Does the scheduler survive Render zero-downtime deploys?
+- Is there a job that already does HTTP fetches to external 
+  docs sites we can model after?
+- Any rate-limiting concerns with Telegram notifications 
+  (if scheduler retries on failure)?
+- Where should the deprecation check's HTTP fetch failures 
+  be logged?
+
+Save the report at SCHEDULER_AUDIT.md in repo root. Wait for 
+my approval before writing any code.
