@@ -438,6 +438,22 @@ async def update_finding_state(request: Request, fid: int):
     return {"ok": True}
 
 
+@router.patch("/findings/{fid}/judgment")
+async def update_finding_judgment(request: Request, fid: int):
+    """Quality tracking: lawyer verdict on a detected finding."""
+    _auth_check(request)
+    body = await request.json()
+    judgment = body.get("lawyer_judgment")
+    valid = {"accepted", "rejected", "modified_minor", "modified_major", "not_reviewed"}
+    if judgment not in valid:
+        raise HTTPException(status_code=400, detail="Invalid lawyer_judgment")
+    solcon_db.execute(
+        "UPDATE solcon_findings SET lawyer_judgment=%s, updated_at=NOW() WHERE id=%s",
+        (judgment, fid),
+    )
+    return {"ok": True}
+
+
 @router.post("/findings/{fid}/judge")
 async def judge_finding(request: Request, fid: int):
     """Eval harness: record lawyer judgment on a finding."""

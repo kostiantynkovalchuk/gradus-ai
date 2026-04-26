@@ -240,6 +240,22 @@
   .finding-ungrounded { font-size: 11px; color: var(--accent-red); background: #fdf2f2; padding: 4px 10px; border-radius: 3px; }
   .finding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+  /* lawyer judgment button group */
+  .judgment-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .judgment-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
+  .judgment-btn {
+    font-size: 10.5px; font-family: 'DM Sans', sans-serif; font-weight: 500;
+    padding: 3px 9px; border-radius: 3px; border: 1px solid var(--border-mid);
+    background: var(--bg); color: var(--text-muted); cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    line-height: 1.6;
+  }
+  .judgment-btn:hover { border-color: var(--navy); color: var(--navy); }
+  .judgment-btn.jud-accepted   { background: #eaf6ec; color: #1a7a30; border-color: #7dbd8a; }
+  .judgment-btn.jud-rejected   { background: #fdf2f2; color: var(--accent-red); border-color: #e09090; }
+  .judgment-btn.jud-modified_minor { background: #fef9e7; color: var(--sev-medium); border-color: #d4a040; }
+  .judgment-btn.jud-modified_major { background: #fff3e0; color: var(--sev-high);   border-color: #e06c00; }
+
   /* Upload zone */
   .upload-zone {
     border: 2px dashed var(--border-mid); border-radius: 10px; padding: 40px;
@@ -636,6 +652,21 @@ async function renderEngagementWorkspace(eid) {
               ${stateOptions(f.workflow_state)}
             </select>
           </div>
+          <div class="judgment-row">
+            <span class="judgment-label">Оцінка:</span>
+            ${[
+              ['accepted',       '✓ Прийнято'],
+              ['rejected',       '✗ Відхилено'],
+              ['modified_minor', '~ Правка мала'],
+              ['modified_major', '▲ Правка суттєва'],
+            ].map(([val, lbl]) => {
+              const active = f.lawyer_judgment === val ? ' jud-' + val : '';
+              return `<button class="judgment-btn${active}" data-fid="${f.id}" data-judgment="${val}" onclick="updateFindingJudgment(${f.id},'${val}')">${lbl}</button>`;
+            }).join('')}
+            ${f.lawyer_judgment !== 'not_reviewed'
+              ? `<button class="judgment-btn" data-fid="${f.id}" data-judgment="not_reviewed" onclick="updateFindingJudgment(${f.id},'not_reviewed')" title="Скинути оцінку">✕</button>`
+              : ''}
+          </div>
         </div>`;
       });
     } else if (docs.some(d => d.analyzed_at)) {
@@ -776,6 +807,20 @@ async function updateFindingState(fid, state) {
   await fetch('/api/contracts/findings/' + fid + '/state', {
     method:'PATCH', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ workflow_state: state })
+  });
+}
+
+async function updateFindingJudgment(fid, judgment) {
+  const btns = document.querySelectorAll(`.judgment-btn[data-fid="${fid}"]`);
+  btns.forEach(b => {
+    b.classList.remove('jud-accepted','jud-rejected','jud-modified_minor','jud-modified_major');
+    if (b.dataset.judgment === judgment && judgment !== 'not_reviewed') {
+      b.classList.add('jud-' + judgment);
+    }
+  });
+  await fetch('/api/contracts/findings/' + fid + '/judgment', {
+    method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ lawyer_judgment: judgment })
   });
 }
 

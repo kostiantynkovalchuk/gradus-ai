@@ -1,0 +1,68 @@
+Pre-commit hook
+Save as scripts/check_model_strings.sh, then chmod +x it:
+bash#!/bin/bash
+# Prevents hardcoded Claude model strings outside ai_models.py
+# Run from repo root.
+
+PATTERN='claude-(sonnet|haiku|opus)-[0-9]'
+BETA_PATTERN='context-1m-2025'
+
+VIOLATIONS=$(rg -n -i "$PATTERN|$BETA_PATTERN" \
+  --glob '!backend/services/ai_models.py' \
+  --glob '!AUDIT_REPORT.md' \
+  --glob '!*.md' \
+  --glob '!attached_assets/**' \
+  --glob '!.git/**' \
+  2>/dev/null)
+
+if [ -n "$VIOLATIONS" ]; then
+  echo "❌ Hardcoded Claude model string or deprecated beta header found."
+  echo "   Import from backend/services/ai_models.py instead."
+  echo ""
+  echo "$VIOLATIONS"
+  exit 1
+fi
+
+exit 0
+Wire it into git:
+bashln -sf ../../scripts/check_model_strings.sh .git/hooks/pre-commit
+Symlink (not copy) so the check stays in version control and every clone of the repo gets it. Test it works by trying to commit a file containing "claude-sonnet-4-6" somewhere outside ai_models.py — should reject.
+The *.md exclusion is deliberate: docs legitimately reference model names. The attached_assets/** exclusion matches what your audit already established.
+Monthly deprecation check
+Add this as a Render scheduled task or a simple cron in your existing scheduler. Once a month, hit Anthropic's deprecation page and ping you on @gradusai_bot if any of your active models appears near a retirement notice:
+python# backend/services/model_deprecation_check.py
+import re
+import httpx
+from backend.services import ai_models
+from backend.services.telegram import send_admin_message  # your existing util
+
+DEPRECATION_URL = "https://docs.claude.com/en/docs/about-claude/model-deprecations"
+
+async def check_model_deprecations():
+    active = {ai_models.SONNET, ai_models.HAIKU, ai_models.OPUS}
+    
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(DEPRECATION_URL)
+        page = r.text.lower()
+    
+    flagged = []
+    for model in active:
+        # Find the model mention, look at surrounding 200 chars for retirement language
+        for match in re.finditer(re.escape(model.lower()), page):
+            window = page[max(0, match.start()-200):match.end()+200]
+            if any(w in window for w in ["deprecat", "retire", "sunset", "end of life"]):
+                flagged.append(model)
+                break
+    
+    if flagged:
+        msg = (
+            f"⚠️ Model deprecation check\n\n"
+            f"Active models flagged on Anthropic's deprecation page:\n"
+            f"{chr(10).join(f'• {m}' for m in flagged)}\n\n"
+            f"Review: {DEPRECATION_URL}"
+        )
+        await send_admin_message(msg)
+    else:
+        # Optional: silent on no-news months, or send a monthly "all clear"
+        pass
+Schedule it for the 1st of every month. Crude grep, but that's the point — it catches the announcement 30+ days before the retirement date instead of you finding out from a support email like this one. False positives are fine; missed deprecations aren't.

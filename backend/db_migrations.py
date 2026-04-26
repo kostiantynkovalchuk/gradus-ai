@@ -1108,6 +1108,23 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "043_lawyer_judgment",
+        "statements": [
+            # Quality tracking for findings — lawyer verdict on each detected risk
+            """ALTER TABLE solcon_findings
+               ADD COLUMN IF NOT EXISTS lawyer_judgment TEXT NOT NULL DEFAULT 'not_reviewed'
+               CHECK (lawyer_judgment IN (
+                   'accepted','rejected','modified_minor','modified_major','not_reviewed'
+               ))""",
+            # Quality tracking for protocols — lawyer verdict on the generated alternative wording
+            """ALTER TABLE solcon_protocols
+               ADD COLUMN IF NOT EXISTS lawyer_judgment TEXT NOT NULL DEFAULT 'not_reviewed'
+               CHECK (lawyer_judgment IN (
+                   'accepted','rejected','modified_minor','modified_major','not_reviewed'
+               ))""",
+        ]
+    },
+    {
         "version": "042_incoterms_summary_schema",
         "statements": [
             # Add provenance_note column for corpus source attribution
