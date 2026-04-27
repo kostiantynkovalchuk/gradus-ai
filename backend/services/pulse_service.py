@@ -405,12 +405,65 @@ def log_hr_action(trigger_id: int, action: str, hr_user: str) -> None:
                     {"eid": row[0]},
                 )
 
+            # Schedule a follow-up survey for 💔 (score=1) employees when HR marks resolved
+            if action == "resolved" and row and row[0]:
+                fu_row = db.execute(
+                    text("""
+                        SELECT id FROM pulse_surveys
+                        WHERE telegram_id = :eid
+                          AND score = 1
+                          AND followup_scheduled = FALSE
+                          AND followup_sent_at IS NULL
+                        ORDER BY responded_at DESC
+                        LIMIT 1
+                    """),
+                    {"eid": row[0]},
+                ).fetchone()
+                if fu_row:
+                    db.execute(
+                        text("UPDATE pulse_surveys SET followup_scheduled = TRUE WHERE id = :sid"),
+                        {"sid": fu_row[0]},
+                    )
+                    logger.info(f"[PULSE] Follow-up scheduled for employee {row[0]} in 14 days")
+
             db.commit()
             logger.info(f"[PULSE] HR action logged: {action} | trigger_id={trigger_id} | by={hr_user}")
         finally:
             db.close()
     except Exception as e:
         logger.error(f"[PULSE] log_hr_action failed: {e}")
+
+
+async def send_followup_survey(telegram_id: int) -> None:
+    """Send a follow-up mood check to a specific employee 14 days after HR resolved their case."""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.error("[PULSE] TELEGRAM_MAYA_BOT_TOKEN not set — cannot send follow-up survey")
+        return
+    month_key = datetime.utcnow().strftime("%Y-%m") + "-FU"
+    text_msg = (
+        "❤️ *Пульс команди — Перевірка*\n\n"
+        "Привіт! Минуло 2 тижні. "
+        "Як ти себе почуваєш зараз?"
+    )
+    keyboard = {"inline_keyboard": [
+        [{"text": "💚 Тримаюся впевнено 💪", "callback_data": f"hr_pulse:mood:3:{month_key}"}],
+        [{"text": "💛 Нормально, буває різне", "callback_data": f"hr_pulse:mood:2:{month_key}"}],
+        [{"text": "💔 Стоп, перевантаження", "callback_data": f"hr_pulse:mood:1:{month_key}"}],
+    ]}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": telegram_id,
+                    "text": text_msg,
+                    "parse_mode": "Markdown",
+                    "reply_markup": keyboard,
+                },
+            )
+        logger.info(f"[PULSE] Follow-up survey message delivered to {telegram_id}")
+    except Exception as e:
+        logger.error(f"[PULSE] send_followup_survey failed for {telegram_id}: {e}")
 
 
 def record_mood(
@@ -439,11 +492,12 @@ def record_mood(
     if existing:
         return True, department
 
+    is_followup = survey_month.endswith("-FU")
     db.execute(
         text(
             "INSERT INTO pulse_surveys "
-            "(telegram_id, employee_name, department, score, survey_month, responded_at) "
-            "VALUES (:tid, :ename, :dept, :score, :sm, NOW())"
+            "(telegram_id, employee_name, department, score, survey_month, responded_at, is_followup) "
+            "VALUES (:tid, :ename, :dept, :score, :sm, NOW(), :is_followup)"
         ),
         {
             "tid": telegram_id,
@@ -451,6 +505,7 @@ def record_mood(
             "dept": department,
             "score": score,
             "sm": survey_month,
+            "is_followup": is_followup,
         },
     )
     db.commit()

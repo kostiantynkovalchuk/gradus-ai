@@ -512,6 +512,56 @@ class ContentScheduler:
         except Exception as e:
             logger.error(f"[SCHEDULER] Pulse risk decay failed: {e}")
 
+    def _pulse_followup_check_task(self):
+        """
+        Send follow-up mood surveys to 💔 employees 14+ days after HR marked their issue resolved.
+        Runs: daily at 08:00 UTC (10:00 Kyiv).
+        """
+        logger.info("[SCHEDULER] Running Team Pulse follow-up check...")
+        try:
+            import asyncio
+            from sqlalchemy import text as sa_text
+            from services.pulse_service import send_followup_survey
+            db = self._get_db_session()
+            try:
+                rows = db.execute(sa_text("""
+                    SELECT DISTINCT ON (ps.telegram_id)
+                           ps.id, ps.telegram_id, ps.employee_name
+                    FROM pulse_surveys ps
+                    JOIN pulse_hr_actions pha ON pha.trigger_id IN (
+                        SELECT pt.id FROM pulse_triggers pt
+                        WHERE pt.employee_id = ps.telegram_id
+                          AND pt.fired_at >= ps.responded_at - INTERVAL '1 day'
+                    )
+                    WHERE ps.score = 1
+                      AND ps.followup_scheduled = TRUE
+                      AND ps.followup_sent_at IS NULL
+                      AND pha.action = 'resolved'
+                      AND pha.created_at < NOW() - INTERVAL '14 days'
+                    ORDER BY ps.telegram_id, ps.responded_at DESC
+                    LIMIT 10
+                """)).fetchall()
+
+                for survey_id, tid, name in rows:
+                    try:
+                        asyncio.run(send_followup_survey(tid))
+                        db.execute(
+                            sa_text("UPDATE pulse_surveys SET followup_sent_at = NOW() WHERE id = :sid"),
+                            {"sid": survey_id},
+                        )
+                        db.commit()
+                        logger.info(f"[PULSE] Follow-up survey sent to {name} ({tid})")
+                    except Exception as inner_e:
+                        logger.error(f"[PULSE] Failed to send follow-up to {tid}: {inner_e}")
+                        db.rollback()
+
+                if not rows:
+                    logger.info("[PULSE] Follow-up check: no surveys due today")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Pulse follow-up check failed: {e}")
+
     def _cleanup_alex_memory_task(self):
         """
         Weekly cleanup: keep only last 50 messages per user in alex_conversations.
@@ -1377,6 +1427,15 @@ class ContentScheduler:
             CronTrigger(day_of_week='mon', hour=2, minute=0),
             id='pulse_risk_decay',
             name='Weekly Pulse risk score decay',
+            replace_existing=True
+        )
+
+        # Team Pulse: daily follow-up survey check — 08:00 UTC (10:00 Kyiv)
+        self.scheduler.add_job(
+            self._pulse_followup_check_task,
+            CronTrigger(hour=8, minute=0),
+            id='pulse_followup_check',
+            name='Send follow-up surveys to resolved 💔 employees (14 days after HR action)',
             replace_existing=True
         )
 
