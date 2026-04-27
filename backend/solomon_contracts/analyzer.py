@@ -244,7 +244,7 @@ HARD RULES:
    If none of the retrieved sources support a grounded alternative, output:
    {"grounding_status": "ungrounded", "alternative": null, "citations": []}
 2. The alternative clause text MUST be in Ukrainian.
-3. Tag every alternative with 'AI suggestion — requires lawyer review'.
+3. Tag every alternative with '[AI пропозиція — потребує перевірки юриста]'.
 4. Never fabricate URLs. Only cite URLs from the retrieved sources list.
 
 ════ INCOTERMS 2020 SUMMARY SOURCES ════
@@ -409,11 +409,11 @@ Write a formal legal opinion in Ukrainian, structured as follows:
 2. One section per document in the engagement (e.g. 'Ризики за Договором поставки').
 3. Within each section, group findings by category.
 4. Each finding rendered as a formal paragraph: clause reference, risk explanation.
-5. If proposed_alternative exists, add a subsection tagged 'AI suggestion — requires lawyer review'.
+5. If proposed_alternative exists, add a subsection tagged '[AI пропозиція — потребує перевірки юриста]'.
 6. Closing summary table (plain text): count by severity, total monetary exposure.
 
 HARD RULES:
-- Every AI suggestion paragraph must end with: 'AI suggestion — requires lawyer review'
+- Every AI suggestion paragraph must end with: '[AI пропозиція — потребує перевірки юриста]'
 - Footer: 'Автоматичний аналіз Solomon. Підлягає перевірці юристом. Не є юридичною консультацією.'
 - Respond in Markdown only."""
 
@@ -435,7 +435,7 @@ def generate_legal_opinion(
             "severity": f["severity"],
             "short_note": f["short_note"],
             "proposed_alternative": f.get("proposed_alternative"),
-            "legal_citations": json.loads(f.get("legal_citations", "[]")),
+            "legal_citations": _safe_jsonb(f.get("legal_citations")),
         }
         for f in findings
     ], ensure_ascii=False, indent=2)
@@ -538,3 +538,17 @@ def _safe_float(val, default=0.7) -> float:
 def _hash(text: str) -> str:
     import hashlib
     return hashlib.md5(text.encode()).hexdigest()
+
+
+def _safe_jsonb(value, default=None):
+    """Parse a JSONB column that may already be a Python object (psycopg2 auto-parses JSONB)."""
+    if default is None:
+        default = []
+    if value is None:
+        return default
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return default

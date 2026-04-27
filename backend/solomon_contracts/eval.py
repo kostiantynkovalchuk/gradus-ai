@@ -418,7 +418,7 @@ def compute_grounding_metrics(solomon_findings: list[dict]) -> dict:
         if (
             f.get("proposed_alternative") is not None
             and f.get("grounding_status") == "grounded"
-            and json.loads(f.get("legal_citations", "[]") or "[]")
+            and (lambda v: v if isinstance(v, list) else json.loads(v or "[]"))(f.get("legal_citations", "[]"))
         )
     ]
     grounding_rate = len(grounded_findings) / n_eligible if n_eligible > 0 else 0.0

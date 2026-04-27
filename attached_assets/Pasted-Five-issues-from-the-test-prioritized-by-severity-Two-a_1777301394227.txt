@@ -1,0 +1,29 @@
+Five issues from the Торба test, prioritized by severity. Two are real bugs, three are translation/labeling fixes. Diagnose #2 and #3 first since they're blocking the legal opinion / risk note workflow.
+Bug 1 — protocol_draft showing "Не проаналізовано" is misleading.
+The protocol document was correctly excluded from analysis (per the previous fix's IN ('main_contract','additional_agreement') filter). But the UI label "Не проаналізовано" implies analysis pending or failed. Add a new status branch in the document card rendering: if document_type IN ('protocol_draft','protocol_returned','protocol_agreed','risks_note','legal_opinion','specification','price_list'), show a neutral grey label like "Не потребує аналізу" instead. Don't show the green "Проаналізовано" check or red error states for these — they're never analyzed by design.
+Bug 2 — GET /api/contracts/engagements/1/risk-note.docx returns 500.
+Internal Server Error on download. The endpoint should generate a Ukrainian-style bullet-list DOCX from all findings in the engagement (per §9.1 of original spec). Diagnose with logger.exception() and find what's choking on Торба's findings. Likely a data-shape difference from Levays — maybe a null field the generator doesn't handle, maybe bold-asterisk artifacts in finding text breaking the DOCX writer. Fix and verify it produces a valid downloadable file.
+Bug 3 — "Правовий висновок" generation fails ("Помилка генерації").
+Likely the same root cause as #2 — both endpoints aggregate the same findings into different output formats. Check if they share helper code (a _render_findings() or similar). Fix at the shared level if so.
+Translation 4 — Severity badges still in English (medium, high, critical).
+Stored as enum in DB (correct), rendered in UI without translation. Add a mapping in the template:
+jsconst severityLabels = {
+  low: 'Низька',
+  medium: 'Середня',
+  high: 'Висока',
+  critical: 'Критична'
+};
+Apply wherever severity is rendered on finding cards and KPI summaries. Keep enum value unchanged in DB.
+Translation 5 — "AI suggestion — requires lawyer review" still appearing in English in finding text.
+The previous fix translated the UI label, but the English string is also baked into the LLM's output via the analyzer prompt. The LLM is told to append "[AI suggestion — requires lawyer review]" to each proposed_alternative — and produces it in English even though surrounding text is Ukrainian. Two-part fix:
+(a) Update the analyzer prompts (SCAN_SYSTEM + ALT_SYSTEM) to instruct the LLM to append "[AI пропозиція — потребує перевірки юриста]" in Ukrainian instead.
+(b) One-time SQL backfill on existing rows:
+sqlUPDATE solcon_findings
+SET proposed_alternative = REPLACE(
+  proposed_alternative,
+  '[AI suggestion — requires lawyer review]',
+  '[AI пропозиція — потребує перевірки юриста]'
+)
+WHERE proposed_alternative LIKE '%AI suggestion%';
+Also check for the variant without brackets, with parens, etc. — there might be 2-3 string variants depending on how Claude rendered it.
+After fixes, verify by re-loading the Торба engagement page (no re-analysis needed for #4 and #5; for #1 just refresh; #2 and #3 just retry the download/generate buttons).

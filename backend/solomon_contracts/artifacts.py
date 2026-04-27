@@ -18,6 +18,21 @@ from docx.oxml import OxmlElement
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_jsonb(value, default=None):
+    """Parse a JSONB column that may already be a Python object (psycopg2 auto-parses JSONB)."""
+    if default is None:
+        default = []
+    if value is None:
+        return default
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
 DISCLAIMER = (
     "Автоматичний аналіз Solomon. "
     "Підлягає перевірці юристом. Не є юридичною консультацією."
@@ -83,11 +98,11 @@ def build_risk_note_docx(
                     p.add_run(f" (≈{f['monetary_exposure_uah']:,.0f} грн)")
                 if f.get("proposed_alternative"):
                     alt_p = doc.add_paragraph(style="List Bullet 2")
-                    r_ai = alt_p.add_run("💡 AI suggestion — requires lawyer review: ")
+                    r_ai = alt_p.add_run("💡 AI пропозиція — потребує перевірки юриста: ")
                     r_ai.italic = True
                     r_ai.font.color.rgb = RGBColor(0x2E, 0x42, 0x70)
                     alt_p.add_run(f["proposed_alternative"])
-                    cits = json.loads(f.get("legal_citations", "[]"))
+                    cits = _safe_jsonb(f.get("legal_citations"))
                     if cits:
                         cit_text = "; ".join(
                             c.get("article_ref", "") or c.get("source_title", "")

@@ -305,7 +305,8 @@
   .doc-name { font-size: 13.5px; color: var(--navy); font-weight: 500; }
   .doc-type { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .doc-analyzed { font-size: 11px; color: #2e7d32; margin-top: 2px; }
-  .doc-pending { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .doc-pending  { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .doc-neutral  { font-size: 11px; color: #aab0bb; margin-top: 2px; font-style: italic; }
 
   .kpi-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
   .kpi { flex: 1; min-width: 100px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
@@ -604,7 +605,12 @@ async function renderEngagementWorkspace(eid) {
       html += `<div class="empty-state" style="padding:30px 0">Завантажте документи для аналізу</div>`;
     } else {
       docs.forEach(d => {
-        const analyzed = d.analyzed_at ? `<div class="doc-analyzed">Проаналізовано ${fmtDate(d.analyzed_at)}</div>` : `<div class="doc-pending">Не проаналізовано</div>`;
+        const NO_ANALYSIS_TYPES = ['protocol_draft','protocol_returned','protocol_agreed','risks_note','legal_opinion','specification','price_list','commercial_code','other'];
+        const analyzed = d.analyzed_at
+          ? `<div class="doc-analyzed">Проаналізовано ${fmtDate(d.analyzed_at)}</div>`
+          : NO_ANALYSIS_TYPES.includes(d.document_type)
+            ? `<div class="doc-neutral">Не потребує аналізу</div>`
+            : `<div class="doc-pending">Не проаналізовано</div>`;
         html += `<div class="doc-list-item">
           <div>
             <div class="doc-name">${esc(d.original_filename)}</div>
@@ -650,7 +656,7 @@ async function renderEngagementWorkspace(eid) {
         html += `<div class="finding-card">
           <div class="finding-header">
             <span class="finding-ref">${esc(f.clause_ref)}</span>
-            <span class="sev sev-${f.severity}">${f.severity}</span>
+            <span class="sev sev-${f.severity}">${sevLabel(f.severity)}</span>
             <span style="font-size:11px;color:var(--text-muted)">${catLabel(f.category)}</span>
             <span style="font-size:11px;color:var(--text-dim)">${esc(f.doc_name||'')}</span>
           </div>
@@ -738,7 +744,7 @@ async function renderEvalPage() {
       html += `<div class="section-title" style="font-size:15px;margin:20px 0 12px">Оцінки</div>`;
       data.judgments.forEach(j => {
         html += `<div class="doc-list-item">
-          <div><div class="doc-name">${esc(j.clause_ref)} · <span class="sev sev-${j.severity}">${j.severity}</span></div>
+          <div><div class="doc-name">${esc(j.clause_ref)} · <span class="sev sev-${j.severity}">${sevLabel(j.severity)}</span></div>
           <div class="doc-type">${esc(j.short_note?.slice(0,80)||'')}</div></div>
           <div class="sev sev-${j.judgment==='true_positive'?'low':'critical'}">${j.judgment}</div>
         </div>`;
@@ -927,6 +933,10 @@ function statusLabel(s) {
     protocol_drafted:'Протокол готовий',protocol_sent:'Протокол надіслано',
     counterparty_responded:'Відповідь отримана',
     agreed:'Узгоджено',declined:'Відхилено',archived:'Архів'};
+  return m[s] || s;
+}
+function sevLabel(s) {
+  const m = {low:'Низька', medium:'Середня', high:'Висока', critical:'Критична'};
   return m[s] || s;
 }
 function catLabel(c) {
