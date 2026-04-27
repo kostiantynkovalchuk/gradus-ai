@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
     pkg-config \
+    poppler-utils \
+    antiword \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
