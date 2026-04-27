@@ -1,0 +1,59 @@
+# Add 3 new HR admins to Maya system
+
+"""
+=== ADD 3 HR ADMINS ===
+
+Three new HR managers need admin access to Maya. 
+They are NOT in SED (employee database), so add them manually.
+
+=== STEP 1: Add to hr_users table ===
+
+Run this SQL (via the migration system or directly):
+
+INSERT INTO hr_users (phone, full_name, first_name, last_name, department, position, access_level, is_active, created_at, updated_at)
+VALUES 
+('380505336931', 'Михайлова Ирина', 'Ирина', 'Михайлова', 'HR', 'HR-менеджер', 'hr', TRUE, NOW(), NOW()),
+('380678487758', 'Борко Юлия', 'Юлия', 'Борко', 'HR', 'HR-менеджер', 'hr', TRUE, NOW(), NOW()),
+('380999065560', 'Куцая Виктория', 'Виктория', 'Куцая', 'HR', 'HR-менеджер', 'hr', TRUE, NOW(), NOW())
+ON CONFLICT (phone) DO UPDATE SET access_level = 'hr', is_active = TRUE, updated_at = NOW();
+
+Note: phone stored WITHOUT + prefix, just digits.
+
+=== STEP 2: Verify they can register ===
+
+After adding, each person needs to:
+1. Open Maya bot in Telegram
+2. Press /start
+3. Share their phone number (the same one we added)
+4. Maya will recognize the phone → grant access
+
+Verify the phones are in the DB:
+SELECT id, full_name, phone, access_level, telegram_id, is_active 
+FROM hr_users 
+WHERE phone IN ('380505336931', '380678487758', '380999065560');
+
+=== STEP 3: Add to HR_ALERT_CHAT_IDS (after they register) ===
+
+Once all three register and have telegram_id populated,
+get their IDs:
+SELECT telegram_id, full_name FROM hr_users 
+WHERE phone IN ('380505336931', '380678487758', '380999065560');
+
+Then update HR_ALERT_CHAT_ID env var on Render:
+Current: 424503938,441389791
+New: 424503938,441389791,{ira_tid},{yulia_tid},{victoria_tid}
+
+=== STEP 4: Grant /hr dashboard access (if needed) ===
+
+The /hr dashboard uses HTTP Basic Auth (admin/Maya_2026).
+If they need dashboard access, share credentials.
+Or create individual logins — but that's a bigger change.
+
+=== NOTHING ELSE TO CHANGE ===
+
+access_level = 'hr' gives them:
+- Full Maya HR bot access
+- Pulse survey responses visible
+- HR alerts for Team Pulse (after adding to HR_ALERT_CHAT_IDS)
+- Broadcast capabilities (if broadcast group is set up)
+"""
