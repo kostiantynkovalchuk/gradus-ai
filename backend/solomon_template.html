@@ -157,6 +157,11 @@
   .read-link:hover { color: var(--navy); }
   .read-link::after { content: '→'; transition: transform 0.15s; }
   .read-link:hover::after { transform: translateX(3px); }
+  .feedback-row { display: flex; gap: 6px; }
+  .fb-btn { font-size: 11px; color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; cursor: pointer; transition: all 0.15s; }
+  .fb-btn:hover { border-color: var(--border-mid); color: var(--navy); }
+  .fb-btn.fb-liked { color: #2e7d32; border-color: #a5d6a7; background: #f1f8f1; }
+  .fb-btn.fb-disliked { color: var(--accent-red); border-color: #f5c6c6; background: #fdf2f2; }
 
   /* ── Shared state styles ── */
   .status { text-align: center; padding: 56px 0; }
@@ -491,9 +496,12 @@ document.getElementById('query').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch();
 });
 
+let _lastQuery = '';
+
 async function doSearch() {
   const query = document.getElementById('query').value.trim();
   if (!query) return;
+  _lastQuery = query;
   const btn = document.getElementById('searchBtn');
   const out = document.getElementById('results');
   btn.disabled = true; btn.textContent = '…';
@@ -514,11 +522,18 @@ async function doSearch() {
       const date = (j.adjudication_date || '').substring(0,10);
       const cause = j.cause_number || '—'; const judge = j.judge || '—';
       const link = j.link || '#'; const summary = j.summary || '';
+      const docId = j.doc_id || '';
+      const safeCase = cause.replace(/\//g,'_').replace(/'/g,'');
+      const fbBtns = docId
+        ? `<div class="feedback-row" id="fb-${docId}">` +
+          `<button class="fb-btn" onclick="submitFeedback('${docId}','${safeCase}','like',this)">👍 Корисно</button>` +
+          `<button class="fb-btn" onclick="submitFeedback('${docId}','${safeCase}','dislike',this)">👎 Не те</button>` +
+          `</div>` : '';
       html += `<div class="card" style="animation-delay:${i*0.07}s">
         <div class="card-top"><div class="case-num">Справа № ${cause}</div><div class="case-date">${date}</div></div>
         <div class="judge">${judge}</div>
         ${summary ? `<div class="summary-text">${summary}</div>` : ''}
-        <div class="card-footer"><a class="read-link" href="${link}" target="_blank">Читати повністю</a></div>
+        <div class="card-footer"><a class="read-link" href="${link}" target="_blank">Читати повністю</a>${fbBtns}</div>
       </div>`;
     });
     out.innerHTML = html;
@@ -527,6 +542,21 @@ async function doSearch() {
   } finally {
     btn.disabled = false; btn.textContent = 'Шукати';
   }
+}
+
+async function submitFeedback(docId, safeCase, feedback, btn) {
+  const row = btn.parentElement;
+  const causeNumber = safeCase.replace(/_/g, '/');
+  try {
+    const r = await fetch('/law/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc_id: docId, cause_number: causeNumber, feedback, query_text: _lastQuery })
+    });
+    if (!r.ok) return;
+    row.querySelectorAll('.fb-btn').forEach(b => b.classList.remove('fb-liked', 'fb-disliked'));
+    btn.classList.add(feedback === 'like' ? 'fb-liked' : 'fb-disliked');
+  } catch(e) { /* silent — non-critical */ }
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -101,6 +101,38 @@ async def solomon_analytics_data():
     }
 
 
+@router.post("/feedback")
+async def submit_feedback(request: Request):
+    """Accept 👍/👎 feedback from the web UI and write to solomon_feedback."""
+    data = await request.json()
+    doc_id = str(data.get("doc_id", "")).strip()
+    cause_number = str(data.get("cause_number", "")).strip()
+    feedback = str(data.get("feedback", "")).strip()
+    query_text = str(data.get("query_text", "")).strip()[:500]
+
+    if feedback not in ("like", "dislike") or not doc_id:
+        raise HTTPException(status_code=400, detail="Invalid feedback data")
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO solomon_feedback
+                 (session_id, doc_id, cause_number, feedback, query_text)
+               VALUES (NULL, %s, %s, %s, %s)""",
+            (doc_id, cause_number, feedback, query_text),
+        )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.error(f"Solomon web feedback error: {e}")
+        raise HTTPException(status_code=500, detail="Could not save feedback")
+    finally:
+        conn.close()
+
+    return {"ok": True}
+
+
 @router.post("/telegram/webhook")
 async def solomon_webhook(request: Request):
     from solomon_bot import process_solomon_update

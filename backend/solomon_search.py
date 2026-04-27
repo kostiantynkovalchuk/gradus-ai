@@ -285,10 +285,8 @@ def score_and_filter(
         for s in all_scored[:limit]:
             kept.append(candidates[s["idx"]])
 
-    # Strip internal field before returning
-    for r in kept:
-        r.pop("_text_snippet", None)
-
+    # NOTE: _text_snippet is intentionally NOT stripped here.
+    # _add_summaries() in search_decisions() needs it; stripping happens there.
     return kept[:limit]
 
 
@@ -408,6 +406,10 @@ def search_decisions(params: dict, original_query: str = "") -> list:
 
     # Generate summaries only for the final kept results
     _add_summaries(final)
+
+    # Strip transient field now that summaries are generated
+    for r in final:
+        r.pop("_text_snippet", None)
 
     logger.info(f"Solomon: {len(final)} results after scoring (from {len(candidates)} candidates)")
     return final
