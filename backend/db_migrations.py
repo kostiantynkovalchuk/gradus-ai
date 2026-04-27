@@ -1183,6 +1183,17 @@ MIGRATIONS = [
                ))""",
         ]
     },
+    {
+        "version": "046_document_extraction_method",
+        "statements": [
+            # Track which extractor produced the raw_text for each document.
+            # Values: NULL (pre-migration / non-PDF), 'pdftotext', 'pdfplumber',
+            # 'pdfminer', 'ocr:tesseract:ukr+rus', 'ocr:failed', 'failed'.
+            # Lets operators know when retrieval quality may be lower (OCR docs).
+            """ALTER TABLE solcon_documents
+               ADD COLUMN IF NOT EXISTS extraction_method TEXT DEFAULT NULL""",
+        ]
+    },
 ]
 
 

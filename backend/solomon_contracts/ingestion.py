@@ -94,7 +94,56 @@ def extract_text_from_doc(path: Path) -> str:
         return ""
 
 
-def extract_text_from_pdf(path: Path) -> str:
+_OCR_THRESHOLD = 500  # chars — below this pdftotext result triggers OCR fallback
+
+
+def _ocr_pdf(path: Path) -> tuple[str, str]:
+    """
+    Rasterize every page at 300 dpi and OCR with Tesseract (ukr+rus).
+    Returns (full_text, method_label).
+    Logs per-page timing; typical budget is 2–5 s/page.
+    """
+    try:
+        import pdf2image          # rasterise
+        import pytesseract        # tesseract wrapper
+
+        t0 = time.time()
+        images = pdf2image.convert_from_path(str(path), dpi=300)
+        pages_text: list[str] = []
+        for i, img in enumerate(images, 1):
+            pt0 = time.time()
+            text = pytesseract.image_to_string(img, lang="ukr+rus")
+            elapsed = time.time() - pt0
+            logger.info(
+                "[SolCon] OCR page %d/%d: %d chars in %.1fs from %s",
+                i, len(images), len(text), elapsed, path.name,
+            )
+            if text.strip():
+                pages_text.append(f"[Стор. {i}]\n{text}")
+
+        full_text = "\n\n".join(pages_text)
+        total = time.time() - t0
+        logger.info(
+            "[SolCon] OCR done: %d chars, %d pages, %.1fs total — %s",
+            len(full_text), len(images), total, path.name,
+        )
+        return full_text, "ocr:tesseract:ukr+rus"
+    except Exception as e:
+        logger.warning("[SolCon] OCR failed for %s: %s", path.name, e)
+        return "", "ocr:failed"
+
+
+def extract_text_from_pdf(path: Path) -> tuple[str, str]:
+    """
+    Returns (text, extraction_method).
+    Chain:
+      1. pdftotext  → if ≥500 chars done, else fall through to OCR
+      2. OCR (tesseract ukr+rus)  → if ≥500 chars done
+      3. pdfplumber  → fallback when OCR unavailable
+      4. pdfminer    → last resort
+    """
+    native_text = ""
+
     # 1. pdftotext (poppler) — most reliable for text-based Ukrainian PDFs
     try:
         result = subprocess.run(
@@ -102,43 +151,62 @@ def extract_text_from_pdf(path: Path) -> str:
             capture_output=True, timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
-            text = result.stdout.decode("utf-8", errors="replace")
-            logger.info(f"[SolCon] pdftotext: {len(text)} chars from {path.name}")
-            return text
+            native_text = result.stdout.decode("utf-8", errors="replace")
+            logger.info("[SolCon] pdftotext: %d chars from %s", len(native_text), path.name)
+            if len(native_text) >= _OCR_THRESHOLD:
+                return native_text, "pdftotext"
+            logger.info(
+                "[SolCon] pdftotext returned %d chars (< %d) — likely scanned PDF, "
+                "falling through to OCR for %s",
+                len(native_text), _OCR_THRESHOLD, path.name,
+            )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.debug(f"[SolCon] pdftotext unavailable or timed out: {e}")
+        logger.debug("[SolCon] pdftotext unavailable or timed out: %s", e)
 
-    # 2. pdfplumber fallback
+    # 2. OCR fallback — for scanned / image-only PDFs
+    ocr_text, ocr_method = _ocr_pdf(path)
+    if len(ocr_text) >= _OCR_THRESHOLD:
+        return ocr_text, ocr_method
+
+    if ocr_text:
+        logger.warning(
+            "[SolCon] OCR produced only %d chars for %s — continuing with other extractors",
+            len(ocr_text), path.name,
+        )
+
+    # 3. pdfplumber fallback (for PDFs that OCR + pdftotext both struggled with)
     try:
         import pdfplumber
-        pages = []
+        pages: list[str] = []
         with pdfplumber.open(str(path)) as pdf:
             for i, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
-                if text:
-                    pages.append(f"[Стор. {i + 1}]\n{text}")
+                t = page.extract_text() or ""
+                if t:
+                    pages.append(f"[Стор. {i + 1}]\n{t}")
         text = "\n\n".join(pages)
         if text.strip():
-            logger.info(f"[SolCon] pdfplumber: {len(text)} chars from {path.name}")
-            return text
+            logger.info("[SolCon] pdfplumber: %d chars from %s", len(text), path.name)
+            return text, "pdfplumber"
     except Exception as e:
-        logger.warning(f"[SolCon] pdfplumber failed for {path.name}: {e}")
+        logger.warning("[SolCon] pdfplumber failed for %s: %s", path.name, e)
 
-    # 3. pdfminer fallback
+    # 4. pdfminer last resort
     try:
         from pdfminer.high_level import extract_text as _pdfminer
         text = _pdfminer(str(path)) or ""
         if text.strip():
-            logger.info(f"[SolCon] pdfminer: {len(text)} chars from {path.name}")
-            return text
+            logger.info("[SolCon] pdfminer: %d chars from %s", len(text), path.name)
+            return text, "pdfminer"
     except Exception as e:
-        logger.warning(f"[SolCon] pdfminer failed for {path.name}: {e}")
+        logger.warning("[SolCon] pdfminer failed for %s: %s", path.name, e)
 
+    # Return whatever we have (may be short OCR or native text)
+    best = ocr_text or native_text
     logger.warning(
-        f"[SolCon] All PDF extractors returned empty for '{path.name}' "
-        "— file may be a scanned/image-only PDF."
+        "[SolCon] All PDF extractors exhausted for '%s' — returning %d chars.",
+        path.name, len(best),
     )
-    return ""
+    return best, "failed"
 
 
 def extract_text_from_xlsx(path: Path) -> str:
@@ -184,20 +252,26 @@ def extract_text_from_xls(path: Path) -> str:
         return ""
 
 
-def extract_text(path: Path, mime_type: str = "") -> str:
+def extract_text(path: Path, mime_type: str = "") -> tuple[str, Optional[str]]:
+    """
+    Returns (raw_text, extraction_method).
+    extraction_method is None for non-PDF types; for PDFs it reflects which
+    extractor succeeded: 'pdftotext', 'ocr:tesseract:ukr+rus', 'pdfplumber',
+    'pdfminer', or 'failed'.
+    """
     suffix = path.suffix.lower()
     if suffix == ".docx" or mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        return extract_text_from_docx(path)
+        return extract_text_from_docx(path), None
     if suffix == ".doc" or mime_type == "application/msword":
-        return extract_text_from_doc(path)
+        return extract_text_from_doc(path), None
     if suffix == ".pdf" or mime_type == "application/pdf":
-        return extract_text_from_pdf(path)
+        return extract_text_from_pdf(path)   # already returns (text, method)
     if suffix == ".xls" or mime_type == "application/vnd.ms-excel":
-        return extract_text_from_xls(path)   # legacy format — must use xlrd
+        return extract_text_from_xls(path), None    # legacy format — must use xlrd
     if suffix == ".xlsx" or "spreadsheet" in mime_type:
-        return extract_text_from_xlsx(path)  # modern format — openpyxl
+        return extract_text_from_xlsx(path), None   # modern format — openpyxl
     logger.warning(f"[SolCon] Unknown file type {suffix} — skipping extraction")
-    return ""
+    return "", None
 
 
 # ─── Document classification ─────────────────────────────────────────────────
@@ -408,7 +482,7 @@ def ingest_file(
         ".xls": "application/vnd.ms-excel",
     }
     mime_type = mime_map.get(suffix, "application/octet-stream")
-    raw_text = extract_text(path, mime_type)
+    raw_text, extraction_method = extract_text(path, mime_type)
     doc_type = classify_document(filename, raw_text)
     clauses = parse_clauses(raw_text, appendix_prefix)
 
@@ -420,4 +494,5 @@ def ingest_file(
         "storage_path": str(path),
         "raw_text": raw_text,
         "clauses": json.dumps(clauses),
+        "extraction_method": extraction_method,
     }

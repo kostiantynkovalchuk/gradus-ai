@@ -646,9 +646,16 @@ async function renderEngagementWorkspace(eid) {
           analyzed = `<div class="doc-pending">Не проаналізовано</div>`;
         }
         const noText = !d.raw_chars;
+        const isOcr = d.extraction_method && d.extraction_method.startsWith('ocr:');
+        const ocrBadge = isOcr
+          ? `<span title="Текст вилучено через OCR — якість розпізнавання може бути нижчою за нативний текст"
+               style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;
+                      background:#fff3cd;color:#856404;font-size:10px;font-weight:600;
+                      border:1px solid #ffc107;vertical-align:middle">OCR</span>`
+          : '';
         html += `<div class="doc-list-item">
           <div>
-            <div class="doc-name">${esc(d.original_filename)}</div>
+            <div class="doc-name">${esc(d.original_filename)}${ocrBadge}</div>
             <select class="doc-type-select" title="Змінити тип документа" onchange="patchDocType(${d.id}, this.value, ${eid})">${docTypeOptions(d.document_type)}</select>
             ${analyzed}
             ${noText ? `<div style="font-size:10px;color:#d9534f;margin-top:2px">⚠ Текст не вилучено — потрібна переекстракція</div>` : ''}

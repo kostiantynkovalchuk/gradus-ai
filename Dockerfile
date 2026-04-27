@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     poppler-utils \
     antiword \
+    tesseract-ocr \
+    tesseract-ocr-ukr \
+    tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \

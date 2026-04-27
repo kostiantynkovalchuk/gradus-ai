@@ -236,7 +236,7 @@ async def get_engagement(request: Request, eid: int):
         raise HTTPException(status_code=404, detail="Engagement not found")
     docs = solcon_db.fetchall(
         "SELECT id, original_filename, document_type, analyzed_at, created_at, "
-        "COALESCE(LENGTH(raw_text), 0) AS raw_chars "
+        "COALESCE(LENGTH(raw_text), 0) AS raw_chars, extraction_method "
         "FROM solcon_documents WHERE engagement_id = %s ORDER BY created_at",
         (eid,),
     )
@@ -323,8 +323,8 @@ def _save_document(eid: int, doc_dict: dict) -> int:
     result = solcon_db.fetchone(
         """INSERT INTO solcon_documents
              (engagement_id, document_type, original_filename, mime_type,
-              storage_path, raw_text, clauses)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)
+              storage_path, raw_text, clauses, extraction_method)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
         (
             eid,
@@ -334,6 +334,7 @@ def _save_document(eid: int, doc_dict: dict) -> int:
             doc_dict["storage_path"],
             doc_dict["raw_text"],
             doc_dict["clauses"],
+            doc_dict.get("extraction_method"),
         ),
     )
     return result["id"]
@@ -542,16 +543,18 @@ async def re_extract_document(request: Request, eid: int, did: int):
             detail=f"File not on disk: {path.name}. Please re-upload the document.",
         )
 
-    raw_text = extract_text(path, doc["mime_type"] or "")
+    raw_text, extraction_method = extract_text(path, doc["mime_type"] or "")
     clauses = parse_clauses(raw_text)
     if not clauses:
         clauses = scan_all_refs(raw_text)
 
     solcon_db.execute(
-        "UPDATE solcon_documents SET raw_text=%s, clauses=%s::jsonb, analyzed_at=NULL WHERE id=%s",
-        (raw_text, _json.dumps(clauses), did),
+        """UPDATE solcon_documents
+           SET raw_text=%s, clauses=%s::jsonb, extraction_method=%s, analyzed_at=NULL
+           WHERE id=%s""",
+        (raw_text, _json.dumps(clauses), extraction_method, did),
     )
-    return {"ok": True, "chars": len(raw_text), "clauses": len(clauses)}
+    return {"ok": True, "chars": len(raw_text), "clauses": len(clauses), "method": extraction_method}
 
 
 @router.delete("/engagements/{eid}/documents/{did}")
