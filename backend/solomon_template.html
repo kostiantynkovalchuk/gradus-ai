@@ -663,7 +663,7 @@ async function renderEngagementWorkspace(eid) {
           <div style="display:flex;gap:8px;align-items:flex-start">
             ${noText ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
             <button class="btn btn-secondary btn-sm" onclick="setIncludeAll(${d.id}, ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='triage').length > 0})">Протокол</button>
-            <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename)})">✕</button>
+            <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename).replace(/"/g, '&quot;')})">✕</button>
           </div>
         </div>`;
       });
