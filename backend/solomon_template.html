@@ -684,7 +684,7 @@ async function renderEngagementWorkspace(eid) {
           </div>
           <div style="display:flex;gap:8px;align-items:flex-start">
             ${(noText || isOcrFailed) ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
-            <button class="btn btn-secondary btn-sm" onclick="setIncludeAll(${d.id}, ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='triage').length > 0})">Протокол</button>
+            ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='included_in_protocol').length > 0 ? `<button class="btn btn-secondary btn-sm" title="Згенерувати протокол розбіжностей" onclick="genProtocol(${eid}, ${d.id})">↓ Протокол DOCX</button>` : ''}
             <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename).replace(/"/g, '&quot;')})">✕</button>
           </div>
         </div>`;
@@ -1049,6 +1049,33 @@ async function genOpinion(eid) {
 
 function downloadOpinion(eid, version) {
   window.open('/api/contracts/engagements/' + eid + '/legal-opinion/' + version + '.docx', '_blank');
+}
+
+async function genProtocol(eid, did) {
+  const btn = event.target;
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = 'Генерація…';
+  try {
+    const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}/protocol`, {method:'POST'});
+    if (r.status === 400) {
+      const body = await r.json().catch(() => ({}));
+      alert(body.detail || 'Позначте пункти "До протоколу" перед генерацією');
+      return;
+    }
+    if (!r.ok) { alert('Помилка генерації протоколу'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protocol_${eid}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    await renderEngagementWorkspace(eid);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
 }
 
 function fmtDateTime(d) {
