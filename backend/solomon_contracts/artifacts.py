@@ -177,23 +177,25 @@ def build_protocol_docx(
     engagement_name: str,
     counterparty: str,
     findings: list[dict],
+    document_filename: str = "",
 ) -> bytes:
     """
     5-column table: Clause № | Buyer verbatim | Supplier alternative | Legal basis | Agreed version
     AI disclaimer tag is stripped from supplier text; text trimmed to 2 paragraphs / 800 chars.
+    document_filename is shown in the header to distinguish protocols for different source docs.
     """
     doc = Document()
     _set_margins(doc)
 
-    h = doc.add_heading(f"ПРОТОКОЛ РОЗБІЖНОСТЕЙ", level=1)
+    h = doc.add_heading("ПРОТОКОЛ РОЗБІЖНОСТЕЙ", level=1)
     h.runs[0].font.color.rgb = RGBColor(0x0D, 0x15, 0x28)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    doc.add_paragraph(
-        f"до Договору поставки з {counterparty}\n"
-        f"Справа: {engagement_name}\n"
-        f"AVTD виступає Постачальником."
-    )
+    subtitle_lines = [f"до Договору поставки з {counterparty}"]
+    if document_filename:
+        subtitle_lines.append(f"документ: {document_filename}")
+    subtitle_lines += [f"Справа: {engagement_name}", "AVTD виступає Постачальником."]
+    doc.add_paragraph("\n".join(subtitle_lines))
     doc.add_paragraph()
 
     tbl = doc.add_table(rows=1, cols=5)

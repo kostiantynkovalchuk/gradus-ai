@@ -651,14 +651,21 @@ async def generate_protocol(request: Request, eid: int, did: int):
     if not findings:
         raise HTTPException(status_code=400, detail="No findings included in protocol")
 
+    doc_record = solcon_db.fetchone(
+        "SELECT original_filename FROM solcon_documents WHERE id=%s", (did,)
+    )
+    original_filename = (doc_record["original_filename"] if doc_record else None) or f"doc{did}"
+
     finding_ids = [f["id"] for f in findings]
     docx_bytes = build_protocol_docx(
         eng["name"],
         eng["counterparty_name"] or "—",
         [dict(f) for f in findings],
+        document_filename=original_filename,
     )
 
     from pathlib import Path
+    from urllib.parse import quote
     from .ingestion import UPLOAD_DIR
     proto_dir = UPLOAD_DIR / str(eid) / "protocols"
     proto_dir.mkdir(parents=True, exist_ok=True)
@@ -687,10 +694,13 @@ async def generate_protocol(request: Request, eid: int, did: int):
         (eid,),
     )
 
+    # Build descriptive download filename using doc stem (RFC 5987 for non-ASCII)
+    doc_stem = Path(original_filename).stem[:50]
+    dl_name = f"protocol_{doc_stem}_v{version}.docx"
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="protocol_{eid}_v{version}.docx"'},
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(dl_name)}"},
     )
 
 
