@@ -279,6 +279,18 @@
   .uqi-name   { color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
   .uqi-status { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
 
+  /* Legal opinion panel */
+  .opinion-panel { background: #f9f8f5; border: 1px solid var(--border); border-radius: 8px; padding: 22px 26px; margin-top: 4px; }
+  .opinion-content { font-size: 13.5px; line-height: 1.7; color: var(--text); }
+  .opinion-content h1 { font-family:'Cormorant Garamond',serif; font-size:20px; font-weight:700; color:var(--navy); margin:18px 0 8px; border-bottom:1px solid var(--border); padding-bottom:4px; }
+  .opinion-content h2 { font-family:'Cormorant Garamond',serif; font-size:16px; font-weight:700; color:var(--navy-light); margin:16px 0 6px; }
+  .opinion-content h3 { font-size:14px; font-weight:600; color:var(--navy); margin:12px 0 4px; }
+  .opinion-content p  { margin:5px 0; }
+  .opinion-content ul { margin:6px 0 6px 20px; padding:0; }
+  .opinion-content li { margin-bottom:3px; }
+  .opinion-content hr { border:none; border-top:1px solid var(--border); margin:14px 0; }
+  .opinion-content strong { font-weight:600; }
+
   /* Modal backdrop */
   .modal-backdrop {
     display: none; position: fixed; inset: 0; background: #0d152860;
@@ -582,7 +594,8 @@ async function renderEngagementWorkspace(eid) {
     const eng = data.engagement;
     const docs = data.documents || [];
     const findings = data.findings || [];
-    const sevSum = data.severity_summary || {};
+    const sevSum   = data.severity_summary || {};
+    const opinion  = data.latest_opinion  || null;
 
     let html = `<div class="workspace-header">
       <span class="workspace-back" onclick="navigateTo('list')">← Список справ</span>
@@ -700,6 +713,23 @@ async function renderEngagementWorkspace(eid) {
       });
     } else if (docs.some(d => d.analyzed_at)) {
       html += `<div class="empty-state" style="padding:30px 0">Ризиків не виявлено</div>`;
+    }
+
+    // Legal opinion panel — show latest version if one already exists
+    if (opinion) {
+      html += `<div class="section-header" style="margin-top:32px">
+        <div>
+          <div class="section-title" style="font-size:16px">Правовий висновок</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Версія ${opinion.version} · Згенеровано: ${fmtDateTime(opinion.generated_at)}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" onclick="downloadOpinion(${eid}, ${opinion.version})">↓ Завантажити DOCX</button>
+          <button class="btn btn-secondary btn-sm" onclick="genOpinion(${eid})">↺ Оновити</button>
+        </div>
+      </div>
+      <div class="opinion-panel">
+        <div class="opinion-content">${_mdToHtml(opinion.content_md || '')}</div>
+      </div>`;
     }
 
     html += `<div class="disclaimer">Автоматичний аналіз Solomon. Підлягає перевірці юристом. Не є юридичною консультацією.</div>`;
@@ -957,12 +987,73 @@ async function downloadRiskNote(eid) {
 
 async function genOpinion(eid) {
   const btn = event.target;
-  btn.disabled = true; btn.textContent = 'Генерація…';
-  const r = await fetch('/api/contracts/engagements/' + eid + '/legal-opinion', { method:'POST' });
-  btn.disabled = false; btn.textContent = 'Правовий висновок';
-  if (!r.ok) { alert('Помилка генерації'); return; }
-  const data = await r.json();
-  window.open('/api/contracts/engagements/' + eid + '/legal-opinion/' + data.version + '.docx', '_blank');
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = 'Генерація…';
+  try {
+    const r = await fetch('/api/contracts/engagements/' + eid + '/legal-opinion', { method: 'POST' });
+    if (!r.ok) { alert('Помилка генерації'); return; }
+    // Re-render the workspace; the GET response now includes latest_opinion
+    await renderEngagementWorkspace(eid);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+function downloadOpinion(eid, version) {
+  window.open('/api/contracts/engagements/' + eid + '/legal-opinion/' + version + '.docx', '_blank');
+}
+
+function fmtDateTime(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('uk-UA') + ', ' +
+    dt.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+}
+
+function _mdToHtml(md) {
+  if (!md) return '';
+  // Escape HTML entities first, then process markdown markup
+  const escaped = md
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  const lines = escaped.split('\n');
+  let html = '';
+  let inList = false;
+
+  for (const rawLine of lines) {
+    // Apply inline formatting (bold, italic)
+    const line = rawLine
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+    if (/^###\s/.test(rawLine)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h3>${line.replace(/^###\s/, '')}</h3>`;
+    } else if (/^##\s/.test(rawLine)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h2>${line.replace(/^##\s/, '')}</h2>`;
+    } else if (/^#\s/.test(rawLine)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h1>${line.replace(/^#\s/, '')}</h1>`;
+    } else if (/^[-*] /.test(rawLine)) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += `<li>${line.replace(/^[-*] /, '')}</li>`;
+    } else if (/^---+$/.test(rawLine.trim())) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<hr>';
+    } else if (rawLine.trim() === '') {
+      if (inList) { html += '</ul>'; inList = false; }
+    } else {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<p>${line}</p>`;
+    }
+  }
+  if (inList) html += '</ul>';
+  return html;
 }
 
 // ══════════════════════════════════════════════════════════════

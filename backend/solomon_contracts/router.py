@@ -251,11 +251,17 @@ async def get_engagement(request: Request, eid: int):
     for f in (findings or []):
         sev_summary[f["severity"]] = sev_summary.get(f["severity"], 0) + 1
 
+    latest_op = solcon_db.fetchone(
+        "SELECT version, content_md, generated_at FROM solcon_legal_opinions "
+        "WHERE engagement_id=%s ORDER BY version DESC LIMIT 1",
+        (eid,),
+    )
     return {
         "engagement": dict(eng),
         "documents": [dict(d) for d in (docs or [])],
         "findings": [dict(f) for f in (findings or [])],
         "severity_summary": sev_summary,
+        "latest_opinion": dict(latest_op) if latest_op else None,
     }
 
 
