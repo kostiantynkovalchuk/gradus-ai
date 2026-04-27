@@ -97,37 +97,86 @@ def extract_text_from_doc(path: Path) -> str:
 _OCR_THRESHOLD = 500  # chars — below this pdftotext result triggers OCR fallback
 
 
+_OCR_DPI = 200          # 200 dpi ≈ 56% less memory than 300 dpi, still legible for Tesseract
+_OCR_MAX_PAGES = 40    # hard cap — override with SOLCON_OCR_MAX_PAGES env var
+
+
+def _pdf_page_count(path: Path) -> int:
+    """Return number of pages using pdfinfo (poppler). Returns 0 on failure."""
+    try:
+        result = subprocess.run(
+            ["pdfinfo", str(path)], capture_output=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+                if line.startswith("Pages:"):
+                    return int(line.split(":", 1)[1].strip())
+    except Exception as e:
+        logger.debug("[SolCon] pdfinfo failed for %s: %s", path.name, e)
+    return 0
+
+
 def _ocr_pdf(path: Path) -> tuple[str, str]:
     """
-    Rasterize every page at 300 dpi and OCR with Tesseract (ukr+rus).
+    Stream-OCR: rasterize and OCR one page at a time to keep peak RSS low.
+    Each page image is freed immediately after OCR — peak memory ≈ 1 page
+    at _OCR_DPI dpi (~10–20 MB for A4) instead of all pages at once.
+
     Returns (full_text, method_label).
-    Logs per-page timing; typical budget is 2–5 s/page.
     """
     try:
-        import pdf2image          # rasterise
-        import pytesseract        # tesseract wrapper
+        import pdf2image
+        import pytesseract
+
+        max_pages = int(os.getenv("SOLCON_OCR_MAX_PAGES", _OCR_MAX_PAGES))
+        page_count = _pdf_page_count(path)
+        if page_count == 0:
+            logger.warning("[SolCon] pdfinfo returned 0 pages for %s — attempting blind OCR", path.name)
+            page_count = max_pages   # will break early when convert_from_path returns []
+
+        pages_to_ocr = min(page_count, max_pages)
+        if page_count > max_pages:
+            logger.warning(
+                "[SolCon] %s has %d pages — capping OCR at %d (SOLCON_OCR_MAX_PAGES)",
+                path.name, page_count, max_pages,
+            )
 
         t0 = time.time()
-        images = pdf2image.convert_from_path(str(path), dpi=300)
         pages_text: list[str] = []
-        for i, img in enumerate(images, 1):
+
+        for page_num in range(1, pages_to_ocr + 1):
+            # Rasterize exactly one page — only that one image lives in RAM
+            images = pdf2image.convert_from_path(
+                str(path), dpi=_OCR_DPI,
+                first_page=page_num, last_page=page_num,
+            )
+            if not images:
+                break  # no more pages (blind-OCR mode hit the real end)
+
+            img = images[0]
+            del images  # release list; img still referenced
+
             pt0 = time.time()
             text = pytesseract.image_to_string(img, lang="ukr+rus")
             elapsed = time.time() - pt0
+
+            del img   # free the rasterized image buffer immediately
+
             logger.info(
-                "[SolCon] OCR page %d/%d: %d chars in %.1fs from %s",
-                i, len(images), len(text), elapsed, path.name,
+                "[SolCon] OCR page %d/%d: %d chars in %.1fs — %s",
+                page_num, pages_to_ocr, len(text), elapsed, path.name,
             )
             if text.strip():
-                pages_text.append(f"[Стор. {i}]\n{text}")
+                pages_text.append(f"[Стор. {page_num}]\n{text}")
 
         full_text = "\n\n".join(pages_text)
         total = time.time() - t0
         logger.info(
-            "[SolCon] OCR done: %d chars, %d pages, %.1fs total — %s",
-            len(full_text), len(images), total, path.name,
+            "[SolCon] OCR done: %d chars, %d/%d pages, %.1fs total — %s",
+            len(full_text), len(pages_text), pages_to_ocr, total, path.name,
         )
         return full_text, "ocr:tesseract:ukr+rus"
+
     except Exception as e:
         logger.warning("[SolCon] OCR failed for %s: %s", path.name, e)
         return "", "ocr:failed"
