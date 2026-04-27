@@ -645,14 +645,18 @@ async function renderEngagementWorkspace(eid) {
         } else {
           analyzed = `<div class="doc-pending">Не проаналізовано</div>`;
         }
+        const noText = !d.raw_chars;
         html += `<div class="doc-list-item">
           <div>
             <div class="doc-name">${esc(d.original_filename)}</div>
             <select class="doc-type-select" title="Змінити тип документа" onchange="patchDocType(${d.id}, this.value, ${eid})">${docTypeOptions(d.document_type)}</select>
             ${analyzed}
+            ${noText ? `<div style="font-size:10px;color:#d9534f;margin-top:2px">⚠ Текст не вилучено — потрібна переекстракція</div>` : ''}
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            ${noText ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
             <button class="btn btn-secondary btn-sm" onclick="setIncludeAll(${d.id}, ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='triage').length > 0})">Протокол</button>
+            <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename)})">✕</button>
           </div>
         </div>`;
       });
@@ -1167,6 +1171,31 @@ async function patchDocType(did, newType, eid) {
   });
   if (!r.ok) { alert('Помилка зміни типу документа'); return; }
   await renderEngagementWorkspace(eid);
+}
+async function deleteDoc(did, eid, filename) {
+  if (!confirm(`Видалити "${filename}" та всі пов'язані ризики?`)) return;
+  const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}`, {method: 'DELETE'});
+  if (!r.ok) { alert('Помилка видалення документа'); return; }
+  await renderEngagementWorkspace(eid);
+}
+async function reExtract(did, eid) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}/re-extract`, {method: 'POST'});
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert(err.detail || 'Помилка переекстракції');
+      return;
+    }
+    const data = await r.json();
+    if (!data.chars) {
+      alert('Текст так і не вдалося вилучити — ймовірно, PDF є сканом. Спробуйте завантажити текстову версію файлу.');
+    }
+    await renderEngagementWorkspace(eid);
+  } finally {
+    btn.disabled = false; btn.textContent = '↺ Текст';
+  }
 }
 function stateOptions(current) {
   const opts = [

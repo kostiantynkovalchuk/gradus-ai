@@ -235,7 +235,8 @@ async def get_engagement(request: Request, eid: int):
     if not eng:
         raise HTTPException(status_code=404, detail="Engagement not found")
     docs = solcon_db.fetchall(
-        "SELECT id, original_filename, document_type, analyzed_at, created_at "
+        "SELECT id, original_filename, document_type, analyzed_at, created_at, "
+        "COALESCE(LENGTH(raw_text), 0) AS raw_chars "
         "FROM solcon_documents WHERE engagement_id = %s ORDER BY created_at",
         (eid,),
     )
@@ -515,6 +516,67 @@ async def download_risk_note(request: Request, eid: int):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="risks_{eid}.docx"'},
     )
+
+
+@router.post("/engagements/{eid}/documents/{did}/re-extract")
+async def re_extract_document(request: Request, eid: int, did: int):
+    """Re-run text extraction + clause parsing on the stored file.
+    Clears analyzed_at so the document can be re-analyzed afterwards.
+    Returns 409 if the file is no longer on disk (re-upload required).
+    """
+    _auth_check(request)
+    doc = solcon_db.fetchone(
+        "SELECT * FROM solcon_documents WHERE id=%s AND engagement_id=%s", (did, eid)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    from pathlib import Path as _Path
+    from .ingestion import extract_text, parse_clauses, scan_all_refs
+    import json as _json
+
+    path = _Path(doc["storage_path"])
+    if not path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"File not on disk: {path.name}. Please re-upload the document.",
+        )
+
+    raw_text = extract_text(path, doc["mime_type"] or "")
+    clauses = parse_clauses(raw_text)
+    if not clauses:
+        clauses = scan_all_refs(raw_text)
+
+    solcon_db.execute(
+        "UPDATE solcon_documents SET raw_text=%s, clauses=%s::jsonb, analyzed_at=NULL WHERE id=%s",
+        (raw_text, _json.dumps(clauses), did),
+    )
+    return {"ok": True, "chars": len(raw_text), "clauses": len(clauses)}
+
+
+@router.delete("/engagements/{eid}/documents/{did}")
+async def delete_document(request: Request, eid: int, did: int):
+    """Delete a document record (and its file + findings) from an engagement."""
+    _auth_check(request)
+    doc = solcon_db.fetchone(
+        "SELECT * FROM solcon_documents WHERE id=%s AND engagement_id=%s", (did, eid)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Remove file from disk if it exists
+    from pathlib import Path as _Path
+    path = _Path(doc["storage_path"])
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    # Cascade: delete findings and then the document
+    solcon_db.execute("DELETE FROM solcon_findings WHERE document_id=%s", (did,))
+    solcon_db.execute("DELETE FROM solcon_documents WHERE id=%s", (did,))
+    return {"ok": True}
 
 
 @router.patch("/engagements/{eid}/documents/{did}/type")

@@ -19,7 +19,8 @@ from services.ai_models import HAIKU
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_DIR = Path(os.getenv("SOLCON_UPLOAD_DIR", "/tmp/solomon_uploads"))
+_DEFAULT_UPLOAD_DIR = str(Path(__file__).parent.parent / "solomon_uploads")
+UPLOAD_DIR = Path(os.getenv("SOLCON_UPLOAD_DIR", _DEFAULT_UPLOAD_DIR))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 CLAUSE_RE = re.compile(
@@ -94,6 +95,20 @@ def extract_text_from_doc(path: Path) -> str:
 
 
 def extract_text_from_pdf(path: Path) -> str:
+    # 1. pdftotext (poppler) — most reliable for text-based Ukrainian PDFs
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-enc", "UTF-8", str(path), "-"],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            text = result.stdout.decode("utf-8", errors="replace")
+            logger.info(f"[SolCon] pdftotext: {len(text)} chars from {path.name}")
+            return text
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        logger.debug(f"[SolCon] pdftotext unavailable or timed out: {e}")
+
+    # 2. pdfplumber fallback
     try:
         import pdfplumber
         pages = []
@@ -102,13 +117,32 @@ def extract_text_from_pdf(path: Path) -> str:
                 text = page.extract_text() or ""
                 if text:
                     pages.append(f"[Стор. {i + 1}]\n{text}")
-        return "\n\n".join(pages)
+        text = "\n\n".join(pages)
+        if text.strip():
+            logger.info(f"[SolCon] pdfplumber: {len(text)} chars from {path.name}")
+            return text
     except Exception as e:
-        logger.warning(f"[SolCon] PDF extraction failed for {path}: {e}")
-        return ""
+        logger.warning(f"[SolCon] pdfplumber failed for {path.name}: {e}")
+
+    # 3. pdfminer fallback
+    try:
+        from pdfminer.high_level import extract_text as _pdfminer
+        text = _pdfminer(str(path)) or ""
+        if text.strip():
+            logger.info(f"[SolCon] pdfminer: {len(text)} chars from {path.name}")
+            return text
+    except Exception as e:
+        logger.warning(f"[SolCon] pdfminer failed for {path.name}: {e}")
+
+    logger.warning(
+        f"[SolCon] All PDF extractors returned empty for '{path.name}' "
+        "— file may be a scanned/image-only PDF."
+    )
+    return ""
 
 
 def extract_text_from_xlsx(path: Path) -> str:
+    """Handles modern .xlsx files via openpyxl."""
     from openpyxl import load_workbook
     rows = []
     try:
@@ -120,9 +154,34 @@ def extract_text_from_xlsx(path: Path) -> str:
                 if cells:
                     rows.append(" | ".join(cells))
         wb.close()
+        logger.info(f"[SolCon] openpyxl: {len(rows)} rows from {path.name}")
     except Exception as e:
-        logger.warning(f"[SolCon] XLSX extraction failed: {e}")
+        logger.warning(f"[SolCon] openpyxl extraction failed for {path.name}: {e}")
     return "\n".join(rows)
+
+
+def extract_text_from_xls(path: Path) -> str:
+    """Handles legacy .xls files via xlrd (openpyxl cannot read old XLS format)."""
+    try:
+        import xlrd
+        wb = xlrd.open_workbook(str(path))
+        rows = []
+        for sheet in wb.sheets():
+            rows.append(f"[Аркуш: {sheet.name}]")
+            for rowx in range(sheet.nrows):
+                cells = []
+                for c in range(sheet.ncols):
+                    ct = sheet.cell_type(rowx, c)
+                    if ct not in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+                        cells.append(str(sheet.cell_value(rowx, c)))
+                if cells:
+                    rows.append(" | ".join(cells))
+        text = "\n".join(rows)
+        logger.info(f"[SolCon] xlrd: {len(rows)} rows / {len(text)} chars from {path.name}")
+        return text
+    except Exception as e:
+        logger.warning(f"[SolCon] xlrd extraction failed for {path.name}: {e}")
+        return ""
 
 
 def extract_text(path: Path, mime_type: str = "") -> str:
@@ -133,8 +192,10 @@ def extract_text(path: Path, mime_type: str = "") -> str:
         return extract_text_from_doc(path)
     if suffix == ".pdf" or mime_type == "application/pdf":
         return extract_text_from_pdf(path)
-    if suffix in (".xlsx", ".xls") or "spreadsheet" in mime_type:
-        return extract_text_from_xlsx(path)
+    if suffix == ".xls" or mime_type == "application/vnd.ms-excel":
+        return extract_text_from_xls(path)   # legacy format — must use xlrd
+    if suffix == ".xlsx" or "spreadsheet" in mime_type:
+        return extract_text_from_xlsx(path)  # modern format — openpyxl
     logger.warning(f"[SolCon] Unknown file type {suffix} — skipping extraction")
     return ""
 
