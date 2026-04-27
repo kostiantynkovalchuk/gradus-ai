@@ -45,6 +45,13 @@ SEV_COLORS = {
     "low": RGBColor(0x3A, 0x4D, 0x6E),
 }
 
+SEV_LABELS = {
+    "critical": "КРИТИЧНИЙ",
+    "high": "ВИСОКИЙ",
+    "medium": "СЕРЕДНІЙ",
+    "low": "НИЗЬКИЙ",
+}
+
 
 # ─── §9.1 Risk note DOCX ─────────────────────────────────────────────────────
 
@@ -88,7 +95,7 @@ def build_risk_note_docx(
                 r = p.add_run(f"[{f['clause_ref']}] ")
                 r.bold = True
                 sev_color = SEV_COLORS.get(f["severity"], RGBColor(0x3A, 0x4D, 0x6E))
-                r2 = p.add_run(f"[{f['severity'].upper()}] ")
+                r2 = p.add_run(f"[{SEV_LABELS.get(f['severity'], f['severity'].upper())}] ")
                 r2.font.color.rgb = sev_color
                 r2.bold = True
                 r3 = p.add_run(f"[{_cat_label(cat)}] ")
