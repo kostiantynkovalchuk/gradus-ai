@@ -1167,6 +1167,22 @@ MIGRATIONS = [
                ON CONFLICT (id) DO NOTHING""",
         ]
     },
+    {
+        "version": "045_engagement_analysis_failed_status",
+        "statements": [
+            # Expand the status CHECK constraint to allow 'analysis_failed'.
+            # This lets the background task mark an engagement that crashed.
+            """ALTER TABLE solcon_engagements
+               DROP CONSTRAINT IF EXISTS solcon_engagements_status_check""",
+            """ALTER TABLE solcon_engagements
+               ADD CONSTRAINT solcon_engagements_status_check
+               CHECK (status IN (
+                   'triage','under_review','analysis_failed',
+                   'protocol_drafted','protocol_sent',
+                   'counterparty_responded','agreed','declined','archived'
+               ))""",
+        ]
+    },
 ]
 
 

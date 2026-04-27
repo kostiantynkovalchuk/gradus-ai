@@ -168,15 +168,18 @@ def scan_document(
         msg.usage.input_tokens, msg.usage.output_tokens, duration_ms,
     )
 
-    try:
-        findings_raw = json.loads(raw_out)
-    except json.JSONDecodeError:
-        logger.error(f"[SolCon] Scan JSON parse failed doc={document_id}: {raw_out[:200]}")
-        solcon_db.log_llm_call(
-            engagement_id, document_id, "scan", ANTHROPIC_SCAN_MODEL,
-            0, 0, 0, "parse_error",
-        )
-        return [], 0
+    if isinstance(raw_out, (list, dict)):
+        findings_raw = raw_out
+    else:
+        try:
+            findings_raw = json.loads(raw_out)
+        except json.JSONDecodeError:
+            logger.exception(f"[SolCon] Scan JSON parse failed doc={document_id}: {raw_out[:200]}")
+            solcon_db.log_llm_call(
+                engagement_id, document_id, "scan", ANTHROPIC_SCAN_MODEL,
+                0, 0, 0, "parse_error",
+            )
+            return [], 0
 
     accepted = []
     rejected_count = 0
@@ -349,11 +352,14 @@ def generate_alternatives(
         if raw_alt.startswith("```"):
             raw_alt = re.sub(r"^```(?:json)?\s*", "", raw_alt)
             raw_alt = re.sub(r"\s*```$", "", raw_alt).strip()
-        try:
-            result = json.loads(raw_alt)
-        except json.JSONDecodeError:
-            logger.warning(f"[SolCon] Alternative JSON parse failed, raw={raw_alt[:200]!r}")
-            continue
+        if isinstance(raw_alt, (list, dict)):
+            result = raw_alt
+        else:
+            try:
+                result = json.loads(raw_alt)
+            except json.JSONDecodeError:
+                logger.exception(f"[SolCon] Alternative JSON parse failed, raw={raw_alt[:200]!r}")
+                continue
 
         grounding = result.get("grounding_status", "ungrounded")
         if grounding not in VALID_GROUNDING:

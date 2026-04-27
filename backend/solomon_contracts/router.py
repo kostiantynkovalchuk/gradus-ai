@@ -368,19 +368,30 @@ async def analyze_engagement(request: Request, eid: int):
 async def _run_analysis(eid: int, docs: list[dict]):
     loop = asyncio.get_event_loop()
     total_findings = 0
+    any_success = False
     for doc in docs:
         try:
             findings, rejected = await loop.run_in_executor(
                 None, _analyze_one_document, doc, eid
             )
             total_findings += len(findings)
+            any_success = True
         except Exception as e:
-            logger.error(f"[SolCon] Analysis failed for doc {doc['id']}: {e}")
+            logger.exception(f"[SolCon] Analysis failed for doc {doc['id']}: {e}")
+    if not any_success:
+        try:
+            solcon_db.execute(
+                "UPDATE solcon_engagements SET status='analysis_failed', updated_at=NOW() WHERE id=%s",
+                (eid,),
+            )
+        except Exception:
+            pass
     logger.info(f"[SolCon] Analysis complete for eng={eid}, total findings={total_findings}")
 
 
 def _analyze_one_document(doc: dict, eid: int):
-    clauses = json.loads(doc.get("clauses", "[]"))
+    raw_clauses = doc.get("clauses") or "[]"
+    clauses = raw_clauses if isinstance(raw_clauses, list) else json.loads(raw_clauses)
     raw_text = doc.get("raw_text", "")
     doc_id = doc["id"]
 

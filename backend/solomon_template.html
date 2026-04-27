@@ -208,7 +208,8 @@
     padding: 3px 10px; border-radius: 20px; white-space: nowrap;
   }
   .status-triage       { background: #f0f4ff; color: var(--navy-light); }
-  .status-under_review { background: #fff8e1; color: #b8892a; }
+  .status-under_review    { background: #fff8e1; color: #b8892a; }
+  .status-analysis_failed { background: #fdf2f2; color: #c0392b; }
   .status-protocol_drafted { background: #e8f5e9; color: #2e7d32; }
   .status-protocol_sent    { background: #e3f2fd; color: #1565c0; }
   .status-agreed           { background: #e8f5e9; color: #1b5e20; }
@@ -577,13 +578,22 @@ async function renderEngagementWorkspace(eid) {
       </div>
     </div>`;
 
-    // KPIs
+    // KPIs — show "—" until at least one doc has been analyzed
+    const anyAnalyzed = docs.some(d => d.analyzed_at);
+    const kpiRisk     = anyAnalyzed ? findings.length          : '—';
+    const kpiCrit     = anyAnalyzed ? (sevSum.critical || 0)   : '—';
+    const kpiHigh     = anyAnalyzed ? (sevSum.high     || 0)   : '—';
     html += `<div class="kpi-row">
       <div class="kpi"><div class="kpi-val">${docs.length}</div><div class="kpi-label">Документів</div></div>
-      <div class="kpi"><div class="kpi-val">${findings.length}</div><div class="kpi-label">Ризиків</div></div>
-      <div class="kpi" style="background:#fdf2f2"><div class="kpi-val" style="color:var(--sev-critical)">${sevSum.critical||0}</div><div class="kpi-label">Критичних</div></div>
-      <div class="kpi" style="background:#fff3e0"><div class="kpi-val" style="color:var(--sev-high)">${sevSum.high||0}</div><div class="kpi-label">Високих</div></div>
+      <div class="kpi"><div class="kpi-val">${kpiRisk}</div><div class="kpi-label">Ризиків</div></div>
+      <div class="kpi" style="background:#fdf2f2"><div class="kpi-val" style="color:var(--sev-critical)">${kpiCrit}</div><div class="kpi-label">Критичних</div></div>
+      <div class="kpi" style="background:#fff3e0"><div class="kpi-val" style="color:var(--sev-high)">${kpiHigh}</div><div class="kpi-label">Високих</div></div>
     </div>`;
+
+    // Analysis-failed callout
+    if (eng.status === 'analysis_failed') {
+      html += `<div class="error-msg" style="margin:12px 0">⚠ Аналіз завершився з помилкою. Перевірте журнал сервера та повторіть спробу.</div>`;
+    }
 
     // Documents section
     html += `<div class="section-header" style="margin-top:24px">
@@ -800,7 +810,34 @@ async function startAnalysis(eid) {
   const r = await fetch('/api/contracts/engagements/' + eid + '/analyze', { method:'POST' });
   if (!r.ok) { alert('Помилка запуску аналізу'); return; }
   const data = await r.json();
-  alert(`Аналіз розпочато для ${data.document_count} документ(ів). Зачекайте 60-120 сек і оновіть сторінку.`);
+
+  // Auto-poll: re-render workspace once analysis finishes or fails
+  const btn = document.querySelector('.btn-gold');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Аналіз…'; }
+
+  const started = Date.now();
+  const TIMEOUT_MS = 3 * 60 * 1000;
+  const POLL_MS    = 8000;
+
+  async function poll() {
+    if (Date.now() - started > TIMEOUT_MS) {
+      alert('Аналіз тривалий — оновіть сторінку вручну.');
+      return;
+    }
+    try {
+      const data = await (await fetch('/api/contracts/engagements/' + eid, {
+        headers: { 'Cookie': document.cookie }
+      })).json();
+      const status = data.engagement && data.engagement.status;
+      const docs   = data.documents || [];
+      if (status === 'analysis_failed' || docs.some(d => d.analyzed_at)) {
+        await renderEngagementWorkspace(eid);
+        return;
+      }
+    } catch (e) { /* network hiccup — keep polling */ }
+    setTimeout(poll, POLL_MS);
+  }
+  setTimeout(poll, POLL_MS);
 }
 
 async function updateFindingState(fid, state) {
@@ -886,8 +923,9 @@ function statusBadge(s) {
   return `<span class="status-badge status-${s||'triage'}">${statusLabel(s)}</span>`;
 }
 function statusLabel(s) {
-  const m = {triage:'Огляд',under_review:'Аналіз',protocol_drafted:'Протокол готовий',
-    protocol_sent:'Протокол надіслано',counterparty_responded:'Відповідь отримана',
+  const m = {triage:'Огляд',under_review:'Аналіз',analysis_failed:'Помилка аналізу',
+    protocol_drafted:'Протокол готовий',protocol_sent:'Протокол надіслано',
+    counterparty_responded:'Відповідь отримана',
     agreed:'Узгоджено',declined:'Відхилено',archived:'Архів'};
   return m[s] || s;
 }
