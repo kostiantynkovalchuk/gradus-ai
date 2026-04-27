@@ -1194,6 +1194,22 @@ MIGRATIONS = [
                ADD COLUMN IF NOT EXISTS extraction_method TEXT DEFAULT NULL""",
         ]
     },
+    {
+        "version": "047_document_ocr_progress",
+        "statements": [
+            # Drive the background OCR progress UI.
+            # ocr_status: NULL=not a scanned PDF, 'pending'=queued,
+            #             'running'=in progress, 'done'=complete, 'failed'=error.
+            # ocr_current_page / ocr_total_pages: updated after each page by
+            # run_background_ocr() so the frontend can display "page 3/11".
+            """ALTER TABLE solcon_documents
+               ADD COLUMN IF NOT EXISTS ocr_status TEXT DEFAULT NULL""",
+            """ALTER TABLE solcon_documents
+               ADD COLUMN IF NOT EXISTS ocr_current_page INT DEFAULT 0""",
+            """ALTER TABLE solcon_documents
+               ADD COLUMN IF NOT EXISTS ocr_total_pages INT DEFAULT 0""",
+        ]
+    },
 ]
 
 

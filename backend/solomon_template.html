@@ -645,7 +645,10 @@ async function renderEngagementWorkspace(eid) {
         } else {
           analyzed = `<div class="doc-pending">Не проаналізовано</div>`;
         }
-        const noText = !d.raw_chars;
+        const isOcrPending = d.ocr_status === 'pending' || d.ocr_status === 'running';
+        const isOcrFailed  = d.ocr_status === 'failed';
+        const noText = !d.raw_chars && !isOcrPending;
+
         const isOcr = d.extraction_method && d.extraction_method.startsWith('ocr:');
         const ocrBadge = isOcr
           ? `<span title="Текст вилучено через OCR — якість розпізнавання може бути нижчою за нативний текст"
@@ -653,15 +656,34 @@ async function renderEngagementWorkspace(eid) {
                       background:#fff3cd;color:#856404;font-size:10px;font-weight:600;
                       border:1px solid #ffc107;vertical-align:middle">OCR</span>`
           : '';
+
+        // Inline OCR progress badge — updated in-place by poll without full re-render
+        const ocrProgressTxt = isOcrPending
+          ? (d.ocr_status === 'running' && d.ocr_total_pages > 0
+              ? `⏳ OCR ${d.ocr_current_page}/${d.ocr_total_pages} стор…`
+              : '⏳ OCR в черзі…')
+          : '';
+        const ocrProgressHtml = isOcrPending
+          ? `<div id="ocr-progress-${d.id}" style="font-size:10px;color:#856404;margin-top:3px;
+               background:#fff3cd;border:1px solid #ffc107;padding:2px 8px;border-radius:4px;
+               display:inline-block">${ocrProgressTxt}</div>`
+          : (isOcrFailed
+              ? `<div style="font-size:10px;color:#d9534f;margin-top:3px">⚠ OCR не вдався — натисніть ↺ Текст для повтору</div>`
+              : '');
+
+        // Suppress "не проаналізовано" while OCR is still running
+        const analyzedDisplay = isOcrPending ? '' : analyzed;
+
         html += `<div class="doc-list-item">
           <div>
             <div class="doc-name">${esc(d.original_filename)}${ocrBadge}</div>
             <select class="doc-type-select" title="Змінити тип документа" onchange="patchDocType(${d.id}, this.value, ${eid})">${docTypeOptions(d.document_type)}</select>
-            ${analyzed}
+            ${analyzedDisplay}
+            ${ocrProgressHtml}
             ${noText ? `<div style="font-size:10px;color:#d9534f;margin-top:2px">⚠ Текст не вилучено — потрібна переекстракція</div>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:flex-start">
-            ${noText ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
+            ${(noText || isOcrFailed) ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
             <button class="btn btn-secondary btn-sm" onclick="setIncludeAll(${d.id}, ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='triage').length > 0})">Протокол</button>
             <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename).replace(/"/g, '&quot;')})">✕</button>
           </div>
@@ -755,6 +777,9 @@ async function renderEngagementWorkspace(eid) {
 
     html += `<div class="disclaimer">Автоматичний аналіз Solomon. Підлягає перевірці юристом. Не є юридичною консультацією.</div>`;
     root.innerHTML = html;
+
+    // Start background OCR polling for any pending/running docs in this engagement
+    _startOcrPoll(eid, docs);
 
     // Inline upload panel
     window._uploadEid = eid;
@@ -1196,14 +1221,74 @@ async function reExtract(did, eid) {
       return;
     }
     const data = await r.json();
+    if (data.async) {
+      // Scanned PDF — OCR started in background; re-render to show progress badge then poll
+      await renderEngagementWorkspace(eid);
+      return;
+    }
     if (!data.chars) {
-      alert('Текст так і не вдалося вилучити — ймовірно, PDF є сканом. Спробуйте завантажити текстову версію файлу.');
+      alert('Текст так і не вдалося вилучити. Спробуйте завантажити текстову версію файлу.');
     }
     await renderEngagementWorkspace(eid);
   } finally {
     btn.disabled = false; btn.textContent = '↺ Текст';
   }
 }
+// ── OCR Progress Polling ──────────────────────────────────────────────────────
+// _ocrPollTimer: single interval ID; replaced every time renderEngagementWorkspace runs.
+// Polls /ocr-status every 3 s for any doc that is still pending or running.
+// When all docs are done (or failed), clears the interval and re-renders once.
+
+let _ocrPollTimer = null;
+
+function _startOcrPoll(eid, docs) {
+  // Stop any existing poller from a previous render
+  if (_ocrPollTimer) { clearInterval(_ocrPollTimer); _ocrPollTimer = null; }
+
+  if (!docs || !docs.length) return;
+
+  // Collect IDs that need polling
+  const pendingIds = docs
+    .filter(d => d.ocr_status === 'pending' || d.ocr_status === 'running')
+    .map(d => d.id);
+  if (!pendingIds.length) return;
+
+  _ocrPollTimer = setInterval(async () => {
+    let anyStillRunning = false;
+    let anyFinished = false;
+
+    for (const did of pendingIds) {
+      try {
+        const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}/ocr-status`);
+        if (!r.ok) continue;
+        const s = await r.json();
+
+        if (s.ocr_status === 'running' || s.ocr_status === 'pending') {
+          anyStillRunning = true;
+          // Update the progress badge in-place without a full re-render
+          const el = document.getElementById(`ocr-progress-${did}`);
+          if (el) {
+            const txt = (s.ocr_status === 'running' && s.ocr_total_pages > 0)
+              ? `⏳ OCR ${s.ocr_current_page}/${s.ocr_total_pages} стор…`
+              : '⏳ OCR в черзі…';
+            el.textContent = txt;
+          }
+        } else {
+          // done or failed — will need a re-render
+          anyFinished = true;
+        }
+      } catch (_) { /* network hiccup — keep polling */ }
+    }
+
+    if (!anyStillRunning) {
+      // All done/failed — stop polling, re-render workspace with final state
+      clearInterval(_ocrPollTimer); _ocrPollTimer = null;
+      if (anyFinished) renderEngagementWorkspace(eid);
+    }
+  }, 3000);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function stateOptions(current) {
   const opts = [
     ['triage','Огляд'],['included_in_protocol','До протоколу'],['excluded','Виключити'],

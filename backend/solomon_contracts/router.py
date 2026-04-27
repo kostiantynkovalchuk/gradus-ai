@@ -19,7 +19,9 @@ from . import db as solcon_db
 from .analyzer import generate_alternatives, generate_legal_opinion, scan_document
 from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
 from .corpus import ingest_incoterms_pdf, ingest_incoterms_summary, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
-from .ingestion import ingest_file, process_zip
+import threading
+from pathlib import Path as _Path
+from .ingestion import ingest_file, process_zip, run_background_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +238,9 @@ async def get_engagement(request: Request, eid: int):
         raise HTTPException(status_code=404, detail="Engagement not found")
     docs = solcon_db.fetchall(
         "SELECT id, original_filename, document_type, analyzed_at, created_at, "
-        "COALESCE(LENGTH(raw_text), 0) AS raw_chars, extraction_method "
+        "COALESCE(LENGTH(raw_text), 0) AS raw_chars, extraction_method, "
+        "ocr_status, COALESCE(ocr_current_page,0) AS ocr_current_page, "
+        "COALESCE(ocr_total_pages,0) AS ocr_total_pages "
         "FROM solcon_documents WHERE engagement_id = %s ORDER BY created_at",
         (eid,),
     )
@@ -311,10 +315,14 @@ async def upload_document(
             doc_dict = ingest_file(f["filename"], f_data, eid, appendix_prefix)
             doc_id = _save_document(eid, doc_dict)
             created_ids.append(doc_id)
+            if doc_dict.get("_ocr_pending"):
+                run_background_ocr(doc_id, _Path(doc_dict["storage_path"]))
     else:
         doc_dict = ingest_file(filename, data, eid, appendix_prefix)
         doc_id = _save_document(eid, doc_dict)
         created_ids.append(doc_id)
+        if doc_dict.get("_ocr_pending"):
+            run_background_ocr(doc_id, _Path(doc_dict["storage_path"]))
 
     return {"created": created_ids}
 
@@ -323,8 +331,8 @@ def _save_document(eid: int, doc_dict: dict) -> int:
     result = solcon_db.fetchone(
         """INSERT INTO solcon_documents
              (engagement_id, document_type, original_filename, mime_type,
-              storage_path, raw_text, clauses, extraction_method)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+              storage_path, raw_text, clauses, extraction_method, ocr_status)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
         (
             eid,
@@ -335,6 +343,7 @@ def _save_document(eid: int, doc_dict: dict) -> int:
             doc_dict["raw_text"],
             doc_dict["clauses"],
             doc_dict.get("extraction_method"),
+            doc_dict.get("ocr_status"),
         ),
     )
     return result["id"]
@@ -544,17 +553,49 @@ async def re_extract_document(request: Request, eid: int, did: int):
         )
 
     raw_text, extraction_method = extract_text(path, doc["mime_type"] or "")
+
+    if extraction_method == "ocr:pending":
+        # Scanned PDF — reset to pending state and launch background OCR
+        solcon_db.execute(
+            """UPDATE solcon_documents
+               SET raw_text='', clauses='[]'::jsonb, extraction_method=NULL,
+                   ocr_status='pending', ocr_current_page=0, ocr_total_pages=0,
+                   analyzed_at=NULL, updated_at=NOW()
+               WHERE id=%s""",
+            (did,),
+        )
+        run_background_ocr(did, path)
+        return {"ok": True, "async": True, "method": "ocr:pending"}
+
     clauses = parse_clauses(raw_text)
     if not clauses:
         clauses = scan_all_refs(raw_text)
 
     solcon_db.execute(
         """UPDATE solcon_documents
-           SET raw_text=%s, clauses=%s::jsonb, extraction_method=%s, analyzed_at=NULL
+           SET raw_text=%s, clauses=%s::jsonb, extraction_method=%s,
+               ocr_status=NULL, ocr_current_page=0, analyzed_at=NULL, updated_at=NOW()
            WHERE id=%s""",
         (raw_text, _json.dumps(clauses), extraction_method, did),
     )
     return {"ok": True, "chars": len(raw_text), "clauses": len(clauses), "method": extraction_method}
+
+
+@router.get("/engagements/{eid}/documents/{did}/ocr-status")
+async def get_ocr_status(request: Request, eid: int, did: int):
+    """Poll endpoint for background OCR progress. Called every 3 s by the frontend."""
+    _auth_check(request)
+    doc = solcon_db.fetchone(
+        """SELECT ocr_status,
+                  COALESCE(ocr_current_page, 0) AS ocr_current_page,
+                  COALESCE(ocr_total_pages,  0) AS ocr_total_pages,
+                  COALESCE(LENGTH(raw_text),  0) AS chars
+           FROM solcon_documents WHERE id=%s AND engagement_id=%s""",
+        (did, eid),
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return dict(doc)
 
 
 @router.delete("/engagements/{eid}/documents/{did}")

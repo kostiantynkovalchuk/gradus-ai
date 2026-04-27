@@ -97,7 +97,8 @@ def extract_text_from_doc(path: Path) -> str:
 _OCR_THRESHOLD = 500  # chars — below this pdftotext result triggers OCR fallback
 
 
-_OCR_DPI = 200          # 200 dpi ≈ 56% less memory than 300 dpi, still legible for Tesseract
+_OCR_DPI = 150          # 150 dpi: ~44% memory vs 300 dpi; ~2× faster per page; legible for dense legal text
+_TESS_CONFIG = "--psm 6"  # PSM 6 = assume single uniform text block; 30-50% faster than default PSM 3 on dense pages
 _OCR_MAX_PAGES = 40    # hard cap — override with SOLCON_OCR_MAX_PAGES env var
 
 
@@ -185,14 +186,13 @@ def _ocr_pdf(path: Path) -> tuple[str, str]:
 def extract_text_from_pdf(path: Path) -> tuple[str, str]:
     """
     Returns (text, extraction_method).
-    Chain:
-      1. pdftotext  → if ≥500 chars done, else fall through to OCR
-      2. OCR (tesseract ukr+rus)  → if ≥500 chars done
-      3. pdfplumber  → fallback when OCR unavailable
-      4. pdfminer    → last resort
+    Chain (fast, synchronous — no OCR here):
+      1. pdftotext → if ≥500 chars: done
+      2. pdfplumber → if ≥500 chars: done
+      3. pdfminer   → if ≥500 chars: done
+      4. Scanned PDF detected → return ("", "ocr:pending")
+         Caller (ingest_file / re-extract) schedules run_background_ocr().
     """
-    native_text = ""
-
     # 1. pdftotext (poppler) — most reliable for text-based Ukrainian PDFs
     try:
         result = subprocess.run(
@@ -200,30 +200,18 @@ def extract_text_from_pdf(path: Path) -> tuple[str, str]:
             capture_output=True, timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
-            native_text = result.stdout.decode("utf-8", errors="replace")
-            logger.info("[SolCon] pdftotext: %d chars from %s", len(native_text), path.name)
-            if len(native_text) >= _OCR_THRESHOLD:
-                return native_text, "pdftotext"
+            text = result.stdout.decode("utf-8", errors="replace")
+            logger.info("[SolCon] pdftotext: %d chars from %s", len(text), path.name)
+            if len(text) >= _OCR_THRESHOLD:
+                return text, "pdftotext"
             logger.info(
-                "[SolCon] pdftotext returned %d chars (< %d) — likely scanned PDF, "
-                "falling through to OCR for %s",
-                len(native_text), _OCR_THRESHOLD, path.name,
+                "[SolCon] pdftotext: only %d chars (<500) for %s — likely scanned",
+                len(text), path.name,
             )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         logger.debug("[SolCon] pdftotext unavailable or timed out: %s", e)
 
-    # 2. OCR fallback — for scanned / image-only PDFs
-    ocr_text, ocr_method = _ocr_pdf(path)
-    if len(ocr_text) >= _OCR_THRESHOLD:
-        return ocr_text, ocr_method
-
-    if ocr_text:
-        logger.warning(
-            "[SolCon] OCR produced only %d chars for %s — continuing with other extractors",
-            len(ocr_text), path.name,
-        )
-
-    # 3. pdfplumber fallback (for PDFs that OCR + pdftotext both struggled with)
+    # 2. pdfplumber (catches some PDFs with unusual encoding that pdftotext misses)
     try:
         import pdfplumber
         pages: list[str] = []
@@ -233,29 +221,131 @@ def extract_text_from_pdf(path: Path) -> tuple[str, str]:
                 if t:
                     pages.append(f"[Стор. {i + 1}]\n{t}")
         text = "\n\n".join(pages)
-        if text.strip():
+        if len(text) >= _OCR_THRESHOLD:
             logger.info("[SolCon] pdfplumber: %d chars from %s", len(text), path.name)
             return text, "pdfplumber"
     except Exception as e:
         logger.warning("[SolCon] pdfplumber failed for %s: %s", path.name, e)
 
-    # 4. pdfminer last resort
+    # 3. pdfminer last native-text attempt
     try:
         from pdfminer.high_level import extract_text as _pdfminer
         text = _pdfminer(str(path)) or ""
-        if text.strip():
+        if len(text) >= _OCR_THRESHOLD:
             logger.info("[SolCon] pdfminer: %d chars from %s", len(text), path.name)
             return text, "pdfminer"
     except Exception as e:
         logger.warning("[SolCon] pdfminer failed for %s: %s", path.name, e)
 
-    # Return whatever we have (may be short OCR or native text)
-    best = ocr_text or native_text
-    logger.warning(
-        "[SolCon] All PDF extractors exhausted for '%s' — returning %d chars.",
-        path.name, len(best),
-    )
-    return best, "failed"
+    # 4. All native extractors exhausted → PDF is scanned; OCR runs in background
+    logger.info("[SolCon] '%s' is scanned — signalling ocr:pending for async OCR", path.name)
+    return "", "ocr:pending"
+
+
+def run_background_ocr(doc_id: int, path: Path) -> None:
+    """
+    Stream-OCR a scanned PDF page-by-page in a daemon thread.
+
+    Memory: peak ≈ 1 page × _OCR_DPI dpi (~5–10 MB) — only one PIL image
+    lives in RAM at a time.  Progress written to DB after every page so the
+    UI can poll ocr_current_page/ocr_total_pages.
+
+    On success:  raw_text, clauses, extraction_method, ocr_status='done'
+    On failure:  ocr_status='failed'
+    """
+    import threading
+    import json as _json
+    from . import db as _db
+
+    def _run():
+        try:
+            import pdf2image
+            import pytesseract
+
+            max_pages = int(os.getenv("SOLCON_OCR_MAX_PAGES", _OCR_MAX_PAGES))
+            page_count = _pdf_page_count(path)
+            if page_count == 0:
+                logger.warning(
+                    "[SolCon] BG OCR: pdfinfo returned 0 for doc_id=%d — trying up to %d pages",
+                    doc_id, max_pages,
+                )
+                page_count = max_pages
+
+            pages_to_ocr = min(page_count, max_pages)
+            if page_count > max_pages:
+                logger.warning(
+                    "[SolCon] BG OCR: doc_id=%d has %d pages — capping at %d (SOLCON_OCR_MAX_PAGES)",
+                    doc_id, page_count, max_pages,
+                )
+
+            _db.execute(
+                "UPDATE solcon_documents SET ocr_status='running', ocr_total_pages=%s, ocr_current_page=0 WHERE id=%s",
+                (pages_to_ocr, doc_id),
+            )
+            logger.info("[SolCon] BG OCR started: doc_id=%d, %d pages, %d dpi, config=%r",
+                        doc_id, pages_to_ocr, _OCR_DPI, _TESS_CONFIG)
+
+            t0 = time.time()
+            pages_text: list[str] = []
+
+            for page_num in range(1, pages_to_ocr + 1):
+                images = pdf2image.convert_from_path(
+                    str(path), dpi=_OCR_DPI,
+                    first_page=page_num, last_page=page_num,
+                )
+                if not images:
+                    logger.warning("[SolCon] BG OCR: no image for page %d of doc_id=%d — stopping", page_num, doc_id)
+                    break
+
+                img = images[0]
+                del images
+
+                pt0 = time.time()
+                text = pytesseract.image_to_string(img, lang="ukr+rus", config=_TESS_CONFIG)
+                elapsed = time.time() - pt0
+                del img  # free rasterized buffer immediately
+
+                logger.info("[SolCon] BG OCR doc_id=%d page %d/%d: %d chars in %.1fs",
+                            doc_id, page_num, pages_to_ocr, len(text), elapsed)
+
+                if text.strip():
+                    pages_text.append(f"[Стор. {page_num}]\n{text}")
+
+                _db.execute(
+                    "UPDATE solcon_documents SET ocr_current_page=%s WHERE id=%s",
+                    (page_num, doc_id),
+                )
+
+            full_text = "\n\n".join(pages_text)
+            total = time.time() - t0
+
+            clauses = parse_clauses(full_text)
+            if not clauses:
+                clauses = scan_all_refs(full_text)
+
+            _db.execute(
+                """UPDATE solcon_documents
+                   SET raw_text=%s, clauses=%s::jsonb,
+                       extraction_method='ocr:tesseract:ukr+rus',
+                       ocr_status='done', ocr_current_page=%s,
+                       analyzed_at=NULL, updated_at=NOW()
+                   WHERE id=%s""",
+                (full_text, _json.dumps(clauses), pages_to_ocr, doc_id),
+            )
+            logger.info("[SolCon] BG OCR done: doc_id=%d, %d chars, %.1fs total",
+                        doc_id, len(full_text), total)
+
+        except Exception as exc:
+            logger.exception("[SolCon] BG OCR FAILED for doc_id=%d: %s", doc_id, exc)
+            try:
+                _db.execute(
+                    "UPDATE solcon_documents SET ocr_status='failed' WHERE id=%s",
+                    (doc_id,),
+                )
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, daemon=True, name=f"ocr-doc-{doc_id}").start()
 
 
 def extract_text_from_xlsx(path: Path) -> str:
@@ -520,6 +610,9 @@ def ingest_file(
     """
     Save file, extract text, classify, parse clauses.
     Returns dict ready for DB insert into solcon_documents.
+
+    When a scanned PDF is detected, extraction_method='ocr:pending' is returned.
+    The caller (router upload endpoint) must then call run_background_ocr(doc_id, path).
     """
     path = save_upload(filename, data, engagement_id)
     suffix = Path(filename).suffix.lower()
@@ -532,8 +625,13 @@ def ingest_file(
     }
     mime_type = mime_map.get(suffix, "application/octet-stream")
     raw_text, extraction_method = extract_text(path, mime_type)
+
+    ocr_pending = extraction_method == "ocr:pending"
+
+    # Classification uses filename heuristics first — works even with empty text
     doc_type = classify_document(filename, raw_text)
-    clauses = parse_clauses(raw_text, appendix_prefix)
+    # Clause parsing on empty text produces nothing useful; skip for OCR-pending docs
+    clauses = [] if ocr_pending else parse_clauses(raw_text, appendix_prefix)
 
     return {
         "engagement_id": engagement_id,
@@ -543,5 +641,10 @@ def ingest_file(
         "storage_path": str(path),
         "raw_text": raw_text,
         "clauses": json.dumps(clauses),
-        "extraction_method": extraction_method,
+        # extraction_method is NULL in DB until OCR finishes and sets 'ocr:tesseract:ukr+rus'
+        "extraction_method": None if ocr_pending else extraction_method,
+        # ocr_status drives the progress UI; None for non-scanned docs
+        "ocr_status": "pending" if ocr_pending else None,
+        "_ocr_pending": ocr_pending,   # internal flag — NOT stored in DB directly
+        "_path": path,                  # internal — passed to run_background_ocr
     }
