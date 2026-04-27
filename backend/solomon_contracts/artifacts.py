@@ -1,12 +1,13 @@
 """
 DOCX artifact generation for Solomon Contracts.
 §9.1 Risk note (auto, bullet list by document)
-§9.3 Protocol (4-column table)
+§9.3 Protocol (5-column table)
 §9.2 Legal opinion (Sonnet markdown → DOCX)
 """
 import io
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,47 @@ SEV_LABELS = {
     "medium": "СЕРЕДНІЙ",
     "low": "НИЗЬКИЙ",
 }
+
+# Matches both Ukrainian and English AI-disclaimer tags added by the ALT prompt
+_AI_TAG_RE = re.compile(
+    r"\[AI\s+(?:suggestion|пропозиція)[^\]]*\]"
+    r"|\(AI\s+(?:suggestion|пропозиція)[^\)]*\)",
+    re.IGNORECASE,
+)
+
+
+def _protocol_clean(text: str, max_chars: int = 800) -> str:
+    """Strip internal AI disclaimer tag and trim to 2 paragraphs / max_chars."""
+    if not text:
+        return ""
+    text = _AI_TAG_RE.sub("", text).strip()
+    paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if len(paras) > 2:
+        text = "\n\n".join(paras[:2])
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "…"
+    return text
+
+
+def _format_citations_docx(cits_raw) -> str:
+    """Format legal_citations JSONB → compact text for DOCX cell."""
+    if not cits_raw:
+        return ""
+    if isinstance(cits_raw, str):
+        try:
+            cits = json.loads(cits_raw)
+        except Exception:
+            return ""
+    else:
+        cits = cits_raw
+    if not isinstance(cits, list) or not cits:
+        return ""
+    parts = []
+    for c in cits:
+        ref = c.get("article_ref") or c.get("source_title") or ""
+        if ref:
+            parts.append(ref)
+    return "; ".join(parts)
 
 
 # ─── §9.1 Risk note DOCX ─────────────────────────────────────────────────────
@@ -137,7 +179,8 @@ def build_protocol_docx(
     findings: list[dict],
 ) -> bytes:
     """
-    4-column table: Clause № | Buyer version | Supplier version | Agreed version
+    5-column table: Clause № | Buyer verbatim | Supplier alternative | Legal basis | Agreed version
+    AI disclaimer tag is stripped from supplier text; text trimmed to 2 paragraphs / 800 chars.
     """
     doc = Document()
     _set_margins(doc)
@@ -153,10 +196,16 @@ def build_protocol_docx(
     )
     doc.add_paragraph()
 
-    tbl = doc.add_table(rows=1, cols=4)
+    tbl = doc.add_table(rows=1, cols=5)
     tbl.style = "Table Grid"
     hdr = tbl.rows[0].cells
-    headers = ["Пункт договору", "Редакція Покупця", "Редакція Постачальника", "Узгоджена редакція"]
+    headers = [
+        "Пункт договору",
+        "Редакція Покупця",
+        "Редакція Постачальника",
+        "Правова підстава",
+        "Узгоджена редакція",
+    ]
     for i, h_text in enumerate(headers):
         hdr[i].text = h_text
         for p in hdr[i].paragraphs:
@@ -168,9 +217,10 @@ def build_protocol_docx(
         row = tbl.add_row().cells
         row[0].text = f.get("clause_ref", "")
         row[1].text = f.get("clause_text", "")
-        supplier_text = f.get("proposed_alternative") or f.get("short_note", "")
-        row[2].text = supplier_text
-        row[3].text = ""
+        supplier_raw = f.get("proposed_alternative") or f.get("short_note", "")
+        row[2].text = _protocol_clean(supplier_raw)
+        row[3].text = _format_citations_docx(f.get("legal_citations"))
+        row[4].text = ""
 
     doc.add_paragraph()
     preamble = doc.add_paragraph(

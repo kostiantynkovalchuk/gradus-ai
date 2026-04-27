@@ -114,7 +114,7 @@ quality_acceptance, delivery_terms, other.
 
 ════ OUTPUT ════
 JSON array of findings. Each finding:
-  clause_ref (string), clause_text (≤25 word paraphrase), category (string),
+  clause_ref (string), clause_text (verbatim excerpt from the contract in original Ukrainian, ≤400 characters — copy-paste the exact wording, do NOT paraphrase or translate), category (string),
   severity (string), monetary_exposure_uah (number or null),
   short_note (Ukrainian, 1-2 sentences), confidence (0.0-1.0).
 
