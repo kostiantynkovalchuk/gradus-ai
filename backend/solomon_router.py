@@ -29,7 +29,7 @@ async def health():
 async def search(request: SearchRequest):
     try:
         params = parse_query(request.query)
-        judgments = search_decisions(params)
+        judgments = search_decisions(params, original_query=request.query)
 
         return {
             "count": len(judgments),

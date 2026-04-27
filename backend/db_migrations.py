@@ -1195,6 +1195,32 @@ MIGRATIONS = [
         ]
     },
     {
+        "version": "048_solomon_scorer_log",
+        "statements": [
+            # Audit log for Solomon Court Search post-fetch scorer.
+            # Captures every decision the scorer EXCLUDED (procedural or low-relevance)
+            # so we can tune the classifier prompt after 2+ weeks of production data.
+            # action: 'excluded' (always for now; 'kept' rows not written to save space)
+            # relevance_score: 0-10 from Haiku
+            # is_substantive: false if flagged as procedural/interlocutory
+            # exclusion_reason: 'procedural', 'low_relevance', or 'procedural+low_relevance'
+            """CREATE TABLE IF NOT EXISTS solomon_scorer_log (
+               id SERIAL PRIMARY KEY,
+               query_text TEXT,
+               search_params JSONB,
+               doc_id TEXT,
+               cause_number TEXT,
+               action VARCHAR(20) DEFAULT 'excluded',
+               relevance_score INT,
+               is_substantive BOOLEAN,
+               exclusion_reason TEXT,
+               created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_scorer_log_created ON solomon_scorer_log(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_scorer_log_doc ON solomon_scorer_log(doc_id)",
+        ]
+    },
+    {
         "version": "047_document_ocr_progress",
         "statements": [
             # Drive the background OCR progress UI.

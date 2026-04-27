@@ -241,7 +241,7 @@ async def handle_search(message: Message):
 
     try:
         params = parse_query(message.text)
-        judgments = search_decisions(params)
+        judgments = search_decisions(params, original_query=message.text)
 
         if not judgments:
             await processing_msg.edit_text(
