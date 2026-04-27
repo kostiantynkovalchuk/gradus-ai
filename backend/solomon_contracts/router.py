@@ -517,6 +517,21 @@ async def download_risk_note(request: Request, eid: int):
     )
 
 
+@router.patch("/engagements/{eid}/documents/{did}/type")
+async def patch_document_type(request: Request, eid: int, did: int):
+    _auth_check(request)
+    from .ingestion import VALID_DOC_TYPES
+    body = await request.json()
+    new_type = (body.get("document_type") or "").strip()
+    if new_type not in VALID_DOC_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid document_type: {new_type}")
+    solcon_db.execute(
+        "UPDATE solcon_documents SET document_type=%s WHERE id=%s AND engagement_id=%s",
+        (new_type, did, eid),
+    )
+    return {"ok": True, "document_type": new_type}
+
+
 @router.post("/engagements/{eid}/documents/{did}/protocol")
 async def generate_protocol(request: Request, eid: int, did: int):
     _auth_check(request)

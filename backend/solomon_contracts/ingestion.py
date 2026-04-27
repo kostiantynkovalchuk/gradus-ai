@@ -36,14 +36,14 @@ DOC_TYPE_HINTS = [
     (re.compile(r"висновок", re.I), "legal_opinion"),
     (re.compile(r"протокол", re.I), "protocol_draft"),
     (re.compile(r"кодекс|ethics|code", re.I), "commercial_code"),
-    (re.compile(r"специфікац", re.I), "specification"),
-    (re.compile(r"прайс|price.?list", re.I), "price_list"),
+    (re.compile(r"специфікац|специф", re.I), "specification"),
+    (re.compile(r"прайс|price[._\s-]?list", re.I), "price_list"),
     (re.compile(r"додаткова.угода|ду\b|допка|edi", re.I), "additional_agreement"),
 ]
 
 VALID_DOC_TYPES = {
     "main_contract", "additional_agreement", "commercial_code",
-    "specification", "price_list", "risks_note", "legal_opinion",
+    "specification", "price_list", "schedule", "risks_note", "legal_opinion",
     "protocol_draft", "protocol_returned", "protocol_agreed", "other",
 }
 
@@ -142,12 +142,36 @@ def extract_text(path: Path, mime_type: str = "") -> str:
 # ─── Document classification ─────────────────────────────────────────────────
 
 def _classify_by_filename(filename: str) -> Optional[str]:
-    name_lower = filename.lower()
+    name = filename.lower()
+    ext = Path(filename).suffix.lower()
+    is_spreadsheet = ext in (".xlsx", ".xls", ".ods", ".csv")
+    is_pdf = ext == ".pdf"
+
+    # --- Extension-specific patterns (checked before generic DOC_TYPE_HINTS) ---
+    if is_spreadsheet:
+        if re.search(r"специф", name):   return "specification"
+        if re.search(r"прайс|price",name): return "price_list"
+        if re.search(r"графік|график", name): return "schedule"
+        if re.search(r"накладна", name):  return "other"   # sample delivery doc
+
+    if is_pdf and re.search(r"додаток|додатки", name):
+        return "additional_agreement"
+
+    # --- Generic DOC_TYPE_HINTS (order matters) ---
     for pattern, doc_type in DOC_TYPE_HINTS:
-        if pattern.search(name_lower):
+        if pattern.search(name):
             return doc_type
-    if re.search(r"договір.поставки|договор.поставки", name_lower, re.I):
+
+    # --- Broader main-contract patterns ---
+    if re.search(r"договір|договор", name):
         return "main_contract"
+    if re.search(r"т\.ф\.\s*\d+", name):          # т.ф. 188 retail form
+        return "main_contract"
+
+    # --- Catch-all other ---
+    if re.search(r"пакувальний|packing", name):
+        return "other"
+
     return None
 
 
@@ -180,10 +204,16 @@ def _classify_via_llm(filename: str, text_snippet: str) -> str:
 
 
 def classify_document(filename: str, raw_text: str) -> str:
+    logger.info(
+        "[SolCon] Classify '%s': extracted %d chars. Preview: %r",
+        filename, len(raw_text), raw_text[:500],
+    )
     hint = _classify_by_filename(filename)
     if hint:
+        logger.info("[SolCon] Filename heuristic '%s' → '%s'", filename, hint)
         return hint
     if not raw_text.strip():
+        logger.warning("[SolCon] '%s': empty text after extraction → 'other'", filename)
         return "other"
     return _classify_via_llm(filename, raw_text)
 
