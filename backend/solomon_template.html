@@ -798,7 +798,7 @@ async function renderBuyerProfiles() {
       <div class="section-title">Профілі покупців</div>
       <button class="btn btn-secondary btn-sm" onclick="navigateTo('list')">← Назад</button>
     </div>`;
-    if (!buyers.length) html += `<div class="empty-state">Профілів немає</div>`;
+    if (!buyers.length) html += `<div class="empty-state" style="max-width:520px;margin:40px auto;line-height:1.6">Профілі покупців накопичуватимуться автоматично після кількох аналізів договорів від одного контрагента. Функція стане доступною, коли в системі буде достатньо даних. Зараз профілі не використовуються в аналізі.</div>`;
     else {
       buyers.forEach(b => {
         html += `<div class="doc-list-item">
