@@ -259,12 +259,25 @@
 
   /* Upload zone */
   .upload-zone {
-    border: 2px dashed var(--border-mid); border-radius: 10px; padding: 40px;
+    border: 2px dashed var(--border-mid); border-radius: 10px; padding: 32px 20px;
     text-align: center; cursor: pointer; transition: all 0.2s;
     background: var(--bg-subtle);
   }
   .upload-zone:hover, .upload-zone.drag-over { border-color: var(--gold); background: var(--gold-dim); }
   .upload-zone-label { font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+
+  /* Upload queue */
+  .upload-queue-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 12px; border-radius: 6px; margin-top: 6px;
+    background: var(--bg-subtle); border: 1px solid var(--border);
+    font-size: 12.5px; gap: 10px;
+  }
+  .upload-queue-item.active  { background: #fff8e1; border-color: var(--gold); }
+  .upload-queue-item.success { background: #f1f8f1; border-color: #8bc48b; }
+  .upload-queue-item.error   { background: #fdf2f2; border-color: #e8a0a0; }
+  .uqi-name   { color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+  .uqi-status { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
 
   /* Modal backdrop */
   .modal-backdrop {
@@ -776,40 +789,111 @@ async function createEngagement() {
   navigateTo('e/' + data.id);
 }
 
+const _ALLOWED_UPLOAD_EXTS = new Set(['.doc','.docx','.pdf','.xls','.xlsx','.zip']);
+
+function _uploadFileAllowed(name) {
+  const dot = name.lastIndexOf('.');
+  return dot !== -1 && _ALLOWED_UPLOAD_EXTS.has(name.slice(dot).toLowerCase());
+}
+
+function _showUploadToast(msg) {
+  const t = document.createElement('div');
+  t.style.cssText = 'position:fixed;top:20px;right:20px;z-index:200;background:#fdf2f2;color:#c0392b;border:1px solid #e8aaaa;border-radius:8px;padding:12px 18px;font-size:13px;box-shadow:0 4px 16px #0002;max-width:360px';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4500);
+}
+
 function openUploadPanel(eid) {
-  const root = document.getElementById('contracts-root');
   const existing = document.getElementById('upload-panel');
   if (existing) { existing.remove(); return; }
   const panel = document.createElement('div');
   panel.id = 'upload-panel';
-  panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:2px solid var(--gold);padding:20px 32px;z-index:50;box-shadow:0 -8px 32px #0d152820';
-  panel.innerHTML = `<div style="max-width:600px;margin:0 auto">
-    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
-      <span style="font-weight:600;color:var(--navy)">Завантажити документ</span>
-      <span style="cursor:pointer;color:var(--text-muted)" onclick="this.parentElement.parentElement.parentElement.remove()">✕</span>
+  panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:2px solid var(--gold);padding:20px 32px;z-index:50;box-shadow:0 -8px 32px #0d152820;max-height:65vh;overflow-y:auto';
+  panel.innerHTML = `<div style="max-width:680px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <span style="font-weight:600;color:var(--navy)">Завантажити документи</span>
+      <span style="cursor:pointer;color:var(--text-muted);font-size:16px" onclick="document.getElementById('upload-panel').remove()">✕</span>
     </div>
-    <input type="file" id="upload-file" accept=".doc,.docx,.pdf,.xls,.xlsx,.zip" style="margin-bottom:10px;width:100%">
-    <input class="form-input" id="upload-prefix" placeholder="Префікс додатку (напр. Дод.1)" style="margin-bottom:10px">
-    <button class="btn btn-primary" style="width:100%" onclick="doUpload(${eid})">Завантажити</button>
-    <div id="upload-status" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+    <div id="upload-drop-zone" class="upload-zone" onclick="document.getElementById('upload-file-input').click()">
+      <div style="font-size:28px;margin-bottom:6px">📎</div>
+      <div style="font-weight:600;color:var(--navy);font-size:14px">Перетягніть файли сюди</div>
+      <div class="upload-zone-label">або натисніть для вибору файлів</div>
+      <div class="upload-zone-label" style="margin-top:4px;font-size:11px;color:var(--text-dim)">.doc · .docx · .pdf · .xls · .xlsx · .zip</div>
+    </div>
+    <input type="file" id="upload-file-input" accept=".doc,.docx,.pdf,.xls,.xlsx,.zip" multiple style="display:none">
+    <div id="upload-queue" style="margin-top:10px"></div>
   </div>`;
   document.body.appendChild(panel);
+
+  const fileInput = document.getElementById('upload-file-input');
+  fileInput.addEventListener('change', () => _runUploadQueue(eid, fileInput.files));
+
+  const dropZone = document.getElementById('upload-drop-zone');
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over'); });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    _runUploadQueue(eid, e.dataTransfer.files);
+  });
 }
 
-async function doUpload(eid) {
-  const fileInput = document.getElementById('upload-file');
-  const prefix = document.getElementById('upload-prefix').value;
-  const status = document.getElementById('upload-status');
-  if (!fileInput.files.length) { alert('Оберіть файл'); return; }
-  status.textContent = 'Завантаження…';
-  const fd = new FormData();
-  fd.append('file', fileInput.files[0]);
-  fd.append('appendix_prefix', prefix);
-  const r = await fetch('/api/contracts/engagements/' + eid + '/upload', { method:'POST', body:fd });
-  if (!r.ok) { status.textContent = 'Помилка: ' + r.statusText; return; }
-  const data = await r.json();
-  status.textContent = `Завантажено ${data.created.length} документ(ів)`;
-  setTimeout(() => { document.getElementById('upload-panel')?.remove(); renderEngagementWorkspace(eid); }, 1000);
+async function _runUploadQueue(eid, fileList) {
+  const all   = Array.from(fileList);
+  const bad   = all.filter(f => !_uploadFileAllowed(f.name));
+  const valid = all.filter(f =>  _uploadFileAllowed(f.name));
+
+  if (bad.length) {
+    _showUploadToast('Підтримуються лише: .doc, .docx, .pdf, .xls, .xlsx, .zip');
+  }
+  if (!valid.length) return;
+
+  // Disable drop zone while uploading
+  const dropZone = document.getElementById('upload-drop-zone');
+  if (dropZone) { dropZone.style.pointerEvents = 'none'; dropZone.style.opacity = '0.5'; }
+
+  const queueEl = document.getElementById('upload-queue');
+  const total = valid.length;
+
+  // Build queue items up-front so the user sees the full list immediately
+  const items = valid.map(f => {
+    const el = document.createElement('div');
+    el.className = 'upload-queue-item';
+    el.innerHTML = `<span class="uqi-name">${esc(f.name)}</span><span class="uqi-status">очікує…</span>`;
+    queueEl.appendChild(el);
+    return { file: f, el };
+  });
+
+  let successCount = 0;
+  for (let i = 0; i < items.length; i++) {
+    const { file, el } = items[i];
+    const statusEl = el.querySelector('.uqi-status');
+    el.classList.add('active');
+    statusEl.textContent = `Завантажується ${i + 1} з ${total}…`;
+
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch('/api/contracts/engagements/' + eid + '/upload', { method: 'POST', body: fd });
+      if (!r.ok) { const msg = await r.text().catch(() => r.statusText); throw new Error(msg || String(r.status)); }
+      el.classList.remove('active');
+      el.classList.add('success');
+      statusEl.textContent = '✓ Завантажено';
+      successCount++;
+    } catch (err) {
+      console.error('[Upload] Failed:', file.name, err);
+      el.classList.remove('active');
+      el.classList.add('error');
+      statusEl.textContent = `❌ помилка: ${err.message.slice(0, 80)}`;
+    }
+  }
+
+  // Single refresh after entire queue
+  setTimeout(() => {
+    document.getElementById('upload-panel')?.remove();
+    renderEngagementWorkspace(eid);
+  }, 1200);
 }
 
 async function startAnalysis(eid) {
