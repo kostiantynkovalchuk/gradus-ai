@@ -104,7 +104,4 @@ def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -
         lines.append(f"{ev_icon} Evolution/Planet/Discovery на елітній полиці{imports_str}")
         lines.append("")
 
-    if report.get("notes"):
-        lines.append(f"💬 _{report['notes']}_")
-
     return "\n".join(lines)
