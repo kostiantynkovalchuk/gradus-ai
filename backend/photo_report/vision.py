@@ -494,6 +494,98 @@ def _analyze_focused_sync(
         return {}
 
 
+def _retry_ukrainka_helsinki(client: anthropic.Anthropic, photo_b64_list: list[str]) -> dict | None:
+    """Focused second pass specifically looking for Ukrainka and Helsinki.
+
+    Triggered when GreenDay is found but Ukrainka + Helsinki = 0,
+    which is wrong 70% of the time based on expert corrections.
+    Only Ukrainka/Helsinki reference images are sent to keep the model focused.
+    """
+    RETRY_PROMPT = """You are re-analyzing a shelf photo. The first analysis found GreenDay vodka but MISSED Ukrainka and Helsinki.
+
+Your ONLY task: find Ukrainka and Helsinki bottles on these shelves. Ignore everything else.
+
+UKRAINKA (Українка) — what to look for:
+- TRANSPARENT/CLEAR glass bottles (not green like GreenDay)
+- Wide WHITE label with large Cyrillic text "УКРАЇНКА"
+- Diamond/geometric pattern carved into the glass on some variants
+- Silver/grey metal cap
+- Variants that ALL count as Ukrainka:
+  * Traditional — white label, clear bottle
+  * Crystal — silver/diamond label, clear bottle with geometric pattern
+  * Tinctures (настоянки) — colored liquid (red=berry, green=herb, dark=black currant) but SAME bottle shape and "УКРАЇНКА" text
+- Usually stands in groups of 3-6 bottles
+- Often positioned NEAR GreenDay on the same shelf row
+
+HELSINKI (Хельсінкі) — what to look for:
+- TRANSPARENT/CLEAR glass bottles (similar to Ukrainka but different label)
+- Winter/mountain landscape scene on label
+- Text "HELSINKI" in Latin letters
+- 5 different label colors: light blue (Ice Palace), grey (Winter Capital), dark blue (Ultramarin), orange (Frosty Citrus), brown (Salted Caramel)
+- Often stands NEXT TO GreenDay
+- Do NOT confuse with Klinkov dark boxes — Helsinki is always a transparent BOTTLE
+
+Scan EVERY shelf row carefully. Count each facing.
+
+Return ONLY this JSON:
+{
+  "ukrainka_facings": 0,
+  "ukrainka_variants": [],
+  "helsinki_facings": 0,
+  "helsinki_variants": [],
+  "search_notes": "describe where you looked and what you found"
+}"""
+
+    content = []
+
+    # Only Ukrainka and Helsinki reference images — keeps model focused
+    ua_hel_refs = [
+        r for r in BRAND_REFERENCES
+        if any(k in r.get("name", "") for k in ("ukrainka", "helsinki"))
+    ]
+    if ua_hel_refs:
+        content.append({
+            "type": "text",
+            "text": "REFERENCE — look carefully at these AVTD vodka brands you must find:",
+        })
+        for ref in ua_hel_refs:
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
+            })
+            content.append({"type": "text", "text": f"↑ {ref['label']}"})
+
+    content.append({
+        "type": "text",
+        "text": "Now look at these shelf photos and find Ukrainka and Helsinki:",
+    })
+    for b64 in photo_b64_list[:5]:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+        })
+    content.append({"type": "text", "text": RETRY_PROMPT})
+
+    try:
+        raw = _call_claude_vision(
+            client=client,
+            content=content,
+            system="You are a shelf photo analyzer. Return only valid JSON.",
+            max_tokens=1024,
+            model=VISION,
+        )
+        result = json.loads(raw)
+        logger.info(
+            f"[PhotoReport] UA/HEL retry: UA={result.get('ukrainka_facings')}, "
+            f"HEL={result.get('helsinki_facings')}, "
+            f"notes={result.get('search_notes', '')[:120]}"
+        )
+        return result
+    except Exception as e:
+        logger.error(f"[PhotoReport] UA/HEL retry failed: {e}")
+        return None
+
+
 def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -584,5 +676,42 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
 
     if retried_categories:
         vision_result["retried_categories"] = retried_categories
+
+    # ── Vodka-specific retry: GD found but UA + HEL = 0 ──────────────────────
+    # This pattern is wrong 70% of the time per expert correction data.
+    vodka = vision_result.get("vodka", {})
+    gd  = vodka.get("greenday_facings") or 0
+    ua  = vodka.get("ukrainka_facings") or 0
+    hel = vodka.get("helsinki_facings") or 0
+
+    if gd > 0 and ua == 0 and hel == 0:
+        logger.info(f"[PhotoReport] Vodka retry triggered: GD={gd} but UA+HEL=0")
+        retry_result = _retry_ukrainka_helsinki(client, photo_b64_list)
+
+        if retry_result:
+            retry_ua  = retry_result.get("ukrainka_facings") or 0
+            retry_hel = retry_result.get("helsinki_facings") or 0
+
+            if retry_ua > 0 or retry_hel > 0:
+                logger.info(f"[PhotoReport] Vodka retry found: UA={retry_ua}, HEL={retry_hel}")
+                vodka["ukrainka_facings"] = retry_ua
+                vodka["helsinki_facings"] = retry_hel
+
+                # Recalculate our_facings and total — retry may have found bottles missed in pass 1
+                other_avtd   = vodka.get("other_avtd_vodka_facings") or 0
+                new_our      = gd + retry_ua + retry_hel + other_avtd
+                prev_our     = vodka.get("our_facings") or (gd + other_avtd)
+                total        = vodka.get("total_vodka_facings") or 0
+                if new_our > prev_our:
+                    vodka["total_vodka_facings"] = total + (new_our - prev_our)
+                vodka["our_facings"] = new_our
+
+                vision_result["vodka"] = vodka
+                notes = vision_result.get("notes", "") or ""
+                vision_result["notes"] = (
+                    notes + " [Vodka retry: found additional Ukrainka/Helsinki after initial scan missed them]"
+                ).strip()
+            else:
+                logger.info("[PhotoReport] Vodka retry confirmed UA=0 HEL=0 — keeping original result")
 
     return vision_result
