@@ -54,12 +54,13 @@ def _should_reject_photo(vision_result: dict) -> tuple[bool, str]:
     """
     categories = ["vodka", "cognac", "wine", "sparkling"]
 
-    # Check 1: All categories have low confidence
+    # Check 1: 3+ out of 4 categories have low confidence
     confidences = [
         vision_result.get(cat, {}).get("confidence", "low")
         for cat in categories
     ]
-    if all(c == "low" for c in confidences):
+    low_count = sum(1 for c in confidences if c == "low")
+    if low_count >= 3:
         return True, "all_low_confidence"
 
     # Check 2: All facings are null or zero AND notes mention distance/resolution
