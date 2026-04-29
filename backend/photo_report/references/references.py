@@ -9,16 +9,24 @@ Reference images are loaded ONCE at module import and cached in memory.
 If the directory is empty or PIL is unavailable, falls back gracefully
 with a warning — analysis still works, just without reference images.
 
-Expected files in this directory:
-  Flagship product photos (3):
-    greenday_classic_500.jpg    — GreenDay Classic 500ml (production photo)
-    helsinki_ice_palace_500.jpg — Helsinki Ice Palace 500ml
-    ukrainka_traditional_500.jpg — Ukrainka Traditional 500ml
+Expected files in this directory (23 total):
 
-  Lineup photos from HoReCa presenter PDF (3):
-    greenday_lineup.jpg         — Full GreenDay lineup (Classic, Air, Crystal, ...)
-    helsinki_lineup.jpg         — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
-    ukrainka_lineup.jpg         — Full Ukrainka lineup (Traditional, Strong, Platinum)
+  Vodka product photos (6):
+    greenday_classic_500.jpg     — GreenDay Classic 500ml (production photo)
+    helsinki_ice_palace_500.jpg  — Helsinki Ice Palace 500ml
+    ukrainka_traditional_500.jpg — Ukrainka Traditional 500ml
+    greenday_lineup.jpg          — Full GreenDay lineup (Classic, Air, Crystal, ...)
+    helsinki_lineup.jpg          — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
+    ukrainka_lineup.jpg          — Full Ukrainka lineup (Traditional, Strong, Platinum)
+
+  Cognac/brandy product photos (7):
+    adjari_3star_500.jpg   — ADJARI 3★ 500ml flagship (rounded amber bottle, golden label)
+    adjari_5star_tubus.jpg — ADJARI 5★ in cylindrical tube packaging
+    adjari_7star_500.jpg   — ADJARI 7★ "Мудрий Аджарелія" premium (black label, portrait)
+    dovbush_3star_500.jpg  — DOVBUSH 3★ "Карпатський" (square bottle, wooden cork, Cyrillic)
+    dovbush_4star_500.jpg  — DOVBUSH 4★ "Big Four" LIMITED (green label, Latin text)
+    dovbush_4star_round.jpg — DOVBUSH 4★ alternative round-stamp design
+    dovbush_honey_500.jpg  — DOVBUSH "Медовий" HONEY tincture (orange/yellow honeycomb label)
 
   Ideal shelf reference photos (10):
     shelf_ref_02.jpg — ADJARI cognac close-up + Helsinki + Ukrainka
@@ -87,6 +95,49 @@ REFERENCE_LABELS: dict[str, str] = {
         "Ukrainka full lineup: Traditional, Strong, Platinum. All have diamond-pattern glass "
         "and wide white labels. Often grouped in 3–6 bottles. Mixed with GreenDay on same shelf."
     ),
+    # ── ADJARI cognac references ──────────────────────────────────────────────
+    "adjari_3star_500": (
+        "ADJARI 3★ 500ml — FLAGSHIP cognac/brandy. Dark amber ROUNDED bottle, golden mountain "
+        "landscape label, eagle emblem at bottom, gold cap, text 'ADJARI', three stars ★★★, "
+        "number '3'. MOST COMMON ADJARI SKU on shelves. Other variants (4★ Квартелі, 5★) look "
+        "similar with different star count. ALL are AVTD brands."
+    ),
+    "adjari_5star_tubus": (
+        "ADJARI 5★ in TUBE packaging — dark brown CYLINDRICAL tube next to the bottle. On shelves "
+        "you may see ONLY the tube (bottle hidden inside). Tube has 'ADJARI' text, mountain "
+        "landscape, eagle, five stars ★★★★★. Do NOT confuse ADJARI tubes with Klinkov boxes — "
+        "Klinkov boxes are RECTANGULAR, ADJARI tubes are CYLINDRICAL."
+    ),
+    "adjari_7star_500": (
+        "ADJARI 7★ 'Мудрий Аджарелія' 500ml — PREMIUM cognac/brandy. Same bottle shape as 3★ "
+        "but with BLACK label, portrait of a man in traditional hat, text 'МУДРИЙ АДЖАРЕЛІЯ', "
+        "number '7'. Premium variant with distinctive dark design. AVTD brand."
+    ),
+    # ── DOVBUSH cognac references ─────────────────────────────────────────────
+    "dovbush_3star_500": (
+        "DOVBUSH (Довбуш) 3★ 'Карпатський' 500ml — FLAGSHIP cognac/brandy. SQUARE bottle "
+        "(NOT rounded like ADJARI!), WOODEN CORK cap, Cossack warrior portrait, CYRILLIC text "
+        "'ДОВБУШ Карпатський', three stars ★★★, number '3'. Usually stands NEXT TO ADJARI on "
+        "cognac shelf. AVTD brand."
+    ),
+    "dovbush_4star_500": (
+        "DOVBUSH 4★ 'Big Four' LIMITED 500ml — Same SQUARE bottle as 3★ but with GREEN label "
+        "and LATIN text 'DOVBUSH the Carpathian BIG FOUR', wooden cork, number '4'. IMPORTANT: "
+        "This looks VERY DIFFERENT from Dovbush 3★ (green vs brown, Latin vs Cyrillic) but it "
+        "IS the same brand. AVTD brand."
+    ),
+    "dovbush_4star_round": (
+        "DOVBUSH 4★ alternative design with ROUND STAMP/SEAL on label. Same square bottle shape "
+        "as other Dovbush variants. Different label layout from 'Big Four' version. AVTD brand — "
+        "count as Dovbush facing."
+    ),
+    "dovbush_honey_500": (
+        "DOVBUSH 'Медовий' HONEY tincture 500ml — Same SQUARE bottle shape as Dovbush cognac "
+        "but with bright ORANGE/YELLOW HONEYCOMB label, bee icon, text 'HONEY Медовий', 37.5% "
+        "ABV. This is a TINCTURE not cognac, but it IS a Dovbush/AVTD product. Count as Dovbush "
+        "facing in the cognac section."
+    ),
+    # ── Shelf references ──────────────────────────────────────────────────────
     "shelf_ref_02": (
         "IDEAL SHELF — ADJARI cognac close-up: top shelf has Cherry, Orange, 3★, 5★, 8★ variants. "
         "Below: Helsinki + Ukrainka vodka. Shows what cognac section looks like with AVTD brands."
