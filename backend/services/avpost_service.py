@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 DB_URL = os.environ.get("DATABASE_URL", "")
 
+# Matches avpost-bestbrands.vercel.app AND avpost-bestbrands-N.vercel.app (N = edition number)
 AVPOST_URL_REGEX = re.compile(
-    r'https?://(?:www\.)?avpost-bestbrands\.vercel\.app(?:/[^\s\)\]]*)?',
+    r'https?://(?:www\.)?avpost-bestbrands(?:-\d+)?\.vercel\.app(?:/[^\s\)\]]*)?',
     re.IGNORECASE,
 )
 
