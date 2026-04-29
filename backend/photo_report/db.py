@@ -89,6 +89,68 @@ def save_report(
         conn.close()
 
 
+def save_rejected_report(
+    agent_id: int,
+    point_name: str,
+    photo_file_ids: list,
+    comment: str,
+    reason: str = "wide_angle",
+) -> int:
+    """Save a minimal record for a rejected wide-angle / low-quality photo.
+
+    Uses scoring_version marker in errors JSON so analytics queries can
+    filter rejections separately from normal low-score reports.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        errors = json.dumps(
+            [{"code": "REJECTED", "description": f"Photo rejected: {reason}", "scoring_version": "v2_rejected"}],
+            ensure_ascii=False,
+        )
+        cur.execute(
+            """INSERT INTO photo_reports
+                (agent_id, trade_point_name, trade_point_type, score, passed,
+                 errors, shelf_share, brands_found, raw_ai_response,
+                 vision_raw_json, photo_count, has_gps, agent_comment)
+                VALUES (%s, %s, %s, %s, %s,
+                        %s::jsonb, %s::jsonb, %s::jsonb,
+                        %s::jsonb, %s::jsonb, %s, %s, %s)
+                RETURNING id""",
+            (
+                agent_id,
+                point_name,
+                "retail",
+                0,
+                False,
+                errors,
+                json.dumps({}),
+                json.dumps({}),
+                json.dumps({}),
+                json.dumps({"rejected": True, "reason": reason}),
+                len(photo_file_ids),
+                False,
+                comment,
+            ),
+        )
+        report_id = cur.fetchone()[0]
+        for i, file_id in enumerate(photo_file_ids):
+            cur.execute(
+                "INSERT INTO photo_report_images (report_id, file_id, sequence_number) "
+                "VALUES (%s, %s, %s)",
+                (report_id, file_id, i + 1),
+            )
+        conn.commit()
+        cur.close()
+        logger.info(f"[PhotoReport] Saved rejected report #{report_id} for agent {agent_id} ({reason})")
+        return report_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def save_report_photos(report_id: int, photos_bytes: list[bytes]) -> int:
     if not photos_bytes:
         return 0

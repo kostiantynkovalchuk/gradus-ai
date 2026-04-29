@@ -15,6 +15,7 @@ from .formatter import format_report_for_telegram
 from .db import (
     get_or_create_agent, save_report, save_report_photos,
     get_agent_stats, save_expert_correction, get_report_by_id,
+    save_rejected_report,
 )
 from .keyboards import MAIN_MENU, PHOTO_ACTIONS
 
@@ -32,6 +33,71 @@ EXPERT_TG_IDS: set[int] = {
 }
 
 pending_reports = {}
+
+PHOTO_REJECTION_MESSAGE = (
+    "📷 Фото зроблено занадто далеко — неможливо розпізнати бренди на полицях.\n\n"
+    "Будь ласка, надішліть 2-3 фото *ближче до полиць* (1-2 метри):\n\n"
+    "1️⃣ Горілчана полиця — щоб етикетки були читабельні\n"
+    "2️⃣ Коньячна / винна полиця\n"
+    "3️⃣ Загальний огляд — необов'язково, але корисно\n\n"
+    "💡 Підказка: етикетки брендів повинні бути читабельні на фото. "
+    "Якщо ви не можете прочитати назву бренду на екрані телефону — бот теж не зможе.\n\n"
+    "Натисніть 📸 Новий звіт щоб спробувати ще раз."
+)
+
+
+def _should_reject_photo(vision_result: dict) -> tuple[bool, str]:
+    """Check if photo quality is too low for reliable analysis.
+
+    Returns (should_reject, reason_code).
+    Reason codes: 'all_low_confidence', 'distance_issue', 'vague_scan'.
+    """
+    categories = ["vodka", "cognac", "wine", "sparkling"]
+
+    # Check 1: All categories have low confidence
+    confidences = [
+        vision_result.get(cat, {}).get("confidence", "low")
+        for cat in categories
+    ]
+    if all(c == "low" for c in confidences):
+        return True, "all_low_confidence"
+
+    # Check 2: All facings are null or zero AND notes mention distance/resolution
+    all_null_or_zero = True
+    for cat in categories:
+        cat_data = vision_result.get(cat, {})
+        for key, val in cat_data.items():
+            if "facings" in key and val is not None and val > 0:
+                all_null_or_zero = False
+                break
+        if not all_null_or_zero:
+            break
+
+    if all_null_or_zero:
+        notes = (vision_result.get("notes", "") or "").lower()
+        distance_keywords = [
+            "distance", "resolution", "too far", "too small",
+            "cannot read", "unreadable", "impossible to identify",
+            "low resolution", "wide-angle", "wide angle",
+            "відстань", "роздільн", "далеко", "нечитабельн",
+            "неможливо", "занадто дрібн", "занадто далек",
+        ]
+        if any(kw in notes for kw in distance_keywords):
+            return True, "distance_issue"
+
+        # Check 3: Shelf scan is entirely vague (x20+, mixed, various, etc.)
+        shelf_scan = vision_result.get("shelf_scan", [])
+        if shelf_scan:
+            vague_count = sum(
+                1
+                for row in shelf_scan
+                for brand in row.get("brands", [])
+                if any(w in brand.lower() for w in ["x20+", "x30+", "mixed", "various", "невизначен", "unknown"])
+            )
+            if vague_count >= len(shelf_scan):
+                return True, "vague_scan"
+
+    return False, ""
 
 
 def parse_correction(text: str) -> list[dict]:
@@ -423,6 +489,31 @@ async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report_data["photos_b64"],
             report_data["comment"]
         )
+
+        # ── Wide-angle / low-quality rejection ───────────────────────────────
+        should_reject, reject_reason = _should_reject_photo(vision_raw)
+        if should_reject:
+            logger.info(f"[PhotoReport] Photo rejected ({reject_reason}) for agent {user_id}")
+            try:
+                await loop.run_in_executor(
+                    None,
+                    save_rejected_report,
+                    user_id,
+                    report_data["point_name"],
+                    report_data["photo_file_ids"],
+                    report_data.get("comment", ""),
+                    reject_reason,
+                )
+            except Exception as db_err:
+                logger.warning(f"[PhotoReport] Could not save rejected report: {db_err}")
+            await update.message.reply_text(
+                PHOTO_REJECTION_MESSAGE,
+                parse_mode="Markdown",
+                reply_markup=MAIN_MENU,
+            )
+            pending_reports.pop(user_id, None)
+            return ConversationHandler.END
+        # ─────────────────────────────────────────────────────────────────────
 
         scored_report = calculate_score(vision_raw)
 
