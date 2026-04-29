@@ -212,6 +212,18 @@ async def execute_broadcast(broadcast_id: int, original_message: dict) -> dict:
         logger.warning(f"[Broadcast] Could not update completed status: {e}")
 
     logger.info(f"[Broadcast] id={broadcast_id} done: sent={sent} failed={failed}")
+
+    # Auto-archive AV Post editions detected in this broadcast
+    try:
+        from services.avpost_service import maybe_archive_from_broadcast
+        maybe_archive_from_broadcast(
+            text_content=original_message.get('text'),
+            caption=original_message.get('caption'),
+            broadcast_id=broadcast_id,
+        )
+    except Exception as _avp_err:
+        logger.warning(f"[Broadcast] AV Post archive hook failed: {_avp_err}")
+
     return {"sent": sent, "failed": failed}
 
 

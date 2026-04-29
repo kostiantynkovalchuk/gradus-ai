@@ -324,6 +324,10 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
                 result = await handle_admin_button_callback(data['callback_query'], db)
                 logger.info(f"✓ Admin button callback processed")
                 return result
+            elif callback_data.startswith('avpost:'):
+                result = await handle_hr_callback(data['callback_query'])
+                logger.info(f"✓ AV Post callback processed")
+                return result
             elif callback_data.startswith('hr_'):
                 result = await handle_hr_callback(data['callback_query'])
                 logger.info(f"✓ HR callback processed")
@@ -1515,6 +1519,47 @@ async def handle_hr_callback(callback_query: dict):
         
         elif callback_data == 'hr_ask':
             await send_telegram_message(chat_id, "Напишіть своє питання, і я постараюся допомогти! 💬")
+
+        elif callback_data.startswith('avpost:'):
+            parts = callback_data.split(':')
+            action = parts[1] if len(parts) > 1 else 'list'
+            offset = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+            from services.avpost_service import list_editions, count_editions
+            try:
+                total = count_editions()
+                editions = list_editions(limit=5, offset=offset)
+            except Exception as _avp_e:
+                logger.error(f"[AVPOST] DB error in menu: {_avp_e}")
+                editions, total = [], 0
+
+            if not editions:
+                avpost_text = "📰 *Архів AV Post*\n\nПоки що немає випусків."
+                avpost_kb = {"inline_keyboard": [
+                    [{"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}]
+                ]}
+            else:
+                avpost_rows = []
+                for ed in editions:
+                    date_str = ed['published_at'].strftime('%d.%m.%Y')
+                    label = f"№{ed['edition_number']} · {date_str} — {ed['title']}"
+                    avpost_rows.append([{"text": label, "url": ed['url']}])
+                nav = []
+                if offset > 0:
+                    nav.append({"text": "⬅", "callback_data": f"avpost:list:{max(0, offset - 5)}"})
+                if offset + 5 < total:
+                    nav.append({"text": "➡", "callback_data": f"avpost:list:{offset + 5}"})
+                if nav:
+                    avpost_rows.append(nav)
+                avpost_rows.append([{"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}])
+                avpost_text = f"📰 *Архів AV Post*\n_Усього випусків: {total}_\n"
+                avpost_kb = {"inline_keyboard": avpost_rows}
+
+            if is_video_message:
+                await delete_telegram_message(chat_id, message_id)
+                await send_telegram_message_with_keyboard(chat_id, avpost_text, avpost_kb)
+            else:
+                await edit_telegram_message(chat_id, message_id, avpost_text, avpost_kb)
 
         elif callback_data.startswith('hr_pulse:'):
             parts = callback_data.split(':')

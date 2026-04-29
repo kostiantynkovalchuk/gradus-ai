@@ -1236,6 +1236,39 @@ MIGRATIONS = [
                ADD COLUMN IF NOT EXISTS ocr_total_pages INT DEFAULT 0""",
         ]
     },
+    {
+        "version": "049_avpost_editions",
+        "statements": [
+            # Corporate newspaper archive for AV Post (avpost-bestbrands.vercel.app).
+            # Auto-populated by broadcast_service.py when a broadcast URL matches
+            # the avpost-bestbrands.vercel.app domain. Exposed in Maya HR as
+            # "📰 Архів AV Post" top-level menu entry.
+            # source: 'broadcast' (auto) or 'manual_seed' (seeded).
+            """CREATE TABLE IF NOT EXISTS hr_avpost_editions (
+                id             SERIAL PRIMARY KEY,
+                url            TEXT NOT NULL UNIQUE,
+                title          TEXT NOT NULL,
+                edition_number INTEGER,
+                published_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                source         VARCHAR(20) NOT NULL DEFAULT 'broadcast',
+                broadcast_id   INTEGER,
+                is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_avpost_active_published
+               ON hr_avpost_editions (is_active, published_at DESC)""",
+            # Seed the first edition (published April 2, 2026)
+            """INSERT INTO hr_avpost_editions (url, title, edition_number, published_at, source)
+               VALUES (
+                   'https://avpost-bestbrands.vercel.app/',
+                   'Випуск №1 — Best Brands',
+                   1,
+                   '2026-04-02 08:00:00+00',
+                   'manual_seed'
+               )
+               ON CONFLICT (url) DO NOTHING""",
+        ]
+    },
 ]
 
 

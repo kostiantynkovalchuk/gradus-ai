@@ -26,6 +26,9 @@ def create_main_menu_keyboard() -> Dict:
             {"text": "📚 Навчання", "callback_data": "hr_menu:training"}
         ],
         [
+            {"text": "📰 Архів AV Post", "callback_data": "avpost:list:0"}
+        ],
+        [
             {"text": "💬 Задати своє питання", "callback_data": "hr_ask"}
         ]
     ]
