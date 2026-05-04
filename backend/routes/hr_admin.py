@@ -1083,16 +1083,21 @@ async def get_pulse_overview(
     """Get Team Pulse statistics: mood trends, department breakdown, trigger counts."""
     db_session = next(get_db())
     try:
+        # Use the latest month that actually has survey data (not necessarily current calendar month)
+        latest_month = db_session.execute(text(
+            "SELECT COALESCE(MAX(survey_month), TO_CHAR(NOW(), 'YYYY-MM')) FROM pulse_surveys"
+        )).scalar()
+
         monthly_mood = db_session.execute(text("""
             SELECT
                 survey_month,
                 ROUND(AVG(score)::NUMERIC, 2) AS avg_score,
                 COUNT(*) AS response_count
             FROM pulse_surveys
-            WHERE survey_month >= TO_CHAR(NOW() - INTERVAL '6 months', 'YYYY-MM')
+            WHERE survey_month >= TO_CHAR((TO_DATE(:latest_month, 'YYYY-MM') - INTERVAL '5 months'), 'YYYY-MM')
             GROUP BY survey_month
             ORDER BY survey_month
-        """)).fetchall()
+        """), {"latest_month": latest_month}).fetchall()
 
         dept_mood = db_session.execute(text("""
             SELECT
@@ -1100,17 +1105,17 @@ async def get_pulse_overview(
                 ROUND(AVG(score)::NUMERIC, 2) AS avg_score,
                 COUNT(*) AS response_count
             FROM pulse_surveys
-            WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')
+            WHERE survey_month = :latest_month
             GROUP BY department
             ORDER BY avg_score DESC
-        """)).fetchall()
+        """), {"latest_month": latest_month}).fetchall()
 
         trigger_counts = db_session.execute(text("""
             SELECT
                 trigger_type,
                 COUNT(*) AS cnt
             FROM pulse_triggers
-            WHERE fired_at >= DATE_TRUNC('month', NOW())
+            WHERE fired_at >= NOW() - INTERVAL '30 days'
             GROUP BY trigger_type
             ORDER BY cnt DESC
         """)).fetchall()
@@ -1120,14 +1125,12 @@ async def get_pulse_overview(
         )).scalar() or 0
 
         current_month = db_session.execute(text(
-            "SELECT COUNT(*) FROM pulse_surveys "
-            "WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')"
-        )).scalar() or 0
+            "SELECT COUNT(*) FROM pulse_surveys WHERE survey_month = :latest_month"
+        ), {"latest_month": latest_month}).scalar() or 0
 
         overall_avg = db_session.execute(text(
-            "SELECT ROUND(AVG(score)::NUMERIC, 2) FROM pulse_surveys "
-            "WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')"
-        )).scalar()
+            "SELECT ROUND(AVG(score)::NUMERIC, 2) FROM pulse_surveys WHERE survey_month = :latest_month"
+        ), {"latest_month": latest_month}).scalar()
 
         response_rate = round((current_month / total_users_row * 100), 1) if total_users_row > 0 else 0.0
 
@@ -1138,10 +1141,10 @@ async def get_pulse_overview(
                 ROUND(AVG(score)::NUMERIC, 2) AS avg_score,
                 COUNT(*) AS response_count
             FROM pulse_surveys
-            WHERE survey_month >= TO_CHAR(NOW() - INTERVAL '6 months', 'YYYY-MM')
+            WHERE survey_month >= TO_CHAR((TO_DATE(:latest_month, 'YYYY-MM') - INTERVAL '5 months'), 'YYYY-MM')
             GROUP BY survey_month, department
             ORDER BY survey_month, department
-        """)).fetchall()
+        """), {"latest_month": latest_month}).fetchall()
 
         individual_responses = db_session.execute(text("""
             SELECT
@@ -1152,20 +1155,20 @@ async def get_pulse_overview(
                 COALESCE(problem_text, '') AS problem_text,
                 COALESCE(responded_at::text, '') AS responded_at
             FROM pulse_surveys
-            WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')
+            WHERE survey_month = :latest_month
             ORDER BY score ASC, responded_at DESC
-        """)).fetchall()
+        """), {"latest_month": latest_month}).fetchall()
 
         problem_breakdown = db_session.execute(text("""
             SELECT
                 COALESCE(problem_category, 'none') AS category,
                 COUNT(*) AS cnt
             FROM pulse_surveys
-            WHERE survey_month = TO_CHAR(NOW(), 'YYYY-MM')
+            WHERE survey_month = :latest_month
               AND score = 1
             GROUP BY problem_category
             ORDER BY cnt DESC
-        """)).fetchall()
+        """), {"latest_month": latest_month}).fetchall()
 
         return {
             "monthly_mood": [
@@ -1204,6 +1207,7 @@ async def get_pulse_overview(
                 {"category": r[0], "count": r[1]}
                 for r in problem_breakdown
             ],
+            "latest_month": latest_month,
             "kpi": {
                 "response_rate": response_rate,
                 "responses_this_month": int(current_month),

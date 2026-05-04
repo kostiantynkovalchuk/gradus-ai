@@ -456,13 +456,13 @@ export default function Presentation() {
         Gradus<span style={{ color: ACCENT }}>AI</span>
       </div>
       <div style={{ position: 'fixed', top: '2.4vh', left: 0, right: 0, display: 'flex', justifyContent: 'center', zIndex: 100 }}>
-        <div style={{ display: 'flex', gap: '0.3vw', background: '#0F1629', border: '1px solid #1E2D4A', borderRadius: '2vw', padding: '0.5vh 1.5vw', alignItems: 'center', gap: '0.2vw' }}>
+        <div style={{ display: 'flex', gap: '0.2vw', background: '#0F1629', border: '1px solid #1E2D4A', borderRadius: '2vw', padding: '0.5vh 1.5vw', alignItems: 'center' }}>
           {TITLES.map((title, i) => (
             <button
               key={i}
               onClick={() => setCurrent(i)}
               style={{
-                background: 'none',
+                background: i === current ? '#F5A62318' : 'none',
                 border: 'none',
                 cursor: 'pointer',
                 fontFamily: "'DM Sans', sans-serif",
@@ -471,7 +471,6 @@ export default function Presentation() {
                 color: i === current ? ACCENT : '#8B9AB1',
                 padding: '0.3vh 0.9vw',
                 borderRadius: '1vw',
-                background: i === current ? '#F5A62318' : 'none',
                 transition: 'all 0.2s',
               }}
             >

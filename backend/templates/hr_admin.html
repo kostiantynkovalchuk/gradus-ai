@@ -1070,22 +1070,6 @@
             <div id="marketIntelligence" style="margin-top:16px;"></div>
         </div>
 
-        <div class="charts-row">
-            <div class="chart-container">
-                <h3>Найзатребуваніші навички</h3>
-                <div id="skillsChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <div style="position: relative; height: 260px; max-height: 260px;">
-                    <canvas id="skillsChart" style="max-height: 100%;"></canvas>
-                </div>
-            </div>
-            <div class="chart-container">
-                <h3>Тренди зарплат</h3>
-                <div id="trendsChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після кількох пошуків</div>
-                <div style="position: relative; height: 260px; max-height: 260px;">
-                    <canvas id="trendsChart" style="max-height: 100%;"></canvas>
-                </div>
-            </div>
-        </div>
 
         <div class="section">
             <div class="section-header">
@@ -1134,24 +1118,6 @@
             </div>
         </div>
 
-        <div class="section" style="margin-top:var(--space-xl);">
-            <div class="section-header">
-                <div><h2 class="section-title">Порівняння з традиційним рекрутингом</h2></div>
-            </div>
-            <div class="section-content">
-                <table class="efficiency-table" id="efficiencyTable">
-                    <thead>
-                        <tr>
-                            <th>Метрика</th>
-                            <th>Традиційно</th>
-                            <th>Maya Hunt</th>
-                            <th>Економія</th>
-                        </tr>
-                    </thead>
-                    <tbody id="efficiencyBody"></tbody>
-                </table>
-            </div>
-        </div>
     </div>
     </div>
 
@@ -1173,7 +1139,7 @@
             </div>
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseRespondents">—</div>
-                <div class="hunt-stat-label">👥 Відповідей цього місяця</div>
+                <div class="hunt-stat-label">👥 Відповідей (<span id="pulseMonthLabel">—</span>)</div>
             </div>
         </div>
 
@@ -1184,7 +1150,7 @@
                 <p id="pulseTrendEmpty" style="display:none;color:var(--gray-400);text-align:center;padding:var(--space-xl);">Дані відсутні — опитування ще не проводились</p>
             </div>
             <div style="background:white;border-radius:var(--radius-lg);padding:var(--space-lg);box-shadow:var(--shadow-sm);border:1px solid var(--gray-200);">
-                <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🏢 Настрій за відділами (поточний місяць)</h3>
+                <h3 style="margin:0 0 var(--space-md);font-size:1rem;color:var(--gray-700);">🏢 Настрій за відділами (<span id="pulseLatestMonth">останній місяць</span>)</h3>
                 <canvas id="pulseDeptChart" height="200"></canvas>
                 <p id="pulseDeptEmpty" style="display:none;color:var(--gray-400);text-align:center;padding:var(--space-xl);">Відповідей ще немає</p>
             </div>
@@ -1454,10 +1420,8 @@
 
         let currentPage = 'analytics';
         let salaryChartInstance = null;
-        let skillsChartInstance = null;
         let funnelChartInstance = null;
         let sourceChartInstance = null;
-        let trendsChartInstance = null;
         let huntCurrency = 'USD';
         let huntDataCache = null;
         let huntReportCache = null;
@@ -1751,8 +1715,6 @@
             document.getElementById('btnUAH').classList.toggle('active', c === 'UAH');
             if (huntDataCache) {
                 renderSalaryChart(huntDataCache.salary_by_city);
-                renderSkillsChart(huntDataCache.top_skills);
-                renderTrendsChart(huntDataCache.salary_trends);
                 renderMarketIntelligence(huntDataCache.market_intelligence || []);
             }
             if (huntReportCache) {
@@ -1835,10 +1797,7 @@
                 renderFunnelChart(data.hire_funnel);
                 renderSourceChart(data.source_performance);
                 renderSalaryChart(data.salary_by_city);
-                renderSkillsChart(data.top_skills);
-                renderTrendsChart(data.salary_trends);
                 renderHuntRecentTable(data.recent_vacancies);
-                renderEfficiencyTable(kpi);
                 renderSourceCards(data.active_sources, kpi.total_candidates_processed);
 
                 if (data.current_usd_rate) {
@@ -2129,93 +2088,6 @@
             });
         }
 
-        function renderSkillsChart(skillsData) {
-            const canvas = document.getElementById('skillsChart');
-            const emptyEl = document.getElementById('skillsChartEmpty');
-
-            if (!skillsData || skillsData.length === 0) {
-                canvas.style.display = 'none'; emptyEl.style.display = 'block'; return;
-            }
-            canvas.style.display = 'block'; emptyEl.style.display = 'none';
-
-            const isUSD = huntCurrency === 'USD';
-            const salaryKey = isUSD ? 'avg_salary' : 'avg_salary_uah';
-            const maxSalary = Math.max(...skillsData.map(d => d[salaryKey] || 0), 1);
-            const colors = skillsData.map(d => {
-                const intensity = Math.min((d[salaryKey] || 0) / maxSalary, 1);
-                const r = Math.round(59 + intensity * 180);
-                const g = Math.round(130 - intensity * 80);
-                const b = Math.round(246 - intensity * 200);
-                return `rgba(${r}, ${g}, ${b}, 0.8)`;
-            });
-
-            if (skillsChartInstance) skillsChartInstance.destroy();
-            skillsChartInstance = new Chart(canvas.getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: skillsData.map(d => d.skill),
-                    datasets: [{ data: skillsData.map(d => d.count), backgroundColor: colors, borderWidth: 0 }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                afterBody: function(ctx) {
-                                    const d = skillsData[ctx[0].dataIndex];
-                                    const sal = isUSD ? d.avg_salary : (d.avg_salary_uah || 0);
-                                    return (isUSD ? '$' : '') + sal.toLocaleString() + (isUSD ? '' : ' грн');
-                                }
-                            }
-                        }
-                    },
-                    scales: { x: { beginAtZero: true } }
-                }
-            });
-        }
-
-        function renderTrendsChart(trends) {
-            const canvas = document.getElementById('trendsChart');
-            const emptyEl = document.getElementById('trendsChartEmpty');
-
-            if (!trends || trends.length === 0) {
-                canvas.style.display = 'none'; emptyEl.style.display = 'block'; return;
-            }
-            canvas.style.display = 'block'; emptyEl.style.display = 'none';
-
-            const isUSD = huntCurrency === 'USD';
-            const candKey = isUSD ? 'candidate_median' : 'candidate_median_uah';
-            const empKey = isUSD ? 'employer_median' : 'employer_median_uah';
-
-            if (trendsChartInstance) trendsChartInstance.destroy();
-            trendsChartInstance = new Chart(canvas.getContext('2d'), {
-                type: 'line',
-                data: {
-                    labels: trends.map(t => t.month),
-                    datasets: [
-                        {
-                            label: 'Очікування кандидатів',
-                            data: trends.map(t => t[candKey] || 0),
-                            borderColor: '#3B82F6', backgroundColor: 'rgba(59,130,246,0.1)',
-                            fill: true, tension: 0.3,
-                        },
-                        {
-                            label: 'Пропозиції роботодавців',
-                            data: trends.map(t => t[empKey] || 0),
-                            borderColor: '#F97316', backgroundColor: 'rgba(249,115,22,0.1)',
-                            fill: true, tension: 0.3,
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true, title: { display: true, text: isUSD ? 'USD' : 'грн' } }
-                    }
-                }
-            });
-        }
 
         function renderHuntRecentTable(vacancies) {
             const table = document.getElementById('huntRecentTable');
@@ -2249,19 +2121,6 @@
             });
         }
 
-        function renderEfficiencyTable(kpi) {
-            const tbody = document.getElementById('efficiencyBody');
-            const avgPerVac = kpi.avg_candidates_per_vacancy || 0;
-            const rows = [
-                ['Час пошуку', '3 год', '5 хв', '97%'],
-                ['Вартість найму', '$400', '$' + kpi.cost_per_hire_maya, Math.round((1 - kpi.cost_per_hire_maya / 400) * 100) + '%'],
-                ['Кандидатів на день', '2-3', kpi.candidates_today > 0 ? kpi.candidates_today + '+' : '20+', '10x'],
-                ['Охоплення каналів', '1-2', kpi.total_channels_posted || '12', (kpi.total_channels_posted || 12) > 2 ? Math.round((kpi.total_channels_posted || 12) / 1.5) + 'x' : '6x'],
-            ];
-            tbody.innerHTML = rows.map(r =>
-                `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="saving">${r[3]}</td></tr>`
-            ).join('');
-        }
 
         function renderSourceCards(activeSources, totalCandidates) {
             const el = document.getElementById('srcTelegram');
@@ -2313,6 +2172,13 @@
                 if (!resp.ok) { console.error('Pulse API error:', resp.status); return; }
                 const data = await resp.json();
                 const kpi = data.kpi || {};
+
+                const latestMonth = data.latest_month || '';
+                const monthLabel = latestMonth || '—';
+                const monthEl = document.getElementById('pulseMonthLabel');
+                if (monthEl) monthEl.textContent = monthLabel;
+                const latestMonthEl = document.getElementById('pulseLatestMonth');
+                if (latestMonthEl) latestMonthEl.textContent = monthLabel;
 
                 document.getElementById('pulseResponseRate').textContent =
                     (kpi.response_rate || 0).toFixed(1) + '%';
