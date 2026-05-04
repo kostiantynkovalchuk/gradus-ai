@@ -1913,6 +1913,13 @@ async def serve_content_page():
         return FileResponse(dist / "index.html")
     raise HTTPException(status_code=404, detail="Frontend not available")
 
+@app.get("/presentation")
+async def serve_presentation_page():
+    dist = get_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    raise HTTPException(status_code=404, detail="Frontend not available")
+
 @app.get("/approval")
 async def serve_approval_page():
     dist = get_frontend_dist()
