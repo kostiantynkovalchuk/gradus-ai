@@ -954,19 +954,6 @@
 
     <div class="page-content" id="page-hunt" style="max-width: 100%; overflow-x: hidden;">
     <div class="container">
-        <div class="hunt-updated" id="huntUpdatedAt"></div>
-
-        <div class="hunt-filter-bar" style="display:flex;align-items:center;gap:var(--space-md);margin-bottom:var(--space-lg);flex-wrap:wrap;">
-            <label style="font-weight:600;color:var(--gray-700);font-size:0.875rem;">🔎 Посада:</label>
-            <select id="roleFilter" onchange="onRoleChange()" style="padding:6px 14px;border:1px solid var(--gray-300);border-radius:var(--radius-md);background:white;font-size:0.875rem;color:var(--gray-700);cursor:pointer;min-width:200px;">
-                <option value="">Всі посади</option>
-            </select>
-            <button class="btn btn-primary" onclick="downloadReport()" style="margin-left:auto;">
-                📥 Завантажити звіт (XLSX)
-            </button>
-        </div>
-
-
         <div class="salary-search-card">
             <h2 class="section-title" style="margin-bottom:var(--space-lg);">🔍 Дослідження ринку зарплат</h2>
             <div style="display:flex;gap:var(--space-md);align-items:flex-end;flex-wrap:wrap;margin-bottom:var(--space-lg);">
@@ -989,100 +976,6 @@
             </div>
             <div id="salaryResults" style="display:none;"></div>
         </div>
-
-        <details open style="margin-bottom:var(--space-xl);">
-            <summary style="cursor:pointer;font-size:1rem;font-weight:700;color:var(--gray-800);padding:var(--space-md) 0;user-select:none;">📋 Детальний звіт по вакансіях</summary>
-            <div id="reportTable" style="margin-top:var(--space-md);overflow-x:auto;"></div>
-        </details>
-
-        <div class="kpi-grid" id="kpiGrid">
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="huntVacancies">0</div>
-                <div class="hunt-stat-label">Вакансій оброблено</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="huntCandidates">0</div>
-                <div class="hunt-stat-label">Кандидатів знайдено</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="huntToday">0</div>
-                <div class="hunt-stat-label">Кандидатів сьогодні</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="huntAcceptance">0%</div>
-                <div class="hunt-stat-label">Прийнято HR</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="huntChannels">0</div>
-                <div class="hunt-stat-label">Розміщено в каналах</div>
-            </div>
-            <div class="hunt-stat-card">
-                <div class="hunt-stat-value" id="huntReach">0</div>
-                <div class="hunt-stat-label">Охоплення аудиторії</div>
-            </div>
-        </div>
-
-        <div class="charts-row">
-            <div class="chart-container">
-                <h3>Воронка найму</h3>
-                <div id="funnelChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <div style="position: relative; height: 280px; max-height: 280px;">
-                    <canvas id="funnelChart" style="max-height: 100%;"></canvas>
-                </div>
-            </div>
-            <div class="chart-container">
-                <h3>Ефективність джерел</h3>
-                <div id="sourceChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <div style="position: relative; height: 280px; max-height: 280px;">
-                    <canvas id="sourceChart" style="max-height: 100%;"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <div class="chart-container">
-            <h3 style="display:inline;">📊 Аналіз ринку зарплат</h3>
-            <div class="currency-toggle" id="currencyToggle">
-                <button class="currency-btn active" onclick="setCurrency('USD')" id="btnUSD">USD</button>
-                <button class="currency-btn" onclick="setCurrency('UAH')" id="btnUAH">грн</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;margin:4px 0 8px;flex-wrap:wrap;">
-                <span style="font-size:0.8rem;color:var(--gray-400);">Дані зібрані Maya Hunt з відкритих джерел</span>
-                <span id="robotauaBadge" style="display:none;font-size:0.75rem;background:rgba(239,68,68,0.15);color:#ef4444;padding:2px 8px;border-radius:8px;font-weight:600;"></span>
-            </div>
-            <div id="nbuRateBanner" style="display:none;font-size:0.8rem;color:var(--gray-400);margin-bottom:8px;">💱 Курс НБУ: <span id="nbuRateValue"></span></div>
-            <div id="salaryChartEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів<br>Maya автоматично збирає статистику зарплат під час кожного пошуку.</div>
-            <div style="position: relative; height: 320px; max-height: 320px;">
-                <canvas id="salaryChart" style="max-height: 100%;"></canvas>
-            </div>
-            <div id="marketIntelligence" style="margin-top:16px;"></div>
-        </div>
-
-
-        <div class="section">
-            <div class="section-header">
-                <div><h2 class="section-title">Останні вакансії</h2></div>
-            </div>
-            <div class="section-content">
-                <div id="huntRecentEmpty" class="hunt-empty" style="display:none;">📊 Дані з'являться після першого пошуку кандидатів</div>
-                <div class="table-container">
-                    <table class="table" id="huntRecentTable" style="display:none;">
-                        <thead>
-                            <tr>
-                                <th>Вакансія</th>
-                                <th>Місто</th>
-                                <th style="text-align:center;">Статус</th>
-                                <th style="text-align:center;">Кандидатів</th>
-                                <th style="text-align:center;">Каналів</th>
-                                <th style="text-align:center;">Найнято</th>
-                                <th>Дата</th>
-                            </tr>
-                        </thead>
-                        <tbody id="huntRecentBody"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
 
     </div>
     </div>
@@ -1276,21 +1169,7 @@
                 navAnalytics: '📊 Аналітика',
                 navHunt: '🔍 Maya Hunt',
                 huntVacancies: 'Вакансій оброблено',
-                huntCandidates: 'Кандидатів знайдено',
-                huntPosted: 'Розміщено в каналах',
-                huntApproved: 'Прийнято HR',
-                huntSalaryTitle: 'Медіанна зарплата: очікування кандидатів vs пропозиції роботодавців',
-                huntSkillsTitle: 'Найзатребуваніші навички',
-                huntRecentTitle: 'Останні вакансії',
-                huntEmptyData: '📊 Дані з\'являться після першого пошуку кандидатів',
-                huntColVacancy: 'Вакансія',
-                huntColCity: 'Місто',
-                huntColStatus: 'Статус',
-                huntColChannels: 'Каналів',
-                huntColCandidates: 'Кандидатів',
-                huntColDate: 'Дата',
-                huntCandidateLabel: 'Кандидати',
-                huntEmployerLabel: 'Роботодавці'
+                huntCandidates: 'Кандидатів знайдено'
             },
             en: {
                 subtitle: 'Admin Analytics & Management',
@@ -1346,21 +1225,7 @@
                 navAnalytics: '📊 Analytics',
                 navHunt: '🔍 Maya Hunt',
                 huntVacancies: 'Vacancies Processed',
-                huntCandidates: 'Candidates Found',
-                huntPosted: 'Posted to Channels',
-                huntApproved: 'Approved by HR',
-                huntSalaryTitle: 'Median Salary: Candidate Expectations vs Employer Offers',
-                huntSkillsTitle: 'Most In-Demand Skills',
-                huntRecentTitle: 'Recent Vacancies',
-                huntEmptyData: '📊 Data will appear after the first candidate search',
-                huntColVacancy: 'Vacancy',
-                huntColCity: 'City',
-                huntColStatus: 'Status',
-                huntColChannels: 'Channels',
-                huntColCandidates: 'Candidates',
-                huntColDate: 'Date',
-                huntCandidateLabel: 'Candidates',
-                huntEmployerLabel: 'Employers'
+                huntCandidates: 'Candidates Found'
             }
         };
 
@@ -1385,15 +1250,7 @@
         }
 
         let currentPage = 'analytics';
-        let salaryChartInstance = null;
-        let funnelChartInstance = null;
-        let sourceChartInstance = null;
-        let huntCurrency = 'USD';
-        let huntDataCache = null;
-        let huntReportCache = null;
-        let huntRefreshTimer = null;
         let rozsilkaRefreshTimer = null;
-        let huntRole = '';
 
         function switchPage(page, evt) {
             currentPage = page;
@@ -1402,13 +1259,7 @@
             document.getElementById('page-' + page).classList.add('active');
             if (evt && evt.target) evt.target.classList.add('active');
             else document.querySelector(`.nav-tab[onclick*="${page}"]`).classList.add('active');
-            if (huntRefreshTimer) { clearInterval(huntRefreshTimer); huntRefreshTimer = null; }
             if (rozsilkaRefreshTimer) { clearInterval(rozsilkaRefreshTimer); rozsilkaRefreshTimer = null; }
-            if (page === 'hunt') {
-                loadRoleFilter();
-                loadHuntAnalytics();
-                huntRefreshTimer = setInterval(loadHuntAnalytics, 60000);
-            }
             if (page === 'pulse') {
                 loadPulseData();
             }
@@ -1675,399 +1526,9 @@
             document.getElementById(tabName + 'Content').classList.add('active');
         }
 
-        function setCurrency(c) {
-            huntCurrency = c;
-            document.getElementById('btnUSD').classList.toggle('active', c === 'USD');
-            document.getElementById('btnUAH').classList.toggle('active', c === 'UAH');
-            if (huntDataCache) {
-                renderSalaryChart(huntDataCache.salary_by_city);
-                renderMarketIntelligence(huntDataCache.market_intelligence || []);
-            }
-            if (huntReportCache) {
-                renderReportTable(huntReportCache);
-            }
-        }
-
         function fmt(n) {
             return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
         }
-
-        async function loadRoleFilter() {
-            try {
-                const resp = await fetch('/hr/api/hunt-roles');
-                const data = await resp.json();
-                const sel = document.getElementById('roleFilter');
-                const prevRole = huntRole;
-                sel.innerHTML = '<option value="">Всі посади</option>';
-                (data.roles || []).forEach(r => {
-                    const opt = document.createElement('option');
-                    opt.value = r;
-                    opt.textContent = r;
-                    sel.appendChild(opt);
-                });
-                if (prevRole) sel.value = prevRole;
-            } catch(e) {
-                console.error('Error loading roles:', e);
-            }
-        }
-
-        function onRoleChange() {
-            huntRole = document.getElementById('roleFilter').value;
-            loadHuntAnalytics();
-        }
-
-        function downloadReport() {
-            const role = document.getElementById('roleFilter').value;
-            let url = '/hr/api/hunt-report?format=xlsx';
-            if (role) url += '&role=' + encodeURIComponent(role);
-            window.location.href = url;
-        }
-
-        async function loadHuntAnalytics() {
-            try {
-                let url = '/hr/api/hunt-analytics';
-                if (huntRole) url += '?role=' + encodeURIComponent(huntRole);
-                const response = await fetch(url);
-                const data = await response.json();
-                huntDataCache = data;
-
-                const kpi = data.kpi;
-                document.getElementById('huntVacancies').textContent = kpi.total_vacancies;
-                document.getElementById('huntCandidates').textContent = kpi.total_candidates_processed;
-                document.getElementById('huntToday').textContent = kpi.candidates_today;
-                document.getElementById('huntAcceptance').textContent = kpi.acceptance_rate + '%';
-                document.getElementById('huntChannels').textContent = kpi.total_channels_posted;
-                document.getElementById('huntReach').textContent = fmt(kpi.estimated_reach);
-
-                document.getElementById('huntUpdatedAt').textContent = 'Оновлено: щойно';
-
-                renderFunnelChart(data.hire_funnel);
-                renderSourceChart(data.source_performance);
-                renderSalaryChart(data.salary_by_city);
-                renderHuntRecentTable(data.recent_vacancies);
-
-                if (data.current_usd_rate) {
-                    const rateBanner = document.getElementById('nbuRateBanner');
-                    document.getElementById('nbuRateValue').textContent = '1 USD = ' + data.current_usd_rate.toFixed(2) + ' грн · оновлено сьогодні';
-                    rateBanner.style.display = 'block';
-                }
-
-                const mi = data.market_intelligence || [];
-                if (mi.length > 0) {
-                    let totalEmp = 0, totalCand = 0;
-                    mi.forEach(m => { totalEmp += (m.employer_count || 0); totalCand += (m.candidate_count || 0); });
-                    const badge = document.getElementById('robotauaBadge');
-                    badge.textContent = '🔴 Robota.ua · ' + totalEmp.toLocaleString() + ' вакансій · ' + totalCand.toLocaleString() + ' кандидатів';
-                    badge.style.display = 'inline-block';
-                }
-                renderMarketIntelligence(mi);
-
-                loadHuntReport(huntRole);
-
-            } catch (error) {
-                console.error('Error loading hunt analytics:', error);
-            }
-        }
-
-        async function loadHuntReport(role) {
-            const container = document.getElementById('reportTable');
-            if (!container) return;
-            container.innerHTML = '<div style="color:var(--gray-400);padding:var(--space-md);">Завантаження...</div>';
-            try {
-                let url = '/hr/api/hunt-report?format=json';
-                if (role) url += '&role=' + encodeURIComponent(role);
-                const resp = await fetch(url);
-                const data = await resp.json();
-                huntReportCache = data;
-                renderReportTable(data);
-            } catch(e) {
-                console.error('Hunt report error:', e);
-                const c = document.getElementById('reportTable');
-                if (c) c.innerHTML = '<div style="color:var(--danger);padding:var(--space-md);">Помилка завантаження звіту</div>';
-            }
-        }
-
-        function renderReportTable(data) {
-            const container = document.getElementById('reportTable');
-            if (!container) return;
-            const vacancies = (data && data.vacancies) || [];
-            if (vacancies.length === 0) {
-                container.innerHTML = '<div style="color:var(--gray-400);padding:var(--space-md);">Вакансій не знайдено</div>';
-                return;
-            }
-            const isUSD = huntCurrency === 'USD';
-            let html = '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">';
-            html += '<thead><tr style="background:var(--gray-50);">';
-            const headers = ['Посада','Місто','Статус','ЗП макс','Кандидатів','Avg AI оцінка','Найнято','Медіана ринку','Джерело',''];
-            headers.forEach(h => { html += `<th style="padding:8px 10px;text-align:left;border-bottom:2px solid var(--gray-200);font-size:0.75rem;font-weight:700;color:var(--gray-600);text-transform:uppercase;">${h}</th>`; });
-            html += '</tr></thead><tbody>';
-            vacancies.forEach((v, idx) => {
-                const rowBg = idx % 2 === 0 ? 'white' : 'var(--gray-50)';
-                const salMax = isUSD
-                    ? (v.salary_max_usd ? '$' + v.salary_max_usd.toLocaleString() : '—')
-                    : (v.salary_max_uah ? v.salary_max_uah.toLocaleString() + ' грн' : '—');
-                const mktMedUsd = v.market_data && (v.market_data.employer || v.market_data.candidate)
-                    ? ((v.market_data.employer || v.market_data.candidate).salary_median_usd || null)
-                    : null;
-                const mktMed = isUSD
-                    ? (mktMedUsd ? '$' + mktMedUsd.toLocaleString() : '—')
-                    : (v.market_median_uah ? v.market_median_uah.toLocaleString() + ' грн' : '—');
-                const statusColors = {searching:'#dbeafe',completed:'#d1fae5',posted:'#fef3c7',filled:'#ede9fe',new:'#e0e7ff',pending:'#f3f4f6',no_results:'#f3f4f6'};
-                const statusBg = statusColors[v.status] || '#f3f4f6';
-                const srcCell = v.market_source_url
-                    ? `<a href="${v.market_source_url}" target="_blank" style="color:var(--primary);text-decoration:none;">${v.market_source || '—'}</a>`
-                    : (v.market_source || '—');
-                html += `<tr style="background:${rowBg};cursor:pointer;" onclick="toggleCandidates(this,'cands-${v.id}')">`;
-                html += `<td style="padding:8px 10px;font-weight:600;">${v.position}</td>`;
-                html += `<td style="padding:8px 10px;">${v.city}</td>`;
-                html += `<td style="padding:8px 10px;"><span style="background:${statusBg};padding:2px 8px;border-radius:10px;font-size:0.75rem;">${v.status}</span></td>`;
-                html += `<td style="padding:8px 10px;">${salMax}</td>`;
-                html += `<td style="padding:8px 10px;text-align:center;">${v.total_candidates}</td>`;
-                html += `<td style="padding:8px 10px;text-align:center;">${v.avg_ai_score || '—'}</td>`;
-                html += `<td style="padding:8px 10px;text-align:center;">${v.hires > 0 ? '🎯 ' + v.hires : '—'}</td>`;
-                html += `<td style="padding:8px 10px;">${mktMed}</td>`;
-                html += `<td style="padding:8px 10px;font-size:0.75rem;">${srcCell}</td>`;
-                html += `<td style="padding:8px 10px;text-align:center;color:var(--primary);">${v.candidates && v.candidates.length > 0 ? '▼' : ''}</td>`;
-                html += '</tr>';
-                if (v.candidates && v.candidates.length > 0) {
-                    html += `<tr id="cands-${v.id}" style="display:none;"><td colspan="10" style="padding:0;background:#f8faff;">`;
-                    html += '<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">';
-                    html += '<thead><tr style="background:#e0e7ff;">';
-                    ['ПІБ','Вік','Місто','Досвід','ЗП очік.','Оцінка','Рішення','Джерело'].forEach(h => {
-                        html += `<th style="padding:6px 10px;font-weight:600;color:var(--primary);font-size:0.7rem;text-transform:uppercase;">${h}</th>`;
-                    });
-                    html += '</tr></thead><tbody>';
-                    v.candidates.forEach(c => {
-                        const salExp = isUSD
-                            ? (c.salary_expectation_usd ? '$' + c.salary_expectation_usd.toLocaleString() : '—')
-                            : (c.salary_expectation_uah ? c.salary_expectation_uah.toLocaleString() + ' грн' : '—');
-                        const decColors = {hired:'#d1fae5',approved:'#dbeafe',rejected:'#fee2e2',saved:'#fef3c7',pending:'#f3f4f6'};
-                        const decBg = decColors[c.hr_decision] || '#f3f4f6';
-                        const srcLink = c.profile_url ? `<a href="${c.profile_url}" target="_blank" style="color:var(--primary);text-decoration:none;">${c.source}</a>` : c.source;
-                        html += '<tr style="border-top:1px solid #e0e7ff;">';
-                        html += `<td style="padding:6px 10px;font-weight:500;">${c.full_name}</td>`;
-                        html += `<td style="padding:6px 10px;">${c.age || '—'}</td>`;
-                        html += `<td style="padding:6px 10px;">${c.city}</td>`;
-                        html += `<td style="padding:6px 10px;">${c.experience_years != null ? c.experience_years + ' р.' : '—'}</td>`;
-                        html += `<td style="padding:6px 10px;">${salExp}</td>`;
-                        html += `<td style="padding:6px 10px;text-align:center;font-weight:700;">${c.ai_score != null ? c.ai_score : '—'}</td>`;
-                        html += `<td style="padding:6px 10px;"><span style="background:${decBg};padding:2px 8px;border-radius:10px;font-size:0.7rem;">${c.hr_decision}</span></td>`;
-                        html += `<td style="padding:6px 10px;">${srcLink}</td>`;
-                        html += '</tr>';
-                    });
-                    html += '</tbody></table></td></tr>';
-                }
-            });
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        }
-
-        function toggleCandidates(row, targetId) {
-            const target = document.getElementById(targetId);
-            if (!target) return;
-            const isHidden = target.style.display === 'none';
-            target.style.display = isHidden ? 'table-row' : 'none';
-            const arrow = row.querySelector('td:last-child');
-            if (arrow) arrow.textContent = isHidden ? '▲' : '▼';
-        }
-
-        function renderFunnelChart(funnel) {
-            const canvas = document.getElementById('funnelChart');
-            const emptyEl = document.getElementById('funnelChartEmpty');
-            if (!funnel || funnel.found === 0) {
-                canvas.style.display = 'none'; emptyEl.style.display = 'block'; return;
-            }
-            canvas.style.display = 'block'; emptyEl.style.display = 'none';
-
-            const stages = ['Знайдено', 'Переглянуто', 'Прийнято', 'Збережено', 'Найнято'];
-            const values = [funnel.found, funnel.reviewed, funnel.approved, funnel.saved, funnel.hired];
-            const colors = ['#3B82F6', '#60A5FA', '#34D399', '#6EE7B7', '#10B981'];
-
-            if (funnelChartInstance) funnelChartInstance.destroy();
-            funnelChartInstance = new Chart(canvas.getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: stages,
-                    datasets: [{
-                        data: values,
-                        backgroundColor: colors,
-                        borderWidth: 0,
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                afterBody: function(ctx) {
-                                    const v = ctx[0].raw;
-                                    const pct = funnel.found > 0 ? ((v / funnel.found) * 100).toFixed(1) : 0;
-                                    return pct + '% від знайдених';
-                                }
-                            }
-                        }
-                    },
-                    scales: { x: { beginAtZero: true } }
-                }
-            });
-        }
-
-        function renderSourceChart(sources) {
-            const canvas = document.getElementById('sourceChart');
-            const emptyEl = document.getElementById('sourceChartEmpty');
-            if (!sources || sources.length === 0) {
-                canvas.style.display = 'none'; emptyEl.style.display = 'block'; return;
-            }
-            canvas.style.display = 'block'; emptyEl.style.display = 'none';
-
-            const maxRate = Math.max(...sources.map(s => s.approval_rate), 1);
-            const colors = sources.map(s => {
-                const i = Math.min(s.approval_rate / maxRate, 1);
-                return `rgba(59, 130, 246, ${0.3 + i * 0.7})`;
-            });
-
-            if (sourceChartInstance) sourceChartInstance.destroy();
-            sourceChartInstance = new Chart(canvas.getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: sources.map(s => s.source),
-                    datasets: [{
-                        label: 'Кандидатів',
-                        data: sources.map(s => s.candidates_found),
-                        backgroundColor: colors,
-                        borderWidth: 0,
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                afterBody: function(ctx) {
-                                    const s = sources[ctx[0].dataIndex];
-                                    return 'Прийнято: ' + s.approved + ' | Найнято: ' + s.hired + ' | Rate: ' + s.approval_rate + '%';
-                                }
-                            }
-                        }
-                    },
-                    scales: { x: { beginAtZero: true } }
-                }
-            });
-        }
-
-        function renderSalaryChart(salaryData) {
-            const canvas = document.getElementById('salaryChart');
-            const emptyEl = document.getElementById('salaryChartEmpty');
-
-            if (!salaryData || salaryData.length === 0) {
-                canvas.style.display = 'none'; emptyEl.style.display = 'block'; return;
-            }
-            canvas.style.display = 'block'; emptyEl.style.display = 'none';
-
-            const labels = salaryData.map(d => d.city + (d.position ? ' (' + d.position.substring(0, 20) + ')' : ''));
-            const isUSD = huntCurrency === 'USD';
-            const candidateData = salaryData.map(d => isUSD ? d.candidate_median : (d.candidate_median_uah || 0));
-            const employerData = salaryData.map(d => isUSD ? d.employer_median : (d.employer_median_uah || 0));
-
-            const datasets = [
-                {
-                    label: 'Очікування кандидатів',
-                    data: candidateData,
-                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
-                    borderColor: 'rgba(59, 130, 246, 1)',
-                    borderWidth: 1,
-                },
-                {
-                    label: 'Пропозиції роботодавців',
-                    data: employerData,
-                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
-                    borderColor: 'rgba(249, 115, 22, 1)',
-                    borderWidth: 1,
-                }
-            ];
-
-            const mi = (huntDataCache && huntDataCache.market_intelligence) || [];
-            if (mi.length > 0) {
-                const marketData = salaryData.map(d => {
-                    const match = mi.find(m => d.position && m.position && d.position.toLowerCase().includes(m.position.toLowerCase()));
-                    return match ? (isUSD ? match.employer_median_usd : match.employer_median_uah) : null;
-                });
-                if (marketData.some(v => v !== null)) {
-                    datasets.push({
-                        label: 'Ринок (Robota.ua)',
-                        data: marketData,
-                        type: 'line',
-                        borderColor: '#ef4444',
-                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                        borderWidth: 2,
-                        borderDash: [6, 3],
-                        pointRadius: 4,
-                        pointBackgroundColor: '#ef4444',
-                        fill: false,
-                        spanGaps: true,
-                    });
-                }
-            }
-
-            if (salaryChartInstance) salaryChartInstance.destroy();
-            salaryChartInstance = new Chart(canvas.getContext('2d'), {
-                type: 'bar',
-                data: { labels: labels, datasets: datasets },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                afterBody: function(context) {
-                                    const d = salaryData[context[0].dataIndex];
-                                    return 'Вибірка: ' + d.sample_size + '\nДжерела: ' + (d.sources || []).join(', ');
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        y: { beginAtZero: true, title: { display: true, text: isUSD ? 'USD' : 'грн' } }
-                    }
-                }
-            });
-        }
-
-
-        function renderHuntRecentTable(vacancies) {
-            const table = document.getElementById('huntRecentTable');
-            const tbody = document.getElementById('huntRecentBody');
-            const emptyEl = document.getElementById('huntRecentEmpty');
-
-            if (!vacancies || vacancies.length === 0) {
-                table.style.display = 'none'; emptyEl.style.display = 'block'; return;
-            }
-            table.style.display = 'table'; emptyEl.style.display = 'none';
-
-            const statusLabel = {
-                'searching': 'Пошук', 'completed': 'Завершено', 'posted': 'Розміщено',
-                'new': 'Нова', 'pending': 'Очікує', 'no_results': 'Без результатів',
-                'filled': '✓ Закрита', 'posting': 'Розміщення...'
-            };
-
-            tbody.innerHTML = '';
-            vacancies.forEach(v => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${v.position || '—'}</td>
-                    <td>${v.city || '—'}</td>
-                    <td style="text-align:center;"><span class="status-badge ${v.status}">${statusLabel[v.status] || v.status}</span></td>
-                    <td style="text-align:center;">${v.candidates_found}</td>
-                    <td style="text-align:center;">${v.channels_posted}</td>
-                    <td style="text-align:center;">${v.hired ? '🎯' : '—'}</td>
-                    <td>${v.created_at || '—'}</td>
-                `;
-                tbody.appendChild(row);
-            });
-        }
-
-
 
         let salaryTrendChart = null;
 
@@ -2221,46 +1682,10 @@
                                 font: { size: 10 },
                             },
                         },
-                        x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+                        x: { reverse: true, ticks: { font: { size: 10 }, maxRotation: 45 } },
                     },
                 },
             });
-        }
-
-        function renderMarketIntelligence(miData) {
-            const container = document.getElementById('marketIntelligence');
-            if (!miData || miData.length === 0) {
-                container.innerHTML = '';
-                return;
-            }
-            const isUSD = huntCurrency === 'USD';
-            let html = '<h4 style="margin:0 0 12px;color:var(--gray-200);font-size:0.95rem;">Ринкова аналітика</h4>';
-            miData.forEach(m => {
-                const empVal = isUSD ? ('$' + (m.employer_median_usd||0).toLocaleString()) : ((m.employer_median_uah||0).toLocaleString() + ' грн');
-                const candVal = isUSD ? ('$' + (m.candidate_median_usd||0).toLocaleString()) : ((m.candidate_median_uah||0).toLocaleString() + ' грн');
-                const gapNum = isUSD ? (m.gap_usd||0) : (m.gap_uah||0);
-                const gapSign = gapNum > 0 ? '+' : '';
-                const gapVal = isUSD ? (gapSign + '$' + gapNum.toLocaleString()) : (gapSign + gapNum.toLocaleString() + ' грн');
-                let gapColor = 'var(--gray-400)';
-                if (gapNum > 0) gapColor = '#22c55e';
-                else if (gapNum < 0) gapColor = '#ef4444';
-                const dateStr = m.collected_at ? new Date(m.collected_at).toLocaleDateString('uk-UA') : '';
-                html += '<div class="market-intel-card" style="background:var(--gray-800);border:1px solid var(--gray-700);border-radius:12px;padding:16px;margin-bottom:12px;">';
-                html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
-                html += '<span style="font-weight:600;color:var(--gray-100);font-size:0.95rem;">💼 ' + (m.position||'—') + '</span>';
-                html += '<span style="font-size:0.75rem;color:var(--gray-400);">📅 ' + dateStr + '</span>';
-                html += '</div>';
-                html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">';
-                html += '<div><div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:2px;">Роботодавці пропонують</div><div style="font-size:1.1rem;font-weight:700;color:var(--gray-100);">' + empVal + '</div></div>';
-                html += '<div><div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:2px;">Кандидати очікують</div><div style="font-size:1.1rem;font-weight:700;color:var(--gray-100);">' + candVal + '</div></div>';
-                html += '<div><div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:2px;">Різниця (gap)</div><div style="font-size:1.1rem;font-weight:700;color:' + gapColor + ';">' + gapVal + '</div></div>';
-                html += '</div>';
-                html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;color:var(--gray-400);">';
-                html += '<span>Вибірка: ' + (m.employer_count||0).toLocaleString() + ' вакансій · ' + (m.candidate_count||0).toLocaleString() + ' резюме</span>';
-                html += '<a href="' + (m.source_url||'https://robota.ua/zapros/transparent-salary') + '" target="_blank" style="color:#ef4444;text-decoration:none;">🔗 Robota.ua Прозора робота</a>';
-                html += '</div></div>';
-            });
-            container.innerHTML = html;
         }
 
         let pulseTrendChart = null;
