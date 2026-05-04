@@ -4,6 +4,7 @@ import HomePage from './pages/HomePage'
 import ChatPage from './pages/ChatPage'
 import ContentApproval from './pages/ContentApproval'
 import ArticleManager from './pages/ArticleManager'
+import Presentation from './pages/Presentation'
 
 function NavLink({ to, icon: Icon, children }) {
   const location = useLocation()
@@ -63,17 +64,22 @@ function Navigation() {
 function App() {
   return (
     <Router>
-      <div className="min-h-screen">
-        <Navigation />
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/content" element={<ContentApproval />} />
-            <Route path="/articles" element={<ArticleManager />} />
-          </Routes>
-        </main>
-      </div>
+      <Routes>
+        <Route path="/presentation" element={<Presentation />} />
+        <Route path="*" element={
+          <div className="min-h-screen">
+            <Navigation />
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+              <Routes>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/chat" element={<ChatPage />} />
+                <Route path="/content" element={<ContentApproval />} />
+                <Route path="/articles" element={<ArticleManager />} />
+              </Routes>
+            </main>
+          </div>
+        } />
+      </Routes>
     </Router>
   )
 }
