@@ -228,16 +228,33 @@ def fetch_salary_analytics_live(position: str, city: str = "") -> Optional[Dict]
         logger.warning("No Robota.ua token — salary-search unavailable")
         return None
 
+    # If position contains "/" (e.g. "Вантажник/різнорабочий"), prepare a clean fallback
+    # using only the part before the slash.
+    clean_position = position.split("/")[0].strip() if "/" in position else position
+
     try:
-        # Try position + city first; fall back to position-only if API returns null
+        # Attempt 1: original position + city
         keyword = f"{position} {city}" if city else position
         statistic = _robota_graphql_call(keyword, token)
         keyword_used = keyword
 
+        # Attempt 2: original position without city
         if not statistic and city:
             logger.info(f"No data for '{keyword}', retrying without city")
             statistic = _robota_graphql_call(position, token)
             keyword_used = position
+
+        # Attempt 3: clean position (before "/") + city
+        if not statistic and clean_position != position:
+            logger.info(f"No data for '{position}', retrying with clean='{clean_position}'")
+            kw = f"{clean_position} {city}" if city else clean_position
+            statistic = _robota_graphql_call(kw, token)
+            keyword_used = kw
+
+        # Attempt 4: clean position without city
+        if not statistic and clean_position != position and city:
+            statistic = _robota_graphql_call(clean_position, token)
+            keyword_used = clean_position
 
         if not statistic:
             logger.warning(f"No salary data from Robota.ua for '{position}'")

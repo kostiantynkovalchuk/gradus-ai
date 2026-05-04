@@ -698,7 +698,7 @@ async def salary_search(
                 MAX(salary_expectation) as sal_max,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY salary_expectation) as sal_median
             FROM hunt_candidates
-            WHERE position ILIKE :pos_pattern
+            WHERE current_role ILIKE :pos_pattern
               AND (:city = '' OR city ILIKE :city_pattern)
               AND salary_expectation IS NOT NULL
               AND salary_expectation > 0
