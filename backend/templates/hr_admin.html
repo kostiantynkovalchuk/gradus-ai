@@ -959,9 +959,10 @@
             <div style="display:flex;gap:var(--space-md);align-items:flex-end;flex-wrap:wrap;margin-bottom:var(--space-lg);">
                 <div style="flex:1;min-width:200px;">
                     <label style="display:block;font-size:0.8rem;color:var(--gray-500);margin-bottom:4px;font-weight:500;">Посада</label>
-                    <input id="salaryPosition" type="text" placeholder="Торговий представник"
+                    <input id="salaryPosition" list="positionHistory" type="text" placeholder="Торговий представник"
                         style="width:100%;padding:10px 14px;border:1px solid var(--gray-300);border-radius:var(--radius-md);font-size:0.95rem;outline:none;box-sizing:border-box;"
                         onkeydown="if(event.key==='Enter') searchSalary()">
+                    <datalist id="positionHistory"></datalist>
                 </div>
                 <div style="flex:1;min-width:160px;">
                     <label style="display:block;font-size:0.8rem;color:var(--gray-500);margin-bottom:4px;font-weight:500;">Місто</label>
@@ -1532,6 +1533,31 @@
 
         let salaryTrendChart = null;
 
+        const _DEFAULT_POSITIONS = [
+            'Торговий представник', 'Вантажник', 'Мерчандайзер',
+            'Комірник', 'Водій', 'Супервайзер', 'Бухгалтер'
+        ];
+
+        function updatePositionDatalist() {
+            const dl = document.getElementById('positionHistory');
+            if (!dl) return;
+            const history = JSON.parse(localStorage.getItem('salarySearchHistory') || '[]');
+            const merged = [...new Set([...history, ..._DEFAULT_POSITIONS])];
+            dl.innerHTML = merged.map(p => '<option value="' + p + '">').join('');
+        }
+
+        function saveSalarySearch(position) {
+            let history = JSON.parse(localStorage.getItem('salarySearchHistory') || '[]');
+            if (!history.includes(position)) {
+                history.unshift(position);
+                if (history.length > 20) history = history.slice(0, 20);
+                localStorage.setItem('salarySearchHistory', JSON.stringify(history));
+            }
+            updatePositionDatalist();
+        }
+
+        updatePositionDatalist();
+
         function searchSalary() {
             const position = document.getElementById('salaryPosition').value.trim();
             const city = document.getElementById('salaryCity').value.trim();
@@ -1548,7 +1574,7 @@
             const url = '/hr/api/salary-search?position=' + encodeURIComponent(position) + '&city=' + encodeURIComponent(city);
             fetch(url)
                 .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-                .then(data => renderSalaryResults(data))
+                .then(data => { saveSalarySearch(position); renderSalaryResults(data); })
                 .catch(e => {
                     resultsEl.innerHTML = '<div style="padding:16px;color:#ef4444;background:#fef2f2;border-radius:8px;">❌ Помилка завантаження: ' + e.message + '</div>';
                 })
@@ -1599,7 +1625,19 @@
             }
             html += '</div>';
 
-            const robotaUrl = 'https://robota.ua/candidates?keyWords=' + encodeURIComponent(data.position || '') + (data.city ? '&city=' + encodeURIComponent(data.city) : '');
+            const _CITY_SLUGS = {
+                'Київ': 'kyiv', 'Харків': 'kharkiv', 'Дніпро': 'dnipro',
+                'Одеса': 'odesa', 'Львів': 'lviv', 'Запоріжжя': 'zaporizhzhia',
+                'Миколаїв': 'mykolaiv', 'Вінниця': 'vinnytsia', 'Полтава': 'poltava',
+                'Чернігів': 'chernihiv', 'Черкаси': 'cherkasy', 'Суми': 'sumy',
+                'Житомир': 'zhytomyr', 'Кропивницький': 'kropyvnytskyi',
+                'Рівне': 'rivne', 'Тернопіль': 'ternopil', 'Луцьк': 'lutsk',
+                'Ужгород': 'uzhhorod', 'Івано-Франківськ': 'ivano-frankivsk',
+                'Хмельницький': 'khmelnytskyi', 'Херсон': 'kherson',
+                'Кам\'янське': 'kamianske', 'Маріуполь': 'mariupol'
+            };
+            const _citySlug = data.city ? (_CITY_SLUGS[data.city] || 'ukraine') : 'ukraine';
+            const robotaUrl = 'https://robota.ua/candidates/all/' + _citySlug + '?keyWords=' + encodeURIComponent(data.position || '');
             const robotaCand = r ? (r.candidate_count || 0) : 0;
             const robotaEmp  = r ? (r.employer_count  || 0) : 0;
             html += '<div class="salary-secondary-card"><div style="font-weight:600;font-size:0.9rem;margin-bottom:8px;">💼 Robota.ua</div>';
