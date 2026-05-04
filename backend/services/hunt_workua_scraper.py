@@ -95,6 +95,39 @@ def _parse_last_active(text: str) -> Optional[datetime]:
     return None
 
 
+def get_workua_cv_count(position: str, city: str = "") -> dict:
+    """Quick count-only search — one HTTP request, no full CV scraping."""
+    url = build_search_url(position, city, page=1)
+    result = {"cv_count": 0, "search_url": url}
+    try:
+        _rate_limit()
+        session = _get_public_session()
+        resp = session.get(url, timeout=10, allow_redirects=True)
+        if resp.status_code != 200:
+            logger.warning(f"Work.ua count: HTTP {resp.status_code} for {url}")
+            return result
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        count = 0
+        for candidate in [
+            soup.find("h1"),
+            soup.find(class_=re.compile(r"(total|count|result|знайдено)", re.I)),
+            soup.find(string=re.compile(r"знайдено\s+\d+", re.I)),
+            soup.find(string=re.compile(r"\d+\s+резюме", re.I)),
+        ]:
+            if candidate:
+                text = candidate.get_text() if hasattr(candidate, "get_text") else str(candidate)
+                m = re.search(r"(\d[\d\s]*)", text.replace("\xa0", " "))
+                if m:
+                    count = int(m.group(1).replace(" ", ""))
+                    break
+        result["cv_count"] = count
+        logger.info(f"Work.ua count for '{position}' / '{city}': {count} CVs ({url})")
+    except Exception as e:
+        logger.error(f"Work.ua count error for '{position}': {e}")
+    return result
+
+
 def build_search_url(position: str, city: str, page: int = 1) -> str:
     city_lower = city.lower().strip() if city else ""
     city_slug = CITY_SLUGS.get(city_lower, city_lower)

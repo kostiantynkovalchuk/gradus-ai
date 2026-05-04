@@ -1,0 +1,162 @@
+Maya Hunt dashboard — Salary Intelligence search feature.
+
+=== OVERVIEW ===
+
+Replace the stripped-down Maya Hunt tab with a salary search tool.
+HR types position + city → system fetches live data from Robota.ua 
+and shows market salary stats.
+
+=== PART 1: Search UI on Maya Hunt tab ===
+
+In hr_admin.py HTML, replace the Maya Hunt tab content with:
+
+1. Search bar at the top:
+   - Input field: "Посада" (placeholder: "Торговий представник")
+   - Input field: "Місто" (placeholder: "Миколаїв")  
+   - Button: "🔍 Дослідити ринок"
+
+2. Results area (hidden until search):
+
+   a) Main stats card:
+      ┌─────────────────────────────────────────────┐
+      │  Торговий представник — Миколаїв             │
+      │                                               │
+      │  💼 Роботодавці пропонують:  42,500 грн      │
+      │     (769 вакансій на robota.ua)               │
+      │                                               │
+      │  👤 Кандидати очікують:      37,818 грн      │
+      │     (7,012 резюме на robota.ua)               │
+      │                                               │
+      │  📊 Різниця: +4,682 грн (роботодавці вище)   │
+      └─────────────────────────────────────────────┘
+
+   b) Secondary indicators (below main card):
+      ┌──────────────────┐  ┌──────────────────┐
+      │ Work.ua           │  │ Telegram канали   │
+      │ 14 резюме знайдено│  │ 3 пости з зарплатою│
+      │ (без даних про    │  │ діапазон:         │
+      │  зарплати)        │  │ 25,000-40,000 грн │
+      └──────────────────┘  └──────────────────┘
+
+   c) Trend chart (if Robota.ua returns timeseries):
+      Line chart showing weekly salary medians over time
+      Two lines: employer vs candidate
+
+   d) Source attribution:
+      "Джерело: robota.ua (агреговані дані з 500K+ вакансій)"
+      "work.ua (публічний пошук резюме)"
+      "Telegram (7 каналів, парсинг зарплат з постів)"
+
+=== PART 2: Backend endpoint ===
+
+Create new endpoint:
+
+GET /hr/api/salary-search?position={}&city={}
+
+This endpoint:
+
+1. Calls Robota.ua GraphQL (real-time, not cached):
+   - Use existing robotaua_salary.py fetch logic
+   - Pass position + city as keywords
+   - Return: vacancy median, candidate median, counts, timeseries
+
+2. Calls Work.ua search (existing hunt_workua_scraper.py logic):
+   - Search by position + city
+   - Return: count of CVs found (no salary data)
+   - Do NOT scrape full CVs — just get the count from search results page
+
+3. Queries Telegram data (from hunt_candidates table):
+   - SELECT salary_expectation_uah FROM hunt_candidates 
+     WHERE position ILIKE '%{position}%' AND city ILIKE '%{city}%'
+     AND created_at > NOW() - INTERVAL '6 months'
+   - Calculate: min, max, median of salary_expectation_uah
+   - Return: count, min, max, median
+
+4. Return combined JSON:
+{
+  "position": "Торговий представник",
+  "city": "Миколаїв",
+  "robota_ua": {
+    "employer_median_uah": 42500,
+    "employer_count": 769,
+    "candidate_median_uah": 37818,
+    "candidate_count": 7012,
+    "gap_uah": 4682,
+    "gap_percent": 12.4,
+    "timeseries": [{"week": "2026-W14", "employer": 42000, "candidate": 37500}, ...],
+    "source_url": "https://robota.ua/salary/торговий-представник/миколаїв"
+  },
+  "work_ua": {
+    "cv_count": 14,
+    "search_url": "https://work.ua/resumes-торговий+представник-миколаїв/"
+  },
+  "telegram": {
+    "post_count": 3,
+    "salary_min_uah": 25000,
+    "salary_max_uah": 40000,
+    "salary_median_uah": 32000
+  },
+  "fetched_at": "2026-05-04T13:00:00Z"
+}
+
+=== PART 3: Robota.ua fetch improvements ===
+
+In robotaua_salary.py, fix two bugs found during audit:
+
+1. sample_count always 0 — the GraphQL returns total.count but it's
+   not being mapped to sample_count in the DB save logic.
+   Fix: save vacancy.total.count and candidate.total.count to sample_count.
+
+2. Add city parameter to GraphQL query — currently only searches by keyword.
+   Check if the GraphQL schema supports city/location filter.
+   If yes — add it. If no — append city to keyword string 
+   (e.g. "Торговий представник Миколаїв").
+
+=== PART 4: Work.ua count-only search ===
+
+Create a lightweight function in hunt_workua_scraper.py (or new file):
+
+def get_workua_cv_count(position: str, city: str) -> dict:
+    """Quick search to get CV count without full scraping"""
+    # Build URL: https://www.work.ua/resumes-{position}-{city}/
+    # Fetch page, parse the count from "Знайдено N резюме"
+    # Return {"cv_count": N, "search_url": url}
+    # Rate limit: 1 request, no full CV scraping
+
+This should be fast (one HTTP request) and not trigger bot detection.
+
+=== PART 5: JavaScript ===
+
+In the dashboard HTML, add:
+
+function searchSalary() {
+    const position = document.getElementById('salaryPosition').value.trim();
+    const city = document.getElementById('salaryCity').value.trim();
+    if (!position) return;
+    
+    // Show loading
+    document.getElementById('salaryResults').innerHTML = 'Завантаження...';
+    document.getElementById('salaryResults').style.display = 'block';
+    
+    fetch(`/hr/api/salary-search?position=${encodeURIComponent(position)}&city=${encodeURIComponent(city)}`)
+    .then(r => r.json())
+    .then(data => renderSalaryResults(data))
+    .catch(e => { document.getElementById('salaryResults').innerHTML = 'Помилка завантаження'; });
+}
+
+renderSalaryResults(data) should populate all the cards described above.
+Use Chart.js for the timeseries chart (same library already loaded on page).
+
+=== KEEP from old Maya Hunt tab ===
+
+Keep the vacancy list table (recent vacancies with status) if it exists.
+Remove everything else that was already removed.
+
+=== IMPORTANT ===
+
+- Robota.ua fetch should be REAL-TIME on each search, not cached stale data
+- Work.ua should be ONE request only (count), not full scraping
+- Telegram data comes from existing DB, no new scraping
+- All results in UAH, with source attribution
+- Loading indicator while fetching
+- Error handling if Robota.ua auth fails → show "Дані з robota.ua недоступні"

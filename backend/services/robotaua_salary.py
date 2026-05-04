@@ -171,6 +171,138 @@ def fetch_salary_analytics(position: str) -> Optional[Dict]:
         return None
 
 
+def _robota_graphql_call(keyword: str, token: str) -> Optional[dict]:
+    """Single GraphQL call to Robota.ua transparent salary. Returns statistic dict or None."""
+    from services.robotaua_auth import get_graphql_headers
+    now_dt = datetime.utcnow()
+    date_begin = (now_dt - timedelta(days=90)).strftime("%Y-%m-%dT00:00:00.000Z")
+    date_end = (now_dt + timedelta(days=30)).strftime("%Y-%m-%dT23:59:59.999Z")
+    payload = {
+        "operationName": "gettingStatisticsAverageSalary",
+        "query": SALARY_QUERY,
+        "variables": {
+            "keyword": keyword,
+            "input": {
+                "keyword": keyword,
+                "cityId": "1",
+                "rubricId": "0",
+                "range": {"begin": date_begin, "end": date_end},
+                "period": "WEEK",
+            },
+        },
+    }
+    resp = requests.post(
+        GRAPHQL_URL + "?q=gettingStatisticsAverageSalary",
+        json=payload,
+        headers=get_graphql_headers(token),
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    keyword_obj = (data.get("data") or {}).get("keyword") or {}
+    statistic = keyword_obj.get("statistic") or {}
+    return statistic if statistic else None
+
+
+def fetch_salary_analytics_live(position: str, city: str = "") -> Optional[Dict]:
+    """Real-time fetch (no cache). Tries position+city first, falls back to position-only."""
+    import os as _os
+    from services.robotaua_auth import get_graphql_headers, _token_cache
+    from services.salary_normalizer import get_usd_uah_rate
+
+    position = position.strip()
+    city = city.strip() if city else ""
+
+    usd_rate = get_usd_uah_rate()
+
+    # Read token directly from in-memory cache (thread-safe for CPython dict reads).
+    # Falls back to env var. Avoids async event-loop issues when called from a thread.
+    now = time.time()
+    token = (
+        _token_cache.get("token")
+        if _token_cache.get("expires_at", 0) > now
+        else None
+    ) or _os.getenv("ROBOTAUA_JWT")
+
+    if not token:
+        logger.warning("No Robota.ua token — salary-search unavailable")
+        return None
+
+    try:
+        # Try position + city first; fall back to position-only if API returns null
+        keyword = f"{position} {city}" if city else position
+        statistic = _robota_graphql_call(keyword, token)
+        keyword_used = keyword
+
+        if not statistic and city:
+            logger.info(f"No data for '{keyword}', retrying without city")
+            statistic = _robota_graphql_call(position, token)
+            keyword_used = position
+
+        if not statistic:
+            logger.warning(f"No salary data from Robota.ua for '{position}'")
+            return None
+
+        logger.info(f"Robota.ua salary data found using keyword='{keyword_used}'")
+
+        vacancy = statistic.get("vacancy") or {}
+        candidate = statistic.get("candidate") or {}
+        vacancy_total = vacancy.get("total") or {}
+        candidate_total = candidate.get("total") or {}
+
+        employer_median_uah = vacancy_total.get("salary", 0) or 0
+        candidate_median_uah = candidate_total.get("salary", 0) or 0
+        employer_count = vacancy_total.get("count", 0) or 0
+        candidate_count = candidate_total.get("count", 0) or 0
+
+        employer_median_usd = int(employer_median_uah / usd_rate) if employer_median_uah and usd_rate else 0
+        candidate_median_usd = int(candidate_median_uah / usd_rate) if candidate_median_uah and usd_rate else 0
+
+        gap_uah = employer_median_uah - candidate_median_uah
+        gap_usd = employer_median_usd - candidate_median_usd
+        gap_percent = round(gap_uah / candidate_median_uah * 100, 1) if candidate_median_uah else 0
+
+        timeseries_vacancy = [
+            {"date": item["begin"][:10], "value_uah": item["value"],
+             "value_usd": int(item["value"] / usd_rate) if usd_rate else 0}
+            for item in vacancy.get("median", []) if item.get("value")
+        ]
+        timeseries_candidate = [
+            {"date": item["begin"][:10], "value_uah": item["value"],
+             "value_usd": int(item["value"] / usd_rate) if usd_rate else 0}
+            for item in candidate.get("median", []) if item.get("value")
+        ]
+
+        city_slug = city.lower().replace(" ", "-").replace("'", "") if city else ""
+        pos_slug = position.lower().replace(" ", "-")
+        source_url = f"https://robota.ua/zapros/transparent-salary/{pos_slug}/{city_slug}" if city_slug else f"https://robota.ua/zapros/transparent-salary/{pos_slug}"
+
+        return {
+            "position": position,
+            "city": city,
+            "source": "robota.ua",
+            "employer_median_uah": employer_median_uah,
+            "employer_median_usd": employer_median_usd,
+            "employer_count": employer_count,
+            "candidate_median_uah": candidate_median_uah,
+            "candidate_median_usd": candidate_median_usd,
+            "candidate_count": candidate_count,
+            "gap_uah": gap_uah,
+            "gap_usd": gap_usd,
+            "gap_percent": gap_percent,
+            "salary_min_uah": vacancy_total.get("salaryMin", 0) or 0,
+            "salary_max_uah": vacancy_total.get("salaryMax", 0) or 0,
+            "timeseries_vacancy": timeseries_vacancy,
+            "timeseries_candidate": timeseries_candidate,
+            "source_url": source_url,
+            "usd_rate": usd_rate,
+        }
+
+    except Exception as e:
+        logger.error(f"fetch_salary_analytics_live error for '{keyword}': {e}")
+        return None
+
+
 def save_salary_data(salary_result: Dict, vacancy_id: int, db) -> None:
     if not salary_result:
         return

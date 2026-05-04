@@ -733,10 +733,16 @@
         .currency-toggle { display: inline-flex; border: 1px solid var(--gray-300); border-radius: 6px; overflow: hidden; margin-left: var(--space-md); }
         .currency-btn { padding: 4px 12px; font-size: 0.8rem; cursor: pointer; border: none; background: white; color: var(--gray-600); }
         .currency-btn.active { background: var(--primary); color: white; }
-        .source-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-md); }
-        .source-card { background: white; border-radius: var(--radius-md); padding: var(--space-md); border: 1px solid var(--gray-200); }
-        .source-card-title { font-weight: 600; margin-bottom: var(--space-xs); }
-        .source-card-stat { font-size: 0.875rem; color: var(--gray-500); }
+        .salary-search-card { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius-lg); padding: var(--space-xl); margin-bottom: var(--space-xl); }
+        .salary-main-result { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; border-radius: var(--radius-lg); padding: var(--space-xl); margin-bottom: var(--space-lg); }
+        .salary-main-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-lg); margin-top: var(--space-lg); }
+        .salary-stat { text-align: center; }
+        .salary-stat-value { font-size: 1.8rem; font-weight: 700; }
+        .salary-stat-label { font-size: 0.8rem; opacity: 0.75; margin-top: 4px; }
+        .salary-secondary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); margin-bottom: var(--space-lg); }
+        .salary-secondary-card { background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: var(--radius-md); padding: var(--space-md); }
+        .salary-source-attr { font-size: 0.78rem; color: var(--gray-400); margin-top: var(--space-md); line-height: 1.6; }
+        @media (max-width: 768px) { .salary-main-grid { grid-template-columns: 1fr; } .salary-secondary-grid { grid-template-columns: 1fr; } }
         .hunt-updated { font-size: 0.75rem; color: var(--gray-400); margin-bottom: var(--space-md); }
         .market-intel-card { max-width: 100%; word-break: break-word; overflow: hidden; }
         @media (max-width: 1024px) {
@@ -961,6 +967,29 @@
         </div>
 
 
+        <div class="salary-search-card">
+            <h2 class="section-title" style="margin-bottom:var(--space-lg);">🔍 Дослідження ринку зарплат</h2>
+            <div style="display:flex;gap:var(--space-md);align-items:flex-end;flex-wrap:wrap;margin-bottom:var(--space-lg);">
+                <div style="flex:1;min-width:200px;">
+                    <label style="display:block;font-size:0.8rem;color:var(--gray-500);margin-bottom:4px;font-weight:500;">Посада</label>
+                    <input id="salaryPosition" type="text" placeholder="Торговий представник"
+                        style="width:100%;padding:10px 14px;border:1px solid var(--gray-300);border-radius:var(--radius-md);font-size:0.95rem;outline:none;box-sizing:border-box;"
+                        onkeydown="if(event.key==='Enter') searchSalary()">
+                </div>
+                <div style="flex:1;min-width:160px;">
+                    <label style="display:block;font-size:0.8rem;color:var(--gray-500);margin-bottom:4px;font-weight:500;">Місто</label>
+                    <input id="salaryCity" type="text" placeholder="Миколаїв"
+                        style="width:100%;padding:10px 14px;border:1px solid var(--gray-300);border-radius:var(--radius-md);font-size:0.95rem;outline:none;box-sizing:border-box;"
+                        onkeydown="if(event.key==='Enter') searchSalary()">
+                </div>
+                <button onclick="searchSalary()" id="salarySearchBtn"
+                    style="padding:10px 24px;background:var(--primary);color:white;border:none;border-radius:var(--radius-md);font-size:0.95rem;font-weight:600;cursor:pointer;white-space:nowrap;height:42px;">
+                    🔍 Дослідити ринок
+                </button>
+            </div>
+            <div id="salaryResults" style="display:none;"></div>
+        </div>
+
         <details open style="margin-bottom:var(--space-xl);">
             <summary style="cursor:pointer;font-size:1rem;font-weight:700;color:var(--gray-800);padding:var(--space-md) 0;user-select:none;">📋 Детальний звіт по вакансіях</summary>
             <div id="reportTable" style="margin-top:var(--space-md);overflow-x:auto;"></div>
@@ -1054,27 +1083,6 @@
             </div>
         </div>
 
-        <div class="section" style="margin-top:var(--space-xl);">
-            <div class="section-header">
-                <div><h2 class="section-title">📡 Джерела даних</h2></div>
-            </div>
-            <div class="section-content">
-                <div class="source-cards" id="sourceCardsContainer">
-                    <div class="source-card">
-                        <div class="source-card-title">📱 Telegram</div>
-                        <div class="source-card-stat" id="srcTelegram">Завантаження...</div>
-                    </div>
-                    <div class="source-card">
-                        <div class="source-card-title">💼 Work.ua</div>
-                        <div class="source-card-stat">⚠️ Не налаштовано</div>
-                    </div>
-                    <div class="source-card">
-                        <div class="source-card-title">🔍 Robota.ua</div>
-                        <div class="source-card-stat">⚠️ Не налаштовано</div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
     </div>
     </div>
@@ -1737,7 +1745,6 @@
                 renderSourceChart(data.source_performance);
                 renderSalaryChart(data.salary_by_city);
                 renderHuntRecentTable(data.recent_vacancies);
-                renderSourceCards(data.active_sources, kpi.total_candidates_processed);
 
                 if (data.current_usd_rate) {
                     const rateBanner = document.getElementById('nbuRateBanner');
@@ -2061,9 +2068,163 @@
         }
 
 
-        function renderSourceCards(activeSources, totalCandidates) {
-            const el = document.getElementById('srcTelegram');
-            el.textContent = activeSources + ' каналів активно | ' + totalCandidates + ' записів';
+
+        let salaryTrendChart = null;
+
+        function searchSalary() {
+            const position = document.getElementById('salaryPosition').value.trim();
+            const city = document.getElementById('salaryCity').value.trim();
+            if (!position) { document.getElementById('salaryPosition').focus(); return; }
+
+            const btn = document.getElementById('salarySearchBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Завантаження...';
+
+            const resultsEl = document.getElementById('salaryResults');
+            resultsEl.style.display = 'block';
+            resultsEl.innerHTML = '<div style="padding:32px;text-align:center;color:var(--gray-400);font-size:0.95rem;">🔍 Запит до Robota.ua, Work.ua та бази Telegram...</div>';
+
+            const url = '/hr/api/salary-search?position=' + encodeURIComponent(position) + '&city=' + encodeURIComponent(city);
+            fetch(url)
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(data => renderSalaryResults(data))
+                .catch(e => {
+                    resultsEl.innerHTML = '<div style="padding:16px;color:#ef4444;background:#fef2f2;border-radius:8px;">❌ Помилка завантаження: ' + e.message + '</div>';
+                })
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.textContent = '🔍 Дослідити ринок';
+                });
+        }
+
+        function renderSalaryResults(data) {
+            const resultsEl = document.getElementById('salaryResults');
+            const pos = data.position || '—';
+            const city = data.city || '';
+            const heading = city ? pos + ' — ' + city : pos;
+            const r = data.robota_ua;
+            const w = data.work_ua || {};
+            const tg = data.telegram || {};
+
+            let html = '';
+
+            if (r && r.employer_median_uah) {
+                const empVal = (r.employer_median_uah || 0).toLocaleString('uk-UA') + ' грн';
+                const candVal = (r.candidate_median_uah || 0).toLocaleString('uk-UA') + ' грн';
+                const gapNum = r.gap_uah || 0;
+                const gapSign = gapNum >= 0 ? '+' : '';
+                const gapColor = gapNum >= 0 ? '#4ade80' : '#f87171';
+                const gapLabel = gapNum >= 0 ? 'роботодавці вище' : 'кандидати очікують більше';
+                html += '<div class="salary-main-result">';
+                html += '<div style="font-size:1.1rem;font-weight:700;opacity:0.9;margin-bottom:4px;">' + heading + '</div>';
+                html += '<div style="font-size:0.78rem;opacity:0.55;margin-bottom:var(--space-lg);">Джерело: robota.ua — агреговані дані з відкритого ринку праці</div>';
+                html += '<div class="salary-main-grid">';
+                html += '<div class="salary-stat"><div class="salary-stat-value">💼 ' + empVal + '</div><div class="salary-stat-label">Роботодавці пропонують</div><div style="font-size:0.75rem;opacity:0.5;margin-top:2px;">' + (r.employer_count||0).toLocaleString('uk-UA') + ' вакансій на robota.ua</div></div>';
+                html += '<div class="salary-stat"><div class="salary-stat-value">👤 ' + candVal + '</div><div class="salary-stat-label">Кандидати очікують</div><div style="font-size:0.75rem;opacity:0.5;margin-top:2px;">' + (r.candidate_count||0).toLocaleString('uk-UA') + ' резюме на robota.ua</div></div>';
+                html += '<div class="salary-stat"><div class="salary-stat-value" style="color:' + gapColor + ';">' + gapSign + gapNum.toLocaleString('uk-UA') + ' грн</div><div class="salary-stat-label">Різниця</div><div style="font-size:0.75rem;opacity:0.5;margin-top:2px;">' + gapLabel + '</div></div>';
+                html += '</div></div>';
+            } else {
+                html += '<div style="padding:16px;background:#fef9c3;border-radius:8px;color:#854d0e;margin-bottom:var(--space-lg);">⚠️ Дані з robota.ua недоступні — перевірте автентифікацію або спробуйте пізніше.</div>';
+            }
+
+            html += '<div class="salary-secondary-grid">';
+            const workCount = w.cv_count || 0;
+            html += '<div class="salary-secondary-card"><div style="font-weight:600;font-size:0.9rem;margin-bottom:8px;">💼 Work.ua</div>';
+            if (workCount > 0) {
+                html += '<div style="font-size:1.4rem;font-weight:700;color:var(--gray-800);">' + workCount.toLocaleString('uk-UA') + ' резюме</div>';
+                html += '<div style="font-size:0.78rem;color:var(--gray-400);margin-top:4px;">знайдено (без даних про зарплату)</div>';
+                if (w.search_url) html += '<a href="' + w.search_url + '" target="_blank" style="font-size:0.78rem;color:var(--primary);text-decoration:none;display:block;margin-top:6px;">🔗 Переглянути на Work.ua</a>';
+            } else {
+                html += '<div style="font-size:0.85rem;color:var(--gray-400);">Резюме не знайдено або сервіс недоступний</div>';
+            }
+            html += '</div>';
+
+            html += '<div class="salary-secondary-card"><div style="font-weight:600;font-size:0.9rem;margin-bottom:8px;">📱 Telegram-канали (база Maya)</div>';
+            const tgCount = tg.post_count || 0;
+            if (tgCount > 0) {
+                html += '<div style="font-size:1.4rem;font-weight:700;color:var(--gray-800);">' + tgCount + ' кандидатів</div>';
+                html += '<div style="font-size:0.78rem;color:var(--gray-400);margin-top:4px;">зі вказаними зарплатними очікуваннями за 6 місяців</div>';
+                if (tg.salary_min_uah && tg.salary_max_uah) {
+                    html += '<div style="font-size:0.85rem;color:var(--gray-600);margin-top:6px;">Діапазон: ' + tg.salary_min_uah.toLocaleString('uk-UA') + ' — ' + tg.salary_max_uah.toLocaleString('uk-UA') + ' грн</div>';
+                }
+                if (tg.salary_median_uah) {
+                    html += '<div style="font-size:0.85rem;color:var(--gray-600);">Медіана: ' + tg.salary_median_uah.toLocaleString('uk-UA') + ' грн</div>';
+                }
+            } else {
+                html += '<div style="font-size:0.85rem;color:var(--gray-400);">Немає даних за останні 6 місяців для цього пошуку</div>';
+            }
+            html += '</div></div>';
+
+            if (r && r.timeseries_vacancy && r.timeseries_vacancy.length > 1) {
+                html += '<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:var(--space-md);margin-bottom:var(--space-lg);">';
+                html += '<h4 style="margin:0 0 12px;font-size:0.9rem;color:var(--gray-700);">📈 Динаміка зарплат (тижні)</h4>';
+                html += '<div style="position:relative;height:200px;max-height:200px;"><canvas id="salaryTrendCanvas"></canvas></div>';
+                html += '</div>';
+            }
+
+            html += '<div class="salary-source-attr">';
+            html += '📊 Джерела: ';
+            if (r && r.employer_median_uah) html += '<strong>robota.ua</strong> (агреговані дані з прозорих зарплат, 500K+ вакансій) · ';
+            if (workCount > 0) html += '<strong>work.ua</strong> (публічний пошук резюме) · ';
+            html += '<strong>Telegram</strong> (7 каналів, парсинг зарплатних очікувань з постів Maya)';
+            const fetched = data.fetched_at ? new Date(data.fetched_at).toLocaleString('uk-UA') : '';
+            if (fetched) html += '<br>🕐 Дані отримані: ' + fetched;
+            html += '</div>';
+
+            resultsEl.innerHTML = html;
+
+            if (r && r.timeseries_vacancy && r.timeseries_vacancy.length > 1) {
+                _renderSalaryTrendChart(r.timeseries_vacancy, r.timeseries_candidate || []);
+            }
+        }
+
+        function _renderSalaryTrendChart(vacSeries, candSeries) {
+            const ctx = document.getElementById('salaryTrendCanvas');
+            if (!ctx) return;
+            if (salaryTrendChart) { salaryTrendChart.destroy(); salaryTrendChart = null; }
+            const labels = vacSeries.map(d => d.date);
+            salaryTrendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Роботодавці',
+                            data: vacSeries.map(d => d.value_uah),
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59,130,246,0.08)',
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            tension: 0.3,
+                            fill: true,
+                        },
+                        {
+                            label: 'Кандидати',
+                            data: candSeries.map(d => d.value_uah),
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34,197,94,0.08)',
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            tension: 0.3,
+                            fill: true,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top', labels: { font: { size: 11 } } } },
+                    scales: {
+                        y: {
+                            ticks: {
+                                callback: v => (v/1000).toFixed(0) + 'K грн',
+                                font: { size: 10 },
+                            },
+                        },
+                        x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+                    },
+                },
+            });
         }
 
         function renderMarketIntelligence(miData) {

@@ -664,6 +664,71 @@ async def get_hunt_analytics(
         }
 
 
+@router.get("/api/salary-search")
+async def salary_search(
+    position: str = Query(...),
+    city: str = Query(default=""),
+    credentials: HTTPBasicCredentials = Depends(verify_admin),
+):
+    import asyncio
+    from datetime import datetime
+
+    db_session = next(get_db())
+
+    robota_data = None
+    try:
+        from services.robotaua_salary import fetch_salary_analytics_live
+        robota_data = await asyncio.to_thread(fetch_salary_analytics_live, position, city)
+    except Exception as e:
+        logger.error(f"Robota.ua salary search error: {e}")
+
+    workua_data = {"cv_count": 0, "search_url": ""}
+    try:
+        from services.hunt_workua_scraper import get_workua_cv_count
+        workua_data = await asyncio.to_thread(get_workua_cv_count, position, city)
+    except Exception as e:
+        logger.error(f"Work.ua count error: {e}")
+
+    tg_data = {"post_count": 0, "salary_min_uah": None, "salary_max_uah": None, "salary_median_uah": None}
+    try:
+        tg_result = db_session.execute(text("""
+            SELECT
+                COUNT(*) as cnt,
+                MIN(salary_expectation) as sal_min,
+                MAX(salary_expectation) as sal_max,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY salary_expectation) as sal_median
+            FROM hunt_candidates
+            WHERE position ILIKE :pos_pattern
+              AND (:city = '' OR city ILIKE :city_pattern)
+              AND salary_expectation IS NOT NULL
+              AND salary_expectation > 0
+              AND created_at > NOW() - INTERVAL '6 months'
+        """), {
+            "pos_pattern": f"%{position}%",
+            "city": city,
+            "city_pattern": f"%{city}%",
+        })
+        tg_row = tg_result.fetchone()
+        if tg_row and tg_row[0] and tg_row[0] > 0:
+            tg_data = {
+                "post_count": int(tg_row[0]),
+                "salary_min_uah": int(tg_row[1]) if tg_row[1] else None,
+                "salary_max_uah": int(tg_row[2]) if tg_row[2] else None,
+                "salary_median_uah": int(tg_row[3]) if tg_row[3] else None,
+            }
+    except Exception as e:
+        logger.error(f"Telegram salary query error: {e}")
+
+    return {
+        "position": position,
+        "city": city,
+        "robota_ua": robota_data,
+        "work_ua": workua_data,
+        "telegram": tg_data,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
 @router.get("/api/hunt-report")
 async def get_hunt_report(
     role: Optional[str] = Query(default=None),
