@@ -1543,7 +1543,7 @@
 
             const resultsEl = document.getElementById('salaryResults');
             resultsEl.style.display = 'block';
-            resultsEl.innerHTML = '<div style="padding:32px;text-align:center;color:var(--gray-400);font-size:0.95rem;">🔍 Запит до Robota.ua, Work.ua та бази Telegram...</div>';
+            resultsEl.innerHTML = '<div style="padding:32px;text-align:center;color:var(--gray-400);font-size:0.95rem;">🔍 Запит до Robota.ua та Work.ua...</div>';
 
             const url = '/hr/api/salary-search?position=' + encodeURIComponent(position) + '&city=' + encodeURIComponent(city);
             fetch(url)
@@ -1565,7 +1565,6 @@
             const heading = city ? pos + ' — ' + city : pos;
             const r = data.robota_ua;
             const w = data.work_ua || {};
-            const tg = data.telegram || {};
 
             let html = '';
 
@@ -1600,20 +1599,13 @@
             }
             html += '</div>';
 
-            html += '<div class="salary-secondary-card"><div style="font-weight:600;font-size:0.9rem;margin-bottom:8px;">📱 Telegram-канали (база Maya)</div>';
-            const tgCount = tg.post_count || 0;
-            if (tgCount > 0) {
-                html += '<div style="font-size:1.4rem;font-weight:700;color:var(--gray-800);">' + tgCount + ' кандидатів</div>';
-                html += '<div style="font-size:0.78rem;color:var(--gray-400);margin-top:4px;">зі вказаними зарплатними очікуваннями за 6 місяців</div>';
-                if (tg.salary_min_uah && tg.salary_max_uah) {
-                    html += '<div style="font-size:0.85rem;color:var(--gray-600);margin-top:6px;">Діапазон: ' + tg.salary_min_uah.toLocaleString('uk-UA') + ' — ' + tg.salary_max_uah.toLocaleString('uk-UA') + ' грн</div>';
-                }
-                if (tg.salary_median_uah) {
-                    html += '<div style="font-size:0.85rem;color:var(--gray-600);">Медіана: ' + tg.salary_median_uah.toLocaleString('uk-UA') + ' грн</div>';
-                }
-            } else {
-                html += '<div style="font-size:0.85rem;color:var(--gray-400);">Немає даних за останні 6 місяців для цього пошуку</div>';
-            }
+            const robotaUrl = 'https://robota.ua/zapros/' + encodeURIComponent(data.position || '') + (data.city ? '/' + encodeURIComponent(data.city) : '');
+            const robotaCand = r ? (r.candidate_count || 0) : 0;
+            const robotaEmp  = r ? (r.employer_count  || 0) : 0;
+            html += '<div class="salary-secondary-card"><div style="font-weight:600;font-size:0.9rem;margin-bottom:8px;">💼 Robota.ua</div>';
+            html += '<div style="font-size:1.4rem;font-weight:700;color:var(--gray-800);">' + robotaCand.toLocaleString('uk-UA') + ' резюме</div>';
+            html += '<div style="font-size:0.78rem;color:var(--gray-400);margin-top:4px;">' + robotaEmp.toLocaleString('uk-UA') + ' вакансій</div>';
+            html += '<a href="' + robotaUrl + '" target="_blank" style="font-size:0.78rem;color:var(--primary);text-decoration:none;display:block;margin-top:6px;">🔗 Переглянути на Robota.ua</a>';
             html += '</div></div>';
 
             if (r && r.timeseries_vacancy && r.timeseries_vacancy.length > 1) {
@@ -1625,9 +1617,8 @@
 
             html += '<div class="salary-source-attr">';
             html += '📊 Джерела: ';
-            if (r && r.employer_median_uah) html += '<strong>robota.ua</strong> (агреговані дані з прозорих зарплат, 500K+ вакансій) · ';
-            if (workCount > 0) html += '<strong>work.ua</strong> (публічний пошук резюме) · ';
-            html += '<strong>Telegram</strong> (7 каналів, парсинг зарплатних очікувань з постів Maya)';
+            if (r && r.employer_median_uah) html += '<strong>robota.ua</strong> (агреговані дані з прозорих зарплат, 500K+ вакансій)';
+            if (workCount > 0) html += ' · <strong>work.ua</strong> (публічний пошук резюме)';
             const fetched = data.fetched_at ? new Date(data.fetched_at).toLocaleString('uk-UA') : '';
             if (fetched) html += '<br>🕐 Дані отримані: ' + fetched;
             html += '</div>';
