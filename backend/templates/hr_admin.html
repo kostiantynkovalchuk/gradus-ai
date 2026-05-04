@@ -787,7 +787,7 @@
         <div class="nav-tabs">
             <div class="nav-tab active" onclick="switchPage('analytics', event)" data-i18n="navAnalytics">📊 Аналітика</div>
             <div class="nav-tab" onclick="switchPage('hunt', event)" data-i18n="navHunt">💰 Зарплати</div>
-            <div class="nav-tab" onclick="switchPage('pulse', event)">💛 Пульс команди</div>
+            <div class="nav-tab" onclick="switchPage('pulse', event)">💚 Пульс команди</div>
             <div class="nav-tab" onclick="switchPage('rozsilka', event)">📋 Розсилка</div>
         </div>
     </div>
@@ -990,7 +990,7 @@
             </div>
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseAvgMood">—</div>
-                <div class="hunt-stat-label">💛 Середня оцінка (місяць)</div>
+                <div class="hunt-stat-label">💚 Середня оцінка (місяць)</div>
             </div>
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseTriggerCount">—</div>
@@ -1599,7 +1599,7 @@
             }
             html += '</div>';
 
-            const robotaUrl = 'https://robota.ua/zapros/' + encodeURIComponent(data.position || '') + (data.city ? '/' + encodeURIComponent(data.city) : '');
+            const robotaUrl = 'https://robota.ua/candidates?keyWords=' + encodeURIComponent(data.position || '') + (data.city ? '&city=' + encodeURIComponent(data.city) : '');
             const robotaCand = r ? (r.candidate_count || 0) : 0;
             const robotaEmp  = r ? (r.employer_count  || 0) : 0;
             html += '<div class="salary-secondary-card"><div style="font-weight:600;font-size:0.9rem;margin-bottom:8px;">💼 Robota.ua</div>';
