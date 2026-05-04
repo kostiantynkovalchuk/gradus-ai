@@ -1113,7 +1113,7 @@
                 const response = await fetch('/hr/api/system-info');
                 const data = await response.json();
                 document.getElementById('systemInfo').textContent = 
-                    `${data.content_items} ${t('contentItems')} | ${data.active_presets} ${t('activePresets')} | ${data.embeddings} ${t('embeddings')}`;
+                    `${data.content_items} елементів контенту | ${data.active_presets} активних пресетів | ${data.embeddings} векторів`;
             } catch (error) {
                 console.error('Error loading system info:', error);
             }
@@ -1155,7 +1155,7 @@
                 tbody.innerHTML = '';
 
                 if (data.queries.length === 0) {
-                    loading.innerHTML = `<div class="empty-state"><div class="empty-state-icon">-</div><p class="empty-state-text">${t('noData')}</p></div>`;
+                    loading.innerHTML = `<div class="empty-state"><div class="empty-state-icon">-</div><p class="empty-state-text">Немає даних за обраний період</p></div>`;
                     return;
                 }
 
@@ -1169,10 +1169,10 @@
                     row.innerHTML = `
                         <td>
                             <strong>${index + 1}.</strong> ${query.query}
-                            ${query.preset_hits > 0 ? `<span class="badge badge-primary">${t('preset')}</span>` : ''}
+                            ${query.preset_hits > 0 ? `<span class="badge badge-primary">Пресет</span>` : ''}
                         </td>
                         <td style="text-align: center;"><strong>${query.frequency}</strong></td>
-                        <td style="text-align: center;">${query.preset_hits > 0 ? t('yes') : t('no')}</td>
+                        <td style="text-align: center;">${query.preset_hits > 0 ? 'Так' : 'Ні'}</td>
                         <td style="text-align: center;">${query.helpful_count}</td>
                         <td style="text-align: center;">${query.not_helpful_count}</td>
                         <td style="text-align: center;">
@@ -1189,7 +1189,7 @@
 
             } catch (error) {
                 console.error('Error loading top queries:', error);
-                loading.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('errorLoading')}</p></div>`;
+                loading.innerHTML = `<div class="empty-state"><p class="empty-state-text">Помилка завантаження</p></div>`;
             }
         }
 
@@ -1200,7 +1200,7 @@
 
                 const helpfulDiv = document.getElementById('helpfulQueries');
                 if (data.helpful.length === 0) {
-                    helpfulDiv.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('noPositiveFeedback')}</p></div>`;
+                    helpfulDiv.innerHTML = `<div class="empty-state"><p class="empty-state-text">Ще немає позитивного відгуку</p></div>`;
                 } else {
                     helpfulDiv.innerHTML = data.helpful.map(q => `
                         <div class="query-item">
@@ -1215,7 +1215,7 @@
 
                 const notHelpfulDiv = document.getElementById('notHelpfulQueries');
                 if (data.not_helpful.length === 0) {
-                    notHelpfulDiv.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('noNegativeFeedback')}</p></div>`;
+                    notHelpfulDiv.innerHTML = `<div class="empty-state"><p class="empty-state-text">Немає негативного відгуку!</p></div>`;
                 } else {
                     notHelpfulDiv.innerHTML = data.not_helpful.map(q => `
                         <div class="query-item">
@@ -1245,7 +1245,7 @@
                 const data = await response.json();
 
                 if (data.candidates.length === 0) {
-                    list.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('allCovered')}</p></div>`;
+                    list.innerHTML = `<div class="empty-state"><p class="empty-state-text">Всі популярні запити покриті пресетами!</p></div>`;
                     loading.style.display = 'none';
                     return;
                 }
@@ -1259,7 +1259,7 @@
                         <div class="query-item">
                             <div class="query-text">
                                 ${c.query}
-                                ${c.should_add ? `<span class="badge badge-warning">${t('recommended')}</span>` : ''}
+                                ${c.should_add ? `<span class="badge badge-warning">Рекомендовано</span>` : ''}
                             </div>
                             <div class="query-meta">
                                 <span class="badge ${priorityBadge}">${c.priority}</span>
@@ -1276,7 +1276,7 @@
             } catch (error) {
                 console.error('Error loading preset candidates:', error);
                 loading.style.display = 'none';
-                list.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('errorLoading')}</p></div>`;
+                list.innerHTML = `<div class="empty-state"><p class="empty-state-text">Помилка завантаження</p></div>`;
             }
         }
 
@@ -1292,7 +1292,7 @@
                 tbody.innerHTML = '';
 
                 if (data.queries.length === 0) {
-                    loading.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('noActivity')}</p></div>`;
+                    loading.innerHTML = `<div class="empty-state"><p class="empty-state-text">Немає активності</p></div>`;
                     return;
                 }
 
@@ -1305,7 +1305,7 @@
                     });
 
                     const typeBadge = q.preset_hit ? 
-                        `<span class="badge badge-primary">${t('preset')}</span>` :
+                        `<span class="badge badge-primary">Пресет</span>` :
                         q.rag_used ? '<span class="badge badge-success">RAG</span>' :
                         '<span class="badge badge-gray">-</span>';
 
@@ -1329,7 +1329,7 @@
 
             } catch (error) {
                 console.error('Error loading recent activity:', error);
-                loading.innerHTML = `<div class="empty-state"><p class="empty-state-text">${t('errorLoading')}</p></div>`;
+                loading.innerHTML = `<div class="empty-state"><p class="empty-state-text">Помилка завантаження</p></div>`;
             }
         }
 
