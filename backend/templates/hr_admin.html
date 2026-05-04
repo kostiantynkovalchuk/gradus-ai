@@ -728,11 +728,6 @@
         .status-badge.pending { background: #f3f4f6; color: #6b7280; }
         .status-badge.no_results { background: #f3f4f6; color: #9ca3af; }
         .status-badge.filled { background: #ede9fe; color: #7c3aed; }
-        .roi-banner { background: linear-gradient(135deg, #065f46 0%, #064e3b 100%); border-radius: var(--radius-lg); padding: var(--space-xl); color: white; margin-bottom: var(--space-xl); }
-        .roi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-lg); }
-        .roi-item { text-align: center; }
-        .roi-value { font-size: 2rem; font-weight: 700; }
-        .roi-label { font-size: 0.875rem; opacity: 0.85; margin-top: var(--space-xs); }
         .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; width: 100%; margin-bottom: var(--space-xl); }
         .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 100%; margin-bottom: var(--space-xl); }
         .currency-toggle { display: inline-flex; border: 1px solid var(--gray-300); border-radius: 6px; overflow: hidden; margin-left: var(--space-md); }
@@ -742,14 +737,9 @@
         .source-card { background: white; border-radius: var(--radius-md); padding: var(--space-md); border: 1px solid var(--gray-200); }
         .source-card-title { font-weight: 600; margin-bottom: var(--space-xs); }
         .source-card-stat { font-size: 0.875rem; color: var(--gray-500); }
-        .efficiency-table { width: 100%; border-collapse: collapse; }
-        .efficiency-table th, .efficiency-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--gray-200); }
-        .efficiency-table th { background: var(--gray-50); font-weight: 600; font-size: 0.875rem; }
-        .efficiency-table .saving { color: #059669; font-weight: 600; }
         .hunt-updated { font-size: 0.75rem; color: var(--gray-400); margin-bottom: var(--space-md); }
         .market-intel-card { max-width: 100%; word-break: break-word; overflow: hidden; }
         @media (max-width: 1024px) {
-            .roi-grid { grid-template-columns: repeat(2, 1fr); }
             .charts-row { grid-template-columns: 1fr; }
         }
         @media (max-width: 768px) {
@@ -970,38 +960,6 @@
             </button>
         </div>
 
-        <div class="roi-banner" id="roiBanner">
-            <div class="roi-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-lg);">
-                <div class="roi-item">
-                    <div class="roi-value" id="roiSavedUah">0 грн</div>
-                    <div class="roi-label">💰 Зекономлено (UAH)</div>
-                </div>
-                <div class="roi-item">
-                    <div class="roi-value" id="roiHours">0 год</div>
-                    <div class="roi-label">⏱ Годин збережено</div>
-                </div>
-                <div class="roi-item">
-                    <div class="roi-value" id="roiHired">0 осіб</div>
-                    <div class="roi-label">🎯 Найнято</div>
-                </div>
-                <div class="roi-item">
-                    <div class="roi-value" id="roiCostMaya">0 грн</div>
-                    <div class="roi-label">📉 Вартість найму Maya</div>
-                </div>
-                <div class="roi-item">
-                    <div class="roi-value" id="roiCostTraditional">0 грн</div>
-                    <div class="roi-label">📊 Вартість традиційно</div>
-                </div>
-                <div class="roi-item">
-                    <div class="roi-value" id="roiVacancies">0</div>
-                    <div class="roi-label">📋 Вакансій оброблено</div>
-                </div>
-            </div>
-            <details style="margin-top:var(--space-lg);">
-                <summary style="cursor:pointer;opacity:0.8;font-size:0.8rem;user-select:none;">ℹ️ Методологія розрахунку ROI</summary>
-                <div id="roiMethodology" style="margin-top:8px;font-size:0.78rem;opacity:0.75;line-height:1.6;"></div>
-            </details>
-        </div>
 
         <details open style="margin-bottom:var(--space-xl);">
             <summary style="cursor:pointer;font-size:1rem;font-weight:700;color:var(--gray-800);padding:var(--space-md) 0;user-select:none;">📋 Детальний звіт по вакансіях</summary>
@@ -1772,25 +1730,6 @@
                 document.getElementById('huntAcceptance').textContent = kpi.acceptance_rate + '%';
                 document.getElementById('huntChannels').textContent = kpi.total_channels_posted;
                 document.getElementById('huntReach').textContent = fmt(kpi.estimated_reach);
-
-                const roi = kpi.roi || {};
-                document.getElementById('roiSavedUah').textContent = (roi.total_savings_uah || 0).toLocaleString() + ' грн';
-                document.getElementById('roiHours').textContent = (roi.hours_saved || kpi.hours_saved || 0) + ' год';
-                document.getElementById('roiHired').textContent = kpi.total_hires + ' осіб';
-                document.getElementById('roiCostMaya').textContent = (roi.cost_per_hire_maya_uah || 0).toLocaleString() + ' грн';
-                document.getElementById('roiCostTraditional').textContent = (roi.cost_per_hire_traditional_uah || 0).toLocaleString() + ' грн';
-                document.getElementById('roiVacancies').textContent = roi.total_vacancies_processed || roi.vacancies_processed || kpi.total_vacancies;
-                if (roi.methodology) {
-                    const m = roi.methodology;
-                    const hrRate = m.hr_hourly_rate || (m.traditional && m.traditional.hr_hourly_rate_uah) || '—';
-                    const hours = m.hours_per_vacancy_traditional || (m.traditional && m.traditional.hours_per_vacancy) || '—';
-                    const portal = m.portal_cost || (m.traditional && m.traditional.portal_cost_uah) || '—';
-                    const tradCost = m.cost_per_vacancy_traditional_uah || (m.traditional && m.traditional.cost_per_vacancy_uah) || '—';
-                    const apiCost = m.api_cost_per_search || (m.maya && m.maya.api_cost_per_search_uah) || '—';
-                    const mayaMin = m.maya_time_minutes || (m.maya && m.maya.time_per_vacancy_minutes) || '—';
-                    const note = `Традиційний пошук: ${hrRate} грн/год × ${hours} год + ${portal} грн портал = ${tradCost} грн/вакансію. Maya: тільки API ${apiCost} грн (${mayaMin} хв/вакансія). Курс НБУ: 1 USD = ${m.usd_rate || '—'} грн.`;
-                    document.getElementById('roiMethodology').textContent = note;
-                }
 
                 document.getElementById('huntUpdatedAt').textContent = 'Оновлено: щойно';
 

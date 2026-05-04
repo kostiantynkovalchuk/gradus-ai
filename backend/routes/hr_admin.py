@@ -14,7 +14,6 @@ import io
 from typing import Optional
 
 from models import get_db
-from hunt_config import ROI_CONSTANTS
 from services.pulse_service import TRIGGER_LABELS as _TRIGGER_LABELS
 
 router = APIRouter(prefix="/hr", tags=["HR Admin"])
@@ -382,61 +381,6 @@ async def get_hunt_analytics(
         from services.salary_normalizer import get_usd_uah_rate
         current_rate = get_usd_uah_rate()
 
-        rc = ROI_CONSTANTS
-        hr_rate = rc["hr_hourly_rate_uah"]
-        trad_hours = rc["hours_per_vacancy_traditional"]
-        portal_cost = rc["portal_cost_per_vacancy_uah"]
-        maya_api_cost = rc["maya_api_cost_per_search_uah"]
-        maya_minutes = rc["maya_time_per_vacancy_minutes"]
-
-        traditional_cost_per_vacancy_uah = (hr_rate * trad_hours) + portal_cost
-        maya_cost_per_vacancy_uah = maya_api_cost
-
-        hours_saved = round(total_vacancies * (trad_hours - maya_minutes / 60), 1)
-        total_savings_uah = round(total_vacancies * (traditional_cost_per_vacancy_uah - maya_cost_per_vacancy_uah))
-        total_savings_usd = round(total_savings_uah / current_rate) if current_rate > 0 else 0
-        cost_per_hire_maya_uah = round(maya_cost_per_vacancy_uah * total_vacancies / max(total_hires, 1))
-        cost_per_hire_traditional_uah = round(traditional_cost_per_vacancy_uah)
-
-        cost_saved_usd = total_savings_usd
-        cost_per_hire_maya = round(cost_per_hire_maya_uah / current_rate, 2) if current_rate > 0 else 0
-
-        roi_data = {
-            "total_savings_uah": total_savings_uah,
-            "total_savings_usd": total_savings_usd,
-            "hours_saved": hours_saved,
-            "cost_per_hire_maya_uah": cost_per_hire_maya_uah,
-            "cost_per_hire_traditional_uah": cost_per_hire_traditional_uah,
-            "cost_per_vacancy_traditional_uah": traditional_cost_per_vacancy_uah,
-            "cost_per_vacancy_maya_uah": round(maya_cost_per_vacancy_uah),
-            "vacancies_processed": total_vacancies,
-            "total_vacancies_processed": total_vacancies,
-            "total_hires": total_hires,
-            "methodology": {
-                "hr_hourly_rate": hr_rate,
-                "hours_per_vacancy_traditional": trad_hours,
-                "portal_cost": portal_cost,
-                "api_cost_per_search": maya_api_cost,
-                "maya_time_minutes": maya_minutes,
-                "cost_per_vacancy_traditional_uah": traditional_cost_per_vacancy_uah,
-                "cost_per_vacancy_maya_uah": maya_cost_per_vacancy_uah,
-                "usd_rate": round(current_rate, 4),
-                "traditional": {
-                    "formula": "hr_rate × hours + portal_cost",
-                    "hr_hourly_rate_uah": hr_rate,
-                    "hours_per_vacancy": trad_hours,
-                    "portal_cost_uah": portal_cost,
-                    "cost_per_vacancy_uah": traditional_cost_per_vacancy_uah,
-                },
-                "maya": {
-                    "formula": "api_cost_only",
-                    "api_cost_per_search_uah": maya_api_cost,
-                    "time_per_vacancy_minutes": maya_minutes,
-                    "cost_per_vacancy_uah": maya_cost_per_vacancy_uah,
-                },
-            },
-        }
-
         kpi = {
             "total_vacancies": total_vacancies,
             "total_filled": total_filled,
@@ -448,10 +392,6 @@ async def get_hunt_analytics(
             "avg_candidates_per_vacancy": avg_per_vacancy,
             "total_channels_posted": total_channels,
             "estimated_reach": estimated_reach,
-            "cost_saved_usd": cost_saved_usd,
-            "hours_saved": hours_saved,
-            "cost_per_hire_maya": cost_per_hire_maya,
-            "traditional_cost_per_hire": 400,
             "decisions": {
                 "approved": approved,
                 "rejected": rejected,
@@ -459,7 +399,6 @@ async def get_hunt_analytics(
                 "pending": pending,
                 "hired": total_hires,
             },
-            "roi": roi_data,
         }
 
         hire_funnel = {
@@ -708,15 +647,8 @@ async def get_hunt_analytics(
                 "total_candidates_processed": 0, "candidates_today": 0,
                 "candidates_this_week": 0, "acceptance_rate": 0,
                 "avg_candidates_per_vacancy": 0, "total_channels_posted": 0,
-                "estimated_reach": 0, "cost_saved_usd": 0, "hours_saved": 0,
-                "cost_per_hire_maya": 0, "traditional_cost_per_hire": 400,
+                "estimated_reach": 0,
                 "decisions": {"approved": 0, "rejected": 0, "saved": 0, "pending": 0, "hired": 0},
-                "roi": {
-                    "total_savings_uah": 0, "total_savings_usd": 0, "hours_saved": 0,
-                    "cost_per_hire_maya_uah": 0, "cost_per_hire_traditional_uah": 0,
-                    "cost_per_vacancy_traditional_uah": 0, "cost_per_vacancy_maya_uah": 0,
-                    "vacancies_processed": 0, "total_hires": 0, "methodology": "",
-                },
             },
             "hire_funnel": {"found": 0, "reviewed": 0, "approved": 0, "saved": 0, "hired": 0},
             "source_performance": [],
