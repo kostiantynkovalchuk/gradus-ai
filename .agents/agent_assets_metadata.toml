@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "ghtjNvRh7y31h3WwFAEWU"
+uri = "file://backend/photo_report/references/jeanjack_lineup.jpg"
+type = "image"
+title = "Jean Jack (Жан-Жак) — Full Lineup (6 SKUs)"
