@@ -36,3 +36,27 @@ id = "njmRWOqjojwMmofXUajJ5"
 uri = "file://backend/photo_report/references/dovbush_lineup.jpg"
 type = "image"
 title = "DOVBUSH — Full Lineup (4 SKUs)"
+
+[[outputs]]
+id = "wkwlL_wyGA3RSgHuOlG7C"
+uri = "file://backend/photo_report/references/villaua_art.jpg"
+type = "image"
+title = "Villa UA Art Collection (6 SKU)"
+
+[[outputs]]
+id = "K43RLYzLzX3mTX5gEQd2c"
+uri = "file://backend/photo_report/references/kosher_lineup.jpg"
+type = "image"
+title = "Kosher Collection (5 SKU)"
+
+[[outputs]]
+id = "gNWIqK5tqyPdGdctRIr-d"
+uri = "file://backend/photo_report/references/kristivalley_lineup.jpg"
+type = "image"
+title = "Kristi Valley (5 SKU)"
+
+[[outputs]]
+id = "CYrBZzSJI9HLaIUwyqU0L"
+uri = "file://backend/photo_report/references/villaua_fruit_frizzante.jpg"
+type = "image"
+title = "Villa UA Frizzante Light (2 SKU — Rose + White)"

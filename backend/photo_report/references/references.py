@@ -9,17 +9,27 @@ Reference images are loaded ONCE at module import and cached in memory.
 If the directory is empty or PIL is unavailable, falls back gracefully
 with a warning — analysis still works, just without reference images.
 
-Expected files in this directory (16 total):
+Expected files in this directory:
 
   Vodka lineups (3):
-    greenday_lineup.jpg  — Full GreenDay lineup (Classic, Air, Crystal, ...)
-    helsinki_lineup.jpg  — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
-    ukrainka_lineup.jpg  — Full Ukrainka lineup (Traditional, Strong, Platinum)
+    greenday_lineup.jpg      — Full GreenDay lineup (Classic, Air, Crystal, ...)
+    helsinki_lineup.jpg      — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
+    ukrainka_lineup.jpg      — Full Ukrainka lineup (Traditional, Strong, Platinum)
 
   Cognac/brandy lineups (3):
-    adjari_lineup.jpg    — ADJARI 3★ flagship + 5★ tube + 7★ premium
-    dovbush_lineup.jpg   — DOVBUSH 3★ Карпатський + 4★ Big Four + 4★ round + Honey
-    jeanjack_lineup.jpg  — JEAN JACK full 6-SKU lineup (3 classic + 3 flavored)
+    adjari_lineup.jpg        — ADJARI 3★ flagship + 5★ tube + 7★ premium
+    dovbush_lineup.jpg       — DOVBUSH 3★ Карпатський + 4★ Big Four + 4★ round + Honey
+    jeanjack_lineup.jpg      — JEAN JACK full 6-SKU lineup (3 classic + 3 flavored)
+
+  Wine lineups (up to 8, added progressively):
+    villaua_classic_white.jpg  — Villa UA Classic white wines (8 SKU) [PENDING]
+    villaua_classic_red.jpg    — Villa UA Classic red/rosé wines (9 SKU) [PENDING]
+    villaua_art.jpg            — Villa UA Art Collection (6 SKU)
+    villaua_avtorskaya.jpg     — Villa UA Avtorskaya blends (5 SKU) [PENDING]
+    villaua_fruit_frizzante.jpg — Villa UA Fruit + Frizzante Light (5 SKU, 2 loaded)
+    villaua_sparkling.jpg      — Villa UA Sparkling champagne-bottle (8 SKU) [PENDING]
+    kosher_lineup.jpg          — Kosher Collection (5 SKU)
+    kristivalley_lineup.jpg    — Kristi Valley French wines (5 SKU)
 
   Ideal shelf reference photos (10):
     shelf_ref_02.jpg — ADJARI cognac close-up + Helsinki + Ukrainka
@@ -94,6 +104,73 @@ REFERENCE_LABELS: dict[str, str] = {
         "Orange/Апельсин (bright orange label with citrus pattern, 30% ABV). "
         "ALL are AVTD brands. Usually stands NEXT TO ADJARI and DOVBUSH in the cognac section. "
         "KEY IDENTIFIER: flat square bottle + horseman medallion + 'Jean Jack' text."
+    ),
+    # ── Wine lineups ──────────────────────────────────────────────────────────
+    "villaua_classic_white": (
+        "VILLA UA CLASSIC — WHITE WINES (8 SKU). AVTD flagship wine brand. "
+        "KEY IDENTIFIER: MEDALLION/COIN emblem on every label (castle/building icon). "
+        "Standard 750ml bottles, pale green/straw color. "
+        "Includes: Riesling, Blanc de Blanc, Chardonnay, Muscat Berbarro, Muscat Marbel, "
+        "Muscat Riviera, Piccolo, Traminer Blanc. "
+        "WARNING: Villa Krim is NOT Villa UA — it is a competitor brand!"
+    ),
+    "villaua_classic_red": (
+        "VILLA UA CLASSIC — RED and ROSÉ WINES (9 SKU). Same AVTD brand, same medallion/coin emblem. "
+        "Dark bottles (red wines) and pink bottles (rosé). "
+        "Includes: Bastardo, Cabernet, Merlot, Negro del Mare, Pinot Noir, Saperavi, "
+        "Shato Baron, Shato Le Grand, Shevalie Rouge. "
+        "Same 750ml bottle shape as Classic White. AVTD brand."
+    ),
+    "villaua_art": (
+        "VILLA UA ART COLLECTION — 6 wine SKUs. Premium line with distinctive slim bottle shape "
+        "and artistic label design. KEY IDENTIFIER: large embossed MEDALLION on upper bottle neck "
+        "(above label). Label has cursive 'Art Collection' text + 'VILLA UA' + wine variety name. "
+        "Red wines have BLACK label with copper/red accents (Bosconelli, Sangiovese). "
+        "White wines have WHITE label with teal/green accents (Muscat, Pinot Grigio, Portofino, Chateau Orlando). "
+        "Includes: Bosconelli, Muscat, Pinot Grigio, Portofino, Sangiovese, Chateau Orlando. "
+        "AVTD brand."
+    ),
+    "villaua_avtorskaya": (
+        "VILLA UA AVTORSKAYA (Authors) COLLECTION — 5 blend wines. "
+        "Each bottle combines two grape varieties. "
+        "Includes: Cabernet Pinot Noir, Chardonnay Sauvignon, Muscat Traminer, "
+        "Piano Rosé, Pinot Noir Merlot. "
+        "Same Villa UA medallion. AVTD brand."
+    ),
+    "villaua_fruit_frizzante": (
+        "VILLA UA FRUIT WINE + FRIZZANTE LIGHT — up to 5 SKUs. "
+        "Frizzante Light: slim 700ml bottles with bold geometric label design (overlapping oval shapes), "
+        "text 'VILLA UA Frizzante Light'. "
+        "Frizzante Rosé has PINK cap + pink/gold ovals. "
+        "Frizzante White has YELLOW cap + yellow/gold ovals. "
+        "Fruit wines (Cherry/Mango/Peach) have fruit-themed labels. "
+        "ALL are AVTD brands. Different shelf section from still wine."
+    ),
+    "villaua_sparkling": (
+        "VILLA UA SPARKLING — 8 SKUs. Dark CHAMPAGNE-SHAPED bottles with FOIL on neck. "
+        "Same Villa UA medallion/coin emblem on champagne bottle. "
+        "Includes: Bellini, Brut, Grand Cuvee, Muscat, Pina Colada, Rose, Salute Asti, Semisweet. "
+        "On SEPARATE shelf from still wine. "
+        "Do NOT confuse with still Villa UA — sparkling has champagne bottle shape and foil neck! "
+        "AVTD brand."
+    ),
+    "kosher_lineup": (
+        "KOSHER COLLECTION — 5 wine SKUs. AVTD kosher wine brand. "
+        "KEY IDENTIFIER: 'KOSHER COLLECTION' text + Star of David menorah logo at top, "
+        "ornate mandala-style pattern on label, 'Est. 2010', kosher certification seal. "
+        "Dark bottles. Includes: Agada (red), Cabernet (red), Chardonnay (white/clear), "
+        "Emet (red), Saperavi (red). "
+        "The only kosher wines in AVTD portfolio. AVTD brand."
+    ),
+    "kristivalley_lineup": (
+        "KRISTI VALLEY — 5 wine SKUs. AVTD wine brand with French-style positioning. "
+        "KEY IDENTIFIER: 'KRISTI VALLEY' text in large font, running horse made of particles on label, "
+        "'Mis en bouteille en France', 'Vin de la Communauté Européenne'. "
+        "Label colors: cream/beige background (white wines), orange/red background (red wines), "
+        "cream with pink tones (rosé). "
+        "Includes: Châtelain Clemont (white, cream label), Belle Mélanie (red, orange label), "
+        "Saint Thouri (rosé, cream+pink), Charon Blanc (white, cream label), Vivien Rouge (red, orange label). "
+        "AVTD brand."
     ),
     # ── Shelf references ──────────────────────────────────────────────────────
     "shelf_ref_02": (
