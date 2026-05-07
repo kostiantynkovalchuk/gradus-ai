@@ -424,6 +424,93 @@ _FOCUSED_PROMPTS = {
 }
 
 
+_CATEGORY_RETRY_PROMPTS = {
+    "cognac": """You are re-analyzing a shelf photo. The first analysis found a cognac/brandy shelf row but MISSED AVTD cognac brands.
+
+Your ONLY task: find AVTD cognac brands on these shelves. Ignore vodka and wine.
+
+ADJARI (Аджарі) — what to look for:
+- Dark amber ROUNDED bottles with DIAMOND MESH/NET texture
+- Gold cap, mountain landscape label, eagle emblem, text "ADJARI"
+- Variants: 3★, 4★ Квартелі, 5★ (in tube), 7★ Мудрий (black label), Cherry, Orange
+- MOST COMMON cognac brand on Ukrainian shelves
+
+DOVBUSH (Довбуш) — what to look for:
+- SQUARE bottles (NOT rounded like ADJARI!), WOODEN CORK cap
+- Portrait of Cossack warrior, text "ДОВБУШ" or "DOVBUSH"
+- Variants: 3★, 4★ Big Four (green label), Honey/Медовий (orange label)
+
+JEAN JACK (Жан-Жак) — what to look for:
+- Flat/square bottles with horseman medallion
+- Text "ЖАН-ЖАК" or "JEAN JACK"
+- Variants: Classic 3★, France 4★, Reserve 5★, Amaretto, Honey, Orange
+
+Count ALL AVTD cognac facings. Also count competitor cognac (Aznauri, Tavria, etc.).
+Do NOT include imported whisky (Jameson, Jack Daniel's) — only cognac/brandy.
+
+Return ONLY this JSON:
+{
+  "adjari_facings": 0,
+  "dovbush_facings": 0,
+  "jean_jack_facings": 0,
+  "klinkov_facings": 0,
+  "competitor_facings": 0,
+  "total_cognac_facings": 0,
+  "search_notes": ""
+}""",
+
+    "wine": """You are re-analyzing a shelf photo. The first analysis found a wine shelf row but MISSED AVTD wine brands.
+
+Your ONLY task: find AVTD wine brands on these shelves. Ignore vodka and cognac.
+
+VILLA UA — what to look for:
+- KEY IDENTIFIER: MEDALLION/COIN on every label
+- Standard 750ml wine bottles (taller and thinner than vodka)
+- Collections: Classic (most common), Art, Avtorskaya, Fruit Wine
+- Colors: pale green (white wine), dark (red wine), pink (rosé)
+- WARNING: Villa Krim is NOT Villa UA — it is a COMPETITOR!
+
+KRISTI VALLEY — text "KRISTI VALLEY" on label, French-style names
+KOSHER — kosher certification symbols, Star of David
+
+Count ALL AVTD wine facings. Also count competitor wines.
+
+Return ONLY this JSON:
+{
+  "villa_ua_facings": 0,
+  "kristi_valley_facings": 0,
+  "kosher_facings": 0,
+  "competitor_facings": 0,
+  "total_wine_facings": 0,
+  "search_notes": ""
+}""",
+
+    "sparkling": """You are re-analyzing a shelf photo. The first analysis found a sparkling wine shelf row but MISSED AVTD sparkling brands.
+
+Your ONLY task: find AVTD sparkling wine. Ignore still wine, vodka, cognac.
+
+VILLA UA SPARKLING — what to look for:
+- Dark CHAMPAGNE-SHAPED bottles with FOIL on neck
+- Same MEDALLION/COIN as still Villa UA wine, but on champagne bottle
+- Variants: Bellini, Brut, Grand Cuvee, Muscat, Pina Colada, Rosé, Salute Asti, Semisweet
+- Usually on SEPARATE shelf from still wine
+- Do NOT confuse with still Villa UA wine — sparkling has champagne bottle shape!
+
+VILLA UA FRIZZANTE — slim bottles, Light Rosé and Light White
+
+Count ALL AVTD sparkling facings. Also count competitor sparkling (Odesa, Oreanda, Artemivske).
+
+Return ONLY this JSON:
+{
+  "villa_ua_sparkling_facings": 0,
+  "villa_ua_frizzante_facings": 0,
+  "competitor_facings": 0,
+  "total_sparkling_facings": 0,
+  "search_notes": ""
+}""",
+}
+
+
 def _call_claude_vision(
     client: anthropic.Anthropic,
     content: list,
@@ -586,6 +673,130 @@ Return ONLY this JSON:
         return None
 
 
+def _retry_category(client: anthropic.Anthropic, photo_b64_list: list[str], category: str) -> dict | None:
+    """Focused second pass for a specific category.
+
+    Sends only category-relevant reference images + a focused prompt.
+    Triggered when shelf_scan mentions the category but all AVTD facings = 0.
+    """
+    prompt = _CATEGORY_RETRY_PROMPTS.get(category)
+    if not prompt:
+        return None
+
+    category_ref_keywords = {
+        "cognac": ["adjari", "dovbush", "jeanjack"],
+        "wine": ["villaua_classic", "villaua_art", "villaua_avtor", "villaua_fruit", "kosher", "kristivalley"],
+        "sparkling": ["villaua_sparkling", "villaua_fruit_frizzante"],
+    }
+    keywords = category_ref_keywords.get(category, [])
+
+    content = []
+
+    refs_added = 0
+    for ref in BRAND_REFERENCES:
+        name = ref.get("name", "")
+        if any(kw in name for kw in keywords):
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
+            })
+            content.append({"type": "text", "text": f"REFERENCE: {ref['label']}"})
+            refs_added += 1
+
+    logger.info(f"[PhotoReport] {category} retry: {refs_added} reference images")
+
+    content.append({
+        "type": "text",
+        "text": f"Now look at these shelf photos and find AVTD {category} brands:",
+    })
+    for b64 in photo_b64_list[:5]:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+        })
+    content.append({"type": "text", "text": prompt})
+
+    try:
+        raw = _call_claude_vision(
+            client=client,
+            content=content,
+            system="You are a shelf photo analyzer. Return only valid JSON.",
+            max_tokens=1024,
+            model=VISION,
+        )
+        result = json.loads(raw)
+        logger.info(f"[PhotoReport] {category} retry result: {json.dumps(result, default=str)[:200]}")
+        return result
+    except Exception as e:
+        logger.error(f"[PhotoReport] {category} retry failed: {e}")
+        return None
+
+
+def _merge_cognac_retry(result: dict, retry: dict) -> None:
+    """Merge cognac retry findings into original result."""
+    cognac = result.get("cognac", {})
+    adjari = retry.get("adjari_facings") or 0
+    dovbush = retry.get("dovbush_facings") or 0
+    jeanjack = retry.get("jean_jack_facings") or 0
+    klinkov = retry.get("klinkov_facings") or 0
+
+    if adjari + dovbush + jeanjack + klinkov > 0:
+        logger.info(f"[PhotoReport] Cognac retry found: ADJARI={adjari}, DOVBUSH={dovbush}, JJ={jeanjack}")
+        cognac["adjari_facings"] = adjari
+        cognac["dovbush_facings"] = dovbush
+        cognac["jean_jack_facings"] = jeanjack
+        cognac["klinkov_facings"] = klinkov
+        cognac["competitor_facings"] = retry.get("competitor_facings") or cognac.get("competitor_facings") or 0
+        cognac["total_cognac_facings"] = retry.get("total_cognac_facings") or 0
+        cognac["other_avtd_cognac_facings"] = 0
+        result["cognac"] = cognac
+        notes = result.get("notes", "") or ""
+        result["notes"] = (notes + " [Cognac retry: found AVTD cognac after initial scan missed them]").strip()
+    else:
+        logger.info("[PhotoReport] Cognac retry confirmed 0 AVTD cognac — keeping original")
+
+
+def _merge_wine_retry(result: dict, retry: dict) -> None:
+    """Merge wine retry findings into original result."""
+    wine = result.get("wine", {})
+    villaua = retry.get("villa_ua_facings") or 0
+    kristivalley = retry.get("kristi_valley_facings") or 0
+    kosher = retry.get("kosher_facings") or 0
+
+    if villaua + kristivalley + kosher > 0:
+        logger.info(f"[PhotoReport] Wine retry found: VillaUA={villaua}, KV={kristivalley}, Kosher={kosher}")
+        wine["villa_ua_facings"] = villaua
+        wine["kristi_valley_facings"] = kristivalley
+        wine["kosher_facings"] = kosher
+        wine["competitor_facings"] = retry.get("competitor_facings") or wine.get("competitor_facings") or 0
+        wine["total_wine_facings"] = retry.get("total_wine_facings") or 0
+        wine["didi_lari_facings"] = 0
+        wine["other_avtd_wine_facings"] = 0
+        result["wine"] = wine
+        notes = result.get("notes", "") or ""
+        result["notes"] = (notes + " [Wine retry: found AVTD wine after initial scan missed them]").strip()
+    else:
+        logger.info("[PhotoReport] Wine retry confirmed 0 AVTD wine — keeping original")
+
+
+def _merge_sparkling_retry(result: dict, retry: dict) -> None:
+    """Merge sparkling retry findings into original result."""
+    sparkling = result.get("sparkling", {})
+    villaua_spark = retry.get("villa_ua_sparkling_facings") or 0
+    frizzante = retry.get("villa_ua_frizzante_facings") or 0
+
+    if villaua_spark + frizzante > 0:
+        logger.info(f"[PhotoReport] Sparkling retry found: VillaUA={villaua_spark}, Frizzante={frizzante}")
+        sparkling["villa_ua_sparkling_facings"] = villaua_spark + frizzante
+        sparkling["competitor_facings"] = retry.get("competitor_facings") or sparkling.get("competitor_facings") or 0
+        sparkling["total_sparkling_facings"] = retry.get("total_sparkling_facings") or 0
+        result["sparkling"] = sparkling
+        notes = result.get("notes", "") or ""
+        result["notes"] = (notes + " [Sparkling retry: found Villa UA sparkling after initial scan missed them]").strip()
+    else:
+        logger.info("[PhotoReport] Sparkling retry confirmed 0 AVTD sparkling — keeping original")
+
+
 def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -713,5 +924,77 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
                 ).strip()
             else:
                 logger.info("[PhotoReport] Vodka retry confirmed UA=0 HEL=0 — keeping original result")
+
+    # ── Cognac retry: shelf_scan mentions cognac row but all AVTD cognac = 0 ──
+    # ~30% outlier rate per expert correction data
+    cognac = vision_result.get("cognac", {})
+    adjari   = cognac.get("adjari_facings") or 0
+    dovbush  = cognac.get("dovbush_facings") or 0
+    klinkov  = cognac.get("klinkov_facings") or 0
+    jeanjack = cognac.get("jean_jack_facings") or 0
+    total_avtd_cognac = adjari + dovbush + klinkov + jeanjack
+
+    shelf_scan = vision_result.get("shelf_scan", [])
+    has_cognac_row = any(
+        "cognac" in (row.get("category", "") or "").lower() or
+        "brandy" in (row.get("category", "") or "").lower() or
+        any(
+            "adjari" in b.lower() or "dovbush" in b.lower() or "cognac" in b.lower()
+            for b in row.get("brands", [])
+        )
+        for row in shelf_scan
+    )
+
+    if has_cognac_row and total_avtd_cognac == 0:
+        logger.info("[PhotoReport] Cognac retry triggered: shelf_scan has cognac row but AVTD cognac=0")
+        retry_result = _retry_category(client, photo_b64_list, "cognac")
+        if retry_result:
+            _merge_cognac_retry(vision_result, retry_result)
+
+    # ── Wine retry: shelf_scan mentions wine row but all AVTD wine = 0 ──
+    # ~52% outlier rate per expert correction data
+    wine = vision_result.get("wine", {})
+    villaua      = wine.get("villa_ua_facings") or 0
+    didilari     = wine.get("didi_lari_facings") or 0
+    kristivalley = wine.get("kristi_valley_facings") or 0
+    kosher       = wine.get("kosher_facings") or 0
+    total_avtd_wine = villaua + didilari + kristivalley + kosher
+
+    has_wine_row = any(
+        "wine" in (row.get("category", "") or "").lower() or
+        any(
+            "villa" in b.lower() or "wine" in b.lower() or "didi" in b.lower()
+            for b in row.get("brands", [])
+        )
+        for row in shelf_scan
+    )
+
+    if has_wine_row and total_avtd_wine == 0:
+        logger.info("[PhotoReport] Wine retry triggered: shelf_scan has wine row but AVTD wine=0")
+        retry_result = _retry_category(client, photo_b64_list, "wine")
+        if retry_result:
+            _merge_wine_retry(vision_result, retry_result)
+
+    # ── Sparkling retry: shelf_scan mentions sparkling row but Villa UA sparkling = 0 ──
+    # ~76% outlier rate per expert correction data
+    sparkling     = vision_result.get("sparkling", {})
+    villaua_spark = sparkling.get("villa_ua_sparkling_facings") or 0
+
+    has_sparkling_row = any(
+        "sparkling" in (row.get("category", "") or "").lower() or
+        "asti" in (row.get("category", "") or "").lower() or
+        any(
+            "sparkling" in b.lower() or "asti" in b.lower() or
+            "prosecco" in b.lower() or "champagne" in b.lower()
+            for b in row.get("brands", [])
+        )
+        for row in shelf_scan
+    )
+
+    if has_sparkling_row and villaua_spark == 0:
+        logger.info("[PhotoReport] Sparkling retry triggered: shelf_scan has sparkling row but Villa UA sparkling=0")
+        retry_result = _retry_category(client, photo_b64_list, "sparkling")
+        if retry_result:
+            _merge_sparkling_retry(vision_result, retry_result)
 
     return vision_result
