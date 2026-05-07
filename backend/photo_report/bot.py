@@ -4,7 +4,7 @@ import base64
 import asyncio
 import logging
 import os
-from telegram import Update, Bot
+from telegram import Update, Bot, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, filters, ContextTypes
@@ -33,6 +33,21 @@ EXPERT_TG_IDS: set[int] = {
 }
 
 pending_reports = {}
+
+PHOTO_INSTRUCTIONS = (
+    "📸 Як правильно сфотографувати полицю:\n\n"
+    "1️⃣ *Загальний огляд* — стань за 1.5–2м\n"
+    "Вся алкогольна секція в кадрі\n\n"
+    "2️⃣ *Горілка* — крупний план полиці з горілкою\n"
+    "Етикетки мають бути чітко читабельні\n\n"
+    "3️⃣ *Коньяк / Вино / Ігристе* — окреме фото кожного\n"
+    "Тільки якщо є на полиці, крупний план\n\n"
+    "⛔ *Не підходить:*\n"
+    "- Фото з кута або від каси\n"
+    "- Занадто далеко — етикетки нечіткі\n"
+    "- Темно або засвічено спалахом\n\n"
+    "Надішли 2–5 фото 👇"
+)
 
 PHOTO_REJECTION_MESSAGE = (
     "📷 Фото зроблено занадто далеко — неможливо розпізнати бренди на полицях.\n\n"
@@ -357,16 +372,13 @@ async def receive_point_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }
 
     await update.message.reply_text(
-        f"✅ Точка: *{point_name}*\n\n"
-        "📸 Надішли фотографії (до 5 штук).\n\n"
-        "💡 *Порада:* Надсилай 2–3 фото для точнішого аналізу:\n"
-        "  • Загальний огляд всіх полиць\n"
-        "  • Крупні плани окремих секцій\n\n"
-        "⚠️ *Обов'язково:* загальний огляд всіх полиць!\n\n"
-        "Коли завантажиш всі фото — натисни *Готово* або напиши коментар "
-        "(напр: 'без ліцензії', 'дефіцит центрального складу').",
+        f"✅ Точка: *{point_name}*",
         parse_mode="Markdown",
-        reply_markup=PHOTO_ACTIONS
+    )
+    await update.message.reply_text(
+        PHOTO_INSTRUCTIONS,
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove(),
     )
     return WAITING_PHOTOS
 
@@ -515,6 +527,44 @@ async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending_reports.pop(user_id, None)
             return ConversationHandler.END
         # ─────────────────────────────────────────────────────────────────────
+
+        # ── All-zero rejection: every AVTD category = 0 after all retries ──
+        vodka_share  = (vision_raw.get("shelf_share", {}) or {}).get("vodka", {})
+        vodka_pct    = (vodka_share.get("percent") if isinstance(vodka_share, dict) else None) or 0
+        adjari       = (vision_raw.get("cognac", {}) or {}).get("adjari_facings", 0) or 0
+        dovbush      = (vision_raw.get("cognac", {}) or {}).get("dovbush_facings", 0) or 0
+        jean_jack    = (vision_raw.get("cognac", {}) or {}).get("jean_jack_facings", 0) or 0
+        villa_ua     = (vision_raw.get("wine", {}) or {}).get("villa_ua_facings", 0) or 0
+        kosher       = (vision_raw.get("wine", {}) or {}).get("kosher_facings", 0) or 0
+        villa_spark  = (vision_raw.get("sparkling", {}) or {}).get("villa_ua_sparkling_facings", 0) or 0
+        avtd_total   = vodka_pct + adjari + dovbush + jean_jack + villa_ua + kosher + villa_spark
+
+        if avtd_total == 0:
+            logger.info(f"[PhotoReport] All-zero rejection for agent {user_id}")
+            try:
+                await loop.run_in_executor(
+                    None,
+                    save_rejected_report,
+                    user_id,
+                    report_data["point_name"],
+                    report_data["photo_file_ids"],
+                    report_data.get("comment", ""),
+                    "v2_all_zero",
+                )
+            except Exception as db_err:
+                logger.warning(f"[PhotoReport] Could not save all-zero rejected report: {db_err}")
+            await update.message.reply_text(
+                "📷 Не вдалося розпізнати жодного бренду АВТД.\n\n"
+                "Можливі причини:\n"
+                "• Фото занадто далеке — етикетки нечіткі\n"
+                "• Погане освітлення\n"
+                "• Товари АВТД відсутні на полиці\n\n"
+                "Якщо товар є — надішли крупний план полиці 👆",
+                reply_markup=MAIN_MENU,
+            )
+            pending_reports.pop(user_id, None)
+            return ConversationHandler.END
+        # ────────────────────────────────────────────────────────────────────
 
         scored_report = calculate_score(vision_raw)
 
