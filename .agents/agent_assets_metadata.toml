@@ -24,3 +24,15 @@ id = "rdx646WizOigU-XCXSQZR"
 uri = "file://backend/photo_report/references/ukrainka_lineup.jpg"
 type = "image"
 title = "Ukrainka — Full Lineup"
+
+[[outputs]]
+id = "HPkzEmcMdJTTFTHGSEBTX"
+uri = "file://backend/photo_report/references/adjari_lineup.jpg"
+type = "image"
+title = "ADJARI — Full Lineup (3 SKUs)"
+
+[[outputs]]
+id = "njmRWOqjojwMmofXUajJ5"
+uri = "file://backend/photo_report/references/dovbush_lineup.jpg"
+type = "image"
+title = "DOVBUSH — Full Lineup (4 SKUs)"
