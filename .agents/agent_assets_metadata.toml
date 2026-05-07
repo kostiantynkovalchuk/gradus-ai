@@ -60,3 +60,15 @@ id = "CYrBZzSJI9HLaIUwyqU0L"
 uri = "file://backend/photo_report/references/villaua_fruit_frizzante.jpg"
 type = "image"
 title = "Villa UA Frizzante Light (2 SKU — Rose + White)"
+
+[[outputs]]
+id = "CGslL0WJQsLZ1LvVyXPly"
+uri = "file://backend/photo_report/references/villaua_classic_white.jpg"
+type = "image"
+title = "Villa UA Classic — White (8 SKU)"
+
+[[outputs]]
+id = "t_bscBUvHitoPGBJsqB1C"
+uri = "file://backend/photo_report/references/villaua_classic_red.jpg"
+type = "image"
+title = "Villa UA Classic — Red & Rosé (9 SKU)"
