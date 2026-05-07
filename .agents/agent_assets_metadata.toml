@@ -6,3 +6,21 @@ id = "ghtjNvRh7y31h3WwFAEWU"
 uri = "file://backend/photo_report/references/jeanjack_lineup.jpg"
 type = "image"
 title = "Jean Jack (Жан-Жак) — Full Lineup (6 SKUs)"
+
+[[outputs]]
+id = "jFnXqcNWbvFr0fCW4pq1s"
+uri = "file://backend/photo_report/references/greenday_lineup.jpg"
+type = "image"
+title = "GreenDay — Full Lineup"
+
+[[outputs]]
+id = "zFX7WtxHbQ3dAi63txWti"
+uri = "file://backend/photo_report/references/helsinki_lineup.jpg"
+type = "image"
+title = "Helsinki — Full Lineup"
+
+[[outputs]]
+id = "rdx646WizOigU-XCXSQZR"
+uri = "file://backend/photo_report/references/ukrainka_lineup.jpg"
+type = "image"
+title = "Ukrainka — Full Lineup"
