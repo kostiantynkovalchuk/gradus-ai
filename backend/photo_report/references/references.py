@@ -9,24 +9,17 @@ Reference images are loaded ONCE at module import and cached in memory.
 If the directory is empty or PIL is unavailable, falls back gracefully
 with a warning — analysis still works, just without reference images.
 
-Expected files in this directory (23 total):
+Expected files in this directory (16 total):
 
-  Vodka product photos (6):
-    greenday_classic_500.jpg     — GreenDay Classic 500ml (production photo)
-    helsinki_ice_palace_500.jpg  — Helsinki Ice Palace 500ml
-    ukrainka_traditional_500.jpg — Ukrainka Traditional 500ml
-    greenday_lineup.jpg          — Full GreenDay lineup (Classic, Air, Crystal, ...)
-    helsinki_lineup.jpg          — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
-    ukrainka_lineup.jpg          — Full Ukrainka lineup (Traditional, Strong, Platinum)
+  Vodka lineups (3):
+    greenday_lineup.jpg  — Full GreenDay lineup (Classic, Air, Crystal, ...)
+    helsinki_lineup.jpg  — Full Helsinki lineup (Ice Palace, Ultramarin, ...)
+    ukrainka_lineup.jpg  — Full Ukrainka lineup (Traditional, Strong, Platinum)
 
-  Cognac/brandy product photos (7):
-    adjari_3star_500.jpg   — ADJARI 3★ 500ml flagship (rounded amber bottle, golden label)
-    adjari_5star_tubus.jpg — ADJARI 5★ in cylindrical tube packaging
-    adjari_7star_500.jpg   — ADJARI 7★ "Мудрий Аджарелія" premium (black label, portrait)
-    dovbush_3star_500.jpg  — DOVBUSH 3★ "Карпатський" (square bottle, wooden cork, Cyrillic)
-    dovbush_4star_500.jpg  — DOVBUSH 4★ "Big Four" LIMITED (green label, Latin text)
-    dovbush_4star_round.jpg — DOVBUSH 4★ alternative round-stamp design
-    dovbush_honey_500.jpg  — DOVBUSH "Медовий" HONEY tincture (orange/yellow honeycomb label)
+  Cognac/brandy lineups (3):
+    adjari_lineup.jpg    — ADJARI 3★ flagship + 5★ tube + 7★ premium
+    dovbush_lineup.jpg   — DOVBUSH 3★ Карпатський + 4★ Big Four + 4★ round + Honey
+    jeanjack_lineup.jpg  — JEAN JACK full 6-SKU lineup (3 classic + 3 flavored)
 
   Ideal shelf reference photos (10):
     shelf_ref_02.jpg — ADJARI cognac close-up + Helsinki + Ukrainka
@@ -53,18 +46,10 @@ MAX_SIZE = 1200
 QUALITY = 85
 
 REFERENCE_LABELS: dict[str, str] = {
-    "greenday_classic_500": (
-        "GreenDay Classic 500ml — flagship vodka. Green bottle, bold 'GD' logo, "
-        "'CLASSIC' label. This is the most common AVTD vodka SKU."
-    ),
+    # ── Vodka lineups ─────────────────────────────────────────────────────────
     "greenday_lineup": (
         "GreenDay full lineup: Classic, Air, Crystal, Original Life, Ultra Soft. "
         "All have green labels and the 'GD' logo. Recognizable by bright green color."
-    ),
-    "helsinki_ice_palace_500": (
-        "Helsinki Ice Palace 500ml — vodka. BLUE bottle or blue label. "
-        "'HELSINKI' in large Latin letters. Winter landscape motif. "
-        "KEY IDENTIFIER: blue/icy color — unique among AVTD vodkas."
     ),
     "helsinki_lineup": (
         "Helsinki FULL LINEUP — 5 SKUs: Ice Palace (light blue label), Winter Capital (grey), "
@@ -72,72 +57,29 @@ REFERENCE_LABELS: dict[str, str] = {
         "ALL are TRANSPARENT bottles with mountain/winter scene on label. "
         "CRITICAL: Do NOT confuse with Klinkov (dark boxes) or Nemiroff."
     ),
-    "shelf_ref_21": (
-        "IDEAL SHELF: Helsinki TRANSPARENT bottles (NO BOXES) on 4th shelf from ground, "
-        "positioned NEXT TO GreenDay on the vodka shelf. "
-        "Top shelf has Klinkov BOXES (dark blue+gold) — these are NOT Helsinki, Klinkov is cognac. "
-        "ADJARI cognac on middle shelves. Key learning: Helsinki = transparent vodka bottles; "
-        "Klinkov = dark premium cognac boxes."
-    ),
-    "shelf_ref_22": (
-        "IDEAL SHELF: 6 Helsinki SKUs on top shelf RIGHT SIDE — transparent bottles, no boxes. "
-        "'HELSINKI' shelf-strip clearly visible. "
-        "All AVTD brands present with shelf-strips: KLINKOV, HELSINKI, ЖАН-ЖАК, УКРАINKA, "
-        "ДОВБУШ, GREENDAY, ADJARI, VILLA UA. "
-        "Best reference for identifying Helsinki transparent bottles and AVTD POS shelf-strips."
-    ),
-    "ukrainka_traditional_500": (
-        "Ukrainka Traditional 500ml — vodka. Clear glass bottle with DIAMOND PATTERN texture. "
-        "WIDE WHITE label with 'УКРАЇНКА' in large Cyrillic text. "
-        "KEY IDENTIFIER: diamond-texture glass + large white label. FREQUENTLY MISSED — look carefully."
-    ),
     "ukrainka_lineup": (
         "Ukrainka full lineup: Traditional, Strong, Platinum. All have diamond-pattern glass "
         "and wide white labels. Often grouped in 3–6 bottles. Mixed with GreenDay on same shelf."
     ),
-    # ── ADJARI cognac references ──────────────────────────────────────────────
-    "adjari_3star_500": (
-        "ADJARI 3★ 500ml — FLAGSHIP cognac/brandy. Dark amber ROUNDED bottle, golden mountain "
-        "landscape label, eagle emblem at bottom, gold cap, text 'ADJARI', three stars ★★★, "
-        "number '3'. MOST COMMON ADJARI SKU on shelves. Other variants (4★ Квартелі, 5★) look "
-        "similar with different star count. ALL are AVTD brands."
+    # ── Cognac/brandy lineups ─────────────────────────────────────────────────
+    "adjari_lineup": (
+        "ADJARI (Аджарі) FULL LINEUP — 3 key SKUs of AVTD cognac/brandy. "
+        "Left to right: ADJARI 3★ (golden label, MOST COMMON on shelves, rounded amber bottle, "
+        "eagle emblem, mountain landscape), ADJARI 5★ in CYLINDRICAL TUBE packaging (dark brown "
+        "tube — do NOT confuse with Klinkov RECTANGULAR boxes), ADJARI 7★ 'Мудрий Аджарелія' "
+        "(BLACK label with portrait of man in traditional hat, premium). "
+        "ALL have 'ADJARI' text, mountain landscape, eagle emblem. ALL are AVTD brands."
     ),
-    "adjari_5star_tubus": (
-        "ADJARI 5★ in TUBE packaging — dark brown CYLINDRICAL tube next to the bottle. On shelves "
-        "you may see ONLY the tube (bottle hidden inside). Tube has 'ADJARI' text, mountain "
-        "landscape, eagle, five stars ★★★★★. Do NOT confuse ADJARI tubes with Klinkov boxes — "
-        "Klinkov boxes are RECTANGULAR, ADJARI tubes are CYLINDRICAL."
+    "dovbush_lineup": (
+        "DOVBUSH (Довбуш) FULL LINEUP — 4 SKUs of AVTD cognac/brandy. "
+        "All have SQUARE bottle shape (NOT rounded like ADJARI!) with WOODEN CORK cap. "
+        "Left to right: 3★ Карпатський (brown label, Cyrillic 'ДОВБУШ', Cossack warrior portrait), "
+        "4★ 'Big Four' (GREEN label, LATIN text 'DOVBUSH the Carpathian BIG FOUR'), "
+        "4★ alternative (round stamp/seal design on label), "
+        "Honey/Медовий (bright ORANGE/YELLOW honeycomb label, bee icon, 37.5% ABV — tincture, "
+        "not cognac, but still AVTD — count as Dovbush facing). "
+        "Usually stands NEXT TO ADJARI on cognac shelf. ALL are AVTD brands."
     ),
-    "adjari_7star_500": (
-        "ADJARI 7★ 'Мудрий Аджарелія' 500ml — PREMIUM cognac/brandy. Same bottle shape as 3★ "
-        "but with BLACK label, portrait of a man in traditional hat, text 'МУДРИЙ АДЖАРЕЛІЯ', "
-        "number '7'. Premium variant with distinctive dark design. AVTD brand."
-    ),
-    # ── DOVBUSH cognac references ─────────────────────────────────────────────
-    "dovbush_3star_500": (
-        "DOVBUSH (Довбуш) 3★ 'Карпатський' 500ml — FLAGSHIP cognac/brandy. SQUARE bottle "
-        "(NOT rounded like ADJARI!), WOODEN CORK cap, Cossack warrior portrait, CYRILLIC text "
-        "'ДОВБУШ Карпатський', three stars ★★★, number '3'. Usually stands NEXT TO ADJARI on "
-        "cognac shelf. AVTD brand."
-    ),
-    "dovbush_4star_500": (
-        "DOVBUSH 4★ 'Big Four' LIMITED 500ml — Same SQUARE bottle as 3★ but with GREEN label "
-        "and LATIN text 'DOVBUSH the Carpathian BIG FOUR', wooden cork, number '4'. IMPORTANT: "
-        "This looks VERY DIFFERENT from Dovbush 3★ (green vs brown, Latin vs Cyrillic) but it "
-        "IS the same brand. AVTD brand."
-    ),
-    "dovbush_4star_round": (
-        "DOVBUSH 4★ alternative design with ROUND STAMP/SEAL on label. Same square bottle shape "
-        "as other Dovbush variants. Different label layout from 'Big Four' version. AVTD brand — "
-        "count as Dovbush facing."
-    ),
-    "dovbush_honey_500": (
-        "DOVBUSH 'Медовий' HONEY tincture 500ml — Same SQUARE bottle shape as Dovbush cognac "
-        "but with bright ORANGE/YELLOW HONEYCOMB label, bee icon, text 'HONEY Медовий', 37.5% "
-        "ABV. This is a TINCTURE not cognac, but it IS a Dovbush/AVTD product. Count as Dovbush "
-        "facing in the cognac section."
-    ),
-    # ── JEAN JACK (Жан-Жак) cognac references ────────────────────────────────
     "jeanjack_lineup": (
         "JEAN JACK (Жан-Жак) FULL LINEUP — 6 SKUs of AVTD cognac/brandy. "
         "All share the same FLAT/SQUARE bottle shape with 'ЖАН-ЖАК' / 'JEAN JACK' text "
@@ -192,6 +134,20 @@ REFERENCE_LABELS: dict[str, str] = {
         "Ukrainka FULL LINEUP in center. Villa UA wine on right. "
         "Shows contrast: Nemiroff POS (competitor) vs our Ukrainka display. "
         "Use to distinguish competitor POS from AVTD POS."
+    ),
+    "shelf_ref_21": (
+        "IDEAL SHELF: Helsinki TRANSPARENT bottles (NO BOXES) on 4th shelf from ground, "
+        "positioned NEXT TO GreenDay on the vodka shelf. "
+        "Top shelf has Klinkov BOXES (dark blue+gold) — these are NOT Helsinki, Klinkov is cognac. "
+        "ADJARI cognac on middle shelves. Key learning: Helsinki = transparent vodka bottles; "
+        "Klinkov = dark premium cognac boxes."
+    ),
+    "shelf_ref_22": (
+        "IDEAL SHELF: 6 Helsinki SKUs on top shelf RIGHT SIDE — transparent bottles, no boxes. "
+        "'HELSINKI' shelf-strip clearly visible. "
+        "All AVTD brands present with shelf-strips: KLINKOV, HELSINKI, ЖАН-ЖАК, УКРАINKA, "
+        "ДОВБУШ, GREENDAY, ADJARI, VILLA UA. "
+        "Best reference for identifying Helsinki transparent bottles and AVTD POS shelf-strips."
     ),
 }
 
@@ -252,7 +208,7 @@ def load_references() -> list[dict]:
 
     logger.info(
         f"[References] Loaded {len(refs)} reference images "
-        f"({sum(1 for r in refs if not r['is_shelf_ref'])} product, "
+        f"({sum(1 for r in refs if not r['is_shelf_ref'])} product lineups, "
         f"{sum(1 for r in refs if r['is_shelf_ref'])} shelf)"
     )
     return refs
