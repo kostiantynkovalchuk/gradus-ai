@@ -137,6 +137,22 @@ REFERENCE_LABELS: dict[str, str] = {
         "ABV. This is a TINCTURE not cognac, but it IS a Dovbush/AVTD product. Count as Dovbush "
         "facing in the cognac section."
     ),
+    # ── JEAN JACK (Жан-Жак) cognac references ────────────────────────────────
+    "jeanjack_lineup": (
+        "JEAN JACK (Жан-Жак) FULL LINEUP — 6 SKUs of AVTD cognac/brandy. "
+        "All share the same FLAT/SQUARE bottle shape with 'ЖАН-ЖАК' / 'JEAN JACK' text "
+        "and the iconic HORSEMAN (rider on horse) medallion on label. "
+        "CLASSIC VARIANTS (differ by ribbon color and star count): "
+        "Classic 3★ (red ribbon, cream label), "
+        "Франс/France 4★ (brown/copper ribbon, cream label), "
+        "Резерв/Reserve 5★ (blue ribbon, cream label with blue accents). "
+        "FLAVORED VARIANTS (same bottle shape, flavor-specific label colors): "
+        "Amaretto (dark brown/black label with leaf pattern, 30% ABV), "
+        "Honey/Медовий (bright yellow/gold honeycomb label, yellow cap, 37.5% ABV), "
+        "Orange/Апельсин (bright orange label with citrus pattern, 30% ABV). "
+        "ALL are AVTD brands. Usually stands NEXT TO ADJARI and DOVBUSH in the cognac section. "
+        "KEY IDENTIFIER: flat square bottle + horseman medallion + 'Jean Jack' text."
+    ),
     # ── Shelf references ──────────────────────────────────────────────────────
     "shelf_ref_02": (
         "IDEAL SHELF — ADJARI cognac close-up: top shelf has Cherry, Orange, 3★, 5★, 8★ variants. "
