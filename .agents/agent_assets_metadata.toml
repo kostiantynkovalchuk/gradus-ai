@@ -59,7 +59,7 @@ title = "Kristi Valley (5 SKU)"
 id = "CYrBZzSJI9HLaIUwyqU0L"
 uri = "file://backend/photo_report/references/villaua_fruit_frizzante.jpg"
 type = "image"
-title = "Villa UA Frizzante Light (2 SKU — Rose + White)"
+title = "Villa UA Fruit Wine + Frizzante Light (5 SKU — Full)"
 
 [[outputs]]
 id = "CGslL0WJQsLZ1LvVyXPly"
@@ -72,3 +72,15 @@ id = "t_bscBUvHitoPGBJsqB1C"
 uri = "file://backend/photo_report/references/villaua_classic_red.jpg"
 type = "image"
 title = "Villa UA Classic — Red & Rosé (9 SKU)"
+
+[[outputs]]
+id = "zf3bSDy5wNn0BWN2f3qwV"
+uri = "file://backend/photo_report/references/villaua_avtorskaya.jpg"
+type = "image"
+title = "Villa UA Avtorskaya — Authors Collection (5 SKU)"
+
+[[outputs]]
+id = "Q81jzIV1hFp8FjhYYA1eE"
+uri = "file://backend/photo_report/references/villaua_sparkling.jpg"
+type = "image"
+title = "Villa UA Sparkling (8 SKU)"
