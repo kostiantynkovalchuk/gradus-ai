@@ -1608,8 +1608,8 @@
                         return 'rgba(239,68,68,0.7)';
                     });
                     const deptResponseCounts = deptMood.map(d => d.responses || 0);
-                    const chartHeight = Math.max(400, deptMood.length * 35);
-                    deptCanvas.parentElement.style.height = chartHeight + 'px';
+                    deptCanvas.parentElement.style.height = '400px';
+                    deptCanvas.parentElement.style.overflowY = 'auto';
                     if (pulseDeptChart) pulseDeptChart.destroy();
                     pulseDeptChart = new Chart(deptCanvas, {
                         type: 'bar',
