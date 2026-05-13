@@ -1806,7 +1806,7 @@
             detailsEl.innerHTML = '<span style="color:var(--gray-400);font-size:0.85rem;">Завантаження...</span>';
             try {
                 const resp = await fetch(`/hr/api/pulse-trigger-details?type=${encodeURIComponent(triggerType)}&month=${month}`, {
-                    headers: { 'Authorization': 'Basic ' + btoa('admin:' + (window._hrPass || '')) }
+                    credentials: 'same-origin'
                 });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
