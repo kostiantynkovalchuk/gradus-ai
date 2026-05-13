@@ -1075,15 +1075,13 @@ async def get_hunt_report(
 
 @router.get("/api/pulse-overview")
 async def get_pulse_overview(
+    month: str = None,
     credentials: HTTPBasicCredentials = Depends(verify_admin)
 ):
     """Get Team Pulse statistics: mood trends, department breakdown, trigger counts."""
     db_session = next(get_db())
     try:
-        # Use the latest month that actually has survey data (not necessarily current calendar month)
-        latest_month = db_session.execute(text(
-            "SELECT COALESCE(MAX(survey_month), TO_CHAR(NOW(), 'YYYY-MM')) FROM pulse_surveys"
-        )).scalar()
+        selected_month = month or datetime.utcnow().strftime("%Y-%m")
 
         monthly_mood = db_session.execute(text("""
             SELECT
@@ -1094,7 +1092,7 @@ async def get_pulse_overview(
             WHERE survey_month >= TO_CHAR((TO_DATE(:latest_month, 'YYYY-MM') - INTERVAL '5 months'), 'YYYY-MM')
             GROUP BY survey_month
             ORDER BY survey_month
-        """), {"latest_month": latest_month}).fetchall()
+        """), {"latest_month": selected_month}).fetchall()
 
         dept_mood = db_session.execute(text("""
             SELECT
@@ -1105,17 +1103,17 @@ async def get_pulse_overview(
             WHERE survey_month = :latest_month
             GROUP BY department
             ORDER BY avg_score DESC
-        """), {"latest_month": latest_month}).fetchall()
+        """), {"latest_month": selected_month}).fetchall()
 
         trigger_counts = db_session.execute(text("""
             SELECT
                 trigger_type,
                 COUNT(DISTINCT COALESCE(employee_id::text, employee_name)) AS cnt
             FROM pulse_triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
+            WHERE to_char(fired_at, 'YYYY-MM') = :month
             GROUP BY trigger_type
             ORDER BY cnt DESC
-        """)).fetchall()
+        """), {"month": selected_month}).fetchall()
 
         total_users_row = db_session.execute(text(
             "SELECT COUNT(*) FROM hr_users WHERE is_active = TRUE AND telegram_id IS NOT NULL"
@@ -1123,11 +1121,11 @@ async def get_pulse_overview(
 
         current_month = db_session.execute(text(
             "SELECT COUNT(*) FROM pulse_surveys WHERE survey_month = :latest_month"
-        ), {"latest_month": latest_month}).scalar() or 0
+        ), {"latest_month": selected_month}).scalar() or 0
 
         overall_avg = db_session.execute(text(
             "SELECT ROUND(AVG(score)::NUMERIC, 2) FROM pulse_surveys WHERE survey_month = :latest_month"
-        ), {"latest_month": latest_month}).scalar()
+        ), {"latest_month": selected_month}).scalar()
 
         response_rate = round((current_month / total_users_row * 100), 1) if total_users_row > 0 else 0.0
 
@@ -1141,7 +1139,7 @@ async def get_pulse_overview(
             WHERE survey_month >= TO_CHAR((TO_DATE(:latest_month, 'YYYY-MM') - INTERVAL '5 months'), 'YYYY-MM')
             GROUP BY survey_month, department
             ORDER BY survey_month, department
-        """), {"latest_month": latest_month}).fetchall()
+        """), {"latest_month": selected_month}).fetchall()
 
         individual_responses = db_session.execute(text("""
             SELECT
@@ -1154,7 +1152,7 @@ async def get_pulse_overview(
             FROM pulse_surveys
             WHERE survey_month = :latest_month
             ORDER BY score ASC, responded_at DESC
-        """), {"latest_month": latest_month}).fetchall()
+        """), {"latest_month": selected_month}).fetchall()
 
         problem_breakdown = db_session.execute(text("""
             SELECT
@@ -1165,7 +1163,7 @@ async def get_pulse_overview(
               AND score = 1
             GROUP BY problem_category
             ORDER BY cnt DESC
-        """), {"latest_month": latest_month}).fetchall()
+        """), {"latest_month": selected_month}).fetchall()
 
         return {
             "monthly_mood": [
@@ -1204,7 +1202,7 @@ async def get_pulse_overview(
                 {"category": r[0], "count": r[1]}
                 for r in problem_breakdown
             ],
-            "latest_month": latest_month,
+            "latest_month": selected_month,
             "kpi": {
                 "response_rate": response_rate,
                 "responses_this_month": int(current_month),
@@ -1222,6 +1220,7 @@ async def get_pulse_overview(
 
 @router.get("/api/pulse-alerts")
 async def get_pulse_alerts(
+    month: str = None,
     credentials: HTTPBasicCredentials = Depends(verify_admin)
 ):
     """Return employees with elevated risk scores (current_score >= 4)."""
@@ -1284,14 +1283,15 @@ async def get_pulse_trigger_details(
     """Return employees who triggered a given pulse trigger type this month."""
     db_session = next(get_db())
     try:
+        month_filter = month or datetime.utcnow().strftime("%Y-%m")
         rows = db_session.execute(text("""
             SELECT DISTINCT ON (COALESCE(employee_id::text, employee_name))
                 employee_name, department, fired_at::date AS date
             FROM pulse_triggers
             WHERE trigger_type = :type
-              AND fired_at >= NOW() - INTERVAL '30 days'
+              AND to_char(fired_at, 'YYYY-MM') = :month
             ORDER BY COALESCE(employee_id::text, employee_name), fired_at DESC
-        """), {"type": type}).fetchall()
+        """), {"type": type, "month": month_filter}).fetchall()
         return {
             "trigger_type": type,
             "employees": [
@@ -1312,11 +1312,13 @@ async def get_pulse_trigger_details(
 
 @router.get("/api/pulse-videos")
 async def get_pulse_video_stats(
+    month: str = None,
     credentials: HTTPBasicCredentials = Depends(verify_admin)
 ):
     """Return video view counts for pulse support videos."""
     db_session = next(get_db())
     try:
+        month_filter = month or datetime.utcnow().strftime("%Y-%m")
         rows = db_session.execute(text("""
             SELECT
                 video_id,
@@ -1324,10 +1326,10 @@ async def get_pulse_video_stats(
                 COUNT(CASE WHEN completed THEN 1 END) AS completed_count,
                 MAX(viewed_at) AS last_viewed_at
             FROM pulse_video_views
-            WHERE viewed_at >= NOW() - INTERVAL '30 days'
+            WHERE to_char(viewed_at, 'YYYY-MM') = :month
             GROUP BY video_id
             ORDER BY view_count DESC
-        """)).fetchall()
+        """), {"month": month_filter}).fetchall()
 
         return {
             "videos": [

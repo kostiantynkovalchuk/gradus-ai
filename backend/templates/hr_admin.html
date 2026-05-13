@@ -935,6 +935,11 @@
     <div class="page-content" id="page-pulse">
     <div class="container" style="max-width:1200px;">
 
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:var(--space-lg);">
+            <label style="font-size:0.9rem;color:var(--gray-600);font-weight:500;">📅 Місяць:</label>
+            <select id="pulseMonthFilter" onchange="loadPulseData()" style="padding:6px 12px;border:1px solid var(--gray-200);border-radius:6px;font-size:0.9rem;color:var(--gray-700);background:white;cursor:pointer;"></select>
+        </div>
+
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-md);margin-bottom:var(--space-xl);" id="pulseKpiGrid">
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseResponseRate">—</div>
@@ -946,7 +951,7 @@
             </div>
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseTriggerCount">—</div>
-                <div class="hunt-stat-label">🔴 Тригерів за 30 днів</div>
+                <div class="hunt-stat-label">🔴 Тригерів за місяць</div>
             </div>
             <div class="hunt-stat-card">
                 <div class="hunt-stat-value" id="pulseRespondents">—</div>
@@ -1076,6 +1081,7 @@
             else document.querySelector(`.nav-tab[onclick*="${page}"]`).classList.add('active');
             if (rozsilkaRefreshTimer) { clearInterval(rozsilkaRefreshTimer); rozsilkaRefreshTimer = null; }
             if (page === 'pulse') {
+                initPulseMonthFilter();
                 loadPulseData();
             }
             if (page === 'rozsilka') {
@@ -1534,9 +1540,25 @@
         let pulseTrendChart = null;
         let pulseDeptChart = null;
 
+        function initPulseMonthFilter() {
+            const sel = document.getElementById('pulseMonthFilter');
+            if (!sel || sel.options.length > 0) return;
+            const now = new Date();
+            for (let i = 0; i < 6; i++) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const val = d.toISOString().slice(0, 7);
+                const label = i === 0 ? val + ' (поточний)' : val;
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = label;
+                sel.appendChild(opt);
+            }
+        }
+
         async function loadPulseData() {
             try {
-                const resp = await fetch('/hr/api/pulse-overview');
+                const month = document.getElementById('pulseMonthFilter')?.value || new Date().toISOString().slice(0, 7);
+                const resp = await fetch(`/hr/api/pulse-overview?month=${month}`);
                 if (!resp.ok) { console.error('Pulse API error:', resp.status); return; }
                 const data = await resp.json();
                 const kpi = data.kpi || {};
@@ -1681,7 +1703,6 @@
                         'tasks':             '📋 Робоче навантаження',
                         'other':             '💬 Інше',
                     };
-                    const currentMonth = new Date().toISOString().slice(0, 7);
                     triggerEl.style.flexDirection = 'column';
                     triggerEl.style.alignItems = 'stretch';
                     triggerEl.innerHTML = triggers.map(tr => {
@@ -1689,7 +1710,7 @@
                         const color = tr.count >= 5 ? '#ef4444' : tr.count >= 2 ? '#f59e0b' : '#6b7280';
                         const safeType = tr.trigger_type.replace(/[^a-zA-Z0-9_]/g, '_');
                         return `<div>
-                            <div onclick="toggleTriggerDetails('${safeType}', '${tr.trigger_type}', '${currentMonth}')"
+                            <div onclick="toggleTriggerDetails('${safeType}', '${tr.trigger_type}')"
                                  style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;"
                                  title="Натисніть, щоб побачити список співробітників">
                                 <span style="font-size:0.9rem;color:var(--gray-700);">${label}</span>
@@ -1705,7 +1726,7 @@
 
                 // Load risk alerts
                 try {
-                    const alertResp = await fetch('/hr/api/pulse-alerts');
+                    const alertResp = await fetch(`/hr/api/pulse-alerts?month=${month}`);
                     if (alertResp.ok) {
                         const alertData = await alertResp.json();
                         const alertsEl = document.getElementById('pulseAlertsList');
@@ -1769,7 +1790,7 @@
 
                 // Load video stats
                 try {
-                    const videoResp = await fetch('/hr/api/pulse-videos');
+                    const videoResp = await fetch(`/hr/api/pulse-videos?month=${month}`);
                     if (videoResp.ok) {
                         const videoData = await videoResp.json();
                         const videosEl = document.getElementById('pulseVideosList');
@@ -1794,7 +1815,8 @@
             }
         }
 
-        async function toggleTriggerDetails(safeType, triggerType, month) {
+        async function toggleTriggerDetails(safeType, triggerType) {
+            const month = document.getElementById('pulseMonthFilter')?.value || new Date().toISOString().slice(0, 7);
             const detailsEl = document.getElementById('triggerDetails_' + safeType);
             if (!detailsEl) return;
             const isOpen = detailsEl.style.display !== 'none';
