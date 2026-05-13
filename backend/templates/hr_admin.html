@@ -1608,6 +1608,8 @@
                         return 'rgba(239,68,68,0.7)';
                     });
                     const deptResponseCounts = deptMood.map(d => d.responses || 0);
+                    const chartHeight = Math.max(400, deptMood.length * 35);
+                    deptCanvas.parentElement.style.height = chartHeight + 'px';
                     if (pulseDeptChart) pulseDeptChart.destroy();
                     pulseDeptChart = new Chart(deptCanvas, {
                         type: 'bar',
@@ -1622,9 +1624,23 @@
                         },
                         options: {
                             responsive: true,
+                            maintainAspectRatio: false,
                             indexAxis: 'y',
+                            layout: {
+                                padding: { left: 20 }
+                            },
                             scales: {
-                                x: { min: 1, max: 3 }
+                                x: { min: 1, max: 3 },
+                                y: {
+                                    ticks: {
+                                        autoSkip: false,
+                                        font: { size: 11 },
+                                        callback: function(value) {
+                                            const label = this.getLabelForValue(value);
+                                            return label.length > 40 ? label.substring(0, 37) + '...' : label;
+                                        }
+                                    }
+                                }
                             },
                             plugins: {
                                 legend: { display: false },
@@ -1665,12 +1681,24 @@
                         'tasks':             '📋 Робоче навантаження',
                         'other':             '💬 Інше',
                     };
+                    const currentMonth = new Date().toISOString().slice(0, 7);
+                    triggerEl.style.flexDirection = 'column';
+                    triggerEl.style.alignItems = 'stretch';
                     triggerEl.innerHTML = triggers.map(tr => {
                         const label = triggerLabels[tr.trigger_type] || tr.trigger_type;
                         const color = tr.count >= 5 ? '#ef4444' : tr.count >= 2 ? '#f59e0b' : '#6b7280';
-                        return `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:10px;">
-                            <span style="font-size:0.9rem;color:var(--gray-700);">${label}</span>
-                            <span style="font-size:1.2rem;font-weight:700;color:${color};">${tr.count}</span>
+                        const safeType = tr.trigger_type.replace(/[^a-zA-Z0-9_]/g, '_');
+                        return `<div>
+                            <div onclick="toggleTriggerDetails('${safeType}', '${tr.trigger_type}', '${currentMonth}')"
+                                 style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:10px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;"
+                                 title="Натисніть, щоб побачити список співробітників">
+                                <span style="font-size:0.9rem;color:var(--gray-700);">${label}</span>
+                                <span style="font-size:1.2rem;font-weight:700;color:${color};">${tr.count}</span>
+                                <span style="margin-left:auto;font-size:0.8rem;color:var(--gray-400);">▼</span>
+                            </div>
+                            <div id="triggerDetails_${safeType}" style="display:none;padding:8px 12px;border:1px solid var(--gray-200);border-top:none;border-radius:0 0 8px 8px;background:#fff;">
+                                <span style="color:var(--gray-400);font-size:0.85rem;">Завантаження...</span>
+                            </div>
                         </div>`;
                     }).join('');
                 }
@@ -1763,6 +1791,45 @@
 
             } catch (err) {
                 console.error('loadPulseData error:', err);
+            }
+        }
+
+        async function toggleTriggerDetails(safeType, triggerType, month) {
+            const detailsEl = document.getElementById('triggerDetails_' + safeType);
+            if (!detailsEl) return;
+            const isOpen = detailsEl.style.display !== 'none';
+            if (isOpen) {
+                detailsEl.style.display = 'none';
+                return;
+            }
+            detailsEl.style.display = 'block';
+            detailsEl.innerHTML = '<span style="color:var(--gray-400);font-size:0.85rem;">Завантаження...</span>';
+            try {
+                const resp = await fetch(`/hr/api/pulse-trigger-details?type=${encodeURIComponent(triggerType)}&month=${month}`, {
+                    headers: { 'Authorization': 'Basic ' + btoa('admin:' + (window._hrPass || '')) }
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                if (!data.employees || data.employees.length === 0) {
+                    detailsEl.innerHTML = '<span style="color:var(--gray-400);font-size:0.85rem;">Немає записів за цей місяць</span>';
+                    return;
+                }
+                detailsEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+                    <thead><tr style="color:var(--gray-500);text-align:left;">
+                        <th style="padding:4px 8px;">Ім'я</th>
+                        <th style="padding:4px 8px;">Відділ</th>
+                        <th style="padding:4px 8px;">Дата</th>
+                    </tr></thead>
+                    <tbody>
+                    ${data.employees.map(e => `<tr style="border-top:1px solid var(--gray-100);">
+                        <td style="padding:4px 8px;">${e.name || '—'}</td>
+                        <td style="padding:4px 8px;color:var(--gray-600);">${e.department || '—'}</td>
+                        <td style="padding:4px 8px;color:var(--gray-500);">${e.date || '—'}</td>
+                    </tr>`).join('')}
+                    </tbody>
+                </table>`;
+            } catch (err) {
+                detailsEl.innerHTML = '<span style="color:#ef4444;font-size:0.85rem;">Помилка завантаження</span>';
             }
         }
 

@@ -1275,6 +1275,41 @@ async def get_pulse_alerts(
         db_session.close()
 
 
+@router.get("/api/pulse-trigger-details")
+async def get_pulse_trigger_details(
+    type: str,
+    month: str = None,
+    credentials: HTTPBasicCredentials = Depends(verify_admin)
+):
+    """Return employees who triggered a given pulse trigger type this month."""
+    db_session = next(get_db())
+    try:
+        month_filter = month or datetime.utcnow().strftime("%Y-%m")
+        rows = db_session.execute(text("""
+            SELECT employee_name, department, fired_at::date AS date
+            FROM pulse_triggers
+            WHERE trigger_type = :type
+              AND to_char(fired_at, 'YYYY-MM') = :month
+            ORDER BY fired_at DESC
+        """), {"type": type, "month": month_filter}).fetchall()
+        return {
+            "trigger_type": type,
+            "employees": [
+                {
+                    "name": r[0] or "Невідомий",
+                    "department": r[1] or "—",
+                    "date": r[2].strftime("%d.%m") if r[2] else "—",
+                }
+                for r in rows
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Pulse trigger details error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db_session.close()
+
+
 @router.get("/api/pulse-videos")
 async def get_pulse_video_stats(
     credentials: HTTPBasicCredentials = Depends(verify_admin)

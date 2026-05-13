@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime
+import html as html_lib
 import os
 import re
 import asyncio
@@ -806,10 +807,14 @@ async def alert_hr_team_identified(
         current_score = row[0] if row else "?"
         status = row[1] if row else "red"
         urgency_emoji = "🚨" if status == "urgent" else "🔴"
-        dept_str = department or "Невідомий відділ"
-        name_str = employee_name or "Невідомий"
-        trigger_label = TRIGGER_LABELS.get(trigger_type, trigger_type)
+        dept_str = html_lib.escape(department or "Невідомий відділ")
+        name_str = html_lib.escape(employee_name or "Невідомий")
+        trigger_label = html_lib.escape(TRIGGER_LABELS.get(trigger_type, trigger_type))
         score_display = min(current_score, 10) if isinstance(current_score, int) else current_score
+        name_link = (
+            f'<a href="tg://user?id={employee_id}">{name_str}</a>'
+            if employee_id else name_str
+        )
 
         # Build trigger history block
         history_lines = []
@@ -824,13 +829,13 @@ async def alert_hr_team_identified(
                 except Exception:
                     date_str = fired_at[:5] if fired_at else "?"
                 pts = h.get("risk_points", 1)
-                ttype = TRIGGER_LABELS.get(h.get("trigger_type", ""), h.get("trigger_type", ""))
+                ttype = html_lib.escape(TRIGGER_LABELS.get(h.get("trigger_type", ""), h.get("trigger_type", "")))
                 history_lines.append(f"  {sev_emoji} {date_str} — {ttype} (+{pts})")
         history_block = "\n".join(history_lines) if history_lines else "  (перший сигнал)"
 
         alert_text = (
-            f"{urgency_emoji} *Пульс команди — Попередження*\n\n"
-            f"👤 {name_str}\n"
+            f"{urgency_emoji} <b>Пульс команди — Попередження</b>\n\n"
+            f"👤 {name_link}\n"
             f"🏢 Відділ: {dept_str}\n"
             f"⚠️ Рівень ризику: {score_display}/10\n"
             f"📌 Тригер: {trigger_label}\n\n"
@@ -855,7 +860,7 @@ async def alert_hr_team_identified(
                 payload: dict = {
                     "chat_id": hr_chat,
                     "text": alert_text,
-                    "parse_mode": "Markdown",
+                    "parse_mode": "HTML",
                 }
                 if keyboard:
                     payload["reply_markup"] = keyboard
@@ -889,15 +894,19 @@ async def alert_hr_pulse_problem(
         return
     hr_chat_ids = [c.strip() for c in hr_chat_raw.split(",") if c.strip()]
     try:
-        cat_label = PROBLEM_CATEGORIES.get(problem_category, problem_category)
+        cat_label = html_lib.escape(PROBLEM_CATEGORIES.get(problem_category, problem_category))
         if problem_category == "other" and problem_text:
-            cat_label = f"Інше: {problem_text[:100]}"
-        name_str = employee_name or "Невідомий"
-        dept_str = department or "Невідомий відділ"
+            cat_label = f"Інше: {html_lib.escape(problem_text[:100])}"
+        name_str = html_lib.escape(employee_name or "Невідомий")
+        dept_str = html_lib.escape(department or "Невідомий відділ")
+        name_link = (
+            f'<a href="tg://user?id={telegram_id}">{name_str}</a>'
+            if telegram_id else name_str
+        )
 
         alert_text = (
-            f"🔴 *Пульс команди — Попередження*\n\n"
-            f"👤 {name_str}\n"
+            f"🔴 <b>Пульс команди — Попередження</b>\n\n"
+            f"👤 {name_link}\n"
             f"🏢 Відділ: {dept_str}\n"
             f"📌 Проблема: {cat_label}\n"
             f"📊 Самопочуття: 💔 перевантаження\n\n"
@@ -919,7 +928,7 @@ async def alert_hr_pulse_problem(
                 payload: dict = {
                     "chat_id": hr_chat,
                     "text": alert_text,
-                    "parse_mode": "Markdown",
+                    "parse_mode": "HTML",
                 }
                 if keyboard:
                     payload["reply_markup"] = keyboard
