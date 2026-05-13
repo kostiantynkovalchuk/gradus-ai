@@ -1110,7 +1110,7 @@ async def get_pulse_overview(
         trigger_counts = db_session.execute(text("""
             SELECT
                 trigger_type,
-                COUNT(*) AS cnt
+                COUNT(DISTINCT COALESCE(employee_id::text, employee_name)) AS cnt
             FROM pulse_triggers
             WHERE fired_at >= NOW() - INTERVAL '30 days'
             GROUP BY trigger_type
@@ -1284,14 +1284,14 @@ async def get_pulse_trigger_details(
     """Return employees who triggered a given pulse trigger type this month."""
     db_session = next(get_db())
     try:
-        month_filter = month or datetime.utcnow().strftime("%Y-%m")
         rows = db_session.execute(text("""
-            SELECT employee_name, department, fired_at::date AS date
+            SELECT DISTINCT ON (COALESCE(employee_id::text, employee_name))
+                employee_name, department, fired_at::date AS date
             FROM pulse_triggers
             WHERE trigger_type = :type
-              AND to_char(fired_at, 'YYYY-MM') = :month
-            ORDER BY fired_at DESC
-        """), {"type": type, "month": month_filter}).fetchall()
+              AND fired_at >= NOW() - INTERVAL '30 days'
+            ORDER BY COALESCE(employee_id::text, employee_name), fired_at DESC
+        """), {"type": type}).fetchall()
         return {
             "trigger_type": type,
             "employees": [

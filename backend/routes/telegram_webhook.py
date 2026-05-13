@@ -868,9 +868,14 @@ async def alert_hr_team_identified(
                     f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
                     json=payload,
                 )
-                logger.info(
-                    f"[PULSE] HR alert sent to {hr_chat}: status={resp.status_code}"
-                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"[PULSE] HR alert send failed: status={resp.status_code} body={resp.text[:300]}"
+                    )
+                else:
+                    logger.info(
+                        f"[PULSE] HR alert sent to {hr_chat}: status={resp.status_code}"
+                    )
         logger.info(
             f"[PULSE] Identified HR alert sent to {hr_chat_ids}: {trigger_type} | {name_str} | score={current_score}"
         )
@@ -936,7 +941,12 @@ async def alert_hr_pulse_problem(
                     f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
                     json=payload,
                 )
-                logger.info(f"[PULSE] Survey problem alert sent to {hr_chat}: {resp.status_code}")
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"[PULSE] Survey problem alert failed: status={resp.status_code} body={resp.text[:300]}"
+                    )
+                else:
+                    logger.info(f"[PULSE] Survey problem alert sent to {hr_chat}: {resp.status_code}")
     except Exception as e:
         logger.warning(f"[PULSE] alert_hr_pulse_problem failed: {e}", exc_info=True)
 
