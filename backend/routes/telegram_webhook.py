@@ -720,6 +720,7 @@ async def process_telegram_message(message: dict):
             # Skip pulse video for resignation — preset q26 already sends the offboarding video
             if trigger_type not in ("звільнення", "resignation"):
                 asyncio.create_task(send_pulse_video(chat_id, trigger_type))
+                log_video_view(telegram_id, trigger_type)
 
         user_id = message.get("from", {}).get("id", 0)
         await handle_hr_question(chat_id, user_id, text, user_name)
@@ -1608,6 +1609,7 @@ async def handle_hr_callback(callback_query: dict):
                         )
                         logger.info(f"[PULSE] score=3: calling send_pulse_video(confident) for chat_id={chat_id}")
                         await send_pulse_video(chat_id, "confident")
+                        log_video_view(callback_query.get('from', {}).get('id'), "confident")
                     elif score == 2:
                         await answer_callback(callback_id, "Дякую за чесність 🤍")
                         await edit_telegram_message(
@@ -1685,6 +1687,7 @@ async def handle_hr_callback(callback_query: dict):
                 await answer_callback(callback_id, "💙 Надсилаю відео")
                 logger.info(f"[PULSE] support handler: calling send_pulse_video(breathing) for chat_id={chat_id}")
                 await send_pulse_video(chat_id, "breathing")
+                log_video_view(callback_query.get('from', {}).get('id'), "breathing")
                 logger.info(f"[PULSE] support handler: send_pulse_video returned")
 
             elif action_part == 'problem' and len(parts) >= 3:
@@ -1754,6 +1757,7 @@ async def handle_hr_callback(callback_query: dict):
                     _prob_video = _PROBLEM_VIDEO_MAP.get(category)
                     if _prob_video:
                         asyncio.create_task(send_pulse_video(chat_id, _prob_video))
+                        log_video_view(telegram_user_id, _prob_video)
 
                     try:
                         _trig_id = log_trigger(
