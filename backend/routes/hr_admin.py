@@ -1203,6 +1203,9 @@ async def get_pulse_overview(
                 for r in problem_breakdown
             ],
             "latest_month": selected_month,
+            "available_months": [r[0] for r in db_session.execute(text(
+                "SELECT DISTINCT survey_month FROM pulse_surveys ORDER BY survey_month DESC"
+            )).fetchall()],
             "kpi": {
                 "response_rate": response_rate,
                 "responses_this_month": int(current_month),

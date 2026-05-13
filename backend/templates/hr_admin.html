@@ -723,7 +723,7 @@
                     <p>Адмін-панель</p>
                 </div>
             </div>
-            <div class="header-controls">
+            <div class="header-controls" id="globalFilterControls">
                 <select class="period-selector" id="periodSelector">
                     <option value="1" data-i18n="today">Сьогодні</option>
                     <option value="7" selected data-i18n="7days">7 днів</option>
@@ -1080,6 +1080,8 @@
             if (evt && evt.target) evt.target.classList.add('active');
             else document.querySelector(`.nav-tab[onclick*="${page}"]`).classList.add('active');
             if (rozsilkaRefreshTimer) { clearInterval(rozsilkaRefreshTimer); rozsilkaRefreshTimer = null; }
+            document.getElementById('globalFilterControls').style.display =
+                page === 'analytics' ? '' : 'none';
             if (page === 'pulse') {
                 initPulseMonthFilter();
                 loadPulseData();
@@ -1544,14 +1546,35 @@
             const sel = document.getElementById('pulseMonthFilter');
             if (!sel || sel.options.length > 0) return;
             const now = new Date();
+            const currentMonthVal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
             for (let i = 0; i < 6; i++) {
                 const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-                const val = d.toISOString().slice(0, 7);
+                const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
                 const label = i === 0 ? val + ' (поточний)' : val;
                 const opt = document.createElement('option');
                 opt.value = val;
                 opt.textContent = label;
                 sel.appendChild(opt);
+            }
+        }
+
+        function updatePulseMonthOptions(months) {
+            if (!months || months.length === 0) return;
+            const sel = document.getElementById('pulseMonthFilter');
+            if (!sel) return;
+            const currentVal = sel.value;
+            const now = new Date();
+            const currentMonthVal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            sel.innerHTML = '';
+            months.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m === currentMonthVal ? m + ' (поточний)' : m;
+                if (m === currentVal) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            if (!months.includes(currentVal) && months.length > 0) {
+                sel.value = months[0];
             }
         }
 
@@ -1562,6 +1585,7 @@
                 if (!resp.ok) { console.error('Pulse API error:', resp.status); return; }
                 const data = await resp.json();
                 const kpi = data.kpi || {};
+                if (data.available_months) updatePulseMonthOptions(data.available_months);
 
                 const latestMonth = data.latest_month || '';
                 const monthLabel = latestMonth || '—';
