@@ -101,13 +101,21 @@ def calculate_score(vision_data: dict) -> dict:
     if pos.get("competitor_branded_pos_present") and not pos.get("avtd_shelf_strip_present"):
         score -= 10
         errors.append({
-            "code": "1_108106",
+            "code": "POS_COMPETITOR",
             "description": "Відсутній шелфстрипер AVTD при наявності конкурентських POS",
-            "brand": "GREENDAY",
+            "brand": "AVTD",
+            "severity": "standard",
+        })
+    elif not pos.get("avtd_shelf_strip_present"):
+        score -= 5
+        errors.append({
+            "code": "POS_MISSING",
+            "description": "Відсутній шелфстрипер/POS-матеріали AVTD",
+            "brand": "AVTD",
             "severity": "standard",
         })
 
-    skipped_codes = {"1_108106", "1_108608", "NP59_200009734"}
+    skipped_codes = {"POS_COMPETITOR", "POS_MISSING", "1_108608", "NP59_200009734"}
     for mv in vision_data.get("merchandise_violations", []):
         if mv.get("code", "") not in skipped_codes:
             sev = mv.get("severity", "standard")
@@ -182,6 +190,33 @@ def calculate_score(vision_data: dict) -> dict:
         our_sparkling = total_sparkling = sparkling_share = None
         info.append("Ігристе: не вдалося точно оцінити (фото занадто далеке або нечітке)")
 
+    if cognac_share is not None and total_cognac > 0 and cognac_share < 33:
+        score -= 5
+        errors.append({
+            "code": "COGNAC_SHARE_FAIL",
+            "description": f"Частка полиці коньяку {cognac_share}% < 33%",
+            "brand": "AVTD Коньяк",
+            "severity": "standard",
+        })
+
+    if wine_share is not None and total_wine > 0 and wine_share < 40:
+        score -= 5
+        errors.append({
+            "code": "WINE_SHARE_FAIL",
+            "description": f"Частка полиці вина {wine_share}% < 40%",
+            "brand": "AVTD Вино",
+            "severity": "standard",
+        })
+
+    if sparkling_share is not None and total_sparkling > 0 and sparkling_share < 20:
+        score -= 5
+        errors.append({
+            "code": "SPARKLING_SHARE_FAIL",
+            "description": f"Частка полиці ігристого {sparkling_share}% < 20%",
+            "brand": "AVTD Ігристе",
+            "severity": "standard",
+        })
+
     standard_errors_count = sum(1 for e in errors if e.get("severity") not in ("auto_fail",))
 
     if auto_fail:
@@ -255,7 +290,7 @@ def calculate_score(vision_data: dict) -> dict:
         "brands_found": vision_data.get("brands_found", {}),
         "notes": vision_data.get("notes", ""),
         "retried_categories": vision_data.get("retried_categories", []),
-        "phase": 1,
-        "scored_categories": ["vodka"],
-        "info_only_categories": ["wine", "cognac", "sparkling"],
+        "phase": 2,
+        "scored_categories": ["vodka", "cognac", "wine", "sparkling"],
+        "info_only_categories": [],
     }
