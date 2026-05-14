@@ -50,15 +50,14 @@ def normalize_excel_np_code(kod_tt: str) -> str | None:
     """Normalize Excel NP-code.
 
     Examples:
-        "1*100015" → "100015"
-        "17*98089" → "98089"
+        "1*100015" → "1100015"
+        "17*98089" → "1798089"
+        "194409"   → "194409"
     """
     if not kod_tt or pd.isna(kod_tt):
         return None
-    kod = str(kod_tt).strip()
-    if '*' in kod:
-        kod = kod.split('*', 1)[1]
-    return kod
+    kod = str(kod_tt).strip().replace('*', '')
+    return kod if kod else None
 
 
 def load_excel_data() -> pd.DataFrame:
