@@ -37,6 +37,8 @@ SHARE_CONTACT_PROMPT = """Чудово! Тепер натисніть кнопк
 
 SHARE_CONTACT_BUTTON = "📱 Поділитись контактом"
 
+CONSENT_CONFIRMED = "✅ Дякуємо! Будь ласка, поділіться своїм контактом нижче."
+
 ALREADY_LINKED = """✅ Ви вже підключені до tenderlot.net.
 
 <b>Профіль:</b>

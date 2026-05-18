@@ -54,6 +54,8 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     raw_phone = contact.phone_number or ""
     phone = normalize_phone(raw_phone)
 
+    logger.info("[contact] raw=%r normalized=%r", raw_phone, phone)
+
     if phone is None:
         logger.warning("[contact] Invalid phone from telegram_id=%d: %r", telegram_id, raw_phone)
         await update.message.reply_text(
@@ -61,11 +63,11 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    logger.info("[contact] telegram_id=%d normalized phone=%s", telegram_id, phone)
-
     async with TlotSession() as tlot_session:
         tlot_repo = TenderlotRepo(tlot_session)
         tlot_user = await tlot_repo.get_user_by_phone(phone)
+
+    logger.info("[contact] lookup result: user_id=%s", tlot_user.id if tlot_user else None)
 
     if tlot_user is None:
         logger.info("[contact] Phone %s not found in tenderlot DB", phone)

@@ -54,6 +54,26 @@ class TestNormalizePhone:
     def test_mock_test_phone_is_invalid(self) -> None:
         assert normalize_phone("+380000000001") is None
 
+    # ── International (non-Ukrainian) numbers — Bug 2 regression suite ────────
+    # Telegram strips the leading + from Contact.phone_number, so all variants
+    # without + must normalize to the same E.164 form as with +.
+
+    def test_spanish_with_plus(self) -> None:
+        assert normalize_phone("+34692480784") == "+34692480784"
+
+    def test_spanish_stripped_plus(self) -> None:
+        # Telegram sends Contact.phone_number as "34692480784" (no +)
+        assert normalize_phone("34692480784") == "+34692480784"
+
+    def test_spanish_double_zero_prefix(self) -> None:
+        assert normalize_phone("0034692480784") == "+34692480784"
+
+    def test_spanish_with_spaces(self) -> None:
+        assert normalize_phone("+34 692 480 784") == "+34692480784"
+
+    def test_spanish_with_dashes(self) -> None:
+        assert normalize_phone("+34-692-480-784") == "+34692480784"
+
     # ── Invalid / unparseable inputs → None ───────────────────────────────────
 
     def test_empty_string(self) -> None:

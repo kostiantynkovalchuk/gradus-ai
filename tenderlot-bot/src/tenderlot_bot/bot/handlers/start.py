@@ -26,6 +26,7 @@ from tenderlot_bot.bot.templates.messages import (
     ALREADY_LINKED,
     ALREADY_LINKED_INACTIVE,
     CONSENT_AGREE_BUTTON,
+    CONSENT_CONFIRMED,
     CONSENT_DECLINE_BUTTON,
     CONSENT_DECLINED,
     CONSENT_TEXT,
@@ -124,13 +125,15 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if context.user_data is not None:
         context.user_data["consent_given_at"] = datetime.now(UTC)
 
-    # Show request_contact keyboard
+    # Edit the consent message to confirm agreement (removes the inline buttons)
+    await query.edit_message_text(CONSENT_CONFIRMED)
+
+    # Send a separate message with the ReplyKeyboard to request the contact
     keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton(SHARE_CONTACT_BUTTON, request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
-    await query.edit_message_text(SHARE_CONTACT_PROMPT, parse_mode="HTML")
     if update.effective_chat:
         await update.effective_chat.send_message(
             SHARE_CONTACT_PROMPT,
@@ -153,12 +156,15 @@ async def relink_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if context.user_data is not None:
         context.user_data["consent_given_at"] = datetime.now(UTC)
 
+    # Edit the original message to confirm re-link (removes the inline buttons)
+    await query.edit_message_text(CONSENT_CONFIRMED)
+
+    # Send a separate message with the ReplyKeyboard to request the contact
     keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton(SHARE_CONTACT_BUTTON, request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
-    await query.edit_message_text(SHARE_CONTACT_PROMPT)
     if update.effective_chat:
         await update.effective_chat.send_message(
             SHARE_CONTACT_PROMPT,
