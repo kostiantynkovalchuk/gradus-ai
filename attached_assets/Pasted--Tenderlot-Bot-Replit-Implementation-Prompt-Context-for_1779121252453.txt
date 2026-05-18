@@ -1,0 +1,510 @@
+# Tenderlot Bot — Replit Implementation Prompt
+
+> **Context for the agent:** You are building the skeleton of a production Telegram bot for AVTD (Ukraine's largest alcohol distributor). The bot will notify tenderlot.net users about tender events via Telegram, replacing/augmenting their current email notification system. This Replit project is the development environment; the production target is Render.com with a real MariaDB integration. For now, use mocks — do NOT attempt to connect to any real database.
+
+---
+
+## 0. Project Identity
+
+- **Project name in Replit:** `tenderlot-bot`
+- **Language:** Python 3.11+
+- **All code, comments, commit messages, log lines, and docs in English.**
+- **All user-facing bot copy (Telegram messages) in Ukrainian.**
+- **Internal documentation/README sections targeted at the dev team can be in Russian where it improves clarity, but default to English.**
+
+---
+
+## 1. Goals of This Build
+
+Deliver a **runnable Telegram bot skeleton** that:
+
+1. Accepts `/start`, walks the user through consent → `request_contact` → phone matching against a mock `users` table → confirmation message.
+2. Runs a **polling loop** every 30 seconds that reads a mock `tender` table, finds tenders where `start_mail_status = 1` AND not yet sent to Telegram, and dispatches a notification to all matched users with the `Відкрити тендер` inline button.
+3. Tracks delivery state in a local SQLite database so duplicate sends are prevented.
+4. Supports `/help`, `/unlink`, and `/status` commands.
+5. Handles edge cases: user blocks bot, phone not found, duplicate `/start`.
+
+**Out of scope for this build (do NOT implement):**
+
+- T−10 minute reminders
+- "Your bid was outbid" notifications
+- Tender completion / winner notifications
+- Two tender types differentiation (auction vs proposal collection) — single template is fine
+- Currency handling beyond a placeholder field
+- Email fallback
+- Web dashboard
+- Real database connection
+
+---
+
+## 2. Tech Stack — Use Exactly These
+
+- **Web framework:** FastAPI
+- **Telegram library:** `python-telegram-bot` v21+ (PTB)
+- **Bot mode in Replit:** polling (long-poll), NOT webhook
+- **Bot mode in production (later):** webhook (note this in code but don't implement)
+- **Database in Replit:** SQLite (file: `tenderlot_bot.db` in project root, git-ignored)
+- **Database in production (later):** Neon PostgreSQL via SQLAlchemy
+- **ORM:** SQLAlchemy 2.x with declarative models
+- **MariaDB driver (for later, prepare imports):** `pymysql`
+- **Config:** `pydantic-settings` reading from `.env` and Replit Secrets
+- **Logging:** Python `logging` module, structured (JSON in production, text in dev)
+- **Tests:** `pytest` with at least one test per service layer
+- **Linting:** `ruff` + `mypy` for static checks
+
+---
+
+## 3. Repository Structure — Layered, Not Single-File
+
+Create this exact structure:
+
+```
+tenderlot-bot/
+├── .env.example
+├── .gitignore
+├── .replit                          # Replit run config
+├── replit.nix                       # Replit dependencies
+├── pyproject.toml                   # poetry or pip-tools
+├── README.md
+├── main.py                          # entry point
+├── src/
+│   └── tenderlot_bot/
+│       ├── __init__.py
+│       ├── config.py                # pydantic Settings class
+│       ├── logging_config.py
+│       ├── bot/
+│       │   ├── __init__.py
+│       │   ├── application.py       # PTB Application setup
+│       │   ├── handlers/
+│       │   │   ├── __init__.py
+│       │   │   ├── start.py         # /start command + consent flow
+│       │   │   ├── contact.py       # handles shared contact
+│       │   │   ├── help.py
+│       │   │   ├── unlink.py
+│       │   │   └── status.py
+│       │   └── templates/
+│       │       ├── __init__.py
+│       │       └── messages.py      # all Ukrainian message templates
+│       ├── services/
+│       │   ├── __init__.py
+│       │   ├── tenderlot_repo.py    # READ-only access to tenderlot mock DB
+│       │   ├── bot_state_repo.py    # READ/WRITE access to bot's own DB
+│       │   ├── matcher.py           # phone-to-user matching
+│       │   ├── notifier.py          # Telegram message dispatcher
+│       │   └── polling_worker.py    # the 30-second polling loop
+│       ├── models/
+│       │   ├── __init__.py
+│       │   ├── tenderlot.py         # mock tenderlot.* tables (mirror real schema)
+│       │   └── bot_state.py         # our own tables
+│       └── mocks/
+│           ├── __init__.py
+│           └── seed_data.py         # function to seed mock tenderlot data
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_matcher.py
+│   ├── test_polling_worker.py
+│   └── test_notifier.py
+└── scripts/
+    └── seed_mock_db.py              # CLI to populate mock data for manual testing
+```
+
+---
+
+## 4. Database Schemas
+
+### 4.1 Mock tenderlot tables — mirror the REAL schema we'll connect to later
+
+Source of truth: production MariaDB at AVTD has these tables — we mirror them so the swap to production requires only changing the connection string and removing the mocks layer.
+
+**`tenderlot_user` (mock of `users` view)**
+```python
+class TenderlotUser(Base):
+    __tablename__ = "tenderlot_user"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)  # E.164 format
+    full_name: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(20))  # "supplier" | "carrier"
+    is_active: Mapped[bool] = mapped_column(default=True)
+```
+
+**`tenderlot_tender`**
+```python
+class TenderlotTender(Base):
+    __tablename__ = "tenderlot_tender"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    number: Mapped[str] = mapped_column(String(50))
+    title: Mapped[str] = mapped_column(String(500))
+    tender_type: Mapped[str] = mapped_column(String(50))  # "auction" | "proposal_collection"
+    start_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="UAH")  # ISO code
+    starts_at: Mapped[datetime]
+    ends_at: Mapped[datetime]
+    start_mail_status: Mapped[int] = mapped_column(default=0)  # 0=not sent, 1=sent
+    end_mail_status: Mapped[int] = mapped_column(default=0)
+    target_role: Mapped[str] = mapped_column(String(20))  # "supplier" | "carrier" | "both"
+```
+
+### 4.2 Bot's own tables — Neon PostgreSQL in production, SQLite in dev
+
+**`bot_user`** — linking Telegram identity to tenderlot user
+```python
+class BotUser(Base):
+    __tablename__ = "bot_user"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    tenderlot_user_id: Mapped[int] = mapped_column(index=True)
+    consent_given_at: Mapped[datetime]
+    linked_at: Mapped[datetime]
+    is_active: Mapped[bool] = mapped_column(default=True)
+    unlinked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+```
+
+**`notification_log`** — what we've sent, idempotency key
+```python
+class NotificationLog(Base):
+    __tablename__ = "notification_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_user_id: Mapped[int] = mapped_column(index=True)
+    tender_id: Mapped[int] = mapped_column(index=True)
+    notification_type: Mapped[str] = mapped_column(String(50))  # "tender_start" for now
+    sent_at: Mapped[datetime]
+    telegram_message_id: Mapped[int | None] = mapped_column(nullable=True)
+    delivery_status: Mapped[str] = mapped_column(String(20))  # "sent" | "failed" | "blocked"
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("bot_user_id", "tender_id", "notification_type",
+                         name="uq_no_duplicate_notifications"),
+    )
+```
+
+The unique constraint is critical — it guarantees we never send the same notification twice even if the polling worker double-runs.
+
+---
+
+## 5. Configuration
+
+Create `src/tenderlot_bot/config.py` with `pydantic-settings`:
+
+```python
+class Settings(BaseSettings):
+    # Bot
+    telegram_bot_token: str  # from Replit Secret
+    bot_mode: Literal["polling", "webhook"] = "polling"
+
+    # Bot's own DB
+    bot_database_url: str = "sqlite:///./tenderlot_bot.db"
+
+    # Tenderlot DB — in Replit, points to mock SQLite; in prod, MariaDB
+    tenderlot_database_url: str = "sqlite:///./tenderlot_mock.db"
+
+    # Polling
+    poll_interval_seconds: int = 30
+    poll_batch_size: int = 50  # max tenders per poll cycle
+
+    # Behavior
+    consent_required: bool = True
+    environment: Literal["replit_dev", "render_staging", "render_prod"] = "replit_dev"
+
+    # Logging
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="TENDERLOT_BOT_")
+```
+
+`.env.example` should have placeholder values plus a comment explaining each.
+
+---
+
+## 6. The User Flow — Detailed
+
+### `/start` handler (`src/tenderlot_bot/bot/handlers/start.py`)
+
+1. Check if `telegram_id` is already in `bot_user` table.
+   - If yes AND `is_active=True` → show "Ви вже підключені" with brief profile info
+   - If yes AND `is_active=False` → offer to re-link
+   - If no → show consent screen
+2. **Consent screen:** message text + two inline buttons: `✅ Згоден` and `❌ Не згоден`
+3. On `❌` → polite goodbye, no further action
+4. On `✅` → store `consent_given_at` timestamp, show `request_contact` keyboard with single button `📱 Поділитись контактом`
+
+### Contact handler (`src/tenderlot_bot/bot/handlers/contact.py`)
+
+1. Receive `Contact` from PTB update
+2. Normalize phone to E.164 (`+380...` format)
+3. Query `tenderlot_user` table by phone
+4. **If no match:**
+   ```
+   На жаль, ваш номер не знайдено в системі tenderlot.net.
+   Перевірте, що в профілі вказано актуальний номер, і спробуйте знову.
+   ```
+5. **If match:** create `bot_user` row, send confirmation:
+   ```
+   ✅ Прив'язку успішно завершено.
+
+   Профіль:
+   Ім'я: [full_name]
+   Роль: [роль українською]
+
+   Тепер ви отримуватимете сповіщення про тендери в Telegram.
+
+   Команди:
+   /help — допомога
+   /status — ваш профіль і статистика
+   /unlink — відписатися від сповіщень
+   ```
+
+### `/unlink` — mark `bot_user.is_active=False`, set `unlinked_at`, send confirmation. Do NOT delete the row (we need it for audit).
+
+### `/help` — show command list and short FAQ.
+
+### `/status` — show profile info + count of notifications received this week.
+
+---
+
+## 7. Notification Templates
+
+In `src/tenderlot_bot/bot/templates/messages.py` — all Ukrainian text lives here, **nowhere else**. No hardcoded strings in handlers.
+
+```python
+TENDER_START = """
+🟢 Новий тендер: {title}
+
+№ {number}
+Стартова ціна: {price} {currency}
+Закінчення: {ends_at:%d.%m.%Y %H:%M}
+"""
+
+TENDER_START_BUTTON_TEXT = "Відкрити тендер"
+TENDER_START_BUTTON_URL = "https://tenderlot.net/tender/{tender_id}"
+```
+
+Use a `Template` class or simple `str.format` — your call, but keep it consistent.
+
+---
+
+## 8. Polling Worker — The Heart of the Bot
+
+`src/tenderlot_bot/services/polling_worker.py`:
+
+```python
+class PollingWorker:
+    """
+    Reads tenderlot.tender every N seconds.
+    For each row where start_mail_status=1 AND no notification_log row exists
+    for (bot_user, tender, 'tender_start') — dispatches via notifier.
+
+    Idempotent by design: the unique constraint on notification_log
+    prevents duplicates even across restarts.
+    """
+
+    async def run_forever(self) -> None:
+        while True:
+            try:
+                await self._poll_once()
+            except Exception:
+                logger.exception("Polling cycle failed; will retry next interval")
+            await asyncio.sleep(settings.poll_interval_seconds)
+
+    async def _poll_once(self) -> None:
+        # 1. Fetch up to poll_batch_size tenders with start_mail_status=1
+        # 2. For each: find target users (matching role), filter out those
+        #    already notified for this tender, dispatch via notifier
+        # 3. Log each send (success/failure) to notification_log
+```
+
+Critical details:
+
+- **Start the worker on FastAPI startup** via `asyncio.create_task`
+- **Graceful shutdown** on SIGTERM (Render and Replit both send it)
+- **Backoff on Telegram API rate limits** — PTB handles this internally, just don't fight it
+- **One try/except per tender, not per cycle** — one failed send must NOT block others
+
+---
+
+## 9. Notifier Service
+
+`src/tenderlot_bot/services/notifier.py`:
+
+```python
+class Notifier:
+    """Wraps PTB's bot.send_message with logging and error categorization."""
+
+    async def send_tender_start(self, bot_user: BotUser, tender: TenderlotTender) -> NotificationResult:
+        # Render message from template
+        # Build InlineKeyboardMarkup with "Відкрити тендер" button
+        # bot.send_message(...)
+        # Categorize errors:
+        #   - Forbidden (user blocked bot) → mark bot_user.is_active=False, return BLOCKED
+        #   - BadRequest → log, return FAILED
+        #   - NetworkError → log, raise (let caller retry on next cycle)
+        # Write notification_log row regardless
+```
+
+`NotificationResult` is an enum: `SENT`, `FAILED`, `BLOCKED`.
+
+---
+
+## 10. Mock Data
+
+`src/tenderlot_bot/mocks/seed_data.py` populates the mock tenderlot SQLite with:
+
+- 10 mock users with realistic Ukrainian names and roles (`supplier` / `carrier`)
+- **IMPORTANT:** one of them must have phone `+380675755800` (Dmytro Apenko's real phone from `hr_users`) so Konstantin can self-test by linking his own Telegram to Dmytro's profile, OR use a clearly fake test phone like `+380000000001` and add Konstantin's own phone as user #2.
+- 5 mock tenders covering both `tender_type` values, both `target_role` values, various currencies
+- At least 2 tenders with `start_mail_status=1` ready to dispatch immediately
+
+`scripts/seed_mock_db.py` calls `seed_data.populate()` and is runnable as `python scripts/seed_mock_db.py`.
+
+---
+
+## 11. Testing
+
+In `tests/`:
+
+- `test_matcher.py` — phone normalization (various input formats → E.164), match found / not found
+- `test_polling_worker.py` — given mock tenders with start_mail_status=1, worker dispatches; given the same set again, no duplicates dispatched
+- `test_notifier.py` — given a Forbidden error from Telegram, bot_user is marked inactive; given a successful send, notification_log row created
+
+Use `pytest-asyncio` for async tests. Mock PTB's bot using `AsyncMock` from `unittest.mock` — do NOT make real Telegram API calls in tests.
+
+`pytest tests/ -v` should pass cleanly.
+
+---
+
+## 12. Replit-Specific Setup
+
+### `.replit`
+```toml
+run = "python main.py"
+entrypoint = "main.py"
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["python", "main.py"]
+deploymentTarget = "cloudrun"
+
+[env]
+PYTHONPATH = "${PYTHONPATH}:/home/runner/${REPL_SLUG}/src"
+```
+
+### `replit.nix`
+```nix
+{ pkgs }: {
+  deps = [
+    pkgs.python311
+    pkgs.python311Packages.pip
+    pkgs.python311Packages.poetry
+  ];
+}
+```
+
+### Replit Secrets to set (instruct the user to add these manually)
+- `TENDERLOT_BOT_TELEGRAM_BOT_TOKEN` — separate bot token for Replit (NOT the production one)
+- Optionally `TENDERLOT_BOT_LOG_LEVEL=DEBUG` for verbose logs
+
+### `main.py` entry point
+- Initialize logging
+- Initialize both databases (create tables if not exist)
+- Seed mock data if `tenderlot_user` table is empty
+- Build PTB Application with all handlers
+- Start polling worker as background asyncio task
+- Run PTB application with `run_polling()` (NOT `run_webhook`)
+
+---
+
+## 13. README.md — Required Content
+
+The README must include:
+
+1. **What this is** — one paragraph
+2. **Quick start in Replit** — set token in Secrets, click Run, follow bot link
+3. **How to test the flow:**
+   - Get bot URL from logs
+   - Open in Telegram, `/start`, accept consent, share contact (use phone `+380000000001` for first test)
+   - Run `python scripts/seed_mock_db.py --add-tender` to trigger a new tender start
+   - Wait up to 30 seconds, observe notification
+4. **Architecture diagram** — ASCII art in README is fine
+5. **Production migration checklist** — what to change when deploying to Render:
+   - Switch `tenderlot_database_url` to MariaDB connection string
+   - Switch `bot_database_url` to Neon PostgreSQL
+   - Set `bot_mode=webhook` and configure webhook URL
+   - Add CA cert from Render env vars
+   - Remove mocks layer
+6. **Known limitations of this skeleton** — explicit list
+
+---
+
+## 14. Code Quality Requirements
+
+- **Type hints everywhere.** `mypy --strict` should pass on `src/`.
+- **No bare `except Exception` blocks** without logging and re-raising or explicit recovery.
+- **Logging at INFO for state changes, DEBUG for detailed flow, ERROR for failures with stack trace.**
+- **All datetimes timezone-aware** — use `datetime.now(timezone.utc)`, never naive.
+- **No print statements** — use logger.
+- **No magic strings for notification types** — use an Enum:
+  ```python
+  class NotificationType(str, Enum):
+      TENDER_START = "tender_start"
+      TENDER_END_REMINDER = "tender_end_reminder"  # future
+      BID_OUTBID = "bid_outbid"                     # future
+      TENDER_CLOSED = "tender_closed"               # future
+  ```
+
+---
+
+## 15. What Success Looks Like
+
+When the agent finishes, Konstantin should be able to:
+
+1. Click **Run** in Replit
+2. See log: `Bot started. Polling for tenders every 30 seconds.`
+3. Open his Telegram, find the bot, send `/start`
+4. Tap "Згоден", tap "Поділитись контактом", share his contact
+5. See "Прив'язку успішно завершено" with his profile
+6. Run `python scripts/seed_mock_db.py --add-tender` in the Replit shell
+7. Within 30 seconds, receive `🟢 Новий тендер: ...` in Telegram with working "Відкрити тендер" button
+8. Run `pytest tests/ -v` — see all tests pass
+9. Run `mypy src/ --strict` — see no type errors
+10. Run `ruff check src/` — see no lint errors
+
+---
+
+## 16. Things the Agent Must NOT Do
+
+- ❌ Connect to any real database (no MariaDB, no Neon)
+- ❌ Use any real production credentials
+- ❌ Implement features marked "out of scope" in Section 1
+- ❌ Hardcode any text strings outside of `templates/messages.py`
+- ❌ Use `print()` for output
+- ❌ Create a single-file bot — must follow the layered structure
+- ❌ Skip tests
+- ❌ Skip type hints
+- ❌ Add dependencies not listed in Section 2 without justification in README
+
+---
+
+## 17. First Action
+
+Begin by creating the project structure (Section 3), then `pyproject.toml`, then models, then services, then handlers, then main.py. Write tests as you go, not at the end. Commit at logical milestones with messages like:
+
+```
+feat(models): add bot_user and notification_log schemas
+feat(services): implement phone matcher with E.164 normalization
+feat(handlers): /start command with consent flow
+test(matcher): cover phone normalization edge cases
+```
+
+Final commit should be `docs(readme): production migration checklist`.
+
+---
+
+**End of prompt. Build this skeleton end-to-end. Don't ask clarifying questions — make reasonable decisions and document them in README. If something genuinely blocks you, leave a TODO comment with `# TODO(human):` prefix and continue with a sensible default.**
