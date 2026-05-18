@@ -1,7 +1,7 @@
 """
 DOCX artifact generation for Solomon Contracts.
 §9.1 Risk note (auto, bullet list by document)
-§9.3 Protocol (5-column table)
+§9.3 Protocol (4-column counterparty-facing table)
 §9.2 Legal opinion (Sonnet markdown → DOCX)
 """
 import io
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -93,6 +93,28 @@ def _format_citations_docx(cits_raw) -> str:
         if ref:
             parts.append(ref)
     return "; ".join(parts)
+
+
+def _set_cell_width(cell, width_cm: float):
+    """Set explicit width on a table cell (twips = cm × 567)."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    # Remove any existing tcW element
+    for old in tcPr.findall(qn("w:tcW")):
+        tcPr.remove(old)
+    tcW = OxmlElement("w:tcW")
+    tcW.set(qn("w:w"), str(int(width_cm * 567)))
+    tcW.set(qn("w:type"), "dxa")
+    tcPr.append(tcW)
+
+
+def _style_header_cell(cell, text: str):
+    """Bold, dark-blue text header cell."""
+    cell.text = text
+    for p in cell.paragraphs:
+        for run in p.runs:
+            run.bold = True
+            run.font.color.rgb = RGBColor(0x0D, 0x15, 0x28)
 
 
 # ─── §9.1 Risk note DOCX ─────────────────────────────────────────────────────
@@ -178,12 +200,41 @@ def build_protocol_docx(
     counterparty: str,
     findings: list[dict],
     document_filename: str = "",
+    avtd_role: Optional[str] = None,
 ) -> bytes:
     """
-    5-column table: Clause № | Buyer verbatim | Supplier alternative | Legal basis | Agreed version
-    AI disclaimer tag is stripped from supplier text; text trimmed to 2 paragraphs / 800 chars.
-    document_filename is shown in the header to distinguish protocols for different source docs.
+    4-column counterparty-facing negotiation table.
+
+    Columns: № | Редакція {counterparty} | Редакція {AVTD} | Узгоджена редакція
+
+    - avtd_role: 'supplier' or 'buyer'. Required — raises ValueError if None.
+    - Column 2 header: dynamic (counterparty's role label).
+    - Column 3 header: dynamic (AVTD's role label).
+    - AI disclaimer tag stripped from BOTH counterparty and AVTD columns.
+    - Clause ref (e.g. "п.13.5") moved to bold prefix at top of column 2.
+    - Правова підстава column DROPPED — stays in solcon_findings.legal_citations
+      and is rendered in the правовий висновок DOCX only.
+    - Column widths: №=0.8cm, counterparty≈6.0cm, AVTD≈6.0cm, agreed≈5.2cm
+      (total ≈18.0cm, fits A4 with 1.2cm/1.0cm margins).
     """
+    if not avtd_role:
+        raise ValueError(
+            "Set AVTD role on engagement before exporting protocol. "
+            "Use PATCH /api/contracts/engagements/{eid} with {\"avtd_role\": \"supplier\"|\"buyer\"}."
+        )
+    if avtd_role not in ("supplier", "buyer"):
+        raise ValueError(f"Invalid avtd_role '{avtd_role}'. Must be 'supplier' or 'buyer'.")
+
+    # Dynamic column headers based on AVTD role
+    if avtd_role == "supplier":
+        counterparty_col_header = "Редакція Покупця"
+        avtd_col_header = "Редакція Постачальника"
+        role_label_ua = "Постачальником"
+    else:
+        counterparty_col_header = "Редакція Постачальника"
+        avtd_col_header = "Редакція Покупця"
+        role_label_ua = "Покупцем"
+
     doc = Document()
     _set_margins(doc)
 
@@ -194,38 +245,54 @@ def build_protocol_docx(
     subtitle_lines = [f"до Договору поставки з {counterparty}"]
     if document_filename:
         subtitle_lines.append(f"документ: {document_filename}")
-    subtitle_lines += [f"Справа: {engagement_name}", "AVTD виступає Постачальником."]
+    subtitle_lines += [
+        f"Справа: {engagement_name}",
+        f"AVTD виступає {role_label_ua}.",
+    ]
     doc.add_paragraph("\n".join(subtitle_lines))
     doc.add_paragraph()
 
-    tbl = doc.add_table(rows=1, cols=5)
+    # 4-column table: №  | counterparty edition | AVTD edition | agreed
+    # Width budget (A4, margins 1.2cm left / 1.0cm right): ≈18.0cm usable
+    COL_WIDTHS_CM = [0.8, 6.0, 6.0, 5.2]
+
+    tbl = doc.add_table(rows=1, cols=4)
     tbl.style = "Table Grid"
     hdr = tbl.rows[0].cells
-    headers = [
-        "Пункт договору",
-        "Редакція Покупця",
-        "Редакція Постачальника",
-        "Правова підстава",
-        "Узгоджена редакція",
-    ]
-    for i, h_text in enumerate(headers):
-        hdr[i].text = h_text
-        for p in hdr[i].paragraphs:
-            for run in p.runs:
-                run.bold = True
-                run.font.color.rgb = RGBColor(0x0D, 0x15, 0x28)
+    headers = ["№", counterparty_col_header, avtd_col_header, "Узгоджена редакція"]
 
-    for f in findings:
+    for i, h_text in enumerate(headers):
+        _style_header_cell(hdr[i], h_text)
+        _set_cell_width(hdr[i], COL_WIDTHS_CM[i])
+
+    for ordinal, f in enumerate(findings, start=1):
         row = tbl.add_row().cells
-        row[0].text = f.get("clause_ref", "")
-        row[1].text = f.get("clause_text", "")
-        supplier_raw = f.get("proposed_alternative") or f.get("short_note", "")
-        row[2].text = _protocol_clean(supplier_raw)
-        row[3].text = _format_citations_docx(f.get("legal_citations"))
-        row[4].text = ""
+
+        # Col 0 — ordinal №
+        row[0].text = str(ordinal)
+        _set_cell_width(row[0], COL_WIDTHS_CM[0])
+
+        # Col 1 — counterparty's verbatim text, clause ref as bold prefix
+        clause_ref = (f.get("clause_ref") or "").strip()
+        clause_text = _protocol_clean(f.get("clause_text") or "")
+        col1_para = row[1].paragraphs[0]
+        if clause_ref:
+            ref_run = col1_para.add_run(f"{clause_ref}\n")
+            ref_run.bold = True
+        col1_para.add_run(clause_text)
+        _set_cell_width(row[1], COL_WIDTHS_CM[1])
+
+        # Col 2 — AVTD's alternative (AI tag stripped, capped at 800 chars)
+        avtd_raw = f.get("proposed_alternative") or f.get("short_note", "")
+        row[2].text = _protocol_clean(avtd_raw)
+        _set_cell_width(row[2], COL_WIDTHS_CM[2])
+
+        # Col 3 — Узгоджена редакція: blank for manual completion
+        row[3].text = ""
+        _set_cell_width(row[3], COL_WIDTHS_CM[3])
 
     doc.add_paragraph()
-    preamble = doc.add_paragraph(
+    doc.add_paragraph(
         "Цей протокол складено у двох примірниках, по одному для кожної Сторони."
     )
     footer_p = doc.add_paragraph()

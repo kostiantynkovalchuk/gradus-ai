@@ -1269,6 +1269,23 @@ MIGRATIONS = [
                ON CONFLICT (url) DO NOTHING""",
         ]
     },
+    {
+        "version": "050_avtd_role",
+        "statements": [
+            # Workstream A (law-director-v2): AVTD role on engagements.
+            # Determines which column headers appear in the 4-column protocol DOCX
+            # and the "AVTD виступає {Постачальником|Покупцем}" header line.
+            # Backfill: existing engagements default to 'supplier' (AVTD's standard
+            # position as a distributor selling into retail).
+            # Protocol export is blocked (HTTP 400) if avtd_role IS NULL.
+            """ALTER TABLE solcon_engagements
+               ADD COLUMN IF NOT EXISTS avtd_role VARCHAR(16)
+               CHECK (avtd_role IN ('supplier', 'buyer'))""",
+            """UPDATE solcon_engagements
+               SET avtd_role = 'supplier'
+               WHERE avtd_role IS NULL""",
+        ]
+    },
 ]
 
 

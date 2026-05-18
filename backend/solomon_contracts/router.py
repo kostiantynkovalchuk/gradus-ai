@@ -197,6 +197,10 @@ class EngagementCreate(BaseModel):
     engagement_date: Optional[str] = None
 
 
+class EngagementPatch(BaseModel):
+    avtd_role: Optional[str] = None  # 'supplier' | 'buyer'
+
+
 @router.get("/engagements")
 async def list_engagements(request: Request):
     _auth_check(request)
@@ -284,6 +288,38 @@ async def update_engagement_status(request: Request, eid: int):
     solcon_db.execute(
         "UPDATE solcon_engagements SET status=%s, updated_at=NOW() WHERE id=%s",
         (status, eid),
+    )
+    return {"ok": True}
+
+
+@router.patch("/engagements/{eid}")
+async def patch_engagement(request: Request, eid: int, body: EngagementPatch):
+    """Update engagement fields. Currently supports: avtd_role ('supplier' | 'buyer')."""
+    _auth_check(request)
+    eng = solcon_db.fetchone("SELECT id FROM solcon_engagements WHERE id=%s", (eid,))
+    if not eng:
+        raise HTTPException(status_code=404, detail="Engagement not found")
+
+    updates = []
+    params = []
+
+    if body.avtd_role is not None:
+        if body.avtd_role not in ("supplier", "buyer"):
+            raise HTTPException(
+                status_code=400,
+                detail="avtd_role must be 'supplier' or 'buyer'",
+            )
+        updates.append("avtd_role=%s")
+        params.append(body.avtd_role)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates.append("updated_at=NOW()")
+    params.append(eid)
+    solcon_db.execute(
+        f"UPDATE solcon_engagements SET {', '.join(updates)} WHERE id=%s",
+        tuple(params),
     )
     return {"ok": True}
 
@@ -656,12 +692,24 @@ async def generate_protocol(request: Request, eid: int, did: int):
     )
     original_filename = (doc_record["original_filename"] if doc_record else None) or f"doc{did}"
 
+    avtd_role = eng.get("avtd_role")
+    if not avtd_role:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Set AVTD role on engagement before exporting protocol. "
+                "Use PATCH /api/contracts/engagements/{eid} with "
+                "{\"avtd_role\": \"supplier\" or \"buyer\"}."
+            ),
+        )
+
     finding_ids = [f["id"] for f in findings]
     docx_bytes = build_protocol_docx(
         eng["name"],
         eng["counterparty_name"] or "—",
         [dict(f) for f in findings],
         document_filename=original_filename,
+        avtd_role=avtd_role,
     )
 
     from pathlib import Path
@@ -694,9 +742,9 @@ async def generate_protocol(request: Request, eid: int, did: int):
         (eid,),
     )
 
-    # Build descriptive download filename using doc stem (RFC 5987 for non-ASCII)
-    doc_stem = Path(original_filename).stem[:50]
-    dl_name = f"protocol_{doc_stem}_v{version}.docx"
+    # RFC 5987 filename: «Протокол розбіжностей — {source_filename}.docx»
+    doc_stem = Path(original_filename).stem[:60]
+    dl_name = f"Протокол розбіжностей — {doc_stem}.docx"
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
