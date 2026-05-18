@@ -3,6 +3,8 @@ Build and configure the PTB Application with all handlers registered.
 """
 
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from telegram.ext import Application
 
@@ -12,15 +14,22 @@ from tenderlot_bot.config import settings
 logger = logging.getLogger(__name__)
 
 
-def build_application() -> Application:  # type: ignore[type-arg]
+def build_application(
+    post_init: Callable[[Application[Any, Any, Any, Any, Any, Any]], Awaitable[None]]
+    | None = None,
+    post_shutdown: Callable[[Application[Any, Any, Any, Any, Any, Any]], Awaitable[None]]
+    | None = None,
+) -> Application[Any, Any, Any, Any, Any, Any]:
     """Create the PTB Application, register all handlers, and return it."""
-    app = (
-        Application.builder()
-        .token(settings.telegram_bot_token)
-        .build()
-    )
+    builder = Application.builder().token(settings.telegram_bot_token)
 
-    # Register handlers in order of specificity
+    if post_init is not None:
+        builder = builder.post_init(post_init)
+    if post_shutdown is not None:
+        builder = builder.post_shutdown(post_shutdown)
+
+    app = builder.build()
+
     start.register(app)
     contact.register(app)
     help.register(app)
