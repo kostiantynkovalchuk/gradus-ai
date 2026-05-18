@@ -747,8 +747,9 @@ async function renderEngagementWorkspace(eid) {
               <span class="finding-ai-tag">💡 AI пропозиція — потребує перевірки юриста:</span><br>
               ${esc(f.proposed_alternative)}
               ${f.legal_citations ? `<br><span style="font-size:11px;color:var(--text-muted)">${formatCitations(f.legal_citations)}</span>` : ''}
+              ${f.citation_filter_failed ? `<span title="Фільтр посилань не відпрацював — повторити аналіз" style="cursor:help;margin-left:4px;font-size:12px">⚠</span>` : ''}
             </div>`
-          : (f.grounding_status === 'ungrounded' && f.severity !== 'low'
+          : (['ungrounded', 'out_of_approved_kb'].includes(f.grounding_status) && f.severity !== 'low'
               ? `<div class="finding-ungrounded">⚠ Альтернатива не обґрунтована — правова база не знайдена</div>` : '');
 
         html += `<div class="finding-card">
@@ -1353,17 +1354,62 @@ function stateOptions(current) {
   ];
   return opts.map(([v,l]) => `<option value="${v}" ${v===current?'selected':''}>${l}</option>`).join('');
 }
-function formatCitations(citsJson) {
+function _normUrl(url) {
+  return (url||'').replace(/\/print1.*$/, '').replace(/\/ed\d{8}.*$/, '').split('#')[0].replace(/\/$/, '');
+}
+function _verifiedColor(isoTs) {
+  if (!isoTs) return '#9ca3af';
+  const days = (Date.now() - new Date(isoTs).getTime()) / 86400000;
+  if (days > 30) return '#B91C1C';
+  if (days > 7)  return '#B45309';
+  return '';
+}
+function _verifiedPrefix(isoTs) {
+  if (!isoTs) return '';
+  return (Date.now() - new Date(isoTs).getTime()) / 86400000 > 30 ? '⚠ ' : '';
+}
+function formatCitations(citsJson, showMeta) {
   try {
     const cits = typeof citsJson === 'string' ? JSON.parse(citsJson) : citsJson;
     if (!cits?.length) return '';
-    return cits.map(c => `<a href="${esc(c.official_url)}" target="_blank" style="color:var(--navy-light)">${esc(c.article_ref||c.source_title)}</a>`).join(' · ');
+    return cits.map(c => {
+      const link = `<a href="${esc(c.official_url)}" target="_blank" style="color:var(--navy-light)">${esc(c.article_ref||c.source_title)}</a>`;
+      if (showMeta === false || !window._kbSources) return link;
+      const src = window._kbSources.get(_normUrl(c.official_url||''));
+      if (!src) return link;
+      const edDate = src.current_edition_date
+        ? new Date(src.current_edition_date).toLocaleDateString('uk-UA') : null;
+      const verTs  = src.last_verified_at;
+      const verDate = verTs ? new Date(verTs).toLocaleDateString('uk-UA') : 'не перевірялось';
+      const verCol  = _verifiedColor(verTs);
+      const verPfx  = _verifiedPrefix(verTs);
+      const parts   = [
+        edDate ? `ред.\u00a0від\u00a0${edDate}` : null,
+        `<span style="${verCol ? `color:${verCol}` : ''}">${verPfx}перевірено\u00a0${verDate}</span>`
+      ].filter(Boolean).join(' \u00b7 ');
+      return `${link} <span style="font-size:10px;opacity:.75">(${parts})</span>`;
+    }).join(' \u00b7 ');
   } catch { return ''; }
 }
 
 // ══════════════════════════════════════════════════════════════
 //  INIT
 // ══════════════════════════════════════════════════════════════
+
+window._kbSources = null;
+(function loadKbSources() {
+  fetch('/api/contracts/kb-sources', {
+    headers: { 'Authorization': 'Basic ' + btoa('solomon:gradus2026') }
+  })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      window._kbSources = new Map(
+        data.map(s => [_normUrl(s.canonical_url || ''), s])
+      );
+    })
+    .catch(() => {});
+})();
+
 (function init() {
   const tab = new URLSearchParams(window.location.search).get('tab') || 'court';
   document.getElementById('tab-court').classList.toggle('active', tab === 'court');

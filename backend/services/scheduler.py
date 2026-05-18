@@ -1493,6 +1493,17 @@ class ContentScheduler:
             replace_existing=True
         )
 
+        # Solomon KB edition actualization — daily at 01:00 UTC (03:00 Kyiv)
+        self.scheduler.add_job(
+            self._kb_edition_check_task,
+            CronTrigger(hour=1, minute=0),
+            id='kb_edition_check',
+            name='Solomon Contracts KB edition actualization (daily)',
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=7200,
+        )
+
         self.scheduler.start()
         
         logger.info("=" * 60)
@@ -1605,6 +1616,22 @@ class ContentScheduler:
             logger.info("[SCHEDULER] Onboarding email check done")
         except Exception as e:
             logger.error(f"[SCHEDULER] Onboarding email check failed: {e}", exc_info=True)
+
+    def _kb_edition_check_task(self):
+        """
+        Solomon Contracts KB edition actualization.
+        Checks all active solomon_kb_sources for edition changes daily.
+        Re-ingests any source whose edition date/basis has changed.
+        Silent on edition flips; dev-channel alert on failure only.
+        Runs: daily at 01:00 UTC (03:00 Kyiv).
+        """
+        logger.info("[SCHEDULER] KB edition check starting...")
+        try:
+            from jobs.kb_edition_check import run_daily_edition_check
+            run_daily_edition_check()
+            logger.info("[SCHEDULER] KB edition check done")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] KB edition check failed: {e}", exc_info=True)
 
     def stop(self):
         """Stop the scheduler (idempotent)"""

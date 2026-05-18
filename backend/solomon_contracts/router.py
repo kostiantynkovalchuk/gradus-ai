@@ -19,6 +19,8 @@ from . import db as solcon_db
 from .analyzer import generate_alternatives, generate_legal_opinion, scan_document
 from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
 from .corpus import ingest_incoterms_pdf, ingest_incoterms_summary, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
+from .kb_sources import get_active_kb_sources, invalidate_cache as _invalidate_kb_cache
+from .citation_filter import filter_citations
 import threading
 from pathlib import Path as _Path
 from .ingestion import ingest_file, process_zip, run_background_ocr
@@ -30,133 +32,8 @@ router = APIRouter(prefix="/api/contracts", tags=["solomon-contracts"])
 SOLOMON_USER = "solomon"
 SOLOMON_PASS = "gradus2026"
 
-# §8.1 — full list confirmed by head of law department 2026-04-23 (15 sources).
-#
-# article_filter:     list of (from_art, to_art) int ranges.  None = whole doc.
-# sub_article_filter: dict art_num → list of sub-article ID strings.
-#                     Used for Art 14 of the Tax Code (definition filtering).
-# URLs marked [UNVERIFIED] were assigned by pattern — redirect tracking in
-# rebuild will correct them and update official_url in solcon_corpus_sources.
-LAW_SOURCES = [
-    # ── Three codes: article-range whitelisted ─────────────────────────────────
-    {
-        "title": "Цивільний кодекс України",
-        "url": "https://zakon.rada.gov.ua/laws/show/435-15",
-        # Supply-contract-relevant articles only.
-        # Excluded: Books I-II (persons/family/objects), Book VI (inheritance).
-        "article_filter": [
-            (3,   21),    # General principles: good faith, pacta sunt servanda
-            (202, 241),   # Transactions — validity and invalidity
-            (509, 558),   # Obligations: general + security (penalty, surety)
-            (610, 654),   # Breach & liability; general contract provisions
-            (655, 726),   # Purchase-sale + supply (постачання) contracts
-            (901, 966),   # Service contracts (послуги)
-        ],
-        "sub_article_filter": None,
-    },
-    {
-        "title": "Господарський кодекс України",
-        "url": "https://zakon.rada.gov.ua/laws/show/436-15",
-        # Commercial supply + economic sanctions only.
-        "article_filter": [
-            (173, 199),   # Commercial obligations: general
-            (200, 212),   # Security of commercial obligations
-            (230, 241),   # Economic sanctions and liability
-            (264, 291),   # Commercial purchase-sale and supply
-        ],
-        "sub_article_filter": None,
-    },
-    {
-        "title": "Податковий кодекс України",
-        "url": "https://zakon.rada.gov.ua/laws/show/2755-17",
-        # Art 14 (definitions) → sub_article_filter keeps only the ~12 definitions
-        # that appear in actual supply-contract risk notes.
-        # Arts 134-141 (profit tax) and 185-201 (VAT) → chunked whole.
-        "article_filter": [
-            (14,  14),    # Definitions — sub_article_filter applied below
-            (134, 141),   # Profit tax: deductible costs, supply-related
-            (185, 201),   # VAT: taxable supply, base, rate, tax credit, tax invoice
-        ],
-        "sub_article_filter": {
-            14: [
-                "14.1.54",   # господарська діяльність
-                "14.1.71",   # дата виникнення права
-                "14.1.122",  # місце постачання товарів
-                "14.1.136",  # нерезидент
-                "14.1.139",  # особа (платник ПДВ)
-                "14.1.156",  # податкове зобов'язання
-                "14.1.159",  # податковий кредит
-                "14.1.162",  # поставка (для ПДВ)
-                "14.1.180",  # резидент
-                "14.1.185",  # розумна економічна причина
-                "14.1.191",  # постачання товарів
-                "14.1.202",  # товари
-            ],
-        },
-    },
-
-    # ── Twelve remaining laws: whole-document, preamble-stripped ──────────────
-    {
-        "title": "Закон України «Про захист прав споживачів»",
-        "url": "https://zakon.rada.gov.ua/laws/show/1023-12",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про основні принципи та вимоги до безпечності та якості харчових продуктів»",
-        "url": "https://zakon.rada.gov.ua/laws/show/771/97-%D0%B2%D1%80",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про інформацію для споживачів щодо харчових продуктів»",  # [UNVERIFIED URL]
-        "url": "https://zakon.rada.gov.ua/laws/show/2639-19",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про державне регулювання виробництва і обігу спирту етилового, коньячного і плодового, алкогольних напоїв та тютюнових виробів»",
-        "url": "https://zakon.rada.gov.ua/laws/show/481/95-%D0%B2%D1%80",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про товариства з обмеженою та додатковою відповідальністю»",
-        "url": "https://zakon.rada.gov.ua/laws/show/2275-19",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про електронні документи та електронний документообіг»",
-        "url": "https://zakon.rada.gov.ua/laws/show/851-15",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про авторське право і суміжні права»",  # [UNVERIFIED URL]
-        "url": "https://zakon.rada.gov.ua/laws/show/3792-12",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про рекламу»",
-        "url": "https://zakon.rada.gov.ua/laws/show/270/96-%D0%B2%D1%80",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про захист від недобросовісної конкуренції»",
-        "url": "https://zakon.rada.gov.ua/laws/show/236/96-%D0%B2%D1%80",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про захист економічної конкуренції»",
-        "url": "https://zakon.rada.gov.ua/laws/show/2210-14",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Закон України «Про бухгалтерський облік та фінансову звітність в Україні»",
-        "url": "https://zakon.rada.gov.ua/laws/show/996-14",
-        "article_filter": None, "sub_article_filter": None,
-    },
-    {
-        "title": "Постанова КМУ №187 «Про забезпечення захисту національної безпеки в сфері економіки»",
-        "url": "https://zakon.rada.gov.ua/laws/show/187-2022-%D0%BF",
-        "article_filter": None, "sub_article_filter": None,
-    },
-]
+# Approved KB source list is now managed via solomon_kb_sources DB table.
+# Use get_active_kb_sources() from kb_sources.py — 5-minute cached helper.
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -453,24 +330,62 @@ def _analyze_one_document(doc: dict, eid: int):
 
     inserted_ids = []
     for f in findings_with_alts:
+        # Phase 5: apply citation filter before persisting
+        raw_cit = f.get("legal_citations", "[]")
+        try:
+            raw_cit_list = json.loads(raw_cit) if isinstance(raw_cit, str) else (raw_cit or [])
+        except (json.JSONDecodeError, TypeError):
+            raw_cit_list = []
+        filter_failed = False
+        dropped: list = []
+        kept = raw_cit_list
+        grounding = f.get("grounding_status", "ungrounded")
+        try:
+            kept, dropped = filter_citations(raw_cit_list)
+            if not kept and raw_cit_list:
+                grounding = "out_of_approved_kb"
+        except Exception as _cfe:
+            filter_failed = True
+            logger.exception(f"[CitFilter] Failed for doc {doc_id}: {_cfe}")
+            kept, grounding = raw_cit_list, f.get("grounding_status", "ungrounded")
+
         result = solcon_db.fetchone(
             """INSERT INTO solcon_findings
                  (document_id, engagement_id, clause_ref, clause_text, category,
                   severity, monetary_exposure_uah, short_note, proposed_alternative,
-                  grounding_status, legal_citations, workflow_state, detected_by, confidence)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                  grounding_status, legal_citations, workflow_state, detected_by, confidence,
+                  citation_filter_failed)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (
                 f["document_id"], f["engagement_id"], f["clause_ref"], f["clause_text"],
                 f["category"], f["severity"], f.get("monetary_exposure_uah"),
                 f["short_note"], f.get("proposed_alternative"),
-                f.get("grounding_status", "ungrounded"),
-                f.get("legal_citations", "[]"),
+                grounding,
+                json.dumps(kept),
                 f.get("workflow_state", "triage"), f["detected_by"],
                 f.get("confidence"),
+                filter_failed,
             ),
         )
-        inserted_ids.append(result["id"])
+        finding_id = result["id"]
+        inserted_ids.append(finding_id)
+
+        if dropped and not filter_failed:
+            try:
+                solcon_db.execute(
+                    """INSERT INTO solcon_citation_filter_log
+                         (finding_id, original_citations, filtered_citations, dropped_citations)
+                       VALUES (%s, %s, %s, %s)""",
+                    (
+                        finding_id,
+                        json.dumps(raw_cit_list),
+                        json.dumps(kept),
+                        json.dumps(dropped),
+                    ),
+                )
+            except Exception as _log_e:
+                logger.warning(f"[CitFilter] Log write failed for finding {finding_id}: {_log_e}")
 
     solcon_db.execute(
         "UPDATE solcon_documents SET analyzed_at=NOW(), updated_at=NOW() WHERE id=%s",
@@ -917,22 +832,23 @@ async def seed_corpus_sources(request: Request):
         try:
             inserted = 0
             skipped = 0
-            for src in LAW_SOURCES:
+            active_sources = get_active_kb_sources()
+            for src in active_sources:
                 existing = solcon_db.fetchone(
                     "SELECT id FROM solcon_corpus_sources WHERE official_url=%s",
-                    (src["url"],),
+                    (src["canonical_url"],),
                 )
                 if not existing:
                     solcon_db.execute(
                         """INSERT INTO solcon_corpus_sources (source_type, title, official_url)
                            VALUES ('ukr_law', %s, %s)""",
-                        (src["title"], src["url"]),
+                        (src["law_name"], src["canonical_url"]),
                     )
                     inserted += 1
-                    _job_progress(job_id, f"Inserted: {src['title']}")
+                    _job_progress(job_id, f"Inserted: {src['law_name']}")
                 else:
                     skipped += 1
-            _job_done(job_id, {"inserted": inserted, "skipped": skipped, "total": len(LAW_SOURCES)})
+            _job_done(job_id, {"inserted": inserted, "skipped": skipped, "total": len(active_sources)})
         except Exception as exc:
             _job_error(job_id, str(exc))
 
@@ -956,16 +872,13 @@ async def rebuild_corpus(request: Request):
     def _do_rebuild():
         _corpus_jobs[job_id]["status"] = "running"
         try:
-            # Build filter lookup keyed by both URL and title so rebuild can
-            # match even after canonical-URL redirect tracking updates the DB.
+            # Build filter lookup keyed by both URL and name.
+            # New registry has no article_filter — Phase 4 ingests all articles.
             law_filters: dict = {}
-            for src in LAW_SOURCES:
-                entry = {
-                    "article_filter": src.get("article_filter"),
-                    "sub_article_filter": src.get("sub_article_filter"),
-                }
-                law_filters[src["url"]] = entry
-                law_filters[src["title"]] = entry
+            for src in get_active_kb_sources():
+                entry = {"article_filter": None, "sub_article_filter": None}
+                law_filters[src["canonical_url"]] = entry
+                law_filters[src["law_name"]] = entry
             total = rebuild_corpus_namespace(on_progress=_progress, law_filters=law_filters)
             _job_progress(job_id, f"Rebuild complete — {total} chunks ingested. Running sanity queries…")
             sanity = run_sanity_queries()
@@ -1226,5 +1139,24 @@ async def list_corpus_sources(request: Request):
     _auth_check(request)
     rows = solcon_db.fetchall(
         "SELECT * FROM solcon_corpus_sources ORDER BY source_type, title"
+    )
+    return [dict(r) for r in (rows or [])]
+
+
+@router.get("/kb-sources")
+async def list_kb_sources(request: Request):
+    """
+    Phase 1 registry: return all solomon_kb_sources rows (active + awaiting_source).
+    Used by Phase 7 UI to display edition dates and verification timestamps on citations.
+    Returns: [{id, law_code, law_name, canonical_url, current_edition_date,
+               last_verified_at, status, ...}]
+    """
+    _auth_check(request)
+    rows = solcon_db.fetchall(
+        """SELECT id, law_code, law_name, canonical_url, status,
+                  current_edition_date, current_edition_basis,
+                  last_verified_at, approved_by, notes
+           FROM solomon_kb_sources
+           ORDER BY id"""
     )
     return [dict(r) for r in (rows or [])]

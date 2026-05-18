@@ -1286,6 +1286,151 @@ MIGRATIONS = [
                WHERE avtd_role IS NULL""",
         ]
     },
+    {
+        "version": "051_solomon_kb_sources",
+        "statements": [
+            # Phase 1 (law-director-v2): Approved KB source registry.
+            # 19 active sources + 1 awaiting_source (INCOTERMS 2020, pending Andrey).
+            # Replaces the old LAW_SOURCES constant in router.py.
+            # Canonical URLs must NOT contain /print1, /edYYYYMMDD, or #fragment.
+            """CREATE TABLE IF NOT EXISTS solomon_kb_sources (
+                id                          SERIAL PRIMARY KEY,
+                law_code                    VARCHAR(32)  NOT NULL UNIQUE,
+                law_name                    VARCHAR(512) NOT NULL,
+                canonical_url               VARCHAR(512) NOT NULL,
+                current_edition_date        DATE,
+                current_edition_basis       VARCHAR(32),
+                next_edition_basis          VARCHAR(32),
+                next_edition_date_estimated DATE,
+                last_verified_at            TIMESTAMPTZ,
+                status                      VARCHAR(24)  NOT NULL DEFAULT 'active',
+                approved_by                 VARCHAR(128) NOT NULL DEFAULT 'Law Director',
+                approved_at                 TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                notes                       TEXT,
+                created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                CONSTRAINT chk_canonical_url_no_print1
+                    CHECK (canonical_url NOT LIKE '%/print1%'),
+                CONSTRAINT chk_canonical_url_no_edition_suffix
+                    CHECK (canonical_url !~ '/ed[0-9]{8}'),
+                CONSTRAINT chk_canonical_url_no_fragment
+                    CHECK (canonical_url NOT LIKE '%#%'),
+                CONSTRAINT chk_kb_status
+                    CHECK (status IN ('active', 'awaiting_source', 'deprecated'))
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_solomon_kb_sources_law_code
+               ON solomon_kb_sources(law_code)""",
+            """CREATE INDEX IF NOT EXISTS idx_solomon_kb_sources_status
+               ON solomon_kb_sources(status)""",
+            # Seed 20 rows: 19 active + 1 awaiting_source (INCOTERMS 2020)
+            """INSERT INTO solomon_kb_sources
+                (law_code, law_name, canonical_url, status)
+               VALUES
+                ('435-15',       'Цивільний кодекс України',
+                 'https://zakon.rada.gov.ua/laws/show/435-15', 'active'),
+                ('2755-17',      'Податковий кодекс України',
+                 'https://zakon.rada.gov.ua/laws/show/2755-17', 'active'),
+                ('3817-20',      'Закон про державне регулювання виробництва і обігу спирту, алкогольних напоїв, тютюнових виробів (2024 редакція)',
+                 'https://zakon.rada.gov.ua/laws/show/3817-20', 'active'),
+                ('995_003',      'Конвенція ООН про договори міжнародної купівлі-продажу товарів (CISG)',
+                 'https://zakon.rada.gov.ua/laws/show/995_003', 'active'),
+                ('incoterms_2020', 'ІНКОТЕРМС 2020',
+                 '', 'awaiting_source'),
+                ('z0128-98',     'Наказ Мінтрансу про правила перевезень вантажів автомобільним транспортом',
+                 'https://zakon.rada.gov.ua/laws/show/z0128-98', 'active'),
+                ('996-14',       'Закон про бухгалтерський облік та фінансову звітність в Україні',
+                 'https://zakon.rada.gov.ua/laws/show/996-14', 'active'),
+                ('z0168-95',     'Положення №88 про документальне забезпечення записів у бухгалтерському обліку',
+                 'https://zakon.rada.gov.ua/laws/show/z0168-95', 'active'),
+                ('2800-20',      'Закон про географічні зазначення спиртних напоїв',
+                 'https://zakon.rada.gov.ua/laws/show/2800-20', 'active'),
+                ('3689-12',      'Закон про охорону прав на знаки для товарів і послуг',
+                 'https://zakon.rada.gov.ua/laws/show/3689-12', 'active'),
+                ('3688-12',      'Закон про охорону прав на промислові зразки',
+                 'https://zakon.rada.gov.ua/laws/show/3688-12', 'active'),
+                ('2811-20',      'Закон про авторське право і суміжні права (2022 редакція)',
+                 'https://zakon.rada.gov.ua/laws/show/2811-20', 'active'),
+                ('270/96-вр',    'Закон про рекламу',
+                 'https://zakon.rada.gov.ua/laws/show/270/96-вр', 'active'),
+                ('1023-12',      'Закон про захист прав споживачів',
+                 'https://zakon.rada.gov.ua/laws/show/1023-12', 'active'),
+                ('2297-17',      'Закон про захист персональних даних',
+                 'https://zakon.rada.gov.ua/laws/show/2297-17', 'active'),
+                ('2639-19',      'Закон про інформацію для споживачів щодо харчових продуктів',
+                 'https://zakon.rada.gov.ua/laws/show/2639-19', 'active'),
+                ('z0601-21',     'Наказ №679 про маркування харчових продуктів',
+                 'https://zakon.rada.gov.ua/laws/show/z0601-21', 'active'),
+                ('3928-20',      'Закон про виноград, вино та продукти виноградарства',
+                 'https://zakon.rada.gov.ua/laws/show/3928-20', 'active'),
+                ('851-15',       'Закон про електронні документи та електронний документообіг',
+                 'https://zakon.rada.gov.ua/laws/show/851-15', 'active'),
+                ('2155-19',      'Закон про електронну ідентифікацію та електронні довірчі послуги',
+                 'https://zakon.rada.gov.ua/laws/show/2155-19', 'active')
+               ON CONFLICT (law_code) DO NOTHING""",
+        ]
+    },
+    {
+        "version": "052_citation_filter",
+        "statements": [
+            # Phase 5 (law-director-v2): Citation filter — ensures AI citations
+            # reference only approved KB sources.  Adds grounding_status value
+            # 'out_of_approved_kb' (preserving all 4 existing CHECK values).
+            """ALTER TABLE solcon_findings
+               DROP CONSTRAINT IF EXISTS solcon_findings_grounding_status_check""",
+            """ALTER TABLE solcon_findings
+               ADD CONSTRAINT solcon_findings_grounding_status_check
+               CHECK (grounding_status IN (
+                   'grounded',
+                   'ungrounded',
+                   'not_applicable',
+                   'awaiting_incoterms_primary_source',
+                   'out_of_approved_kb'
+               ))""",
+            """ALTER TABLE solcon_findings
+               ADD COLUMN IF NOT EXISTS citation_filter_failed
+               BOOLEAN NOT NULL DEFAULT FALSE""",
+            """CREATE TABLE IF NOT EXISTS solcon_citation_filter_log (
+                id                 SERIAL PRIMARY KEY,
+                finding_id         BIGINT REFERENCES solcon_findings(id) ON DELETE CASCADE,
+                original_citations JSONB NOT NULL,
+                filtered_citations JSONB NOT NULL,
+                dropped_citations  JSONB NOT NULL,
+                filter_version     VARCHAR(16) NOT NULL DEFAULT 'v1',
+                created_at         TIMESTAMPTZ DEFAULT NOW()
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_solcon_cflog_finding
+               ON solcon_citation_filter_log(finding_id)""",
+        ]
+    },
+    {
+        "version": "053_kb_source_history",
+        "statements": [
+            # Phase 6 (law-director-v2): Edition actualization history.
+            # Tracks every edition check run per source, including re-ingests.
+            """CREATE TABLE IF NOT EXISTS solomon_kb_source_history (
+                id                    SERIAL PRIMARY KEY,
+                kb_source_id          INTEGER NOT NULL
+                                        REFERENCES solomon_kb_sources(id) ON DELETE CASCADE,
+                edition_date_from     DATE,
+                edition_basis_from    VARCHAR(32),
+                edition_date_to       DATE,
+                edition_basis_to      VARCHAR(32),
+                reingest_started_at   TIMESTAMPTZ,
+                reingest_completed_at TIMESTAMPTZ,
+                chunks_added          INTEGER,
+                chunks_removed        INTEGER,
+                status                VARCHAR(16) NOT NULL,
+                error_message         TEXT,
+                created_at            TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT chk_history_status
+                    CHECK (status IN (
+                        'pending', 'in_progress', 'completed', 'failed', 'no_change'
+                    ))
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_kb_source_history_source
+               ON solomon_kb_source_history(kb_source_id, created_at DESC)""",
+        ]
+    },
 ]
 
 
