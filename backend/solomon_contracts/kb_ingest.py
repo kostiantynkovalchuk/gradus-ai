@@ -39,11 +39,15 @@ _MAX_CHUNK_CHARS = 6_000
 _EMBED_BATCH = 40
 
 _DATE_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
+# zakon.rada.gov.ua canonical page, after HTML stripping, renders as:
+#   "Редакція від 01.02.2026 , підстава - 4671-IX"
+# BeautifulSoup get_text(separator=' ') inserts a space before the comma.
+# Also handle both "підстава" and "підстави".
 _CUR_EDITION_RE = re.compile(
-    r"Редакція від (\d{2}\.\d{2}\.\d{4}),\s*підстава\s*[-–]\s*(\S+)"
+    r"Редакція від (\d{2}\.\d{2}\.\d{4})\s*,\s*підстав[аи]\s*[-–-]\s*(\S+)"
 )
 _NEXT_EVENT_RE = re.compile(
-    r"(?:Остання подія|наступна редакція).*?підстава\s*[-–]\s*(\S+)", re.DOTALL
+    r"(?:Остання подія|наступна редакція).*?підстав[аи]\s*[-–-]\s*(\S+)", re.DOTALL
 )
 
 _HEADERS = {
@@ -79,13 +83,20 @@ def ingest_law(law_code: str) -> dict:
 
     logger.info(f"[KBIngest] Starting ingest for {law_code} from {canonical_url}")
 
-    # Go straight to /print1 — the canonical base URL returns a JS shell with
-    # no law text. /print1 delivers the full plain-HTML text (~150-400 KB).
-    print_url = canonical_url.rstrip("/") + "/print1"
-    html = _fetch_print1(print_url)
-
-    edition_date, edition_basis, next_basis, next_date = _parse_edition_header(html)
+    # Fetch 1: canonical page → edition header only.
+    # The canonical page is a JS-SPA shell with no law body text, but it DOES
+    # carry the "Редакція від DD.MM.YYYY, підстава - XXXX" header in plain HTML.
+    # _fetch_current_edition follows any "Це не поточна редакція" redirect so
+    # final_canonical_url is always the URL of the CURRENT edition.
+    canonical_html, final_canonical_url = _fetch_current_edition(canonical_url, max_hops=3)
+    edition_date, edition_basis, next_basis, next_date = _parse_edition_header(canonical_html)
     logger.info(f"[KBIngest] {law_code}: edition={edition_date}, basis={edition_basis}")
+
+    # Fetch 2: /print1 of the SAME current edition → full law body for chunking.
+    # Derive print_url from final_canonical_url (not source.canonical_url) so
+    # both edition metadata and chunk content always describe the same edition.
+    print_url = final_canonical_url.rstrip("/") + "/print1"
+    html = _fetch_print1(print_url)
 
     chunks = _chunk_by_article(
         html,
@@ -190,6 +201,34 @@ def _batch_embed(texts: list[str]) -> list[list[float]]:
 
 # ─── Fetch helpers ────────────────────────────────────────────────────────────
 
+def _fetch_current_edition(canonical_url: str, max_hops: int = 3):
+    """
+    Fetch the CANONICAL zakon.rada.gov.ua page, following the
+    'Це не поточна редакція документу' redirect up to max_hops times.
+
+    Returns (html: str, final_url: str) for the CURRENT edition's canonical page.
+    The returned html is the raw HTML of the canonical page (not /print1) and is
+    intended solely for edition-header parsing via _parse_edition_header().
+    """
+    url = canonical_url
+    for _ in range(max_hops):
+        resp = requests.get(url, headers=_HEADERS, timeout=30, allow_redirects=True)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # If the page warns "not the current edition", follow the link
+        if soup.find(string=re.compile(r"Це не поточна редакція")):
+            link = soup.find("a", string=re.compile(r"Перейти до поточної"))
+            if link and link.get("href"):
+                href = link["href"]
+                if href.startswith("/"):
+                    href = "https://zakon.rada.gov.ua" + href
+                url = href
+                continue
+        return resp.text, resp.url
+    # Exhausted hops — return whatever we have
+    return resp.text, resp.url
+
+
 def _fetch_print1(print_url: str, retries: int = 3) -> str:
     """
     Fetch a zakon.rada.gov.ua /print1 page.  Uses a single User-Agent that
@@ -214,14 +253,27 @@ def _fetch_print1(print_url: str, retries: int = 3) -> str:
 
 def _parse_edition_header(html: str):
     """
-    Parse edition metadata from zakon.rada.gov.ua /print1 page.
+    Parse edition metadata from a zakon.rada.gov.ua CANONICAL page.
+
+    The canonical page wraps the date and basis in HTML tags:
+        <b>Редакція</b> від <span class="dat0"><b>01.02.2026</b></span>,
+        підстава - <a href="...">4671-IX</a>
+
+    After BeautifulSoup stripping with separator=' ' this becomes:
+        "Редакція від 01.02.2026 , підстава - 4671-IX"
+
+    Laws that have never been amended carry no "Редакція від" line at all —
+    the function returns (None, None, None, None) without raising in that case.
+
     Returns (current_date, current_basis, next_basis, next_date_or_None).
     """
-    m_cur = _CUR_EDITION_RE.search(html)
-    m_next = _NEXT_EVENT_RE.search(html)
+    soup = BeautifulSoup(html, "html.parser")
+    text = re.sub(r"\s+", " ", soup.get_text(separator=" "))
+    m_cur = _CUR_EDITION_RE.search(text)
+    m_next = _NEXT_EVENT_RE.search(text)
     cur_date = _parse_date_dmy(m_cur.group(1)) if m_cur else None
-    cur_basis = m_cur.group(2) if m_cur else None
-    next_basis = m_next.group(1) if m_next else None
+    cur_basis = m_cur.group(2).rstrip(".,;)") if m_cur else None
+    next_basis = m_next.group(1).rstrip(".,;)") if m_next else None
     return cur_date, cur_basis, next_basis, None
 
 
