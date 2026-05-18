@@ -918,8 +918,9 @@ class HRRagService:
 
         import re as _re
         import uuid as _uuid
-        slug = _re.sub(r'[^a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9]+', '_', title.lower())[:50].strip('_')
         uid = _uuid.uuid4().hex[:8]
+        _ascii_title = _re.sub(r'[^a-zA-Z0-9]+', '_', title.lower().encode('ascii', 'ignore').decode())
+        slug = _ascii_title[:50].strip('_') or uid
         content_id = f"doc_{slug}_{uid}"
 
         from models.hr_models import HRContent

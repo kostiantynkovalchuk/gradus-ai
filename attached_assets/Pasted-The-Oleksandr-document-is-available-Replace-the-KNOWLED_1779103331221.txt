@@ -1,21 +1,5 @@
-"""
-One-time script: load Alex AVTD mobiletrade knowledge into Pinecone.
-
-Splits structured knowledge into chunks by section (one chunk per topic).
-Uses metadata: source=mobiletrade_guide, bot=alex_avtd
-
-Usage:
-    cd backend
-    DATABASE_URL=... python scripts/load_alex_knowledge.py
-
-Paste the full Oleksandr document into KNOWLEDGE_SECTIONS below,
-adding new dicts with 'title' and 'content' per section.
-"""
-import os
-import sys
-import asyncio
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+The Oleksandr document is available. Replace the KNOWLEDGE_SECTIONS 
+in backend/scripts/load_alex_knowledge.py with this full content:
 
 KNOWLEDGE_SECTIONS = [
     {
@@ -135,36 +119,9 @@ KNOWLEDGE_SECTIONS = [
     },
 ]
 
+After updating the file, run it:
+cd backend && python scripts/load_alex_knowledge.py
 
-async def main():
-    from routes.hr_routes import hr_pinecone_index
-    from services.hr_rag_service import HRRagService
-    from models import get_db
+Confirm how many chunks were upserted to Pinecone.
 
-    db = next(get_db())
-
-    try:
-        service = HRRagService(pinecone_index=hr_pinecone_index, db_session=db)
-
-        for i, section in enumerate(KNOWLEDGE_SECTIONS, 1):
-            print(f"\n[{i}/{len(KNOWLEDGE_SECTIONS)}] Loading: {section['title']}")
-            result = await service.ingest_document(
-                title=section["title"],
-                content=section["content"],
-                category="mobiletrade_guide",
-                subcategory="alex_avtd",
-                content_type="guide",
-                keywords=["mobiletrade", "alex_avtd", "АВТД", "торговий агент"],
-            )
-            status = result.get("status", "unknown")
-            cid = result.get("content_id", "?")
-            print(f"  → {status} | id: {cid}")
-
-        print(f"\nDone. {len(KNOWLEDGE_SECTIONS)} sections loaded.")
-        print("Alex AVTD RAG will now find mobiletrade URLs and procedures in free-text queries.")
-    finally:
-        db.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+DO NOT TOUCH any other files.
