@@ -1,10 +1,12 @@
 """
 CLI script to populate the mock tenderlot database for manual testing.
 
-Usage:
-    python scripts/seed_mock_db.py              # seed users + 5 tenders
-    python scripts/seed_mock_db.py --add-tender # add one new tender with start_mail_status=1
-    python scripts/seed_mock_db.py --force      # re-seed even if table is not empty
+Behaviour:
+  - Default (no flags): seed users + 5 tenders if table is empty; SKIP if data exists.
+  - --force: truncate and re-seed even when data already exists.
+  - --add-tender: insert one new tender with start_mail_status=1 (for live polling test).
+
+After seeding, the script queries the DB and prints the actual phones — never hardcoded.
 """
 
 import asyncio
@@ -13,11 +15,29 @@ import sys
 
 sys.path.insert(0, "src")
 
-from tenderlot_bot.db import TlotSession, init_db
+from sqlalchemy import select
+
+from tenderlot_bot.db import TlotSession, init_db, tlot_engine
 from tenderlot_bot.logging_config import setup_logging
 from tenderlot_bot.mocks.seed_data import add_one_tender, populate
+from tenderlot_bot.models.tenderlot import TenderlotUser
 
 logger = logging.getLogger(__name__)
+
+
+async def _print_users(limit: int = 5) -> None:
+    """Query and print actual phones from the DB — never hardcoded."""
+    async with TlotSession() as session:
+        result = await session.execute(
+            select(TenderlotUser.phone, TenderlotUser.full_name, TenderlotUser.role)
+            .order_by(TenderlotUser.id)
+            .limit(limit)
+        )
+        rows = result.all()
+
+    print("\nTest phones available (live from DB):")
+    for phone, name, role in rows:
+        print(f"  {phone}  — {name} ({role})")
 
 
 async def _main() -> None:
@@ -41,10 +61,21 @@ async def _main() -> None:
                 print("Mock data re-seeded (--force).")
             else:
                 print("Mock data seeded (skipped if already populated).")
-            print("\nTest phones available:")
-            print("  +380000000001  — Тестовий Користувач (supplier)")
-            print("  +380675755800  — Апенко Дмитро Сергійович (supplier)")
+            await _print_users()
+
+
+async def _shutdown() -> None:
+    """Dispose DB engines so asyncio.run() exits cleanly."""
+    from tenderlot_bot.db import bot_engine  # noqa: PLC0415
+
+    await tlot_engine.dispose()
+    await bot_engine.dispose()
+
+
+async def _run() -> None:
+    await _main()
+    await _shutdown()
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    asyncio.run(_run())

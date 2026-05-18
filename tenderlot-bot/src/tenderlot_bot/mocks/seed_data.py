@@ -25,11 +25,11 @@ MOCK_USERS = [
         "role": "supplier",
         "is_active": True,
     },
-    # index 1: Dmytro Apenko — real AVTD employee phone for live testing
+    # index 1: developer test phone for live self-testing
     {
-        "phone": "+380675755800",
-        "full_name": "Апенко Дмитро Сергійович",
-        "email": "d.apenko@avtd.ua",
+        "phone": "+34692480784",
+        "full_name": "Dev Test User",
+        "email": "dev@test.local",
         "role": "supplier",
         "is_active": True,
     },
