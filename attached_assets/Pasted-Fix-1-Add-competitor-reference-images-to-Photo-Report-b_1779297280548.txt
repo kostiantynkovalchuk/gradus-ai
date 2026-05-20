@@ -1,0 +1,185 @@
+Fix 1 — Add competitor reference images to Photo Report bot.
+
+## STEP 1 — Convert and save images
+
+The following 7 competitor images need to be saved to 
+backend/photo_report/references/ as .jpg files.
+They are currently in /mnt/user-data/uploads/ as .webp files.
+
+Run this Python script to convert and copy them:
+
+```python
+from PIL import Image
+import pathlib
+
+uploads = pathlib.Path("/mnt/user-data/uploads")
+refs = pathlib.Path("backend/photo_report/references")
+
+conversions = [
+    ("382030308.webp",  "aliko_cognac_competitor.jpg"),
+    ("269257695.webp",  "aliko_wine_competitor.jpg"),
+    ("308935895.webp",  "koblevo_cognac_competitor.jpg"),
+    ("345033198.webp",  "khortytsia_vodka_competitor.jpg"),
+    ("478890389.webp",  "koblevo_wine_muscat_competitor.jpg"),
+    ("659263268.webp",  "koblevo_wine_cabernet_competitor.jpg"),
+    ("388502306.webp",  "hlibnydar_vodka_competitor.jpg"),
+]
+
+for src_name, dst_name in conversions:
+    src = uploads / src_name
+    dst = refs / dst_name
+    img = Image.open(src).convert("RGB")
+    img.save(dst, "JPEG", quality=90)
+    print(f"✅ {dst_name} saved ({dst.stat().st_size // 1024}KB)")
+```
+
+## STEP 2 — Add to REFERENCE_LABELS in references.py
+
+Find REFERENCE_LABELS dict in 
+backend/photo_report/references/references.py.
+Add these entries following exact existing format:
+
+```python
+"aliko_cognac_competitor": (
+    "COMPETITOR — Aliko cognac (Georgian). DO NOT count as AVTD. "
+    "Black and red label, mountain goat logo, 'ALIKO' text in large font. "
+    "Says 'GEORGIAN COGNAC SPIRITS' and 'V.S.O.P.' "
+    "Commonly confused with ADJARI due to similar cognac category. "
+    "Key difference: ADJARI has diamond mesh pattern bottle, "
+    "Aliko has smooth bottle with goat silhouette on label."
+),
+"aliko_wine_competitor": (
+    "COMPETITOR — Aliko wine (Georgian). DO NOT count as AVTD. "
+    "Burgundy/dark red label, gold goat medallion, 'ALIKO' text. "
+    "Commonly appears on wine shelves. "
+    "Do NOT confuse with Villa UA which has a coin/medallion. "
+    "Aliko goat medallion ≠ Villa UA coin medallion."
+),
+"koblevo_cognac_competitor": (
+    "COMPETITOR — Koblevo cognac/brandy. DO NOT count as AVTD. "
+    "Angular flat bottle shape, gold label, 'KOBLEVO RESERVE' text. "
+    "Says 'COGNAC OF UKRAINE'. Ukrainian competitor brand. "
+    "Koblevo shelf strips are RED — when you see KOBLEVO shelf strip, "
+    "all bottles in that section are competitor."
+),
+"khortytsia_vodka_competitor": (
+    "COMPETITOR — Khortytsia vodka. DO NOT count as AVTD. "
+    "Clear ribbed/fluted bottle, large Cyrillic Х logo, "
+    "'Хортиця' text, red and silver label design. "
+    "One of Ukraine's largest vodka competitors. "
+    "Do NOT count as GreenDay, Ukrainka or Helsinki."
+),
+"koblevo_wine_muscat_competitor": (
+    "COMPETITOR — Koblevo wine (Muscat Royal). DO NOT count as AVTD. "
+    "Ornate floral pattern label, 'KOBLEVO MUSCAT ROYAL' text. "
+    "Red/dessert wine. Ukrainian wine competitor. "
+    "Do NOT confuse with Villa UA wines."
+),
+"koblevo_wine_cabernet_competitor": (
+    "COMPETITOR — Koblevo wine (Exclusive Collection). DO NOT count as AVTD. "
+    "Vineyard landscape illustration on label, "
+    "'KOBLEVO Exclusive Collection Cabernet' text. "
+    "Dry red wine. Ukrainian wine competitor."
+),
+"hlibnydar_vodka_competitor": (
+    "COMPETITOR — Hlibny Dar vodka. DO NOT count as AVTD. "
+    "Large square 1L bottle shape, gold/wheat label, "
+    "'HLIBNY DAR' text in large font, HD logo with wheat design. "
+    "One of Ukraine's most common vodka competitors. "
+    "Appears with HLIBNY DAR branded shelf strip (red/brown). "
+    "Do NOT count as GreenDay, Ukrainka or Helsinki."
+),
+```
+
+## STEP 3 — Inject competitor refs into Claude API call in vision.py
+
+Find analyze_photos() function in backend/photo_report/vision.py.
+Find where content list is built — specifically where 
+BRAND_REFERENCES is split into product_refs and shelf_refs.
+
+Add competitor refs injection AFTER product lineup refs 
+and BEFORE shelf refs:
+
+```python
+# Filter competitor refs
+competitor_refs = [r for r in BRAND_REFERENCES 
+                   if "_competitor" in r["name"]]
+
+if competitor_refs:
+    content.append({
+        "type": "text",
+        "text": (
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "REFERENCE — COMPETITOR BRANDS (DO NOT COUNT AS AVTD)\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "The following images show competitor brands commonly "
+            "found on Ukrainian alcohol shelves alongside AVTD products. "
+            "Memorize their labels. NEVER count these as AVTD brands."
+        )
+    })
+    for ref in competitor_refs:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": ref["media_type"],
+                "data": ref["b64"]
+            }
+        })
+        content.append({
+            "type": "text",
+            "text": f"↑ {ref['label']}"
+        })
+```
+
+## STEP 4 — Add confusion pairs note to SYSTEM_PROMPT
+
+Find the ACCURATE COUNTING RULES section in SYSTEM_PROMPT 
+(vision.py). After the Ukrainka SKU variants paragraph, add:
+CRITICAL COMPETITOR CONFUSION PAIRS:
+
+Aliko (COMPETITOR) vs ADJARI (OURS):
+Both are cognac. ADJARI has diamond mesh pattern on bottle.
+Aliko has smooth bottle with mountain goat silhouette.
+KOBLEVO shelf strip = entire section is competitor.
+HLIBNY DAR shelf strip = entire section is competitor vodka.
+GREENDAY / GD shelf strip = our brand section.
+ADJARI shelf strip = our brand section.
+Koblevo wine (COMPETITOR) vs Villa UA (OURS):
+Villa UA has gold medallion/coin on every label.
+Koblevo wine has vineyard or floral pattern, no medallion.
+Hlibny Dar (COMPETITOR) vs any AVTD vodka:
+Square bottle, gold label, HD wheat logo = competitor.
+GreenDay = green bottle/label. Helsinki = winter landscape.
+Ukrainka = diamond pattern glass, white label.
+USE SHELF STRIPS AS ZONE MARKERS:
+When a branded shelf strip is visible, all bottles in
+that shelf zone belong to that brand.
+GREENDAY strip → GreenDay zone.
+ADJARI strip → ADJARI zone.
+HLIBNY DAR strip → competitor zone, do not count as AVTD.
+KOBLEVO strip → competitor zone, do not count as AVTD.
+
+
+## STEP 5 — Verify
+
+After all changes:
+1. Confirm 7 new .jpg files exist in references/ directory
+2. Run: python -c "from photo_report.references.references 
+   import load_references; refs = load_references(); 
+   print(f'Total refs: {len(refs)}'); 
+   comp = [r for r in refs if '_competitor' in r['name']]; 
+   print(f'Competitor refs: {len(comp)}'); 
+   [print(r['name']) for r in comp]"
+3. Confirm total goes from 24 to 31 references
+4. Confirm AST clean: python -m py_compile 
+   backend/photo_report/vision.py && echo "OK"
+
+## DO NOT TOUCH
+- scoring.py
+- bot.py
+- alex_admin.py
+- Any other bot files
+- Database schema
+- Low-share retry logic added in previous session
+- Few-shot block in SYSTEM_PROMPT

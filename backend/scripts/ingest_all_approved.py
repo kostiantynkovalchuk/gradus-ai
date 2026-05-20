@@ -23,7 +23,7 @@ TO_INGEST = [
     # NOTE: IDs in solomon_kb_sources do NOT match solcon_corpus_sources IDs — always
     # ingest ALL active laws to avoid ID-collision overwrites.
     "435-15",    # id=1  ЦК (already in corpus from solcon run; use to upgrade metadata)
-    "2755-17",   # id=2  ПК
+    # "2755-17",  # id=2  ПК — already in corpus as source_id=3 (P2 audit); skip to avoid orphan duplicate
     "3817-20",   # id=3  Держ. регулювання алкоголю (2024)
     "995_003",   # id=4  CISG
     # id=5 incoterms_2020 → awaiting_source, skip

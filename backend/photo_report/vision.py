@@ -69,6 +69,45 @@ ACCURATE COUNTING RULES:
     Traditional (white label), Crystal (silver/diamond),
     tinctures (red berry, green herb, black currant) — all are Ukrainka.
 - GreenDay comes in different sizes on different shelves: 0.5L on upper shelf, 0.2L and 0.1L on lower shelves. Count ALL sizes.
+
+CRITICAL COMPETITOR CONFUSION PAIRS — study reference images:
+
+  Aliko (COMPETITOR) vs ADJARI (OURS):
+    Both are cognac. ADJARI has diamond mesh/net pattern on bottle.
+    Aliko has smooth bottle with mountain goat silhouette on label.
+
+  Aznauri (COMPETITOR) vs ADJARI (OURS):
+    Both are cognac/brandy in similar bottles.
+    ADJARI has diamond mesh pattern on bottle + mountain logo.
+    Aznauri has smooth bottle + ornate gold 'A' crown crest + 3 stars.
+    Aznauri wine has pink/magenta band — never count as Villa UA.
+
+  Khortytsia (COMPETITOR) vs AVTD vodka:
+    Clear ribbed/fluted bottle, large Cyrillic Х logo = competitor.
+    GreenDay = green bottle. Helsinki = winter landscape. Ukrainka = diamond glass.
+
+  Nemiroff (COMPETITOR) vs AVTD vodka:
+    Black ribbed bottle, NEMIROFF vintage font, 1872 date = competitor.
+    GreenDay = green. Helsinki = winter landscape. Ukrainka = diamond glass.
+
+  Hlibny Dar (COMPETITOR) vs AVTD vodka:
+    Square bottle, gold label, HD wheat logo = competitor.
+
+  Koblevo wine (COMPETITOR) vs Villa UA (OURS):
+    Villa UA has gold medallion/coin on every label.
+    Koblevo wine has vineyard or floral pattern, no medallion.
+
+  Aliko wine (COMPETITOR) vs Villa UA (OURS):
+    Villa UA has gold coin/medallion on every label.
+    Aliko wine has goat medallion — different shape, different brand.
+
+USE SHELF STRIPS AS ZONE MARKERS:
+  When a branded shelf strip is visible, all bottles in that zone belong to that brand.
+  GREENDAY strip → GreenDay zone (OURS).
+  ADJARI strip → ADJARI zone (OURS).
+  HLIBNY DAR strip → competitor zone, do NOT count as AVTD.
+  KOBLEVO strip → competitor zone, do NOT count as AVTD.
+  NEMIROFF strip → competitor zone, do NOT count as AVTD.
 - Lower rows (3-6) are often under-counted — bottles are smaller or at an angle. Look CAREFULLY.
 - After counting — verify: does the sum of facings by row = sum by brand? If not — recount.
 
@@ -859,7 +898,11 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
     content = []
 
     if BRAND_REFERENCES:
-        product_refs = [r for r in BRAND_REFERENCES if not r["is_shelf_ref"]]
+        product_refs = [
+            r for r in BRAND_REFERENCES
+            if not r["is_shelf_ref"] and "_competitor" not in r["name"]
+        ]
+        competitor_refs = [r for r in BRAND_REFERENCES if "_competitor" in r["name"]]
         shelf_refs = [r for r in BRAND_REFERENCES if r["is_shelf_ref"]]
 
         if product_refs:
@@ -870,6 +913,25 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
                 ),
             })
             for ref in product_refs:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
+                })
+                content.append({"type": "text", "text": f"↑ {ref['label']}"})
+
+        if competitor_refs:
+            content.append({
+                "type": "text",
+                "text": (
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "REFERENCE — COMPETITOR BRANDS (DO NOT COUNT AS AVTD)\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "The following images show competitor brands commonly found on Ukrainian "
+                    "alcohol shelves alongside AVTD products. Memorize their labels. "
+                    "NEVER count these as AVTD brands."
+                ),
+            })
+            for ref in competitor_refs:
                 content.append({
                     "type": "image",
                     "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},

@@ -172,6 +172,81 @@ REFERENCE_LABELS: dict[str, str] = {
         "Saint Thouri (rosé, cream+pink), Charon Blanc (white, cream label), Vivien Rouge (red, orange label). "
         "AVTD brand."
     ),
+    # ── Competitor references ─────────────────────────────────────────────────
+    "aliko_cognac_competitor": (
+        "COMPETITOR — Aliko cognac (Georgian). DO NOT count as AVTD. "
+        "Black and red label, mountain goat logo, 'ALIKO' text in large font. "
+        "Says 'GEORGIAN COGNAC SPIRITS' and 'V.S.O.P.' "
+        "Commonly confused with ADJARI due to similar cognac category. "
+        "Key difference: ADJARI has diamond mesh pattern bottle, "
+        "Aliko has smooth bottle with goat silhouette on label."
+    ),
+    "aliko_wine_competitor": (
+        "COMPETITOR — Aliko wine (Georgian). DO NOT count as AVTD. "
+        "Burgundy/dark red label, gold goat medallion, 'ALIKO' text. "
+        "Commonly appears on wine shelves. "
+        "Do NOT confuse with Villa UA which has a coin/medallion. "
+        "Aliko goat medallion ≠ Villa UA coin medallion."
+    ),
+    "aznauri_cognac_competitor": (
+        "COMPETITOR — Aznauri cognac/brandy 3★. DO NOT count as AVTD. "
+        "Gold ornate label with crown and 'A' crest, "
+        "'AZNAURI' text, 3 stars at bottom. Georgian brandy. "
+        "Very commonly confused with ADJARI — key difference: "
+        "ADJARI has diamond mesh bottle pattern and mountain logo. "
+        "Aznauri has smooth bottle with ornate gold 'A' crown crest."
+    ),
+    "aznauri_wine_competitor": (
+        "COMPETITOR — Aznauri wine. DO NOT count as AVTD. "
+        "Distinctive pink/magenta color band on label, "
+        "'AZNAURI' text, decorative 'A' crest medallion. "
+        "Georgian wine brand, very common on Ukrainian shelves. "
+        "Do NOT confuse with Villa UA — Villa UA has gold coin, "
+        "Aznauri has 'A' letter crest."
+    ),
+    "hlibnydar_vodka_competitor": (
+        "COMPETITOR — Hlibny Dar vodka. DO NOT count as AVTD. "
+        "Large square 1L bottle shape, gold/wheat label, "
+        "'HLIBNY DAR' text in large font, HD logo with wheat design. "
+        "One of Ukraine's most common vodka competitors. "
+        "Appears with HLIBNY DAR branded shelf strip (red/brown). "
+        "Do NOT count as GreenDay, Ukrainka or Helsinki."
+    ),
+    "khortytsia_vodka_competitor": (
+        "COMPETITOR — Khortytsia vodka. DO NOT count as AVTD. "
+        "Clear ribbed/fluted bottle, large Cyrillic Х logo, "
+        "'Хортиця' text, red and silver label design. "
+        "One of Ukraine's largest vodka competitors. "
+        "Do NOT count as GreenDay, Ukrainka or Helsinki."
+    ),
+    "koblevo_cognac_competitor": (
+        "COMPETITOR — Koblevo cognac/brandy. DO NOT count as AVTD. "
+        "Angular flat bottle shape, gold label, 'KOBLEVO RESERVE' text. "
+        "Says 'COGNAC OF UKRAINE'. Ukrainian competitor brand. "
+        "Koblevo shelf strips are RED — when you see KOBLEVO shelf strip, "
+        "all bottles in that section are competitor."
+    ),
+    "koblevo_wine_cabernet_competitor": (
+        "COMPETITOR — Koblevo wine (Exclusive Collection). DO NOT count as AVTD. "
+        "Vineyard landscape illustration on label, "
+        "'KOBLEVO Exclusive Collection Cabernet' text. "
+        "Dry red wine. Ukrainian wine competitor."
+    ),
+    "koblevo_wine_muscat_competitor": (
+        "COMPETITOR — Koblevo wine (Muscat Royal). DO NOT count as AVTD. "
+        "Ornate floral pattern label, 'KOBLEVO MUSCAT ROYAL' text. "
+        "Red/dessert wine. Ukrainian wine competitor. "
+        "Do NOT confuse with Villa UA wines."
+    ),
+    "nemiroff_vodka_competitor": (
+        "COMPETITOR — Nemiroff vodka. DO NOT count as AVTD. "
+        "Dark/black ribbed cylindrical bottle, "
+        "'NEMIROFF' in large vintage font, '1872' date. "
+        "Says 'ГОРІЛКА' in large Cyrillic text on label. "
+        "Ukraine's largest vodka competitor. "
+        "Do NOT count as GreenDay, Ukrainka or Helsinki. "
+        "When NEMIROFF shelf strip visible → entire zone is competitor."
+    ),
     # ── Shelf references ──────────────────────────────────────────────────────
     "shelf_ref_02": (
         "IDEAL SHELF — ADJARI cognac close-up: top shelf has Cherry, Orange, 3★, 5★, 8★ variants. "

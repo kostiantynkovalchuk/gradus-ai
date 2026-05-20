@@ -1,0 +1,46 @@
+Add to conversions list in Step 1:
+("557927535.webp",  "aznauri_wine_competitor.jpg"),
+("650845854.webp",  "aznauri_cognac_competitor.jpg"),
+("301146636.webp",  "nemiroff_vodka_competitor.jpg"),
+
+Add to REFERENCE_LABELS in Step 2:
+"aznauri_wine_competitor": (
+    "COMPETITOR — Aznauri wine. DO NOT count as AVTD. "
+    "Distinctive pink/magenta color band on label, "
+    "'AZNAURI' text, decorative 'A' crest medallion. "
+    "Georgian wine brand, very common on Ukrainian shelves. "
+    "Do NOT confuse with Villa UA — Villa UA has gold coin, "
+    "Aznauri has 'A' letter crest."
+),
+"aznauri_cognac_competitor": (
+    "COMPETITOR — Aznauri cognac/brandy 3★. DO NOT count as AVTD. "
+    "Gold ornate label with crown and 'A' crest, "
+    "'AZNAURI' text, 3 stars at bottom. Georgian brandy. "
+    "Very commonly confused with ADJARI — key difference: "
+    "ADJARI has diamond mesh bottle pattern and mountain logo. "
+    "Aznauri has smooth bottle with ornate gold 'A' crown crest."
+),
+"nemiroff_vodka_competitor": (
+    "COMPETITOR — Nemiroff vodka. DO NOT count as AVTD. "
+    "Dark/black ribbed cylindrical bottle, "
+    "'NEMIROFF' in large vintage font, '1872' date. "
+    "Says 'ГОРІЛКА' in large Cyrillic text on label. "
+    "Ukraine's largest vodka competitor. "
+    "Do NOT count as GreenDay, Ukrainka or Helsinki. "
+    "When NEMIROFF shelf strip visible → entire zone is competitor."
+),
+
+Update Step 5 verification:
+Confirm total goes from 24 to 34 references (not 31)
+Confirm competitor refs: 10 (not 7)
+
+Also add to SYSTEM_PROMPT confusion pairs in Step 4:
+- Aznauri (COMPETITOR) vs ADJARI (OURS):
+  Both are cognac/brandy in similar bottles.
+  ADJARI has diamond mesh pattern on bottle + mountain logo.
+  Aznauri has smooth bottle + ornate gold 'A' crown crest + 3 stars.
+  Aznauri wine has pink/magenta band — never count as Villa UA.
+
+- Nemiroff (COMPETITOR) vs AVTD vodka:
+  Black ribbed bottle, NEMIROFF vintage font, 1872 date = competitor.
+  GreenDay = green. Helsinki = winter landscape. Ukrainka = diamond glass.
