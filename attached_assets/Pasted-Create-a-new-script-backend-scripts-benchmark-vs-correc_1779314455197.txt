@@ -1,0 +1,195 @@
+Create a new script: backend/scripts/benchmark_vs_corrections.py
+
+This script re-analyzes stored photos through the current
+vision pipeline and compares results to saved expert corrections.
+
+## WHAT IT DOES
+
+1. Loads reports from DB that have expert corrections (id >= 86,
+   scoring_version = 'v2')
+2. For each report — fetches stored photos from report_photos (BYTEA)
+3. Re-runs photos through the CURRENT analyze_photos() function
+   (with all May 2026 improvements: few-shot, competitor refs,
+   retry logic, etc.)
+4. Compares new AI output vs saved expert corrections
+5. Calculates MAE per category — old vs new
+6. Prints comparison table
+
+## SCRIPT
+
+```python
+import os, sys, asyncio, json, base64
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+
+import psycopg2
+from collections import defaultdict
+
+DATABASE_URL = os.environ['DATABASE_URL']
+
+async def run_benchmark():
+    # Connect to DB
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+
+    # Get all reports with expert corrections
+    cur.execute("""
+        SELECT DISTINCT pr.id, pr.trade_point_name
+        FROM photo_reports pr
+        JOIN expert_corrections ec ON ec.report_id = pr.id
+        WHERE pr.id >= 86
+          AND pr.scoring_version = 'v2'
+          AND ec.true_share IS NOT NULL
+        ORDER BY pr.id
+    """)
+    reports = cur.fetchall()
+    print(f"Found {len(reports)} reports with corrections")
+
+    # Get expert corrections
+    cur.execute("""
+        SELECT report_id, category, true_share
+        FROM expert_corrections
+        WHERE report_id >= 86
+          AND true_share IS NOT NULL
+        ORDER BY report_id, category
+    """)
+    corrections = {}
+    for report_id, category, true_share in cur.fetchall():
+        if report_id not in corrections:
+            corrections[report_id] = {}
+        corrections[report_id][category] = true_share
+
+    # Import vision pipeline
+    from photo_report.references.references import load_references, BRAND_REFERENCES
+    from photo_report.vision import analyze_photos
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
+
+    results = defaultdict(list)  # category -> list of (ai_share, expert_share)
+    old_results = defaultdict(list)
+
+    for report_id, trade_point_name in reports:
+        # Get stored photos
+        cur.execute("""
+            SELECT photo_data FROM report_photos
+            WHERE report_id = %s
+            ORDER BY photo_order
+        """, (report_id,))
+        photo_rows = cur.fetchall()
+
+        if not photo_rows:
+            print(f"  Report #{report_id}: no photos stored, skipping")
+            continue
+
+        # Get OLD AI results from stored shelf_share
+        cur.execute("""
+            SELECT shelf_share FROM photo_reports WHERE id = %s
+        """, (report_id,))
+        old_shelf_share = cur.fetchone()[0] or {}
+
+        # Prepare photos as base64
+        photos_b64 = []
+        for (photo_data,) in photo_rows:
+            if isinstance(photo_data, memoryview):
+                photo_data = bytes(photo_data)
+            photos_b64.append(base64.b64encode(photo_data).decode())
+
+        print(f"\nReport #{report_id} ({trade_point_name}): "
+              f"{len(photos_b64)} photo(s)...")
+
+        try:
+            # Re-analyze with current pipeline
+            new_result = await analyze_photos(client, photos_b64)
+
+            # Extract shares
+            def get_share(result, category):
+                data = result.get(category, {})
+                if isinstance(data, dict):
+                    return data.get('percent') or data.get('share') or 0
+                return 0
+
+            def get_old_share(shelf_share, category):
+                data = shelf_share.get(category, {})
+                if isinstance(data, dict):
+                    return data.get('percent') or 0
+                return 0
+
+            # Compare per category
+            report_corrections = corrections.get(report_id, {})
+            for category, expert_share in report_corrections.items():
+                new_share = get_share(new_result, category)
+                old_share = get_old_share(old_shelf_share, category)
+
+                results[category].append((new_share, expert_share))
+                old_results[category].append((old_share, expert_share))
+
+                new_gap = abs(new_share - expert_share)
+                old_gap = abs(old_share - expert_share)
+                delta = old_gap - new_gap
+                symbol = "✅" if delta > 0 else "❌" if delta < 0 else "="
+                print(f"  {category}: old={old_share:.0f}% new={new_share:.0f}% "
+                      f"expert={expert_share:.0f}% | "
+                      f"old_gap={old_gap:.0f}pp new_gap={new_gap:.0f}pp "
+                      f"{symbol} {'+' if delta>0 else ''}{delta:.0f}pp")
+
+        except Exception as e:
+            print(f"  ERROR on report #{report_id}: {e}")
+            continue
+
+    # Summary
+    print("\n" + "="*60)
+    print("BENCHMARK RESULTS — OLD vs NEW PIPELINE")
+    print("="*60)
+    print(f"{'Category':<12} {'Old MAE':>8} {'New MAE':>8} "
+          f"{'AI=0 old':>10} {'AI=0 new':>10} {'Delta':>8}")
+    print("-"*60)
+
+    for category in ['vodka', 'cognac', 'wine', 'sparkling']:
+        if category not in results:
+            continue
+
+        new_data = results[category]
+        old_data = old_results[category]
+
+        new_mae = sum(abs(a-e) for a,e in new_data) / len(new_data)
+        old_mae = sum(abs(a-e) for a,e in old_data) / len(old_data)
+
+        new_mae_nz = sum(abs(a-e) for a,e in new_data if a>0) / max(1, sum(1 for a,e in new_data if a>0))
+        old_mae_nz = sum(abs(a-e) for a,e in old_data if a>0) / max(1, sum(1 for a,e in old_data if a>0))
+
+        new_zeros = sum(1 for a,e in new_data if a==0)
+        old_zeros = sum(1 for a,e in old_data if a==0)
+
+        delta = old_mae - new_mae
+        print(f"{category:<12} {old_mae:>7.1f}% {new_mae:>7.1f}%  "
+              f"{old_zeros:>4}/{len(old_data)}    {new_zeros:>4}/{len(new_data)}  "
+              f"{'+' if delta>0 else ''}{delta:>6.1f}pp")
+
+    conn.close()
+    print("\nBenchmark complete.")
+
+if __name__ == '__main__':
+    asyncio.run(run_benchmark())
+```
+
+## HOW TO RUN
+
+```bash
+cd backend
+python scripts/benchmark_vs_corrections.py 2>&1 | tee benchmark_output.txt
+```
+
+## IMPORTANT NOTES
+
+- This re-analyzes ~29 reports × avg 1.2 photos = ~35 Claude API calls
+- Cost: ~35 × $0.21 = ~$7.35 total
+- Runtime: ~10-15 minutes
+- analyze_photos() signature may differ — check vision.py and
+  adjust the call to match exact function signature
+- shelf_share JSON structure: check one real row first to confirm
+  field names (percent vs share vs avtd_share)
+
+## DO NOT TOUCH
+- Any production bot files
+- Database records (read-only)
+- vision.py, scoring.py, bot.py
