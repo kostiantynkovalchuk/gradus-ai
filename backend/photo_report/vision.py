@@ -920,23 +920,21 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
                 content.append({"type": "text", "text": f"↑ {ref['label']}"})
 
         if competitor_refs:
-            content.append({
-                "type": "text",
-                "text": (
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "REFERENCE — COMPETITOR BRANDS (DO NOT COUNT AS AVTD)\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "The following images show competitor brands commonly found on Ukrainian "
-                    "alcohol shelves alongside AVTD products. Memorize their labels. "
-                    "NEVER count these as AVTD brands."
-                ),
-            })
-            for ref in competitor_refs:
-                content.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": ref["media_type"], "data": ref["b64"]},
-                })
-                content.append({"type": "text", "text": f"↑ {ref['label']}"})
+            # Inject competitor knowledge as TEXT ONLY — not as images.
+            # Sending 10 extra ref images would push the total to ~39 images per request
+            # (14 AVTD product + 10 competitor + 10 shelf + 5 real photos), which causes
+            # the Claude API to fail or produce degenerate all-zero results.
+            # The label descriptions below are sufficient — combined with the
+            # CRITICAL COMPETITOR CONFUSION PAIRS block already in SYSTEM_PROMPT.
+            competitor_text = (
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "COMPETITOR BRANDS — TEXT REFERENCE (DO NOT COUNT AS AVTD)\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "These competitor brands appear on Ukrainian shelves alongside AVTD products. "
+                "NEVER count them as AVTD brands:\n\n"
+                + "\n\n".join(f"• {ref['label']}" for ref in competitor_refs)
+            )
+            content.append({"type": "text", "text": competitor_text})
 
         if shelf_refs:
             content.append({

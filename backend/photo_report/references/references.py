@@ -358,10 +358,14 @@ def load_references() -> list[dict]:
             "is_shelf_ref": name.startswith("shelf_ref_"),
         })
 
+    avtd_count       = sum(1 for r in refs if not r["is_shelf_ref"] and "_competitor" not in r["name"])
+    competitor_count = sum(1 for r in refs if "_competitor" in r["name"])
+    shelf_count      = sum(1 for r in refs if r["is_shelf_ref"])
     logger.info(
         f"[References] Loaded {len(refs)} reference images "
-        f"({sum(1 for r in refs if not r['is_shelf_ref'])} product lineups, "
-        f"{sum(1 for r in refs if r['is_shelf_ref'])} shelf)"
+        f"({avtd_count} AVTD product, {competitor_count} competitor, {shelf_count} shelf) "
+        f"— images sent to Claude: {avtd_count + shelf_count} + real photos "
+        f"(competitor refs injected as text only)"
     )
     return refs
 
