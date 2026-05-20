@@ -1050,4 +1050,162 @@ def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
         if retry_result:
             _merge_sparkling_retry(vision_result, retry_result)
 
+    # ── Vodka low-share retry: AVTD share < 30% but total > 5 and confidence != low ──
+    # Catches cases where AI found some AVTD vodka but massively under-counted —
+    # e.g. report 118 returned 61% when expert verified 97%.
+    _vodka = vision_result.get("vodka", {})
+    _vodka_avtd = (
+        (_vodka.get("greenday_facings") or 0) +
+        (_vodka.get("ukrainka_facings") or 0) +
+        (_vodka.get("helsinki_facings") or 0) +
+        (_vodka.get("other_avtd_vodka_facings") or 0)
+    )
+    _vodka_total = _vodka.get("total_vodka_facings") or 0
+    _vodka_share = (_vodka_avtd / _vodka_total * 100) if _vodka_total > 5 else None
+
+    if (
+        _vodka_share is not None
+        and _vodka_share < 30
+        and _vodka.get("confidence") != "low"
+    ):
+        logger.info(
+            f"[PhotoReport] Vodka low-share retry: "
+            f"{_vodka_avtd}/{_vodka_total} = {_vodka_share:.0f}%"
+        )
+        _retry = _analyze_focused_sync(client, photo_b64_list, "vodka")
+        if _retry and _retry.get("confidence") in ("high", "medium"):
+            _retry_avtd = (
+                (_retry.get("greenday_facings") or 0) +
+                (_retry.get("ukrainka_facings") or 0) +
+                (_retry.get("helsinki_facings") or 0) +
+                (_retry.get("other_avtd_vodka_facings") or 0)
+            )
+            if _retry_avtd > _vodka_avtd:
+                _retry_total = _retry.get("total_vodka_facings") or _vodka_total
+                _new_share = (_retry_avtd / _retry_total * 100) if _retry_total else 0
+                logger.info(
+                    f"[PhotoReport] Vodka low-share retry improved: "
+                    f"{_vodka_share:.0f}% → {_new_share:.0f}%"
+                )
+                vision_result["vodka"] = _retry
+                notes = vision_result.get("notes", "") or ""
+                vision_result["notes"] = (
+                    notes + f" [Vodka low-share retry: {_vodka_share:.0f}% → {_new_share:.0f}%]"
+                ).strip()
+            else:
+                logger.info(
+                    f"[PhotoReport] Vodka low-share retry did not improve: "
+                    f"retry={_retry_avtd} vs original={_vodka_avtd}"
+                )
+
+    # ── Cognac low-share retry: AVTD share < 30% but total > 5 and confidence != low ──
+    _cognac = vision_result.get("cognac", {})
+    _cognac_avtd = (
+        (_cognac.get("adjari_facings") or 0) +
+        (_cognac.get("dovbush_facings") or 0) +
+        (_cognac.get("jean_jack_facings") or 0) +
+        (_cognac.get("klinkov_facings") or 0) +
+        (_cognac.get("other_avtd_cognac_facings") or 0)
+    )
+    _cognac_total = _cognac.get("total_cognac_facings") or 0
+    _cognac_share = (_cognac_avtd / _cognac_total * 100) if _cognac_total > 5 else None
+
+    if (
+        _cognac_share is not None
+        and _cognac_share < 30
+        and _cognac.get("confidence") != "low"
+    ):
+        logger.info(
+            f"[PhotoReport] Cognac low-share retry: "
+            f"{_cognac_avtd}/{_cognac_total} = {_cognac_share:.0f}%"
+        )
+        _retry_result = _retry_category(client, photo_b64_list, "cognac")
+        if _retry_result:
+            _retry_avtd_c = (
+                (_retry_result.get("adjari_facings") or 0) +
+                (_retry_result.get("dovbush_facings") or 0) +
+                (_retry_result.get("jean_jack_facings") or 0) +
+                (_retry_result.get("klinkov_facings") or 0)
+            )
+            if _retry_avtd_c > _cognac_avtd:
+                _retry_total_c = _retry_result.get("total_cognac_facings") or _cognac_total
+                _new_share_c = (_retry_avtd_c / _retry_total_c * 100) if _retry_total_c else 0
+                logger.info(
+                    f"[PhotoReport] Cognac low-share retry improved: "
+                    f"{_cognac_share:.0f}% → {_new_share_c:.0f}%"
+                )
+                vision_result["cognac"].update({
+                    "adjari_facings":         _retry_result.get("adjari_facings") or 0,
+                    "adjari_skus":            _retry_result.get("adjari_skus") or _cognac.get("adjari_skus") or [],
+                    "dovbush_facings":        _retry_result.get("dovbush_facings") or 0,
+                    "jean_jack_facings":      _retry_result.get("jean_jack_facings") or 0,
+                    "klinkov_facings":        _retry_result.get("klinkov_facings") or 0,
+                    "other_avtd_cognac_facings": 0,
+                    "competitor_facings":     _retry_result.get("competitor_facings") or _cognac.get("competitor_facings") or 0,
+                    "total_cognac_facings":   _retry_total_c,
+                })
+                notes = vision_result.get("notes", "") or ""
+                vision_result["notes"] = (
+                    notes + f" [Cognac low-share retry: {_cognac_share:.0f}% → {_new_share_c:.0f}%]"
+                ).strip()
+            else:
+                logger.info(
+                    f"[PhotoReport] Cognac low-share retry did not improve: "
+                    f"retry={_retry_avtd_c} vs original={_cognac_avtd}"
+                )
+
+    # ── Wine low-share retry: AVTD share < 20% but total > 5 and confidence != low ──
+    _wine = vision_result.get("wine", {})
+    _wine_avtd = (
+        (_wine.get("villa_ua_facings") or 0) +
+        (_wine.get("didi_lari_facings") or 0) +
+        (_wine.get("kristi_valley_facings") or 0) +
+        (_wine.get("kosher_facings") or 0) +
+        (_wine.get("other_avtd_wine_facings") or 0)
+    )
+    _wine_total = _wine.get("total_wine_facings") or 0
+    _wine_share = (_wine_avtd / _wine_total * 100) if _wine_total > 5 else None
+
+    if (
+        _wine_share is not None
+        and _wine_share < 20
+        and _wine.get("confidence") != "low"
+    ):
+        logger.info(
+            f"[PhotoReport] Wine low-share retry: "
+            f"{_wine_avtd}/{_wine_total} = {_wine_share:.0f}%"
+        )
+        _retry_result = _retry_category(client, photo_b64_list, "wine")
+        if _retry_result:
+            _retry_avtd_w = (
+                (_retry_result.get("villa_ua_facings") or 0) +
+                (_retry_result.get("kristi_valley_facings") or 0) +
+                (_retry_result.get("kosher_facings") or 0)
+            )
+            if _retry_avtd_w > _wine_avtd:
+                _retry_total_w = _retry_result.get("total_wine_facings") or _wine_total
+                _new_share_w = (_retry_avtd_w / _retry_total_w * 100) if _retry_total_w else 0
+                logger.info(
+                    f"[PhotoReport] Wine low-share retry improved: "
+                    f"{_wine_share:.0f}% → {_new_share_w:.0f}%"
+                )
+                vision_result["wine"].update({
+                    "villa_ua_facings":         _retry_result.get("villa_ua_facings") or 0,
+                    "didi_lari_facings":         _retry_result.get("didi_lari_facings") or 0,
+                    "kristi_valley_facings":     _retry_result.get("kristi_valley_facings") or 0,
+                    "kosher_facings":            _retry_result.get("kosher_facings") or 0,
+                    "other_avtd_wine_facings":   0,
+                    "competitor_facings":        _retry_result.get("competitor_facings") or _wine.get("competitor_facings") or 0,
+                    "total_wine_facings":        _retry_total_w,
+                })
+                notes = vision_result.get("notes", "") or ""
+                vision_result["notes"] = (
+                    notes + f" [Wine low-share retry: {_wine_share:.0f}% → {_new_share_w:.0f}%]"
+                ).strip()
+            else:
+                logger.info(
+                    f"[PhotoReport] Wine low-share retry did not improve: "
+                    f"retry={_retry_avtd_w} vs original={_wine_avtd}"
+                )
+
     return vision_result
