@@ -1,0 +1,78 @@
+Found 29 reports with expert corrections
+
+Report #86 (199156 Панченко СМ): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEapbgmEMpQaPScCfC8N'}
+Report #87 (Брановська ВМ 133592): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEapcwAocatAqmVPz9Yf'}
+Report #88 (Шевченко ОІ, 332981): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEapeno3GQpKBWvvrHLx'}
+Report #89 (110018 Школьнік ОВ): 1 photo(s)
+  ERROR: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>cloudflare</center>
+</body>
+</html>
+Report #90 (Тимощук І.І 1103045): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEapqhsZQJk2HVxPVPyZ'}
+Report #91 (Бойко АА ,8890): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEapvWMLPQaQyv3QjgNk'}
+Report #92 (Максимович В.П 188641): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEapwmkRow4buaBTqeYg'}
+Report #93 (Ніколаєнко Ю.В 139820): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaq1aSqdXcaVZBRdjkX'}
+Report #94 (182265 Ткачик НВ): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaq2n8SahT41fCspeAN'}
+Report #95 (Без назви): 3 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaq4JuMr8GtrzR2ML2o'}
+Report #96 (Без назви): 2 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaq5a4AKrSvxRohDMyk'}
+Report #97 (Без назви): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqESc7YCPnDUHvLDjJ'}
+Report #98 (Без назви): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqFpCh1E5CKcoHTWs3'}
+Report #100 (Без назви): 3 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqHEmzTi2xsKWL9auf'}
+Report #101 (Без назви): 2 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqJgbVZ4dHBVsqNGBL'}
+Report #102 (Без назви): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqTzSMQ6W2Q98bGxoi'}
+Report #103 (Без назви): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqVTVKjMTRpnr8yNox'}
+Report #104 (141899): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqWr5xEycD49aTPEVC'}
+Report #105 (182164 Власюк): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqY8EKfD9JkfaCXtf5'}
+Report #106 (193810 Ахметов НМ): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqZjDR1VLPvGy3aQe8'}
+Report #107 (239573 Кулик Володимир): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqasvLdeMDL77DXzjP'}
+Report #108 (299420 Макарчук): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqbyf4vnsKPuMpUSZn'}
+Report #109 (393065 ТОВ ВП): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqd8rMdZbyfR9iziwq'}
+Report #110 (7647маг.Вулик): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqeSjTzTCUSEvoRLkm'}
+Report #111 (Бар-магазин ФОП КраснобрижаЛВ): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqfjcwRbvUQ9G1WPbG'}
+Report #112 (154290 Губочало ФОП): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqkB2P6RGLiUCN9JyE'}
+Report #113 (194409 Вовк НВ): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaquT8URMz2VhneW9So'}
+Report #118 (Без назви): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEaqzQnF5amnmb7SEum9'}
+Report #119 (Без назви): 1 photo(s)
+  ERROR: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CbEarAgfPqiijezQ37XgK'}
+
+======================================================================
+BENCHMARK RESULTS — OLD vs NEW PIPELINE
+======================================================================
+Category      Old MAE  New MAE   AI=0 old   AI=0 new  Delta MAE
+----------------------------------------------------------------------
+vodka         — no data —
+cognac        — no data —
+wine          — no data —
+sparkling     — no data —
+
+Benchmark complete.

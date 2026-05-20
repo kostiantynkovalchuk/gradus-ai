@@ -1,0 +1,152 @@
+Found 29 reports with expert corrections
+
+Report #86 (199156 Панченко СМ): 1 photo(s)
+  cognac     old=100.0%  new=100.0%  expert=100.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 50.0%  |  old_gap= 50.0pp  new_gap= 50.0pp  = 0.0pp
+  vodka      old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  wine       old= 40.0%  new= 50.0%  expert= 45.0%  |  old_gap=  5.0pp  new_gap=  5.0pp  = 0.0pp
+Report #87 (Брановська ВМ 133592): 1 photo(s)
+  cognac     old= 29.0%  new= 36.0%  expert= 86.0%  |  old_gap= 57.0pp  new_gap= 50.0pp  ✅ +7.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=  0.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+  vodka      old= 20.0%  new= 18.0%  expert= 18.0%  |  old_gap=  2.0pp  new_gap=  0.0pp  ✅ +2.0pp
+  wine       old=  0.0%  new=  0.0%  expert=  0.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+Report #88 (Шевченко ОІ, 332981): 1 photo(s)
+  cognac     old= 24.0%  new= 29.0%  expert= 43.0%  |  old_gap= 19.0pp  new_gap= 14.0pp  ✅ +5.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 60.0%  |  old_gap= 60.0pp  new_gap= 60.0pp  = 0.0pp
+  vodka      old= 23.0%  new= 53.0%  expert= 21.0%  |  old_gap=  2.0pp  new_gap= 32.0pp  ❌ -30.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 81.0%  |  old_gap= 81.0pp  new_gap= 81.0pp  = 0.0pp
+Report #89 (110018 Школьнік ОВ): 1 photo(s)
+  cognac     old= 92.0%  new=100.0%  expert= 86.0%  |  old_gap=  6.0pp  new_gap= 14.0pp  ❌ -8.0pp
+  vodka      old= 33.0%  new= 75.0%  expert= 43.0%  |  old_gap= 10.0pp  new_gap= 32.0pp  ❌ -22.0pp
+  wine       old=100.0%  new=100.0%  expert=100.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+Report #90 (Тимощук І.І 1103045): 1 photo(s)
+  cognac     old= 78.0%  new=100.0%  expert=100.0%  |  old_gap= 22.0pp  new_gap=  0.0pp  ✅ +22.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  vodka      old= 35.0%  new= 38.0%  expert= 62.0%  |  old_gap= 27.0pp  new_gap= 24.0pp  ✅ +3.0pp
+  wine       old= 64.0%  new= 64.0%  expert=100.0%  |  old_gap= 36.0pp  new_gap= 36.0pp  = 0.0pp
+Report #91 (Бойко АА ,8890): 1 photo(s)
+  cognac     old= 25.0%  new= 43.0%  expert= 60.0%  |  old_gap= 35.0pp  new_gap= 17.0pp  ✅ +18.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 95.0%  |  old_gap= 95.0pp  new_gap= 95.0pp  = 0.0pp
+  vodka      old= 31.0%  new= 33.0%  expert= 50.0%  |  old_gap= 19.0pp  new_gap= 17.0pp  ✅ +2.0pp
+  wine       old= 20.0%  new= 30.0%  expert= 71.0%  |  old_gap= 51.0pp  new_gap= 41.0pp  ✅ +10.0pp
+Report #92 (Максимович В.П 188641): 1 photo(s)
+  cognac     old= 36.0%  new= 33.0%  expert= 54.0%  |  old_gap= 18.0pp  new_gap= 21.0pp  ❌ -3.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 20.0%  |  old_gap= 20.0pp  new_gap= 20.0pp  = 0.0pp
+  vodka      old= 58.0%  new= 77.0%  expert= 83.0%  |  old_gap= 25.0pp  new_gap=  6.0pp  ✅ +19.0pp
+  wine       old= 33.0%  new= 20.0%  expert=100.0%  |  old_gap= 67.0pp  new_gap= 80.0pp  ❌ -13.0pp
+Report #93 (Ніколаєнко Ю.В 139820): 1 photo(s)
+  cognac     old= 33.0%  new= 44.0%  expert= 50.0%  |  old_gap= 17.0pp  new_gap=  6.0pp  ✅ +11.0pp
+  sparkling  old=  0.0%  new=100.0%  expert= 50.0%  |  old_gap= 50.0pp  new_gap= 50.0pp  = 0.0pp
+  vodka      old= 22.0%  new= 62.0%  expert= 23.0%  |  old_gap=  1.0pp  new_gap= 39.0pp  ❌ -38.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 66.0%  |  old_gap= 66.0pp  new_gap= 66.0pp  = 0.0pp
+Report #94 (182265 Ткачик НВ): 1 photo(s)
+  cognac     old= 57.0%  new= 95.0%  expert=100.0%  |  old_gap= 43.0pp  new_gap=  5.0pp  ✅ +38.0pp
+  sparkling  old= 25.0%  new= 78.0%  expert=100.0%  |  old_gap= 75.0pp  new_gap= 22.0pp  ✅ +53.0pp
+  vodka      old= 84.0%  new= 90.0%  expert=100.0%  |  old_gap= 16.0pp  new_gap= 10.0pp  ✅ +6.0pp
+  wine       old= 76.0%  new= 79.0%  expert= 92.0%  |  old_gap= 16.0pp  new_gap= 13.0pp  ✅ +3.0pp
+Report #95 (Без назви): 3 photo(s)
+  cognac     old= 49.0%  new= 51.0%  expert= 30.0%  |  old_gap= 19.0pp  new_gap= 21.0pp  ❌ -2.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 30.0%  |  old_gap= 30.0pp  new_gap= 30.0pp  = 0.0pp
+  vodka      old= 39.0%  new= 53.0%  expert= 30.0%  |  old_gap=  9.0pp  new_gap= 23.0pp  ❌ -14.0pp
+  wine       old= 31.0%  new= 31.0%  expert= 31.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+Report #96 (Без назви): 2 photo(s)
+  cognac     old= 55.0%  new= 62.0%  expert= 50.0%  |  old_gap=  5.0pp  new_gap= 12.0pp  ❌ -7.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 25.0%  |  old_gap= 25.0pp  new_gap= 25.0pp  = 0.0pp
+  vodka      old= 32.0%  new= 78.0%  expert= 34.0%  |  old_gap=  2.0pp  new_gap= 44.0pp  ❌ -42.0pp
+  wine       old= 29.0%  new= 33.0%  expert= 40.0%  |  old_gap= 11.0pp  new_gap=  7.0pp  ✅ +4.0pp
+Report #97 (Без назви): 1 photo(s)
+  cognac     old=  0.0%  new= 40.0%  expert= 47.0%  |  old_gap= 47.0pp  new_gap=  7.0pp  ✅ +40.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 50.0%  |  old_gap= 50.0pp  new_gap= 50.0pp  = 0.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 50.0%  |  old_gap= 50.0pp  new_gap= 50.0pp  = 0.0pp
+Report #98 (Без назви): 1 photo(s)
+  cognac     old=  0.0%  new=  0.0%  expert= 75.0%  |  old_gap= 75.0pp  new_gap= 75.0pp  = 0.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 60.0%  |  old_gap= 60.0pp  new_gap= 60.0pp  = 0.0pp
+  vodka      old= 42.0%  new= 67.0%  expert= 42.0%  |  old_gap=  0.0pp  new_gap= 25.0pp  ❌ -25.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 70.0%  |  old_gap= 70.0pp  new_gap= 70.0pp  = 0.0pp
+Report #100 (Без назви): 3 photo(s)
+  cognac     old= 46.0%  new= 51.0%  expert= 46.0%  |  old_gap=  0.0pp  new_gap=  5.0pp  ❌ -5.0pp
+  sparkling  old= 23.0%  new= 36.0%  expert= 23.0%  |  old_gap=  0.0pp  new_gap= 13.0pp  ❌ -13.0pp
+  vodka      old= 45.0%  new= 40.0%  expert= 38.0%  |  old_gap=  7.0pp  new_gap=  2.0pp  ✅ +5.0pp
+  wine       old= 38.0%  new= 34.0%  expert= 38.0%  |  old_gap=  0.0pp  new_gap=  4.0pp  ❌ -4.0pp
+Report #101 (Без назви): 2 photo(s)
+  cognac     old= 77.0%  new=100.0%  expert=100.0%  |  old_gap= 23.0pp  new_gap=  0.0pp  ✅ +23.0pp
+  sparkling  old= 13.0%  new= 33.0%  expert= 50.0%  |  old_gap= 37.0pp  new_gap= 17.0pp  ✅ +20.0pp
+  vodka      old= 50.0%  new= 62.0%  expert= 50.0%  |  old_gap=  0.0pp  new_gap= 12.0pp  ❌ -12.0pp
+  wine       old= 20.0%  new= 26.0%  expert= 50.0%  |  old_gap= 30.0pp  new_gap= 24.0pp  ✅ +6.0pp
+Report #102 (Без назви): 1 photo(s)
+  cognac     old=  0.0%  new= 27.0%  expert= 33.0%  |  old_gap= 33.0pp  new_gap=  6.0pp  ✅ +27.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 25.0%  |  old_gap= 25.0pp  new_gap= 25.0pp  = 0.0pp
+  vodka      old=  0.0%  new=  0.0%  expert= 25.0%  |  old_gap= 25.0pp  new_gap= 25.0pp  = 0.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 10.0%  |  old_gap= 10.0pp  new_gap= 10.0pp  = 0.0pp
+Report #103 (Без назви): 1 photo(s)
+  cognac     old= 50.0%  new= 71.0%  expert= 50.0%  |  old_gap=  0.0pp  new_gap= 21.0pp  ❌ -21.0pp
+  sparkling  old= 57.0%  new= 50.0%  expert= 40.0%  |  old_gap= 17.0pp  new_gap= 10.0pp  ✅ +7.0pp
+  vodka      old= 58.0%  new= 55.0%  expert= 50.0%  |  old_gap=  8.0pp  new_gap=  5.0pp  ✅ +3.0pp
+  wine       old= 27.0%  new= 60.0%  expert= 50.0%  |  old_gap= 23.0pp  new_gap= 10.0pp  ✅ +13.0pp
+Report #104 (141899): 1 photo(s)
+  cognac     old= 50.0%  new= 60.0%  expert=100.0%  |  old_gap= 50.0pp  new_gap= 40.0pp  ✅ +10.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  vodka      old= 69.0%  new= 75.0%  expert= 77.0%  |  old_gap=  8.0pp  new_gap=  2.0pp  ✅ +6.0pp
+  wine       old= 25.0%  new= 32.0%  expert= 88.0%  |  old_gap= 63.0pp  new_gap= 56.0pp  ✅ +7.0pp
+Report #105 (182164 Власюк): 1 photo(s)
+  cognac     old= 30.0%  new= 45.0%  expert= 56.0%  |  old_gap= 26.0pp  new_gap= 11.0pp  ✅ +15.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  vodka      old= 44.0%  new= 60.0%  expert= 50.0%  |  old_gap=  6.0pp  new_gap= 10.0pp  ❌ -4.0pp
+  wine       old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+Report #106 (193810 Ахметов НМ): 1 photo(s)
+  cognac     old=  0.0%  new=  0.0%  expert= 36.0%  |  old_gap= 36.0pp  new_gap= 36.0pp  = 0.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  vodka      old= 28.0%  new= 29.0%  expert= 27.0%  |  old_gap=  1.0pp  new_gap=  2.0pp  ❌ -1.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 40.0%  |  old_gap= 40.0pp  new_gap= 40.0pp  = 0.0pp
+Report #107 (239573 Кулик Володимир): 1 photo(s)
+  cognac     old=  0.0%  new= 36.0%  expert= 42.0%  |  old_gap= 42.0pp  new_gap=  6.0pp  ✅ +36.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  vodka      old= 40.0%  new= 63.0%  expert= 35.0%  |  old_gap=  5.0pp  new_gap= 28.0pp  ❌ -23.0pp
+  wine       old=  0.0%  new=  0.0%  expert= 70.0%  |  old_gap= 70.0pp  new_gap= 70.0pp  = 0.0pp
+Report #108 (299420 Макарчук): 1 photo(s)
+  cognac     old= 50.0%  new= 54.0%  expert= 60.0%  |  old_gap= 10.0pp  new_gap=  6.0pp  ✅ +4.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  vodka      old= 58.0%  new= 82.0%  expert= 34.0%  |  old_gap= 24.0pp  new_gap= 48.0pp  ❌ -24.0pp
+  wine       old= 40.0%  new= 67.0%  expert= 60.0%  |  old_gap= 20.0pp  new_gap=  7.0pp  ✅ +13.0pp
+Report #109 (393065 ТОВ ВП): 1 photo(s)
+  cognac     old=  0.0%  new=  0.0%  expert= 35.0%  |  old_gap= 35.0pp  new_gap= 35.0pp  = 0.0pp
+  sparkling  old=  4.0%  new=  4.0%  expert=  9.0%  |  old_gap=  5.0pp  new_gap=  5.0pp  = 0.0pp
+  vodka      old=  0.0%  new=  0.0%  expert=  8.0%  |  old_gap=  8.0pp  new_gap=  8.0pp  = 0.0pp
+  wine       old=  0.0%  new=  0.0%  expert=  0.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+Report #110 (7647маг.Вулик): 1 photo(s)
+  cognac     old= 57.0%  new=100.0%  expert=100.0%  |  old_gap= 43.0pp  new_gap=  0.0pp  ✅ +43.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert= 60.0%  |  old_gap= 60.0pp  new_gap= 60.0pp  = 0.0pp
+  vodka      old= 22.0%  new= 43.0%  expert= 73.0%  |  old_gap= 51.0pp  new_gap= 30.0pp  ✅ +21.0pp
+  wine       old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+Report #111 (Бар-магазин ФОП КраснобрижаЛВ): 1 photo(s)
+  cognac     old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+  sparkling  old= 20.0%  new= 20.0%  expert= 33.0%  |  old_gap= 13.0pp  new_gap= 13.0pp  = 0.0pp
+  vodka      old=  0.0%  new=  0.0%  expert= 60.0%  |  old_gap= 60.0pp  new_gap= 60.0pp  = 0.0pp
+  wine       old=  0.0%  new=  0.0%  expert=100.0%  |  old_gap=100.0pp  new_gap=100.0pp  = 0.0pp
+Report #112 (154290 Губочало ФОП): 1 photo(s)
+  cognac     old=  0.0%  new= 45.0%  expert= 16.0%  |  old_gap= 16.0pp  new_gap= 29.0pp  ❌ -13.0pp
+  vodka      old= 29.0%  new= 42.0%  expert= 14.0%  |  old_gap= 15.0pp  new_gap= 28.0pp  ❌ -13.0pp
+  wine       old=  0.0%  new= 50.0%  expert= 47.0%  |  old_gap= 47.0pp  new_gap=  3.0pp  ✅ +44.0pp
+Report #113 (194409 Вовк НВ): 1 photo(s)
+  cognac     old= 43.0%  new= 64.0%  expert= 50.0%  |  old_gap=  7.0pp  new_gap= 14.0pp  ❌ -7.0pp
+  sparkling  old=  0.0%  new=  0.0%  expert=  0.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+  vodka      old= 54.0%  new= 46.0%  expert= 28.0%  |  old_gap= 26.0pp  new_gap= 18.0pp  ✅ +8.0pp
+  wine       old=  0.0%  new=  0.0%  expert=  0.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+Report #118 (Без назви): 1 photo(s)
+  cognac     old= 74.0%  new= 82.0%  expert= 98.0%  |  old_gap= 24.0pp  new_gap= 16.0pp  ✅ +8.0pp
+  vodka      old= 61.0%  new= 82.0%  expert= 97.0%  |  old_gap= 36.0pp  new_gap= 15.0pp  ✅ +21.0pp
+Report #119 (Без назви): 1 photo(s)
+  cognac     old=100.0%  new=100.0%  expert=100.0%  |  old_gap=  0.0pp  new_gap=  0.0pp  = 0.0pp
+  vodka      old= 75.0%  new= 75.0%  expert= 50.0%  |  old_gap= 25.0pp  new_gap= 25.0pp  = 0.0pp
+
+======================================================================
+BENCHMARK RESULTS — OLD vs NEW PIPELINE
+======================================================================
+Category      Old MAE  New MAE   AI=0 old   AI=0 new  Delta MAE
+----------------------------------------------------------------------
+vodka           18.5%     23.9%     4/28       4/28       -5.4pp
+cognac          27.9%     19.6%     8/29       4/29    +    8.3pp
+wine            39.1%     36.0%    14/27      13/27    +    3.1pp
+sparkling       50.9%     48.2%    19/25      18/25    +    2.7pp
+
+Benchmark complete.

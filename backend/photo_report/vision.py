@@ -475,13 +475,45 @@ Correct approach for share calculation:
 - Unidentified bottles on AVTD-dominant shelf → add to relevant AVTD category, not competitor
 - Result: vodka share should reflect ~97% AVTD on this shelf
 
-GENERAL RULE FROM BOTH EXAMPLES:
-1. Closeup photo + readable label = count precisely, high confidence
-2. Wide shot + AVTD-dominant shelf = assume AVTD for unreadable bottles,
-   note uncertainty in "notes" field
-3. Never inflate competitor_facings with unidentified bottles
-4. If unsure about a specific bottle — add it to the AVTD category it most likely
-   belongs to based on shelf context, and note it
+GENERAL RULE — WHEN TO ASSUME AVTD vs COMPETITOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1 — Determine shelf context BEFORE counting:
+
+AVTD-DOMINANT shelf (use AVTD assumption):
+- AVTD shelf strips visible (GREENDAY, GD, ADJARI, ДОВБУШ, ЖАН-ЖАК, VILLA UA, HELSINKI, UKRAINKA)
+- OR majority of clearly readable labels are AVTD brands
+- OR shelf has AVTD branded display unit/stand
+
+MIXED or COMPETITOR-DOMINANT shelf (use conservative count):
+- Competitor shelf strips visible (HLIBNY DAR, KOBLEVO, KOZATSKA RADA, NEMIROFF, AZNAURI)
+- OR majority of readable labels are competitor brands
+- OR roughly equal mix of AVTD and competitor bottles
+
+Step 2 — Apply the correct counting rule:
+
+ON AVTD-DOMINANT SHELF:
+- Count confirmed AVTD facings precisely
+- Unidentified/unclear bottles → add to nearest AVTD category based on bottle shape/color
+- Note uncertainty in "notes" field
+
+ON MIXED/COMPETITOR-DOMINANT SHELF:
+- Count ONLY confirmed AVTD facings (readable label or unmistakable brand shape)
+- Unidentified bottles → add to competitor_facings
+- Do NOT inflate AVTD share with uncertain bottles
+- This may result in lower AVTD share — that is correct
+
+Step 3 — Confidence calibration:
+- Closeup photo + readable labels = high confidence, count precisely
+- Wide shot + AVTD-dominant = medium confidence, apply AVTD assumption conservatively
+- Wide shot + mixed shelf = medium confidence, count only confirmed AVTD
+- Wide shot + competitor-dominant = medium confidence, do not assume AVTD for unclear bottles
+
+EXAMPLE of correct mixed-shelf behavior:
+Shelf has HLIBNY DAR strip + clearly visible Hlibny Dar bottles + some unclear clear bottles
++ GreenDay strip on right side + clearly visible GreenDay bottles.
+CORRECT: count confirmed GreenDay only, unclear bottles near Hlibny Dar strip → competitor_facings.
+WRONG: assume all unclear bottles are AVTD.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
