@@ -391,7 +391,60 @@ Return ONLY this JSON (no score, no passed, no status):
   "merchandise_violations": [],
 
   "notes": ""
-}"""
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FEW-SHOT EXAMPLES — VERIFIED BY EXPERT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+These are verified examples showing correct JSON output for reference shelf photos.
+Use them to calibrate your counting and share calculation.
+
+EXAMPLE 1 — shelf_ref_02.jpg (ADJARI closeup, verified)
+This photo shows one shelf row with ADJARI cognac lineup.
+Expert verified: cognac AVTD share = 100%.
+Correct output for cognac section:
+{
+  "confidence": "high",
+  "adjari_facings": 11,
+  "adjari_skus": ["Cherry", "Orange", "3★", "5★ tubus", "5★"],
+  "dovbush_facings": 0,
+  "jean_jack_facings": 0,
+  "klinkov_facings": 0,
+  "competitor_facings": 1,
+  "competitor_brands": ["Ukrainian Soul"],
+  "total_cognac_facings": 12
+}
+Key lesson: When you can clearly read ADJARI label — count confidently.
+Partial photo = "medium" confidence but still count what is visible.
+
+EXAMPLE 2 — shelf_ref_21.jpg (full store overview, verified)
+This photo shows a complete alcohol section, both edges visible.
+Expert verified: vodka AVTD share = 97%, cognac AVTD share = 98%.
+This means nearly ALL bottles on this shelf are AVTD brands.
+
+CRITICAL LESSON FROM THIS EXAMPLE:
+When a shelf has strong AVTD signage and predominantly AVTD-shaped bottles,
+do NOT default unclear bottles to "competitor". Instead:
+- If bottle shape/color matches known AVTD brand → count as AVTD
+- If bottle is truly unidentifiable → add to notes, do NOT inflate competitor_facings
+- "other vodka x6" on an AVTD-dominant shelf is likely AVTD, not competitor
+
+Correct approach for share calculation:
+- Count confirmed AVTD facings
+- Count confirmed competitor facings (only if brand is clearly identifiable as non-AVTD)
+- Unidentified bottles on AVTD-dominant shelf → add to relevant AVTD category, not competitor
+- Result: vodka share should reflect ~97% AVTD on this shelf
+
+GENERAL RULE FROM BOTH EXAMPLES:
+1. Closeup photo + readable label = count precisely, high confidence
+2. Wide shot + AVTD-dominant shelf = assume AVTD for unreadable bottles,
+   note uncertainty in "notes" field
+3. Never inflate competitor_facings with unidentified bottles
+4. If unsure about a specific bottle — add it to the AVTD category it most likely
+   belongs to based on shelf context, and note it
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
 _FOCUSED_PROMPTS = {
     "wine": (
