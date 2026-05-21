@@ -84,3 +84,9 @@ id = "Q81jzIV1hFp8FjhYYA1eE"
 uri = "file://backend/photo_report/references/villaua_sparkling.jpg"
 type = "image"
 title = "Villa UA Sparkling (8 SKU)"
+
+[[outputs]]
+id = "L2EhH1qww7HlGCHnkTcbl"
+uri = "file://tenderlot-bot-export.tar.gz"
+type = "unspecified"
+title = "tenderlot-bot-export.tar.gz"
