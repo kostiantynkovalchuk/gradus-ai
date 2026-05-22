@@ -163,39 +163,41 @@ def _style_header_cell(cell, text: str):
 
 
 def _set_table_fixed_layout(tbl, col_widths_dxa: list):
-    """Set tblLayout=fixed + tblGrid so Word honours exact column widths."""
+    """
+    Force fixed table layout — column widths become authoritative,
+    Word will not auto-expand columns to fit content.
+    CT_Tbl has no get_or_add_tblPr(); must use find() + manual insert.
+    """
     tbl_el = tbl._tbl
-    tblPr = tbl_el.get_or_add_tblPr()
 
-    # Overall table width
-    for old in tblPr.findall(qn("w:tblW")):
-        tblPr.remove(old)
-    tblW = OxmlElement("w:tblW")
-    tblW.set(qn("w:w"), str(sum(col_widths_dxa)))
-    tblW.set(qn("w:type"), "dxa")
-    tblPr.append(tblW)
+    # 1. Find or create <w:tblPr> as the FIRST child of <w:tbl>
+    tblPr = tbl_el.find(qn("w:tblPr"))
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl_el.insert(0, tblPr)
 
-    # Fixed layout — prevents renderer from auto-expanding narrow columns
+    # 2. Remove any existing <w:tblLayout>, then add fixed layout (idempotent)
     for old in tblPr.findall(qn("w:tblLayout")):
         tblPr.remove(old)
     tblLayout = OxmlElement("w:tblLayout")
     tblLayout.set(qn("w:type"), "fixed")
     tblPr.append(tblLayout)
 
-    # tblGrid — explicit per-column widths (must sit right after tblPr)
-    for old in tbl_el.findall(qn("w:tblGrid")):
-        tbl_el.remove(old)
-    tblGrid = OxmlElement("w:tblGrid")
+    # 3. Find or create <w:tblGrid> right after <w:tblPr>; rebuild gridCols
+    tblGrid = tbl_el.find(qn("w:tblGrid"))
+    if tblGrid is None:
+        tblGrid = OxmlElement("w:tblGrid")
+        tblPr_index = list(tbl_el).index(tblPr)
+        tbl_el.insert(tblPr_index + 1, tblGrid)
+    else:
+        for old in tblGrid.findall(qn("w:gridCol")):
+            tblGrid.remove(old)
+
+    # 4. One <w:gridCol w:w="…"/> per column
     for dxa in col_widths_dxa:
         gridCol = OxmlElement("w:gridCol")
         gridCol.set(qn("w:w"), str(dxa))
         tblGrid.append(gridCol)
-    children = list(tbl_el)
-    try:
-        insert_idx = children.index(tblPr) + 1
-    except ValueError:
-        insert_idx = 0
-    tbl_el.insert(insert_idx, tblGrid)
 
 
 def _set_cell_width_dxa(cell, dxa: int):
