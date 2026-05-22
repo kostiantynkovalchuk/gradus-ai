@@ -426,11 +426,6 @@ def build_protocol_docx(
     doc.add_paragraph(
         "Цей протокол складено у двох примірниках, по одному для кожної Сторони."
     )
-    footer_p = doc.add_paragraph()
-    footer_r = footer_p.add_run(DISCLAIMER)
-    footer_r.italic = True
-    footer_r.font.color.rgb = RGBColor(0x7A, 0x8F, 0xA8)
-    footer_r.font.size = Pt(9)
 
     buf = io.BytesIO()
     doc.save(buf)
