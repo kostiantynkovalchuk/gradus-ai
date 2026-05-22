@@ -683,6 +683,7 @@ async def generate_opinion(request: Request, eid: int):
            WHERE f.engagement_id=%s ORDER BY f.severity DESC""",
         (eid,),
     )
+    findings_list = [dict(f) for f in (findings or [])]
     loop = asyncio.get_event_loop()
     md_text = await loop.run_in_executor(
         None,
@@ -690,7 +691,7 @@ async def generate_opinion(request: Request, eid: int):
         eid,
         eng["counterparty_name"] or "—",
         [dict(d) for d in (docs or [])],
-        [dict(f) for f in (findings or [])],
+        findings_list,
     )
 
     existing = solcon_db.fetchone(
@@ -702,7 +703,7 @@ async def generate_opinion(request: Request, eid: int):
     from .ingestion import UPLOAD_DIR
     op_dir = UPLOAD_DIR / str(eid) / "opinions"
     op_dir.mkdir(parents=True, exist_ok=True)
-    docx_bytes = build_opinion_docx(md_text, eng["name"])
+    docx_bytes = build_opinion_docx(md_text, eng["name"], findings=findings_list)
     op_path = op_dir / f"opinion_v{version}.docx"
     op_path.write_bytes(docx_bytes)
 

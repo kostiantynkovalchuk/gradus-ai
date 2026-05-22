@@ -74,8 +74,49 @@ def _protocol_clean(text: str, max_chars: int = 800) -> str:
     return text
 
 
+def _strip_url_suffixes(url: str) -> str:
+    """Normalize a zakon.rada.gov.ua URL — strip /print1, /edYYYYMMDD, #fragment."""
+    if not url:
+        return ""
+    url = re.sub(r"/print1.*$", "", url)
+    url = re.sub(r"/ed\d{8}.*$", "", url)
+    url = url.split("#")[0]
+    return url.rstrip("/")
+
+
+def _kb_edition_map() -> dict:
+    """
+    Return {normalized_canonical_url: 'DD.MM.YYYY'} for active KB sources.
+    Cached via get_active_kb_sources() (5-min TTL). Silently returns {} on error.
+    """
+    try:
+        from .kb_sources import get_active_kb_sources
+        sources = get_active_kb_sources()
+    except Exception:
+        return {}
+    result = {}
+    for s in sources:
+        url = s.get("canonical_url", "")
+        ed = s.get("current_edition_date")
+        if not url or not ed:
+            continue
+        if hasattr(ed, "strftime"):
+            ed_str = ed.strftime("%d.%m.%Y")
+        else:
+            try:
+                y, m, d = str(ed)[:10].split("-")
+                ed_str = f"{d}.{m}.{y}"
+            except Exception:
+                ed_str = str(ed)[:10]
+        result[_strip_url_suffixes(url)] = ed_str
+    return result
+
+
 def _format_citations_docx(cits_raw) -> str:
-    """Format legal_citations JSONB → compact text for DOCX cell."""
+    """
+    Format legal_citations JSONB → compact text for DOCX.
+    Each citation rendered as 'Ст. X (ред. від DD.MM.YYYY)' when edition is known.
+    """
     if not cits_raw:
         return ""
     if isinstance(cits_raw, str):
@@ -87,11 +128,15 @@ def _format_citations_docx(cits_raw) -> str:
         cits = cits_raw
     if not isinstance(cits, list) or not cits:
         return ""
+    edition_map = _kb_edition_map()
     parts = []
     for c in cits:
         ref = c.get("article_ref") or c.get("source_title") or ""
-        if ref:
-            parts.append(ref)
+        if not ref:
+            continue
+        url = c.get("official_url", "")
+        ed = edition_map.get(_strip_url_suffixes(url))
+        parts.append(f"{ref} (ред. від {ed})" if ed else ref)
     return "; ".join(parts)
 
 
@@ -115,6 +160,92 @@ def _style_header_cell(cell, text: str):
         for run in p.runs:
             run.bold = True
             run.font.color.rgb = RGBColor(0x0D, 0x15, 0x28)
+
+
+def _set_table_fixed_layout(tbl, col_widths_dxa: list):
+    """Set tblLayout=fixed + tblGrid so Word honours exact column widths."""
+    tbl_el = tbl._tbl
+    tblPr = tbl_el.get_or_add_tblPr()
+
+    # Overall table width
+    for old in tblPr.findall(qn("w:tblW")):
+        tblPr.remove(old)
+    tblW = OxmlElement("w:tblW")
+    tblW.set(qn("w:w"), str(sum(col_widths_dxa)))
+    tblW.set(qn("w:type"), "dxa")
+    tblPr.append(tblW)
+
+    # Fixed layout — prevents renderer from auto-expanding narrow columns
+    for old in tblPr.findall(qn("w:tblLayout")):
+        tblPr.remove(old)
+    tblLayout = OxmlElement("w:tblLayout")
+    tblLayout.set(qn("w:type"), "fixed")
+    tblPr.append(tblLayout)
+
+    # tblGrid — explicit per-column widths (must sit right after tblPr)
+    for old in tbl_el.findall(qn("w:tblGrid")):
+        tbl_el.remove(old)
+    tblGrid = OxmlElement("w:tblGrid")
+    for dxa in col_widths_dxa:
+        gridCol = OxmlElement("w:gridCol")
+        gridCol.set(qn("w:w"), str(dxa))
+        tblGrid.append(gridCol)
+    children = list(tbl_el)
+    try:
+        insert_idx = children.index(tblPr) + 1
+    except ValueError:
+        insert_idx = 0
+    tbl_el.insert(insert_idx, tblGrid)
+
+
+def _set_cell_width_dxa(cell, dxa: int):
+    """Set explicit cell width in DXA twips."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    for old in tcPr.findall(qn("w:tcW")):
+        tcPr.remove(old)
+    tcW = OxmlElement("w:tcW")
+    tcW.set(qn("w:w"), str(dxa))
+    tcW.set(qn("w:type"), "dxa")
+    tcPr.append(tcW)
+
+
+def _style_col0_cell(cell, text: str, bold: bool = False):
+    """
+    Style a column-0 (№) cell: 454 DXA wide, narrow margins (40 DXA left/right),
+    text centred horizontally and vertically.
+    """
+    _set_cell_width_dxa(cell, 454)
+
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+
+    # Narrow margins — default 120 DXA each side was eating half the column
+    for old in tcPr.findall(qn("w:tcMar")):
+        tcPr.remove(old)
+    tcMar = OxmlElement("w:tcMar")
+    for side, val in [("top", 60), ("bottom", 60), ("left", 40), ("right", 40)]:
+        mar_el = OxmlElement(f"w:{side}")
+        mar_el.set(qn("w:w"), str(val))
+        mar_el.set(qn("w:type"), "dxa")
+        tcMar.append(mar_el)
+    tcPr.append(tcMar)
+
+    # Vertical centre
+    for old in tcPr.findall(qn("w:vAlign")):
+        tcPr.remove(old)
+    vAlign = OxmlElement("w:vAlign")
+    vAlign.set(qn("w:val"), "center")
+    tcPr.append(vAlign)
+
+    # Clear and write centred paragraph
+    cell.text = ""
+    para = cell.paragraphs[0]
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = para.add_run(text)
+    if bold:
+        run.bold = True
+        run.font.color.rgb = RGBColor(0x0D, 0x15, 0x28)
 
 
 # ─── §9.1 Risk note DOCX ─────────────────────────────────────────────────────
@@ -173,12 +304,8 @@ def build_risk_note_docx(
                     r_ai.italic = True
                     r_ai.font.color.rgb = RGBColor(0x2E, 0x42, 0x70)
                     alt_p.add_run(f["proposed_alternative"])
-                    cits = _safe_jsonb(f.get("legal_citations"))
-                    if cits:
-                        cit_text = "; ".join(
-                            c.get("article_ref", "") or c.get("source_title", "")
-                            for c in cits
-                        )
+                    cit_text = _format_citations_docx(f.get("legal_citations"))
+                    if cit_text:
                         alt_p.add_run(f" [{cit_text}]").italic = True
 
     doc.add_paragraph()
@@ -253,24 +380,26 @@ def build_protocol_docx(
     doc.add_paragraph()
 
     # 4-column table: №  | counterparty edition | AVTD edition | agreed
-    # Width budget (A4, margins 1.2cm left / 1.0cm right): ≈18.0cm usable
-    COL_WIDTHS_CM = [0.8, 6.0, 6.0, 5.2]
+    # 454 + 3200 + 3200 + 2506 = 9360 DXA ≈ 16.5cm (fits A4 with 1.2cm/1.0cm margins)
+    COL_WIDTHS_DXA = [454, 3200, 3200, 2506]
 
     tbl = doc.add_table(rows=1, cols=4)
     tbl.style = "Table Grid"
+    _set_table_fixed_layout(tbl, COL_WIDTHS_DXA)  # forces Word to honour narrow col 0
+
     hdr = tbl.rows[0].cells
     headers = ["№", counterparty_col_header, avtd_col_header, "Узгоджена редакція"]
 
-    for i, h_text in enumerate(headers):
-        _style_header_cell(hdr[i], h_text)
-        _set_cell_width(hdr[i], COL_WIDTHS_CM[i])
+    _style_col0_cell(hdr[0], "№", bold=True)       # narrow margins + centred
+    for i in range(1, 4):
+        _style_header_cell(hdr[i], headers[i])
+        _set_cell_width_dxa(hdr[i], COL_WIDTHS_DXA[i])
 
     for ordinal, f in enumerate(findings, start=1):
         row = tbl.add_row().cells
 
-        # Col 0 — ordinal №
-        row[0].text = str(ordinal)
-        _set_cell_width(row[0], COL_WIDTHS_CM[0])
+        # Col 0 — ordinal №: narrow, centred, vertically centred
+        _style_col0_cell(row[0], str(ordinal))
 
         # Col 1 — counterparty's verbatim text, clause ref as bold prefix
         clause_ref = (f.get("clause_ref") or "").strip()
@@ -280,16 +409,16 @@ def build_protocol_docx(
             ref_run = col1_para.add_run(f"{clause_ref}\n")
             ref_run.bold = True
         col1_para.add_run(clause_text)
-        _set_cell_width(row[1], COL_WIDTHS_CM[1])
+        _set_cell_width_dxa(row[1], COL_WIDTHS_DXA[1])
 
         # Col 2 — AVTD's alternative (AI tag stripped, capped at 800 chars)
         avtd_raw = f.get("proposed_alternative") or f.get("short_note", "")
         row[2].text = _protocol_clean(avtd_raw)
-        _set_cell_width(row[2], COL_WIDTHS_CM[2])
+        _set_cell_width_dxa(row[2], COL_WIDTHS_DXA[2])
 
         # Col 3 — Узгоджена редакція: blank for manual completion
         row[3].text = ""
-        _set_cell_width(row[3], COL_WIDTHS_CM[3])
+        _set_cell_width_dxa(row[3], COL_WIDTHS_DXA[3])
 
     doc.add_paragraph()
     doc.add_paragraph(
@@ -308,8 +437,16 @@ def build_protocol_docx(
 
 # ─── §9.2 Legal opinion DOCX (from markdown) ─────────────────────────────────
 
-def build_opinion_docx(markdown_text: str, engagement_name: str) -> bytes:
-    """Convert markdown legal opinion to DOCX."""
+def build_opinion_docx(
+    markdown_text: str,
+    engagement_name: str,
+    findings: Optional[list] = None,
+) -> bytes:
+    """
+    Convert markdown legal opinion to DOCX.
+    If `findings` are provided, appends a 'Правова база' table listing every
+    cited KB source with its current edition date and last-verified timestamp.
+    """
     doc = Document()
     _set_margins(doc)
 
@@ -329,9 +466,91 @@ def build_opinion_docx(markdown_text: str, engagement_name: str) -> bytes:
             p = doc.add_paragraph()
             _add_md_run(p, line)
 
+    # ── Правова база appendix ────────────────────────────────────────────────
+    if findings:
+        _append_kb_sources_table(doc, findings)
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _append_kb_sources_table(doc: "Document", findings: list) -> None:
+    """
+    Append a 'Правова база' section to the legal opinion DOCX.
+    Collects all unique cited URLs from findings, matches them against
+    the active KB registry, and renders a 3-column table:
+    Закон | Редакція | Перевірено
+    """
+    try:
+        from .kb_sources import get_active_kb_sources
+        sources = get_active_kb_sources()
+    except Exception:
+        return
+
+    # Build lookup: normalized_url → source row
+    src_by_url: dict = {_strip_url_suffixes(s["canonical_url"]): s for s in sources if s.get("canonical_url")}
+
+    # Collect unique cited URLs from all findings
+    seen_urls: set = set()
+    cited_sources: list = []
+    for f in findings:
+        cits = _safe_jsonb(f.get("legal_citations"))
+        for c in (cits or []):
+            norm = _strip_url_suffixes(c.get("official_url", ""))
+            if norm and norm not in seen_urls:
+                seen_urls.add(norm)
+                src = src_by_url.get(norm)
+                if src:
+                    cited_sources.append(src)
+
+    if not cited_sources:
+        return
+
+    doc.add_paragraph()
+    h = doc.add_heading("Правова база", level=2)
+    h.runs[0].font.color.rgb = RGBColor(0x0D, 0x15, 0x28)
+
+    tbl = doc.add_table(rows=1, cols=3)
+    tbl.style = "Table Grid"
+    _set_table_fixed_layout(tbl, [5670, 1701, 1701])  # 10cm + 3cm + 3cm = 16cm
+
+    hdr_cells = tbl.rows[0].cells
+    for cell, text in zip(hdr_cells, ["Закон / джерело", "Редакція", "Перевірено"]):
+        _style_header_cell(cell, text)
+
+    for src in cited_sources:
+        row = tbl.add_row().cells
+        row[0].text = src.get("law_name", src.get("law_code", ""))
+
+        ed = src.get("current_edition_date")
+        if ed:
+            if hasattr(ed, "strftime"):
+                ed_str = ed.strftime("%d.%m.%Y")
+            else:
+                try:
+                    y, m, d = str(ed)[:10].split("-")
+                    ed_str = f"{d}.{m}.{y}"
+                except Exception:
+                    ed_str = str(ed)[:10]
+        else:
+            ed_str = "—"
+        row[1].text = ed_str
+
+        ver = src.get("last_verified_at")
+        if ver:
+            if hasattr(ver, "strftime"):
+                ver_str = ver.strftime("%d.%m.%Y")
+            else:
+                try:
+                    ver_str = str(ver)[:10].replace("-", ".")
+                    y, m, d = str(ver)[:10].split("-")
+                    ver_str = f"{d}.{m}.{y}"
+                except Exception:
+                    ver_str = str(ver)[:10]
+        else:
+            ver_str = "—"
+        row[2].text = ver_str
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

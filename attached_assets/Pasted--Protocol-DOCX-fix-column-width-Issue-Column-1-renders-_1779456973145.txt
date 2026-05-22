@@ -1,0 +1,101 @@
+# Protocol DOCX — fix № column width
+
+**Issue:** Column 1 (`№`) renders at ~2cm wide in the generated DOCX even though spec calls for 0.8cm. Other columns shrink to compensate, reducing usable space for contract text and the lawyer's handwritten negotiated wording.
+
+**Reference rendering for comparison:** the law director's `protocol_4.pages` shows column 1 as just slightly wider than the digit itself, roughly 0.6–0.8cm, with columns 2/3/4 of approximately equal width filling the rest of the page.
+
+**File:** `backend/solomon_contracts/artifacts.py` — `build_protocol_docx()`.
+
+## Root cause
+
+Two compounding issues in the table builder:
+
+1. **`columnWidths` is advisory in Word.** docx-js writes column widths as suggestions. When the renderer (LibreOffice, Word) decides cell content needs more room, it silently expands the column. Even a single-character cell can be expanded if cell padding pushes the effective minimum width up.
+
+2. **Cell padding eats into narrow columns.** If cell margins are `{left: 120, right: 120}` DXA (≈0.21cm each side), a column declared as 0.8cm (~454 DXA) only has ~214 DXA of usable text room. The renderer rounds this up.
+
+## Fix
+
+### Step 1 — set explicit narrow widths with fixed layout
+
+In the table definition, ensure all three of the following are set:
+
+```javascript
+new Table({
+  width: { size: 9360, type: WidthType.DXA },
+  columnWidths: [454, 3200, 3200, 2506],  // ≈ 0.8cm / 5.5cm / 5.5cm / 4.3cm
+  layout: TableLayoutType.FIXED,  // CRITICAL: prevents auto-expansion
+  rows: [
+    // ...
+  ]
+})
+```
+
+**Verify the column width sum:**
+
+`454 + 3200 + 3200 + 2506 = 9360` — matches table `width.size`. If these don't sum exactly, Word ignores the column widths and falls back to auto-sizing, which is exactly what's happening now.
+
+The `layout: TableLayoutType.FIXED` is the key change — it forces the renderer to honor `columnWidths` instead of treating them as hints. Import it from docx:
+
+```javascript
+const { ..., TableLayoutType } = require('docx');
+```
+
+### Step 2 — match per-cell width on column 1
+
+Every cell in column 1 (the № cells) must have:
+
+```javascript
+new TableCell({
+  width: { size: 454, type: WidthType.DXA },  // matches columnWidths[0]
+  margins: { top: 60, bottom: 60, left: 40, right: 40 },  // reduced from default
+  verticalAlign: VerticalAlign.CENTER,  // center the digit vertically
+  children: [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun(String(ordinal))]
+    })
+  ]
+})
+```
+
+Two things to note:
+- **Reduced cell margins** for column 1: `left: 40, right: 40` (≈0.07cm each side). The default 120 was eating too much room.
+- **Centered text** both horizontally (`alignment: AlignmentType.CENTER` on the Paragraph) and vertically (`verticalAlign: VerticalAlign.CENTER` on the cell). The reference shows the digit centered in a tall row when columns 2/3 wrap to many lines.
+
+### Step 3 — same treatment for the header cell
+
+Header row's column 1 cell (the one containing "№") gets the same width and margins. Otherwise the header row expands and the body rows align to its expanded width.
+
+```javascript
+new TableCell({
+  width: { size: 454, type: WidthType.DXA },
+  margins: { top: 60, bottom: 60, left: 40, right: 40 },
+  verticalAlign: VerticalAlign.CENTER,
+  shading: { fill: "F2F2F2", type: ShadingType.CLEAR },  // if header has shading
+  children: [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: "№", bold: true })]
+    })
+  ]
+})
+```
+
+## Verification
+
+Re-generate the Lvivholod protocol after the change. Open in Word or LibreOffice. Specific checks:
+
+- [ ] Column 1 visibly narrow — roughly the width of a 2-digit number with minimal padding around it
+- [ ] Column 4 (`Узгоджена редакція`) visibly wide enough to handwrite a paragraph of negotiated text — at least matching column 2 or 3 in width
+- [ ] Columns 2 and 3 are roughly equal width to each other
+- [ ] Total table width still spans the page content area without overflow
+- [ ] When row 2's text is tall (multi-paragraph clause), the `1` in column 1 stays vertically centered, not stuck at the top
+
+If the column still expands in LibreOffice but renders narrow in Word, that's a known LibreOffice quirk with fixed table layout — Word is the authoritative renderer since the law director and his team use Word.
+
+## Out of scope
+
+- Don't change the column 2/3/4 logic — only column 1 widths and cell properties
+- Don't touch the header text content or role-aware switching
+- Don't modify the analyzer prompt, citation filter, or anything outside this one builder function
