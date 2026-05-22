@@ -32,6 +32,8 @@ EXPERT_TG_IDS: set[int] = {
     408894540,   # Олександр — reviewing expert
 }
 
+FORWARD_EXPERT_ID = 408894540  # Олександр — receives all new reports for review
+
 pending_reports = {}
 
 PHOTO_INSTRUCTIONS = (
@@ -315,6 +317,43 @@ async def handle_expert_correction(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"[PhotoReport] Failed to save expert correction: {e}", exc_info=True)
         await msg.reply_text("Помилка при збереженні корекції. Спробуй ще раз.")
+
+
+async def forward_report_to_expert(
+    context: ContextTypes.DEFAULT_TYPE,
+    report_id: int,
+    agent_name: str,
+    trade_point_name: str,
+    report_text: str,
+    photo_file_ids: list,
+    score: int,
+    passed: bool,
+):
+    """Forward completed report to expert for review. Never crashes agent flow."""
+    try:
+        passed_emoji = "✅" if passed else "❌"
+        header = (
+            f"📋 *Новий звіт #{report_id}*\n"
+            f"👤 Агент: {agent_name}\n"
+            f"🏪 Точка: {trade_point_name}\n"
+            f"{passed_emoji} Оцінка: {score}/100\n\n"
+            f"Залиш корекцію якщо є розбіжності ↓"
+        )
+        await context.bot.send_message(
+            chat_id=FORWARD_EXPERT_ID,
+            text=header + "\n\n" + report_text,
+            parse_mode="Markdown",
+        )
+        for file_id in photo_file_ids[:5]:
+            try:
+                await context.bot.send_photo(
+                    chat_id=FORWARD_EXPERT_ID,
+                    photo=file_id,
+                )
+            except Exception as photo_err:
+                logger.warning(f"[ExpertForward] Could not forward photo: {photo_err}")
+    except Exception as e:
+        logger.error(f"[ExpertForward] Failed to forward report #{report_id}: {e}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -615,6 +654,22 @@ async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"[PhotoReport] Markdown parse failed, retrying plain: {fmt_err}")
             plain = tg_message.replace("*", "").replace("_", "").replace("`", "")
             await update.message.reply_text(plain, reply_markup=MAIN_MENU)
+
+        # ── Forward to expert for review (non-blocking) ───────────────────────
+        if user.id not in EXPERT_TG_IDS:
+            asyncio.create_task(
+                forward_report_to_expert(
+                    context=context,
+                    report_id=report_id,
+                    agent_name=user.full_name or "Агент",
+                    trade_point_name=report_data["point_name"],
+                    report_text=tg_message,
+                    photo_file_ids=report_data["photo_file_ids"],
+                    score=scored_report.get("score", 0),
+                    passed=scored_report.get("passed", False),
+                )
+            )
+        # ─────────────────────────────────────────────────────────────────────
 
     except Exception as e:
         logger.error(f"Photo report error: {e}", exc_info=True)
