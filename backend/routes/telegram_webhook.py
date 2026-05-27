@@ -50,6 +50,11 @@ from services.broadcast_service import (
     send_confirmation_card,
     execute_broadcast,
     cancel_broadcast,
+    claim_pending_broadcast,
+    execute_recall,
+    get_broadcast_summary,
+    mark_user_inactive,
+    mark_user_active,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,10 +64,6 @@ TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 HUNT_SUPERGROUP_ID = int(os.getenv("HUNT_TG_SUPERGROUP_ID", "0"))
 BROADCAST_GROUP_ID = int(os.getenv("MAYA_BROADCAST_GROUP_ID", "0"))
 API_BASE_URL = os.getenv("APP_URL", "http://localhost:8000")
-
-PENDING_BROADCASTS: dict = {}
-# Maps broadcast_id → original Telegram message dict
-# Cleared after broadcast executes or is cancelled
 
 HR_KEYWORDS = [
     'зарплата', 'зп', 'виплата', 'аванс', 'нарахування',
@@ -244,7 +245,7 @@ def is_hr_question(text: str) -> bool:
 @router.post("/webhook/maya")
 async def handle_telegram_webhook_maya(request: Request, db: Session = Depends(get_db)):
     """Maya HR Bot webhook — all HR, Hunt, Broadcast logic lives here."""
-    return await handle_telegram_webhook(request, db)
+    return await _process_webhook_update(request, db)
 
 
 @router.post("/webhook/gradus")
@@ -288,20 +289,15 @@ async def handle_telegram_webhook_gradus(request: Request, db: Session = Depends
 
 @router.post("/webhook")
 async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db)):
-    """
-    UNIFIED webhook handler for all Telegram updates
-
-    ⚠️  DEPRECATED — use /webhook/maya or /webhook/gradus instead.
-    Kept for backwards compatibility until both bots are re-registered.
-
-    Priority order:
-    1. Callback queries (approval buttons) - Critical business logic
-    2. Regular messages (Maya bot chat) - User interaction
-    """
+    """Legacy bare /webhook — kept for backwards compatibility."""
     logger.warning(
         "⚠️ Legacy /webhook hit — both bots should use /webhook/maya or /webhook/gradus"
     )
-    
+    return await _process_webhook_update(request, db)
+
+
+async def _process_webhook_update(request: Request, db: Session):
+    """Shared handler for /webhook/maya and legacy /webhook."""
     try:
         data = await request.json()
         
@@ -336,7 +332,9 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             elif callback_data.startswith('survey_'):
                 await handle_survey_callback(data['callback_query'])
                 return {"ok": True}
-            elif callback_data.startswith('broadcast_confirm_') or callback_data.startswith('broadcast_cancel_'):
+            elif (callback_data.startswith('broadcast_confirm_') or
+                  callback_data.startswith('broadcast_cancel_') or
+                  callback_data.startswith('broadcast_recall_')):
                 result = await handle_broadcast_callback(data['callback_query'])
                 return result
             else:
@@ -402,8 +400,8 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
                     content_type=content_type,
                     content_preview=content_preview,
                     file_id=file_id,
+                    original_message=message,
                 )
-                PENDING_BROADCASTS[broadcast_id] = message
                 await send_confirmation_card(
                     broadcast_id=broadcast_id,
                     content_type=content_type,
@@ -436,6 +434,16 @@ async def handle_telegram_webhook(request: Request, db: Session = Depends(get_db
             await process_telegram_message(message)
             return {"ok": True}
         
+        elif "my_chat_member" in data:
+            mcm = data["my_chat_member"]
+            new_status = mcm.get("new_chat_member", {}).get("status")
+            user_id = mcm.get("from", {}).get("id")
+            if new_status == "kicked" and user_id:
+                await mark_user_inactive(user_id)
+            elif new_status == "member" and user_id:
+                await mark_user_active(user_id)
+            return JSONResponse({"ok": True})
+
         else:
             logger.warning(f"⚠️  Unknown update: {list(data.keys())}")
             return {"ok": True}
@@ -1293,7 +1301,7 @@ async def handle_admin_button_callback(callback_query: dict, db):
 
 
 async def handle_broadcast_callback(callback_query: dict):
-    """Handle broadcast confirm / cancel callbacks."""
+    """Handle broadcast confirm / cancel / recall callbacks."""
     callback_id   = callback_query.get("id")
     callback_data = callback_query.get("data", "")
     message       = callback_query.get("message", {})
@@ -1307,9 +1315,10 @@ async def handle_broadcast_callback(callback_query: dict):
 
     broadcast_id = int(callback_data.split("_")[-1])
 
+    # ── Confirm: atomically claim + send ─────────────────────────────────────
     if callback_data.startswith("broadcast_confirm_"):
-        original_message = PENDING_BROADCASTS.get(broadcast_id)
-        if not original_message:
+        original_message = await claim_pending_broadcast(broadcast_id)
+        if original_message is None:
             await answer_callback(callback_id, "⚠️ Розсилка не знайдена або вже виконана")
             return {"ok": True}
         await answer_callback(callback_id, "⏳ Виконую розсилку...")
@@ -1318,22 +1327,92 @@ async def handle_broadcast_callback(callback_query: dict):
             "⏳ *Розсилка виконується...*\n\nБудь ласка, зачекайте."
         )
         result = await execute_broadcast(broadcast_id, original_message)
-        PENDING_BROADCASTS.pop(broadcast_id, None)
         await edit_telegram_message(
             chat_id, message_id,
             f"✅ *Розсилку завершено*\n\n"
             f"📤 Надіслано: {result['sent']}\n"
             f"❌ Заблоковано: {result['failed']}\n"
-            f"👥 Всього: {result['sent'] + result['failed']}"
+            f"👥 Всього: {result['sent'] + result['failed']}",
+            keyboard={"inline_keyboard": [[
+                {"text": "🔙 Відкликати", "callback_data": f"broadcast_recall_{broadcast_id}"}
+            ]]}
         )
         logger.info(f"[Broadcast] id={broadcast_id} confirmed by {confirmer_id}: sent={result['sent']} failed={result['failed']}")
 
+    # ── Cancel: abort before sending ─────────────────────────────────────────
     elif callback_data.startswith("broadcast_cancel_"):
         await cancel_broadcast(broadcast_id)
-        PENDING_BROADCASTS.pop(broadcast_id, None)
         await edit_telegram_message(chat_id, message_id, "❌ *Розсилку скасовано*")
         await answer_callback(callback_id, "Розсилку скасовано")
         logger.info(f"[Broadcast] id={broadcast_id} cancelled by {confirmer_id}")
+
+    # ── Recall confirm: execute deleteMessage fan-out ─────────────────────────
+    elif callback_data.startswith("broadcast_recall_confirm_"):
+        await answer_callback(callback_id, "⏳ Відкликаю...")
+        summary = await get_broadcast_summary(broadcast_id)
+        n = summary["sent_count"] if summary else "?"
+        await edit_telegram_message(
+            chat_id, message_id,
+            f"⏳ *Відкликаю {n} повідомлень...*"
+        )
+        result = await execute_recall(broadcast_id, confirmer_id)
+        if "error" in result:
+            err = result["error"]
+            age = result.get("age_hours", "")
+            msg = f"⚠️ Не вдалося відкликати: {err}" + (f" ({age}г)" if age else "")
+            await edit_telegram_message(chat_id, message_id, msg)
+        else:
+            await edit_telegram_message(
+                chat_id, message_id,
+                f"✅ *Розсилку відкликано*\n\n"
+                f"🗑 Відкликано: {result['recalled']}\n"
+                f"❌ Не вдалося: {result['failed']}"
+            )
+        logger.info(f"[Recall] id={broadcast_id} completed by {confirmer_id}: {result}")
+
+    # ── Recall cancel: restore completion card with recall button ─────────────
+    elif callback_data.startswith("broadcast_recall_cancel_"):
+        summary = await get_broadcast_summary(broadcast_id)
+        if summary:
+            await edit_telegram_message(
+                chat_id, message_id,
+                f"✅ *Розсилку завершено*\n\n"
+                f"📤 Надіслано: {summary['sent_count']}\n"
+                f"❌ Заблоковано: {summary['failed_count']}\n"
+                f"👥 Всього: {summary['sent_count'] + summary['failed_count']}",
+                keyboard={"inline_keyboard": [[
+                    {"text": "🔙 Відкликати", "callback_data": f"broadcast_recall_{broadcast_id}"}
+                ]]}
+            )
+        await answer_callback(callback_id, "Скасовано")
+        logger.info(f"[Recall] id={broadcast_id} recall cancelled by {confirmer_id}")
+
+    # ── Recall: show 2-button confirmation card ───────────────────────────────
+    elif callback_data.startswith("broadcast_recall_"):
+        summary = await get_broadcast_summary(broadcast_id)
+        if not summary or summary["status"] not in ('completed', 'sent'):
+            await answer_callback(callback_id, "⚠️ Цю розсилку вже неможливо відкликати")
+            return {"ok": True}
+        # Age guard (47h safety margin)
+        from datetime import datetime, timezone as _tz
+        ref_time = summary.get("completed_at") or summary.get("created_at")
+        if ref_time:
+            now_utc = datetime.now(_tz.utc)
+            if ref_time.tzinfo is None:
+                ref_time = ref_time.replace(tzinfo=_tz.utc)
+            if (now_utc - ref_time).total_seconds() / 3600 > 47:
+                await answer_callback(callback_id, "⚠️ Розсилка старша 48 годин, Telegram не дозволяє видалення")
+                return {"ok": True}
+        n = summary["sent_count"]
+        await edit_telegram_message(
+            chat_id, message_id,
+            f"⚠️ *Ви впевнені?*\n\nБуде видалено ~{n} повідомлень у чатах співробітників.",
+            keyboard={"inline_keyboard": [[
+                {"text": "✅ Так, відкликати", "callback_data": f"broadcast_recall_confirm_{broadcast_id}"},
+                {"text": "❌ Скасувати",       "callback_data": f"broadcast_recall_cancel_{broadcast_id}"},
+            ]]}
+        )
+        await answer_callback(callback_id, "")
 
     return {"ok": True}
 

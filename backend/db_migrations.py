@@ -6,6 +6,22 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "054_hr_broadcast_recipients",
+        "statements": [
+            "ALTER TABLE hr_broadcast_log ADD COLUMN IF NOT EXISTS payload JSONB",
+            """CREATE TABLE IF NOT EXISTS hr_broadcast_recipients (
+                id              SERIAL PRIMARY KEY,
+                broadcast_id    INTEGER NOT NULL REFERENCES hr_broadcast_log(id) ON DELETE CASCADE,
+                recipient_tg_id BIGINT NOT NULL,
+                message_id      BIGINT,
+                sent_at         TIMESTAMP DEFAULT NOW(),
+                status          VARCHAR(16) DEFAULT 'sent'
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_hr_broadcast_recipients_bid ON hr_broadcast_recipients(broadcast_id)",
+            "CREATE INDEX IF NOT EXISTS idx_hr_broadcast_recipients_status ON hr_broadcast_recipients(broadcast_id, status)",
+        ]
+    },
+    {
         "version": "039_pulse_score_constraint_fix",
         "statements": [
             "ALTER TABLE pulse_surveys DROP CONSTRAINT IF EXISTS pulse_surveys_score_check",

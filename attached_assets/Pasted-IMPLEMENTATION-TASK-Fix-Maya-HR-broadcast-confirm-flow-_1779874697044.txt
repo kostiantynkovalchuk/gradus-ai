@@ -1,0 +1,290 @@
+IMPLEMENTATION TASK — Fix Maya HR broadcast confirm flow + add recall.
+
+Two problems being solved:
+
+(1) PENDING_BROADCASTS is a module-level dict in
+    routes/telegram_webhook.py:63. On Render with multiple workers or
+    after a restart, the worker handling the confirm callback has an
+    empty dict, so the broadcast never fans out. Row 7 in
+    hr_broadcast_log was stuck at status='pending' as proof.
+    Audit also revealed: zero idempotency — a double-click or
+    Telegram retry can fan out twice.
+
+(2) When a broadcast goes out wrong (typo, duplicate, wrong image),
+    there is currently no way to recall it. Per-recipient message_ids
+    are not stored anywhere.
+
+Both fixes ship together. Do NOT change authorization logic. Do NOT
+refactor anything outside the files listed below. Keep the diff
+minimal.
+
+=== STEP 1: Migration 039 ===
+
+Add to backend/db_migrations.py following the existing numbered
+pattern:
+
+  ALTER TABLE hr_broadcast_log
+    ADD COLUMN IF NOT EXISTS payload JSONB;
+
+  CREATE TABLE IF NOT EXISTS hr_broadcast_recipients (
+    id              SERIAL PRIMARY KEY,
+    broadcast_id    INTEGER NOT NULL REFERENCES hr_broadcast_log(id) ON DELETE CASCADE,
+    recipient_tg_id BIGINT NOT NULL,
+    message_id      BIGINT,
+    sent_at         TIMESTAMP DEFAULT NOW(),
+    status          VARCHAR(16) DEFAULT 'sent'
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hr_broadcast_recipients_bid
+    ON hr_broadcast_recipients(broadcast_id);
+  CREATE INDEX IF NOT EXISTS idx_hr_broadcast_recipients_status
+    ON hr_broadcast_recipients(broadcast_id, status);
+
+Status values used: 'sent', 'recalled', 'recall_failed'.
+
+Register migration 039 in the migrations list. Do not modify existing
+migrations.
+
+=== STEP 2: broadcast_service.py ===
+
+(a) Modify create_broadcast_log(...) to accept original_message: dict
+    and store it in the new payload column via json.dumps(...) on
+    insert. Keep all other columns/behavior identical. Return the
+    same shape.
+
+(b) Add a new function:
+
+      async def claim_pending_broadcast(broadcast_id: int) -> dict | None:
+          """
+          Atomically transitions a broadcast from 'pending' to 'sending'.
+          Returns the stored payload dict if the transition succeeded,
+          None if the broadcast is already claimed, cancelled, or
+          missing. This is the idempotency guard — only one caller
+          wins the row.
+          """
+
+    Implementation:
+
+      UPDATE hr_broadcast_log
+         SET status = 'sending'
+       WHERE id = %s
+         AND status = 'pending'
+      RETURNING payload
+
+    If a row is returned, normalize payload (psycopg2 may return dict
+    or string) and return it. If no row, return None.
+
+(c) In execute_broadcast(): for every successful send response from
+    sendMessage / sendPhoto / sendVideo / sendDocument / etc., capture
+    response["result"]["message_id"] and insert a row into
+    hr_broadcast_recipients with broadcast_id, recipient_tg_id,
+    message_id, status='sent'. Batch the inserts in groups of ~50 to
+    avoid 800 individual round-trips — use psycopg2 execute_values or
+    SQLAlchemy bulk insert, whichever matches the existing style.
+    Do NOT insert rows for 403 Forbidden responses (the bot was
+    blocked) or other failures — only successful sends.
+
+(d) Optional cleanup: if execute_broadcast() currently does its own
+    UPDATE ... SET status='sending', that's now a no-op redundant
+    write since claim_pending_broadcast() owns the transition.
+    Remove it ONLY if nothing else depends on it; safer to leave a
+    redundant write than break something.
+
+(e) Add a new function for the recall fan-out:
+
+      async def execute_recall(broadcast_id: int, initiated_by: int) -> dict:
+          """
+          Deletes all sent messages for a broadcast.
+          Returns {"recalled": N, "failed": M, "expired": K}.
+          'expired' = messages older than 48h (Telegram API limit).
+          """
+
+    Implementation:
+      1. Atomic guard:
+           UPDATE hr_broadcast_log
+              SET status = 'recalling'
+            WHERE id = %s
+              AND status IN ('completed', 'sent')
+           RETURNING sent_at, completed_at
+
+         If no row → return {"error": "already recalled or not eligible"}.
+
+      2. Check age. Use completed_at if present, else sent_at, else
+         created_at. If now() - timestamp > 47 hours → mark status
+         back to 'completed' (or whatever it was), return
+         {"error": "too old", "age_hours": X}.
+         Use 47h not 48h as a safety margin — by the time we finish
+         iterating 800 rows we don't want to hit the wall.
+
+      3. SELECT recipient_tg_id, message_id
+           FROM hr_broadcast_recipients
+          WHERE broadcast_id = %s
+            AND status = 'sent'
+            AND message_id IS NOT NULL
+
+      4. For each row, call Telegram deleteMessage(chat_id, message_id).
+         Rate limit to ~25 calls/sec (sleep 0.04s between calls — keeps
+         well under Telegram's 30/sec global bot limit).
+         On 200 OK → UPDATE recipient row SET status='recalled'.
+         On error → SET status='recall_failed', log the error.
+
+      5. UPDATE hr_broadcast_log
+            SET status = 'recalled',
+                completed_at = NOW()
+          WHERE id = %s
+
+      6. Return {"recalled": N, "failed": M, "expired": 0}.
+
+(f) Add a small helper:
+
+      async def get_broadcast_summary(broadcast_id: int) -> dict | None:
+          """Returns id, status, sent_count, failed_count, content_type,
+          created_at, completed_at — for the recall confirmation card."""
+
+=== STEP 3: routes/telegram_webhook.py ===
+
+(a) Delete the module-level PENDING_BROADCASTS dict at line 63 and
+    every reference to it.
+
+(b) In the message intercept block (around lines 356–414), where
+    create_broadcast_log() is called, pass the full `message` dict as
+    the new original_message argument. Remove the line that writes to
+    PENDING_BROADCASTS.
+
+(c) In handle_broadcast_callback() (around line 1295), replace:
+
+      original_message = PENDING_BROADCASTS.get(broadcast_id)
+      if original_message is None:
+          await answer_callback(callback_id, "⚠️ Розсилка не знайдена або вже виконана")
+          return JSONResponse({"ok": True})
+
+    with:
+
+      original_message = await claim_pending_broadcast(broadcast_id)
+      if original_message is None:
+          await answer_callback(callback_id, "⚠️ Розсилка не знайдена або вже виконана")
+          return JSONResponse({"ok": True})
+
+    Remove the PENDING_BROADCASTS.pop(...) line after
+    execute_broadcast(). The DB row is now the source of truth.
+
+(d) After execute_broadcast() completes successfully and the
+    completion-summary card is edited, add a "🔙 Відкликати" inline
+    button alongside any existing buttons. callback_data:
+    "broadcast_recall_<id>".
+
+(e) Add a new callback handler branch in handle_broadcast_callback()
+    for "broadcast_recall_<id>":
+
+      - Check is_authorized_broadcaster(confirmer_id) — same gate as
+        confirm.
+      - Parse broadcast_id.
+      - Fetch summary via get_broadcast_summary(broadcast_id).
+      - If status NOT IN ('completed', 'sent') → answer_callback with
+        "⚠️ Цю розсилку вже неможливо відкликати", return.
+      - Check age (use completed_at). If > 47h → answer_callback with
+        "⚠️ Розсилка старша 48 годин, Telegram не дозволяє видалення",
+        return.
+      - Edit the card to show a TWO-BUTTON confirmation:
+          "✅ Так, відкликати"  → callback_data "broadcast_recall_confirm_<id>"
+          "❌ Скасувати"        → callback_data "broadcast_recall_cancel_<id>"
+        With message text: "Ви впевнені? Буде видалено ~N повідомлень
+        у чатах співробітників."  (N = sent_count from summary)
+      - answer_callback("").
+
+(f) Add handler for "broadcast_recall_confirm_<id>":
+      - Auth check.
+      - answer_callback("⏳ Відкликаю...").
+      - Edit card to "⏳ Відкликаю N повідомлень...".
+      - Call execute_recall(broadcast_id, confirmer_id).
+      - Edit card to completion summary:
+          "✅ Розкликано: {recalled}\n❌ Не вдалося: {failed}"
+        (or error message if execute_recall returned {"error": ...}).
+      - Remove inline buttons.
+
+(g) Add handler for "broadcast_recall_cancel_<id>":
+      - Just edit card back to the original completion summary
+        WITH the "🔙 Відкликати" button restored (so they can change
+        their mind again later, within 48h).
+      - answer_callback("Скасовано").
+
+=== STEP 4: Fix the false-positive legacy warning ===
+
+In routes/telegram_webhook.py:
+
+  - Delete the logger.warning("⚠️ Legacy /webhook hit ...") call from
+    inside handle_telegram_webhook() (~line 301).
+  - Add it to the bare @router.post("/webhook") handler body only,
+    before `await handle_telegram_webhook(request, db)`.
+
+=== STEP 5: Handle my_chat_member updates ===
+
+Also at the top of handle_telegram_webhook() there's a generic
+"Unknown update" warning. The 'my_chat_member' update type fires when
+users block/unblock the bot. Add a small handler before the unknown-
+update warning:
+
+  if "my_chat_member" in update:
+      mcm = update["my_chat_member"]
+      new_status = mcm.get("new_chat_member", {}).get("status")
+      user_id    = mcm.get("from", {}).get("id")
+      if new_status == "kicked" and user_id:
+          # User blocked the bot — mark inactive so future broadcasts skip them
+          await mark_user_inactive(user_id)
+      elif new_status == "member" and user_id:
+          await mark_user_active(user_id)
+      return JSONResponse({"ok": True})
+
+Add the two helpers in broadcast_service.py (or wherever the
+hr_users updates already live):
+
+  async def mark_user_inactive(telegram_id: int):
+      UPDATE hr_users SET is_active = FALSE WHERE telegram_id = %s
+
+  async def mark_user_active(telegram_id: int):
+      UPDATE hr_users SET is_active = TRUE WHERE telegram_id = %s
+
+This reduces the failed_count on future broadcasts (was 22 on the
+last run — most of those were probably already-blocked users).
+
+=== STEP 6: Verification ===
+
+After deploy, manually verify in this order:
+
+  1. Send a photo to group -5226315336 → card appears.
+  2. Click ✅ ONCE → expect: card edits to "⏳ Розсилка
+     виконується...", fan-out logs appear, hr_broadcast_log row
+     transitions pending → sending → completed, hr_broadcast_recipients
+     gets ~sent_count rows with message_id populated, card edits to
+     completion summary WITH "🔙 Відкликати" button.
+  3. Click ✅ a second time on the same (now completed) card → expect:
+     answerCallbackQuery with "⚠️ Розсилка не знайдена або вже
+     виконана", NO double fan-out in logs.
+  4. Click "🔙 Відкликати" → two-button confirmation appears.
+  5. Click "❌ Скасувати" → card reverts to completion summary with
+     recall button still present.
+  6. Click "🔙 Відкликати" again, then "✅ Так, відкликати" → expect:
+     deleteMessage calls fire, recipient rows transition to
+     'recalled', hr_broadcast_log row → status='recalled', card
+     shows final summary, no buttons.
+  7. Tail logs and confirm the "⚠️ Legacy /webhook hit" warning is
+     gone from /webhook/maya traffic.
+  8. Block the bot from a test account, send any message in the test
+     account's private chat with the bot → expect: my_chat_member
+     update handled, that user's hr_users.is_active becomes FALSE.
+
+=== Out of scope ===
+
+- Do NOT add Telegram admin API auto-promotion to hr_users.
+- Do NOT add a web UI for recall — Telegram inline button only.
+- Do NOT change the authorization gate logic.
+- Do NOT introduce a queue/celery — execute_broadcast and
+  execute_recall both run inline in the webhook handler. They
+  already do today; preserve that.
+- Do NOT touch any other migration or table.
+
+When done, paste:
+  - The diff (or summary of changed files)
+  - Migration 039 SQL
+  - A screenshot or text dump of one end-to-end test (steps 1–6)
+Then push.
