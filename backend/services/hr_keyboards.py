@@ -526,6 +526,17 @@ MENU_TITLES = {
 }
 
 
+def get_inline_menu_for_access_level(access_level: str) -> Dict:
+    """Return the appropriate inline keyboard based on user access level.
+    Employees get the standard HR menu; admins/developers get an extra admin row."""
+    base = create_main_menu_keyboard()
+    if access_level in ('hr_admin', 'developer'):
+        base["inline_keyboard"].append([
+            {"text": "⚙️ Адмін-панель", "callback_data": "admin_cmd:panel"}
+        ])
+    return base
+
+
 def split_long_message(text: str, max_length: int = 3800) -> List[str]:
     """Split long message into chunks"""
     if len(text) <= max_length:

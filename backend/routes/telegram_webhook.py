@@ -24,6 +24,7 @@ from services.hr_keyboards import (
     create_main_menu_keyboard, create_category_keyboard,
     create_feedback_keyboard, create_back_keyboard,
     create_content_navigation_keyboard,
+    get_inline_menu_for_access_level,
     MENU_TITLES, split_long_message, LEGAL_CONTRACTS, CATEGORY_NAMES
 )
 from services.maya_hr_content import get_direct_content, has_direct_content
@@ -490,16 +491,22 @@ async def handle_contact_shared(message: dict, db: Session):
     user = get_user_by_telegram_id(db, telegram_id)
     if user:
         logger.info(f"VERIFY_CONTACT_ALREADY_AUTH: telegram_id={telegram_id}, user={user.full_name}")
-        from services.hr_keyboards import get_inline_menu_for_access_level
-        keyboard = get_inline_menu_for_access_level(user.access_level)
-        await send_telegram_message_with_keyboard(
-            chat_id,
-            f"✅ Ви вже авторизовані як *{user.full_name}*\n\n"
-            f"📋 Посада: {user.position or 'N/A'}\n"
-            f"🏢 Відділ: {user.department or 'N/A'}\n\n"
-            f"Рада знову тебе бачити! Чим можу допомогти?",
-            keyboard
-        )
+        try:
+            keyboard = get_inline_menu_for_access_level(user.access_level)
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                f"✅ Ви вже авторизовані як *{user.full_name}*\n\n"
+                f"📋 Посада: {user.position or 'N/A'}\n"
+                f"🏢 Відділ: {user.department or 'N/A'}\n\n"
+                f"Рада знову тебе бачити! Чим можу допомогти?",
+                keyboard
+            )
+        except Exception as menu_err:
+            logger.error(f"VERIFY_CONTACT_MENU_ERROR: {menu_err}", exc_info=True)
+            await send_telegram_message(
+                chat_id,
+                f"✅ Дякуємо, ви авторизовані як *{user.full_name}*!\n\nЧим можу допомогти?"
+            )
         return
 
     await send_telegram_message(
