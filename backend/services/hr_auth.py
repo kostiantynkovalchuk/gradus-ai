@@ -1,5 +1,6 @@
 import re
 import os
+import asyncio
 import httpx
 import logging
 from datetime import datetime
@@ -692,32 +693,46 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
 async def handle_logs_command(chat_id: int, telegram_id: int, db: Session):
     access = get_access_level(db, telegram_id)
     if not access or access not in ["developer", "admin_hr", "admin_it"]:
-        await send_message(chat_id, "❌ Немає доступу")
+        await send_plain_message(chat_id, "❌ Немає доступу")
         return
 
-    logs = db.query(VerificationLog).order_by(
+    logs = db.query(VerificationLog).filter(
+        VerificationLog.status != "success"
+    ).order_by(
         VerificationLog.created_at.desc()
-    ).limit(15).all()
+    ).limit(50).all()
 
     if not logs:
-        await send_message(chat_id, "📋 Журнал верифікацій порожній")
+        await send_plain_message(chat_id, "✅ Невдалих спроб не зафіксовано. Всі верифікації успішні.")
         return
 
-    log_text = "📋 *Останні 15 спроб верифікації:*\n\n"
-
+    lines = [f"🔍 Невдалі верифікації (останні {len(logs)}):"]
     for entry in logs:
-        status_emoji = "✅" if entry.status == "success" else "❌"
         time_str = entry.created_at.strftime("%d.%m %H:%M") if entry.created_at else "?"
-
         user = db.query(HRUser).filter(HRUser.telegram_id == entry.telegram_id).first()
-        name = user.full_name if user else "Невідомий"
+        name = user.full_name if user else "unknown"
+        phone = entry.phone or "—"
+        reason = entry.verification_type or entry.status or "?"
+        lines.append(f"❌ {time_str} | {name} | {phone} | {reason}")
 
-        log_text += (
-            f"{status_emoji} `{time_str}` | `{entry.phone}`\n"
-            f"   {name} | {entry.verification_type} | {entry.status}\n\n"
-        )
+    chunks = []
+    current = ""
+    for line in lines:
+        candidate = (current + line + "\n")
+        if len(candidate) > 3500 and current:
+            chunks.append(current.strip())
+            current = line + "\n"
+        else:
+            current = candidate
+    if current:
+        chunks.append(current.strip())
 
-    await send_message(chat_id, log_text)
+    for chunk in chunks:
+        ok = await send_plain_message(chat_id, chunk)
+        if not ok:
+            await send_plain_message(chat_id, "⚠️ Помилка завантаження журналу")
+            return
+        await asyncio.sleep(0.05)
 
 
 async def handle_stats_command(chat_id: int, telegram_id: int, db: Session):
@@ -764,22 +779,39 @@ async def handle_stats_command(chat_id: int, telegram_id: int, db: Session):
 async def handle_listusers_command(chat_id: int, telegram_id: int, db: Session):
     access = get_access_level(db, telegram_id)
     if access != "developer":
-        await send_message(chat_id, "❌ Тільки для розробників")
+        await send_plain_message(chat_id, "❌ Тільки для розробників")
         return
 
-    users = db.query(HRUser).order_by(HRUser.access_level, HRUser.full_name).limit(50).all()
+    users = db.query(HRUser).order_by(HRUser.access_level, HRUser.full_name).all()
+    total = len(users)
 
-    message = f"👥 *Користувачі ({len(users)}):*\n\n"
+    lines = []
     current_level = None
-
     for u in users:
         if u.access_level != current_level:
             current_level = u.access_level
-            message += f"\n*{current_level.upper()}:*\n"
+            lines.append(f"\n{current_level.upper()}:")
         status = "✅" if u.is_active else "❌"
-        message += f"{status} {u.full_name} | `{u.phone}`\n"
+        lines.append(f"{status} {u.full_name} | {u.phone or '—'}")
+    lines.append(f"\nВсього: {total} користувачів")
 
-    await send_message(chat_id, message)
+    chunks = []
+    current = ""
+    for line in lines:
+        candidate = current + line + "\n"
+        if len(candidate) > 3500 and current:
+            chunks.append(current.strip())
+            current = line + "\n"
+        else:
+            current = candidate
+    if current:
+        chunks.append(current.strip())
+
+    total_chunks = len(chunks)
+    for i, chunk in enumerate(chunks, 1):
+        header = f"👥 Користувачі (page {i}/{total_chunks}):\n"
+        await send_plain_message(chat_id, header + chunk)
+        await asyncio.sleep(0.05)
 
 
 def get_inline_menu_for_access_level(access_level: str) -> dict:
@@ -805,6 +837,24 @@ def get_inline_menu_for_access_level(access_level: str) -> dict:
         ])
 
     return {"inline_keyboard": buttons}
+
+
+async def send_plain_message(chat_id: int, text: str) -> bool:
+    """Send a plain-text message (no parse_mode). Returns True on success."""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.warning("TELEGRAM_MAYA_BOT_TOKEN not set")
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json={"chat_id": chat_id, "text": text})
+            if resp.status_code != 200:
+                logger.error(f"send_plain_message {resp.status_code}: {resp.text[:300]}")
+                return False
+            return True
+    except Exception as e:
+        logger.error(f"send_plain_message error to {chat_id}: {e}")
+        return False
 
 
 async def send_message(chat_id: int, text: str):
