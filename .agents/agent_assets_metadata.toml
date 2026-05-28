@@ -90,3 +90,9 @@ id = "L2EhH1qww7HlGCHnkTcbl"
 uri = "file://tenderlot-bot-export.tar.gz"
 type = "unspecified"
 title = "tenderlot-bot-export.tar.gz"
+
+[[outputs]]
+id = "kEwl1Z9HTauI8tgLXzOYW"
+uri = "file://avtd_scoring_package.zip"
+type = "unspecified"
+title = "AVTD Scoring Module — IT Delivery Package"
