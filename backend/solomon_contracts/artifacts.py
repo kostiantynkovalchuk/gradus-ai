@@ -61,14 +61,11 @@ _AI_TAG_RE = re.compile(
 )
 
 
-def _protocol_clean(text: str, max_chars: int = 800) -> str:
-    """Strip internal AI disclaimer tag and trim to 2 paragraphs / max_chars."""
+def _protocol_clean(text: str, max_chars: int = 4000) -> str:
+    """Strip internal AI disclaimer tag. Truncates only at max_chars (runaway guard)."""
     if not text:
         return ""
     text = _AI_TAG_RE.sub("", text).strip()
-    paras = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if len(paras) > 2:
-        text = "\n\n".join(paras[:2])
     if len(text) > max_chars:
         text = text[:max_chars].rstrip() + "…"
     return text
@@ -403,20 +400,34 @@ def build_protocol_docx(
         # Col 0 — ordinal №: narrow, centred, vertically centred
         _style_col0_cell(row[0], str(ordinal))
 
-        # Col 1 — counterparty's verbatim text, clause ref as bold prefix
+        # Col 1 — counterparty's verbatim text, clause ref as bold prefix in first para
         clause_ref = (f.get("clause_ref") or "").strip()
         clause_text = _protocol_clean(f.get("clause_text") or "")
-        col1_para = row[1].paragraphs[0]
-        if clause_ref:
-            ref_run = col1_para.add_run(f"{clause_ref}\n")
+        col1_cell = row[1]
+        col1_cell.text = ""
+        col1_paras = [p.strip() for p in clause_text.split("\n\n") if p.strip()]
+        for i, seg in enumerate(col1_paras):
+            p = col1_cell.paragraphs[0] if i == 0 else col1_cell.add_paragraph()
+            if i == 0 and clause_ref:
+                ref_run = p.add_run(f"{clause_ref}\n")
+                ref_run.bold = True
+            p.add_run(seg)
+        if not col1_paras and clause_ref:
+            p = col1_cell.paragraphs[0]
+            ref_run = p.add_run(clause_ref)
             ref_run.bold = True
-        col1_para.add_run(clause_text)
-        _set_cell_width_dxa(row[1], COL_WIDTHS_DXA[1])
+        _set_cell_width_dxa(col1_cell, COL_WIDTHS_DXA[1])
 
-        # Col 2 — AVTD's alternative (AI tag stripped, capped at 800 chars)
+        # Col 2 — AVTD's alternative (AI tag stripped; each \n\n block → separate <w:p>)
         avtd_raw = f.get("proposed_alternative") or f.get("short_note", "")
-        row[2].text = _protocol_clean(avtd_raw)
-        _set_cell_width_dxa(row[2], COL_WIDTHS_DXA[2])
+        avtd_cleaned = _protocol_clean(avtd_raw)
+        col2_cell = row[2]
+        col2_cell.text = ""
+        avtd_paras = [p.strip() for p in avtd_cleaned.split("\n\n") if p.strip()]
+        for i, para in enumerate(avtd_paras):
+            p = col2_cell.paragraphs[0] if i == 0 else col2_cell.add_paragraph()
+            p.add_run(para)
+        _set_cell_width_dxa(col2_cell, COL_WIDTHS_DXA[2])
 
         # Col 3 — Узгоджена редакція: blank for manual completion
         row[3].text = ""
