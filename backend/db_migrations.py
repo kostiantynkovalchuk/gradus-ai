@@ -1447,6 +1447,22 @@ MIGRATIONS = [
                ON solomon_kb_source_history(kb_source_id, created_at DESC)""",
         ]
     },
+    {
+        "version": "052_avtd_role_default_notnull",
+        "statements": [
+            # Belt-and-braces UPDATE before SET NOT NULL — handles any rows inserted
+            # between migration 050 and now with avtd_role = NULL.
+            # Migration 050 backfilled existing rows, but new POST /engagements
+            # did not include avtd_role in the INSERT, so gaps are possible.
+            """UPDATE solcon_engagements
+               SET avtd_role = 'supplier'
+               WHERE avtd_role IS NULL""",
+            """ALTER TABLE solcon_engagements
+               ALTER COLUMN avtd_role SET DEFAULT 'supplier'""",
+            """ALTER TABLE solcon_engagements
+               ALTER COLUMN avtd_role SET NOT NULL""",
+        ]
+    },
 ]
 
 

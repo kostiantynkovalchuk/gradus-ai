@@ -9,7 +9,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -72,6 +72,7 @@ class EngagementCreate(BaseModel):
     our_entity: Optional[str] = "AVTD"
     buyer_profile_id: Optional[int] = None
     engagement_date: Optional[str] = None
+    avtd_role: Literal['supplier', 'buyer'] = 'supplier'
 
 
 class EngagementPatch(BaseModel):
@@ -100,13 +101,13 @@ async def create_engagement(request: Request, body: EngagementCreate):
     _auth_check(request)
     result = solcon_db.fetchone(
         """INSERT INTO solcon_engagements
-             (name, counterparty_name, our_entity, buyer_profile_id, engagement_date, created_by)
-           VALUES (%s, %s, %s, %s, %s, %s)
+             (name, counterparty_name, our_entity, buyer_profile_id, engagement_date, created_by, avtd_role)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
         (body.name, body.counterparty_name, body.our_entity,
-         body.buyer_profile_id, body.engagement_date, SOLOMON_USER),
+         body.buyer_profile_id, body.engagement_date, SOLOMON_USER, body.avtd_role),
     )
-    return {"id": result["id"], "name": body.name}
+    return {"id": result["id"], "name": body.name, "avtd_role": body.avtd_role}
 
 
 @router.get("/engagements/{eid}")
@@ -600,7 +601,13 @@ async def generate_protocol(request: Request, eid: int, did: int):
         (did,),
     )
     if not findings:
-        raise HTTPException(status_code=400, detail="No findings included in protocol")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "no_findings_in_protocol",
+                "message": "Позначте принаймні один пункт «До протоколу» перед генерацією",
+            },
+        )
 
     doc_record = solcon_db.fetchone(
         "SELECT original_filename FROM solcon_documents WHERE id=%s", (did,)
@@ -609,13 +616,14 @@ async def generate_protocol(request: Request, eid: int, did: int):
 
     avtd_role = eng.get("avtd_role")
     if not avtd_role:
+        # Defense-in-depth guard — should be unreachable after migration 052
+        # sets DEFAULT 'supplier' + NOT NULL on solcon_engagements.
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Set AVTD role on engagement before exporting protocol. "
-                "Use PATCH /api/contracts/engagements/{eid} with "
-                "{\"avtd_role\": \"supplier\" or \"buyer\"}."
-            ),
+            detail={
+                "code": "avtd_role_required",
+                "message": "Не вказано роль АВТД у договорі",
+            },
         )
 
     finding_ids = [f["id"] for f in findings]

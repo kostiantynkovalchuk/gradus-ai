@@ -634,6 +634,10 @@ async function renderEngagementWorkspace(eid) {
       <div>
         <div class="workspace-title">${esc(eng.name)}</div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(eng.counterparty_name||'—')} · ${statusBadge(eng.status)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+          Роль АВТД: <strong>${eng.avtd_role === 'buyer' ? 'Покупець' : 'Постачальник'}</strong>
+          &nbsp;<a href="#" style="font-size:10px;color:var(--accent);text-decoration:none" onclick="event.preventDefault();openRoleModal(${eid}, null)">змінити</a>
+        </div>
       </div>
     </div>`;
 
@@ -1081,16 +1085,21 @@ function downloadOpinion(eid, version) {
   window.open('/api/contracts/engagements/' + eid + '/legal-opinion/' + version + '.docx', '_blank');
 }
 
-async function genProtocol(eid, did) {
-  const btn = event.target;
-  btn.disabled = true;
-  const origText = btn.textContent;
-  btn.textContent = 'Генерація…';
+async function genProtocol(eid, did, _btn) {
+  const btn = _btn || (typeof event !== 'undefined' && event && event.target ? event.target : null);
+  if (btn) btn.disabled = true;
+  const origText = btn ? btn.textContent : '';
+  if (btn) btn.textContent = 'Генерація…';
   try {
     const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}/protocol`, {method:'POST'});
     if (r.status === 400) {
       const body = await r.json().catch(() => ({}));
-      alert(body.detail || 'Позначте пункти "До протоколу" перед генерацією');
+      const code = body.detail?.code;
+      const message = body.detail?.message || 'Не вдалося згенерувати протокол';
+      if (code === 'avtd_role_required') {
+        return promptForRoleAndRetry(eid, did);
+      }
+      alert(message);
       return;
     }
     if (!r.ok) { alert('Помилка генерації протоколу'); return; }
@@ -1103,8 +1112,62 @@ async function genProtocol(eid, did) {
     URL.revokeObjectURL(url);
     await renderEngagementWorkspace(eid);
   } finally {
-    btn.disabled = false;
-    btn.textContent = origText;
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+}
+
+function promptForRoleAndRetry(eid, did) {
+  openRoleModal(eid, did);
+}
+
+function openRoleModal(eid, did) {
+  const existing = document.getElementById('role-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'role-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:8px;padding:28px 32px;min-width:320px;box-shadow:0 8px 32px rgba(0,0,0,0.18)">
+      <div style="font-size:16px;font-weight:600;margin-bottom:6px">Роль АВТД у договорі</div>
+      <div style="font-size:13px;color:#666;margin-bottom:20px">Ким виступає АВТД у цьому договорі?</div>
+      <div style="display:flex;gap:12px">
+        <button class="btn btn-gold" style="flex:1" onclick="applyRole('supplier',${eid},${did === null ? 'null' : did})">Постачальник</button>
+        <button class="btn btn-secondary" style="flex:1" onclick="applyRole('buyer',${eid},${did === null ? 'null' : did})">Покупець</button>
+      </div>
+      <div style="text-align:right;margin-top:16px">
+        <a href="#" style="font-size:12px;color:#999;text-decoration:none" onclick="event.preventDefault();document.getElementById('role-modal-overlay').remove()">Скасувати</a>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+async function applyRole(role, eid, did) {
+  const overlay = document.getElementById('role-modal-overlay');
+  const btns = overlay ? Array.from(overlay.querySelectorAll('button')) : [];
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`/api/contracts/engagements/${eid}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({avtd_role: role}),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      alert(body.detail || 'Помилка збереження ролі');
+      return;
+    }
+    if (overlay) overlay.remove();
+    if (did != null) {
+      await genProtocol(eid, did, null);
+    } else {
+      await renderEngagementWorkspace(eid);
+    }
+  } catch (e) {
+    alert('Помилка збереження ролі: ' + e.message);
+  } finally {
+    btns.forEach(b => b.disabled = false);
   }
 }
 
