@@ -96,3 +96,9 @@ id = "kEwl1Z9HTauI8tgLXzOYW"
 uri = "file://avtd_scoring_package.zip"
 type = "unspecified"
 title = "AVTD Scoring Module — IT Delivery Package"
+
+[[outputs]]
+id = "UWSr1jTDbcQMi-J-ZiGgB"
+uri = "file://solomon_handover.md"
+type = "text"
+title = "Solomon — Full Project Handover for Claude"
