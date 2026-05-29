@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import db as solcon_db
@@ -143,9 +143,28 @@ async def get_engagement(request: Request, eid: int):
         "WHERE engagement_id=%s ORDER BY version DESC LIMIT 1",
         (eid,),
     )
+    proto_rows = solcon_db.fetchall(
+        """SELECT document_id, version, generated_at
+           FROM solcon_protocols
+           WHERE engagement_id=%s
+           ORDER BY document_id, version DESC""",
+        (eid,),
+    )
+    proto_map: dict = {}
+    for p in (proto_rows or []):
+        doc_id = p["document_id"]
+        if doc_id not in proto_map:
+            proto_map[doc_id] = []
+        proto_map[doc_id].append({
+            "version": p["version"],
+            "generated_at": p["generated_at"].isoformat() if p["generated_at"] else None,
+        })
     return {
         "engagement": dict(eng),
-        "documents": [dict(d) for d in (docs or [])],
+        "documents": [
+            {**dict(d), "protocols": proto_map.get(d["id"], [])}
+            for d in (docs or [])
+        ],
         "findings": [dict(f) for f in (findings or [])],
         "severity_summary": sev_summary,
         "latest_opinion": dict(latest_op) if latest_op else None,
@@ -672,6 +691,36 @@ async def generate_protocol(request: Request, eid: int, did: int):
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(dl_name)}"},
+    )
+
+
+@router.get("/engagements/{eid}/documents/{did}/protocol.docx")
+async def download_protocol(request: Request, eid: int, did: int, version: Optional[int] = None):
+    _auth_check(request)
+    if version is not None:
+        row = solcon_db.fetchone(
+            """SELECT version, docx_storage_path FROM solcon_protocols
+               WHERE document_id=%s AND engagement_id=%s AND version=%s""",
+            (did, eid, version),
+        )
+    else:
+        row = solcon_db.fetchone(
+            """SELECT version, docx_storage_path FROM solcon_protocols
+               WHERE document_id=%s AND engagement_id=%s
+               ORDER BY version DESC LIMIT 1""",
+            (did, eid),
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="No protocol found for this document")
+    from pathlib import Path
+    path = Path(row["docx_storage_path"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Protocol file missing on disk (orphaned record)")
+    v = row["version"]
+    return FileResponse(
+        path=str(path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename=\"protocol_{eid}_v{v}.docx\""},
     )
 
 

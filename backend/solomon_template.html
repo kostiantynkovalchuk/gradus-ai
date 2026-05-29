@@ -717,7 +717,11 @@ async function renderEngagementWorkspace(eid) {
           </div>
           <div style="display:flex;gap:8px;align-items:flex-start">
             ${(noText || isOcrFailed) ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
-            ${findings.filter(f=>f.document_id===d.id&&f.workflow_state==='included_in_protocol').length > 0 ? `<button class="btn btn-secondary btn-sm" title="Згенерувати протокол розбіжностей" onclick="genProtocol(${eid}, ${d.id})">↓ Протокол DOCX</button>` : ''}
+            ${(d.protocols||[]).length > 0
+              ? `<button class="btn btn-secondary btn-sm" title="Завантажити протокол (v${(d.protocols||[])[0]?.version})" onclick="downloadProtocol(${eid}, ${d.id})">↓ Протокол DOCX</button>`
+              : findings.filter(f=>f.document_id===d.id&&f.workflow_state==='included_in_protocol').length > 0
+                ? `<button class="btn btn-secondary btn-sm" title="Згенерувати протокол розбіжностей" onclick="genProtocol(${eid}, ${d.id})">↓ Згенерувати протокол</button>`
+                : ''}
             <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename).replace(/"/g, '&quot;')})">✕</button>
           </div>
         </div>`;
@@ -1111,6 +1115,32 @@ async function genProtocol(eid, did, _btn) {
     a.click();
     URL.revokeObjectURL(url);
     await renderEngagementWorkspace(eid);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+  }
+}
+
+async function downloadProtocol(eid, did) {
+  const btn = typeof event !== 'undefined' && event && event.target ? event.target : null;
+  if (btn) btn.disabled = true;
+  const origText = btn ? btn.textContent : '';
+  if (btn) btn.textContent = 'Завантаження…';
+  try {
+    const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}/protocol.docx`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      alert(body.detail || 'Помилка завантаження протоколу');
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protocol_${eid}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Помилка завантаження протоколу: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = origText; }
   }
