@@ -244,7 +244,7 @@ async def upload_document(
     if suffix == "zip":
         files = process_zip(data, eid)
         for f in files:
-            f_data = f["path"].read_bytes()
+            f_data = f["bytes"]
             doc_dict = ingest_file(f["filename"], f_data, eid, appendix_prefix)
             doc_id = _save_document(eid, doc_dict)
             created_ids.append(doc_id)
@@ -264,8 +264,8 @@ def _save_document(eid: int, doc_dict: dict) -> int:
     result = solcon_db.fetchone(
         """INSERT INTO solcon_documents
              (engagement_id, document_type, original_filename, mime_type,
-              storage_path, raw_text, clauses, extraction_method, ocr_status)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+              storage_path, file_bytes, raw_text, clauses, extraction_method, ocr_status)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
         (
             eid,
@@ -273,6 +273,7 @@ def _save_document(eid: int, doc_dict: dict) -> int:
             doc_dict["original_filename"],
             doc_dict["mime_type"],
             doc_dict["storage_path"],
+            doc_dict.get("file_bytes"),
             doc_dict["raw_text"],
             doc_dict["clauses"],
             doc_dict.get("extraction_method"),
@@ -501,9 +502,9 @@ async def download_risk_note(request: Request, eid: int):
 
 @router.post("/engagements/{eid}/documents/{did}/re-extract")
 async def re_extract_document(request: Request, eid: int, did: int):
-    """Re-run text extraction + clause parsing on the stored file.
-    Clears analyzed_at so the document can be re-analyzed afterwards.
-    Returns 409 if the file is no longer on disk (re-upload required).
+    """Re-run text extraction + clause parsing on stored file bytes.
+    Reads file_bytes from DB (bytea column). Falls back to disk for pre-migration rows.
+    Returns 409 if neither bytes nor disk file is available (re-upload required).
     """
     _auth_check(request)
     doc = solcon_db.fetchone(
@@ -512,21 +513,48 @@ async def re_extract_document(request: Request, eid: int, did: int):
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    from pathlib import Path as _Path
+    import tempfile
     from .ingestion import extract_text, parse_clauses, scan_all_refs
     import json as _json
 
-    path = _Path(doc["storage_path"])
-    if not path.exists():
-        raise HTTPException(
-            status_code=409,
-            detail=f"File not on disk: {path.name}. Please re-upload the document.",
-        )
+    file_bytes = doc.get("file_bytes")
+    if file_bytes:
+        file_bytes = bytes(file_bytes)
+    else:
+        # Pre-migration row — try disk fallback
+        disk_path = _Path(doc["storage_path"])
+        if not disk_path.exists():
+            raise HTTPException(
+                status_code=409,
+                detail=f"File not on disk and bytes not in DB: {disk_path.name}. Please re-upload the document.",
+            )
+        file_bytes = disk_path.read_bytes()
 
-    raw_text, extraction_method = extract_text(path, doc["mime_type"] or "")
+    _mime_to_suffix = {
+        "application/pdf": ".pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.ms-excel": ".xls",
+    }
+    suffix = _mime_to_suffix.get(doc.get("mime_type") or "", "")
+    if not suffix:
+        suffix = _Path(doc["original_filename"]).suffix.lower()
+
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp_path = _Path(tmp.name)
+    tmp.write(file_bytes)
+    tmp.flush()
+    tmp.close()
+
+    try:
+        raw_text, extraction_method = extract_text(tmp_path, doc["mime_type"] or "")
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     if extraction_method == "ocr:pending":
-        # Scanned PDF — reset to pending state and launch background OCR
+        # Scanned PDF — temp file must survive until background OCR thread finishes
         solcon_db.execute(
             """UPDATE solcon_documents
                SET raw_text='', clauses='[]'::jsonb, extraction_method=NULL,
@@ -535,8 +563,10 @@ async def re_extract_document(request: Request, eid: int, did: int):
                WHERE id=%s""",
             (did,),
         )
-        run_background_ocr(did, path)
+        run_background_ocr(did, tmp_path, delete_when_done=True)
         return {"ok": True, "async": True, "method": "ocr:pending"}
+
+    tmp_path.unlink(missing_ok=True)
 
     clauses = parse_clauses(raw_text)
     if not clauses:
@@ -669,11 +699,12 @@ async def generate_protocol(request: Request, eid: int, did: int):
 
     solcon_db.execute(
         """INSERT INTO solcon_protocols
-             (document_id, engagement_id, version, finding_ids, docx_storage_path, generated_by)
-           VALUES (%s,%s,%s,%s,%s,%s)
+             (document_id, engagement_id, version, finding_ids, docx_storage_path, docx_bytes, generated_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s)
            ON CONFLICT (document_id, version) DO UPDATE
-             SET docx_storage_path=EXCLUDED.docx_storage_path""",
-        (did, eid, version, json.dumps(finding_ids), str(proto_path), SOLOMON_USER),
+             SET docx_storage_path=EXCLUDED.docx_storage_path,
+                 docx_bytes=EXCLUDED.docx_bytes""",
+        (did, eid, version, json.dumps(finding_ids), str(proto_path), docx_bytes, SOLOMON_USER),
     )
     solcon_db.execute(
         "UPDATE solcon_findings SET workflow_state='sent_to_counterparty' WHERE id=ANY(%s)",
@@ -699,26 +730,25 @@ async def download_protocol(request: Request, eid: int, did: int, version: Optio
     _auth_check(request)
     if version is not None:
         row = solcon_db.fetchone(
-            """SELECT version, docx_storage_path FROM solcon_protocols
+            """SELECT version, docx_bytes FROM solcon_protocols
                WHERE document_id=%s AND engagement_id=%s AND version=%s""",
             (did, eid, version),
         )
     else:
         row = solcon_db.fetchone(
-            """SELECT version, docx_storage_path FROM solcon_protocols
+            """SELECT version, docx_bytes FROM solcon_protocols
                WHERE document_id=%s AND engagement_id=%s
                ORDER BY version DESC LIMIT 1""",
             (did, eid),
         )
-    if not row:
-        raise HTTPException(status_code=404, detail="No protocol found for this document")
-    from pathlib import Path
-    path = Path(row["docx_storage_path"])
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Protocol file missing on disk (orphaned record)")
+    if not row or not row["docx_bytes"]:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "protocol_missing", "message": "Протокол не знайдено"},
+        )
     v = row["version"]
-    return FileResponse(
-        path=str(path),
+    return Response(
+        content=bytes(row["docx_bytes"]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename=\"protocol_{eid}_v{v}.docx\""},
     )
@@ -766,11 +796,12 @@ async def generate_opinion(request: Request, eid: int):
 
     solcon_db.execute(
         """INSERT INTO solcon_legal_opinions
-             (engagement_id, version, content_md, docx_storage_path, generated_by)
-           VALUES (%s,%s,%s,%s,%s)
+             (engagement_id, version, content_md, docx_storage_path, docx_bytes, generated_by)
+           VALUES (%s,%s,%s,%s,%s,%s)
            ON CONFLICT (engagement_id, version) DO UPDATE
-             SET content_md=EXCLUDED.content_md""",
-        (eid, version, md_text, str(op_path), SOLOMON_USER),
+             SET content_md=EXCLUDED.content_md,
+                 docx_bytes=EXCLUDED.docx_bytes""",
+        (eid, version, md_text, str(op_path), docx_bytes, SOLOMON_USER),
     )
     return {"markdown": md_text, "version": version}
 
@@ -779,14 +810,16 @@ async def generate_opinion(request: Request, eid: int):
 async def download_opinion(request: Request, eid: int, version: int):
     _auth_check(request)
     rec = solcon_db.fetchone(
-        "SELECT docx_storage_path FROM solcon_legal_opinions WHERE engagement_id=%s AND version=%s",
+        "SELECT docx_bytes FROM solcon_legal_opinions WHERE engagement_id=%s AND version=%s",
         (eid, version),
     )
-    if not rec or not rec["docx_storage_path"]:
-        raise HTTPException(status_code=404, detail="Opinion not found")
-    data = open(rec["docx_storage_path"], "rb").read()
+    if not rec or not rec["docx_bytes"]:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "protocol_missing", "message": "Протокол не знайдено"},
+        )
     return Response(
-        content=data,
+        content=bytes(rec["docx_bytes"]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="opinion_{eid}_v{version}.docx"'},
     )

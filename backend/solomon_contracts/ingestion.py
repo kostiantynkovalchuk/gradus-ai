@@ -242,7 +242,7 @@ def extract_text_from_pdf(path: Path) -> tuple[str, str]:
     return "", "ocr:pending"
 
 
-def run_background_ocr(doc_id: int, path: Path) -> None:
+def run_background_ocr(doc_id: int, path: Path, delete_when_done: bool = False) -> None:
     """
     Stream-OCR a scanned PDF page-by-page in a daemon thread.
 
@@ -252,6 +252,9 @@ def run_background_ocr(doc_id: int, path: Path) -> None:
 
     On success:  raw_text, clauses, extraction_method, ocr_status='done'
     On failure:  ocr_status='failed'
+
+    delete_when_done: if True, the thread deletes the file at `path` after OCR
+    completes or fails (used when path is a NamedTemporaryFile from re-extract).
     """
     import threading
     import json as _json
@@ -344,6 +347,12 @@ def run_background_ocr(doc_id: int, path: Path) -> None:
                 )
             except Exception:
                 pass
+        finally:
+            if delete_when_done:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     threading.Thread(target=_run, daemon=True, name=f"ocr-doc-{doc_id}").start()
 
@@ -578,16 +587,16 @@ def normalize_clause_ref(ref: str) -> str:
 
 # ─── Bundle ingestion ────────────────────────────────────────────────────────
 
-def save_upload(filename: str, data: bytes, engagement_id: int) -> Path:
+def save_upload(filename: str, data: bytes, engagement_id: int) -> tuple:
     eng_dir = UPLOAD_DIR / str(engagement_id)
     eng_dir.mkdir(parents=True, exist_ok=True)
     dest = eng_dir / filename
     dest.write_bytes(data)
-    return dest
+    return dest, data
 
 
 def process_zip(data: bytes, engagement_id: int) -> list[dict]:
-    """Extract zip, return list of {filename, path, size}."""
+    """Extract zip, return list of {filename, path, bytes, size}."""
     files = []
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for member in zf.infolist():
@@ -598,8 +607,8 @@ def process_zip(data: bytes, engagement_id: int) -> list[dict]:
             if suffix not in {".doc", ".docx", ".pdf", ".xls", ".xlsx"}:
                 continue
             content = zf.read(member.filename)
-            path = save_upload(name, content, engagement_id)
-            files.append({"filename": name, "path": path, "size": len(content)})
+            path, file_bytes = save_upload(name, content, engagement_id)
+            files.append({"filename": name, "path": path, "bytes": file_bytes, "size": len(content)})
     return files
 
 
@@ -614,7 +623,7 @@ def ingest_file(
     When a scanned PDF is detected, extraction_method='ocr:pending' is returned.
     The caller (router upload endpoint) must then call run_background_ocr(doc_id, path).
     """
-    path = save_upload(filename, data, engagement_id)
+    path, file_bytes = save_upload(filename, data, engagement_id)
     suffix = Path(filename).suffix.lower()
     mime_map = {
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -639,6 +648,7 @@ def ingest_file(
         "original_filename": filename,
         "mime_type": mime_type,
         "storage_path": str(path),
+        "file_bytes": file_bytes,
         "raw_text": raw_text,
         "clauses": json.dumps(clauses),
         # extraction_method is NULL in DB until OCR finishes and sets 'ocr:tesseract:ukr+rus'

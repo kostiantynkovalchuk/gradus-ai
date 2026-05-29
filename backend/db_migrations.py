@@ -1463,6 +1463,14 @@ MIGRATIONS = [
                ALTER COLUMN avtd_role SET NOT NULL""",
         ]
     },
+    {
+        "version": "056_solcon_bytea_storage",
+        "statements": [
+            "ALTER TABLE solcon_documents      ADD COLUMN IF NOT EXISTS file_bytes BYTEA",
+            "ALTER TABLE solcon_protocols      ADD COLUMN IF NOT EXISTS docx_bytes BYTEA",
+            "ALTER TABLE solcon_legal_opinions ADD COLUMN IF NOT EXISTS docx_bytes BYTEA",
+        ]
+    },
 ]
 
 
