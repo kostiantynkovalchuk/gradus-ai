@@ -1,0 +1,18 @@
+Audit prompt — Postgres bytea storage migration (read-only)
+Context: Render filesystem is ephemeral. All solcon_documents.storage_path, solcon_protocols.docx_storage_path, solcon_legal_opinions.docx_storage_path point to files that are wiped on every deploy. Moving to bytea columns in Postgres. Need scope before implementing.
+
+List every read of storage_path and docx_storage_path across the codebase. For each, report file path, line number, and what it does with the path (read file? serve file? log?). Cover router.py, ingestion.py, analyzer.py, artifacts.py, corpus.py, anywhere else.
+List every write that sets one of those fields. Report the source of the bytes — is it docx_bytes from python-docx, await file.read() from upload, something else?
+For solcon_documents: report current storage_path column definition (nullable? NOT NULL?). Same for solcon_protocols.docx_storage_path and solcon_legal_opinions.docx_storage_path.
+Report file size patterns. Run:
+
+sql   SELECT document_type, COUNT(*), AVG(LENGTH(raw_text)), MAX(LENGTH(raw_text))
+   FROM solcon_documents WHERE raw_text IS NOT NULL GROUP BY document_type;
+raw_text size correlates roughly with file size — gives us a sense of whether bytea storage will be MB-scale or larger.
+
+Report current row counts: solcon_documents, solcon_protocols, solcon_legal_opinions. Need to know backfill scope (existing rows have orphaned paths — bytes are gone, can't be recovered).
+Check ingestion.py OCR path. Does OCR re-read the file from disk during the background thread, or does it hold bytes in memory? If it re-reads, the bytea migration needs to update that read path too.
+Report whether FileResponse is used anywhere else for these files, or only the new GET protocol endpoint. List every endpoint that serves bytes from UPLOAD_DIR.
+Confirm: is there a re-extract endpoint (POST /documents/{did}/re-extract)? If yes, does it re-read from disk? After bytea migration, re-extract must read from the column.
+
+Do not propose fixes. Just report findings.
