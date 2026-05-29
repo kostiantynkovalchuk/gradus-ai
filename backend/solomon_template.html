@@ -1085,8 +1085,31 @@ async function genOpinion(eid) {
   }
 }
 
-function downloadOpinion(eid, version) {
-  window.open('/api/contracts/engagements/' + eid + '/legal-opinion/' + version + '.docx', '_blank');
+async function downloadOpinion(eid, version) {
+  const btn = typeof event !== 'undefined' && event && event.target ? event.target : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Завантаження…'; }
+  try {
+    const r = await fetch(`/api/contracts/engagements/${eid}/legal-opinion/${version}.docx`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      const detail = body.detail;
+      const msg = (detail && typeof detail === 'object' ? detail.message : detail)
+                  || 'Помилка завантаження висновку';
+      alert(msg);
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `opinion_${eid}_v${version}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Помилка завантаження висновку: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↓ Завантажити DOCX'; }
+  }
 }
 
 async function genProtocol(eid, did, _btn) {
@@ -1129,7 +1152,10 @@ async function downloadProtocol(eid, did) {
     const r = await fetch(`/api/contracts/engagements/${eid}/documents/${did}/protocol.docx`);
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
-      alert(body.detail || 'Помилка завантаження протоколу');
+      const detail = body.detail;
+      const msg = (detail && typeof detail === 'object' ? detail.message : detail)
+                  || 'Помилка завантаження протоколу';
+      alert(msg);
       return;
     }
     const blob = await r.blob();
