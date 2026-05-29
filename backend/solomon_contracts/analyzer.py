@@ -123,6 +123,20 @@ almost certainly means you are over-flagging routine commercial terms.
 Respond ONLY with valid JSON — no markdown fences, no explanation."""
 
 
+def _truncate_clause(text: str, max_chars: int = 1200) -> str:
+    """Sentence-boundary truncation for clause_text. Uses […] to signal system redaction."""
+    text = str(text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    for boundary in (". ", ".\n", "; ", ":\n"):
+        idx = cut.rfind(boundary)
+        if idx > max_chars * 0.6:
+            return cut[:idx + 1].rstrip() + " […]"
+    space_idx = cut.rfind(" ")
+    return (cut[:space_idx] if space_idx > 0 else cut).rstrip() + " […]"
+
+
 def scan_document(
     document_id: int,
     engagement_id: int,
@@ -211,7 +225,7 @@ def scan_document(
             "document_id": document_id,
             "engagement_id": engagement_id,
             "clause_ref": clause_ref,
-            "clause_text": str(f.get("clause_text", ""))[:500],
+            "clause_text": _truncate_clause(f.get("clause_text", "")),
             "category": category,
             "severity": severity,
             "monetary_exposure_uah": _safe_num(f.get("monetary_exposure_uah")),
