@@ -1266,15 +1266,18 @@ class ContentScheduler:
             logger.info("⚠️ Scheduler DISABLED via DISABLE_SCHEDULER env var")
             return
         
+        _paused = bool(os.getenv("GRADUSMEDIA_PAUSED"))
+
         try:
             # LinkedIn sources: Mon/Wed/Fri at 1:00 AM
-            self.scheduler.add_job(
-                self.scrape_linkedin_sources_task,
-                CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
-                id='scrape_linkedin',
-                name='Scrape LinkedIn sources (TSB, Drinks Int)',
-                replace_existing=True
-            )
+            if not _paused:
+                self.scheduler.add_job(
+                    self.scrape_linkedin_sources_task,
+                    CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
+                    id='scrape_linkedin',
+                    name='Scrape LinkedIn sources (TSB, Drinks Int)',
+                    replace_existing=True
+                )
         except Exception as e:
             logger.info(f"Scheduler issue, recreating... ({e})")
             # Recreate scheduler with same config
@@ -1285,58 +1288,64 @@ class ContentScheduler:
                     'misfire_grace_time': 3600 * 2
                 }
             )
+            if not _paused:
+                self.scheduler.add_job(
+                    self.scrape_linkedin_sources_task,
+                    CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
+                    id='scrape_linkedin',
+                    name='Scrape LinkedIn sources (TSB, Drinks Int)',
+                    replace_existing=True
+                )
+
+        # Facebook sources: Daily at 2:00 AM
+        if not _paused:
             self.scheduler.add_job(
-                self.scrape_linkedin_sources_task,
-                CronTrigger(day_of_week='mon,wed,fri', hour=1, minute=0),
-                id='scrape_linkedin',
-                name='Scrape LinkedIn sources (TSB, Drinks Int)',
+                self.scrape_facebook_sources_task,
+                CronTrigger(hour=2, minute=0),
+                id='scrape_facebook',
+                name='Scrape Facebook sources (Delo, HoReCa, Just Drinks)',
                 replace_existing=True
             )
-        
-        # Facebook sources: Daily at 2:00 AM
-        self.scheduler.add_job(
-            self.scrape_facebook_sources_task,
-            CronTrigger(hour=2, minute=0),
-            id='scrape_facebook',
-            name='Scrape Facebook sources (Delo, HoReCa, Just Drinks)',
-            replace_existing=True
-        )
-        
+
         # Translation: 3x per day (morning, afternoon, evening)
-        self.scheduler.add_job(
-            self.translate_pending_task,
-            CronTrigger(hour='6,14,20', minute=0),
-            id='translate_articles',
-            name='Translate pending articles (3x/day)',
-            replace_existing=True
-        )
-        
+        if not _paused:
+            self.scheduler.add_job(
+                self.translate_pending_task,
+                CronTrigger(hour='6,14,20', minute=0),
+                id='translate_articles',
+                name='Translate pending articles (3x/day)',
+                replace_existing=True
+            )
+
         # Images: 3x per day (15 minutes after translation)
-        self.scheduler.add_job(
-            self.generate_images_task,
-            CronTrigger(hour='6,14,20', minute=15),
-            id='generate_images',
-            name='Generate images & send Telegram notifications (3x/day)',
-            replace_existing=True
-        )
-        
+        if not _paused:
+            self.scheduler.add_job(
+                self.generate_images_task,
+                CronTrigger(hour='6,14,20', minute=15),
+                id='generate_images',
+                name='Generate images & send Telegram notifications (3x/day)',
+                replace_existing=True
+            )
+
         # LinkedIn posting: Mon/Wed/Fri at 9:00 AM
-        self.scheduler.add_job(
-            self.post_to_linkedin_task,
-            CronTrigger(day_of_week='mon,wed,fri', hour=9, minute=0),
-            id='post_linkedin',
-            name='Post to LinkedIn',
-            replace_existing=True
-        )
-        
+        if not _paused:
+            self.scheduler.add_job(
+                self.post_to_linkedin_task,
+                CronTrigger(day_of_week='mon,wed,fri', hour=9, minute=0),
+                id='post_linkedin',
+                name='Post to LinkedIn',
+                replace_existing=True
+            )
+
         # Facebook posting: Daily at 6:00 PM
-        self.scheduler.add_job(
-            self.post_to_facebook_task,
-            CronTrigger(hour=18, minute=0),
-            id='post_facebook',
-            name='Post to Facebook',
-            replace_existing=True
-        )
+        if not _paused:
+            self.scheduler.add_job(
+                self.post_to_facebook_task,
+                CronTrigger(hour=18, minute=0),
+                id='post_facebook',
+                name='Post to Facebook',
+                replace_existing=True
+            )
         
         # Cleanup: Daily at 3:00 AM
         self.scheduler.add_job(
@@ -1393,14 +1402,15 @@ class ContentScheduler:
         )
 
         # Telegram channel queue: every 5 minutes
-        self.scheduler.add_job(
-            self._process_channel_queue_task,
-            'interval',
-            minutes=5,
-            id='process_channel_queue',
-            name='Post queued articles to Telegram channel',
-            replace_existing=True
-        )
+        if not _paused:
+            self.scheduler.add_job(
+                self._process_channel_queue_task,
+                'interval',
+                minutes=5,
+                id='process_channel_queue',
+                name='Post queued articles to Telegram channel',
+                replace_existing=True
+            )
 
         # Alex memory cleanup: weekly on Sunday at 4:30 AM
         self.scheduler.add_job(
@@ -1449,13 +1459,14 @@ class ContentScheduler:
         )
 
         # LinkedIn weekly news digest — Thursday 08:00 UTC (10:00 Kyiv)
-        self.scheduler.add_job(
-            self._linkedin_digest_task,
-            CronTrigger(day_of_week='thu', hour=8, minute=0),
-            id='linkedin_weekly_digest',
-            name='LinkedIn weekly HoReCa news digest',
-            replace_existing=True
-        )
+        if not _paused:
+            self.scheduler.add_job(
+                self._linkedin_digest_task,
+                CronTrigger(day_of_week='thu', hour=8, minute=0),
+                id='linkedin_weekly_digest',
+                name='LinkedIn weekly HoReCa news digest',
+                replace_existing=True
+            )
 
         # Alex Avatar video digest — Monday 08:00 UTC (10:00 Kyiv)
         self.scheduler.add_job(
@@ -1485,13 +1496,14 @@ class ContentScheduler:
         )
 
         # Onboarding email checker — every 5 minutes
-        self.scheduler.add_job(
-            self._onboarding_email_task,
-            CronTrigger(minute='*/5'),
-            id='onboarding_email_checker',
-            name='Onboarding email sequence checker (Alex Gradus)',
-            replace_existing=True
-        )
+        if not _paused:
+            self.scheduler.add_job(
+                self._onboarding_email_task,
+                CronTrigger(minute='*/5'),
+                id='onboarding_email_checker',
+                name='Onboarding email sequence checker (Alex Gradus)',
+                replace_existing=True
+            )
 
         # Solomon KB edition actualization — daily at 01:00 UTC (03:00 Kyiv)
         self.scheduler.add_job(
@@ -1505,7 +1517,14 @@ class ContentScheduler:
         )
 
         self.scheduler.start()
-        
+
+        if _paused:
+            logger.info("⏸️  GradusMedia consumer product PAUSED (GRADUSMEDIA_PAUSED=true)")
+            logger.info("   Gated: scraping, translation, image gen, posting, LinkedIn digest, Telegram channel, onboarding emails")
+            logger.info("   Active: Maya HR Bot, Maya Hunt, Alex Photo Report, Solomon, AVTD Alex, Pulse surveys, KB edition check")
+        else:
+            logger.info("▶️  GradusMedia consumer product ACTIVE")
+
         logger.info("=" * 60)
         logger.info("✅ GRADUS MEDIA AI AGENT - FULLY OPERATIONAL")
         logger.info("=" * 60)

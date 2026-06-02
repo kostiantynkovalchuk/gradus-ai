@@ -174,7 +174,7 @@ async def lifespan(app: FastAPI):
         logger.info("Photo Report: PHOTO_REPORT_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
     alex_gradus_token = os.environ.get("ALEX_GRADUS_BOT_TOKEN")
-    if alex_gradus_token and RENDER_URL:
+    if alex_gradus_token and RENDER_URL and not os.environ.get("GRADUSMEDIA_PAUSED"):
         try:
             import httpx
             async with httpx.AsyncClient() as hclient:
@@ -185,6 +185,8 @@ async def lifespan(app: FastAPI):
                 logger.info(f"🥃 Alex Gradus webhook: {resp.json()}")
         except Exception as e:
             logger.error(f"Alex Gradus webhook setup failed: {e}")
+    elif os.environ.get("GRADUSMEDIA_PAUSED"):
+        logger.info("⏸️  Alex Gradus bot webhook skipped (GRADUSMEDIA_PAUSED)")
     else:
         logger.info("Alex Gradus: ALEX_GRADUS_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
@@ -205,7 +207,7 @@ async def lifespan(app: FastAPI):
 
     # GradusMediaBot (content approval + notifications) → /api/telegram/webhook/gradus
     main_tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if main_tg_token and RENDER_URL:
+    if main_tg_token and RENDER_URL and not os.environ.get("GRADUSMEDIA_PAUSED"):
         try:
             import httpx
             async with httpx.AsyncClient() as hclient:
@@ -216,6 +218,8 @@ async def lifespan(app: FastAPI):
                 logger.info(f"📱 GradusMediaBot webhook: {resp.json()}")
         except Exception as e:
             logger.error(f"Main Telegram webhook setup failed: {e}")
+    elif os.environ.get("GRADUSMEDIA_PAUSED"):
+        logger.info("⏸️  GradusMediaBot webhook skipped (GRADUSMEDIA_PAUSED)")
     else:
         logger.info("Main Telegram: TELEGRAM_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
