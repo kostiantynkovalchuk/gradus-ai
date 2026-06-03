@@ -1303,6 +1303,8 @@ async def handle_admin_button_callback(callback_query: dict, db):
         await handle_adduser_command(chat_id, telegram_id, [], db)
     elif cmd == "listusers":
         await handle_listusers_command(chat_id, telegram_id, db)
+    else:
+        await send_telegram_message(chat_id, "⚠️ Невідома команда.")
 
     return {"ok": True}
 
