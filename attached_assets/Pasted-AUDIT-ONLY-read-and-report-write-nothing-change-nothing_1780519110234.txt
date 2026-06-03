@@ -1,0 +1,70 @@
+AUDIT ONLY — read and report, write nothing, change nothing, propose nothing.
+We are preparing to normalize an access_level inconsistency: the DB stores
+'hr_admin' (4 rows, confirmed via GROUP BY), but ~half the code filters on
+'admin_hr' (confirmed via grep). Before any fix, establish whether replacing
+the string literal 'admin_hr' with 'hr_admin' across the codebase is safe.
+Report findings as a structured list. Do NOT design or apply the fix.
+
+1. READ vs WRITE of access_level
+For EACH of these sites, quote the surrounding lines and classify as READ
+(filter/comparison/guard) or WRITE (INSERT/UPDATE/assignment that PERSISTS the
+value into hr_users or hr_whitelist):
+  hr_auth.py: 112, 300, 487, 551, 598, 642, 649, 695, 740, 832
+  survey_service.py: 39
+  scheduler.py: 833
+  broadcast_service.py: 51
+  hr_keyboards.py: 533
+  telegram_webhook.py: 2302
+- Critically: is there ANY code path that writes 'admin_hr' into the database
+  (role assignment, whitelist insert, SED-sync, verification)? If yes, those 4
+  existing 'hr_admin' rows and any future ones came from somewhere — find the
+  writer. If 'admin_hr' is only ever READ and never WRITTEN, the fix is pure
+  read-side alignment and far safer.
+
+2. THE valid_levels VALIDATOR (hr_auth.py:642)
+- Quote the full function. It lists 'admin_hr' but not 'hr_admin'. Does this
+  validate INPUT before a write? If so, has it been REJECTING attempts to assign
+  'hr_admin' — and if it rejects, how did 4 hr_admin rows get created? (manual SQL?
+  SED sync? an older code version?) Report the most likely origin from what's in
+  the code. This tells us whether changing the validator changes who can be assigned.
+
+3. THE PRIVILEGE GUARDS (the behavioural change)
+- For lines 551, 598, 695, 740 (hr_auth.py) and 2302 (telegram_webhook.py): each
+  is a guard of the form `access not in (...'admin_hr'...)`. Confirm for each WHAT
+  capability it gates (document upload? broadcast? admin command? role assignment?).
+- State plainly: TODAY, do the 4 hr_admin users PASS or FAIL each guard? (They
+  should FAIL — DB value 'hr_admin' not in the 'admin_hr' list.) After the fix they
+  will PASS. List exactly which new capabilities the 4 hr_admin users GAIN the
+  moment this ships. We need to know we're not silently handing out access nobody
+  intended — confirm all 4 are genuinely meant to be full HR admins (name them via
+  full_name, no other PII).
+
+4. NON-PYTHON / EXTERNAL DEPENDENCIES on the string
+- grep templates/, any .html, .js, .ts, .sql, .json, and frontend for 'admin_hr'
+  and 'hr_admin'. Does the /hr admin dashboard, any API response, or any stored
+  config compare against the literal 'admin_hr'? A backend rename that leaves a
+  frontend or template checking 'admin_hr' just moves the split.
+- Is access_level ever returned in an API payload the frontend branches on?
+
+5. THE notify PATTERN (hr_auth.py:487) — feature dependency
+- Quote notify_hr_admins_about_failed_registration fully. Confirm it currently
+  filters in_(['admin_hr','developer']) and therefore TODAY notifies only the
+  developer, never the 4 hr_admins. This is the pattern the candidate-resume fork
+  was going to reuse — confirm whether it's read-only (safe to rename) and whether
+  any OTHER caller depends on its current (broken) behaviour.
+
+6. CHECK CONSTRAINT READINESS
+- Confirm there is currently NO CHECK constraint on hr_users.access_level (and
+  hr_whitelist.access_level). Report the exact current column definition for both.
+- List every DISTINCT access_level value actually present in BOTH tables (GROUP BY
+  on each), so the eventual CHECK list is built from real data, not the grep.
+  hr_whitelist may contain 'contractor' or other values the hr_users count missed.
+
+7. BLAST RADIUS (Rule 5 preview)
+- List every file that imports from hr_auth.py, survey_service.py, scheduler.py,
+  broadcast_service.py, hr_keyboards.py. After the eventual fix these must be
+  re-confirmed to import cleanly; for the audit just enumerate them.
+
+Report only. After this comes back we decide canonical value + whether the fix is
+read-side-only or also touches a writer + whether frontend is involved, THEN write
+the implementation prompt.
