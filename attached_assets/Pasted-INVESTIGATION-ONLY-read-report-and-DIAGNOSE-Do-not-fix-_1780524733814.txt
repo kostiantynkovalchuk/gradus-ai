@@ -1,0 +1,59 @@
+INVESTIGATION ONLY — read, report, and DIAGNOSE. Do not fix anything, do not delete
+or edit any file, do not write code. Output is a findings report with quoted
+evidence. This is about YOUR OWN behaviour across recent sessions, so be literal and
+evidence-based — do not give me a plausible theory, show me the file contents and
+mechanism that prove it.
+
+THE PROBLEM (observed 3 times, this is data, not speculation):
+In this workspace there are at least two distinct projects sharing one codebase:
+MAYA HR (Telegram HR/recruitment bot) and SOLOMON CONTRACTS (law-director-v2, phases
+labelled P1–P7, Pinecone corpus, kb_sources). Three times, while working on an
+explicitly-scoped MAYA HR task, the agent abandoned the task and began reading and
+"verifying" SOLOMON files — including after being told in the task prompt to ignore
+Solomon entirely. Once it self-reported reading a plan from `.local/session_plan.md`.
+
+YOUR JOB: find the ACTUAL mechanism that causes this cross-task bleed, with file
+evidence. Investigate and report:
+
+1. PLAN / STATE / MEMORY FILES — find every file the agent reads to decide "what to
+   work on" or "what's pending." Check at minimum: .local/, any session_plan*,
+   any *.md at repo root or in a docs/notes/plans dir, any TODO/FOLLOWUP/tasks file,
+   any agent-instructions or .replit / replit.md / .config files, and any
+   "follow-up tasks" mechanism. For EACH found: quote its full path, its
+   last-modified time, and the first ~40 lines. Flag every one that describes
+   SOLOMON / P1–P7 / law-director / kb_sources content.
+
+2. THE SMOKING GUN — is there a file that (a) the agent would naturally consult at
+   the start or end of a turn to find "next work," and (b) currently contains
+   Solomon P1–P7 content? If yes, quote it. This is the most likely bleed source —
+   the agent finishes the real task, looks for "what's next," finds this file, and
+   resumes Solomon. Confirm or rule this out with the file's actual contents.
+
+3. FOLLOW-UP TASK QUEUE — you referenced a "proposeFollowUpTasks" / follow-up-tasks
+   mechanism in a prior session. Locate whatever backs it (a file, a skill, a state
+   store). Does it currently hold any Solomon P1–P7 items? Quote them. Are MAYA HR
+   and SOLOMON items mixed in one undifferentiated queue with no project tag? That
+   lack of separation would explain why finishing one task surfaces the other.
+
+4. SHARED-SEQUENCE / SHARED-NAMESPACE CONFUSION — both projects use the same
+   schema_migrations table (Maya HR is on 059; Solomon used 051–056). List any OTHER
+   place the two projects share an undifferentiated namespace (migration sequence,
+   a common services/ dir, a shared scheduler.py registering both projects' jobs,
+   one main.py importing both). Quote the shared registration points. Shared infra
+   with no project boundary is part of why the agent can't tell which project it's
+   in.
+
+5. ABSENCE OF A PROJECT MARKER — is there ANY file or convention that tells the agent
+   "you are working on Maya HR, not Solomon" for a given session? A scoping file, a
+   per-project README, a directory boundary? If there is NO such marker, say so
+   plainly — that absence is itself a root cause.
+
+6. ROOT CAUSE STATEMENT — based ONLY on what you found and quoted above, state the
+   single most likely mechanism in one paragraph. If the evidence doesn't clearly
+   point to one cause, say the evidence is inconclusive and list what you'd need to
+   observe to confirm — do NOT invent a tidy explanation. Distinguish what you PROVED
+   from disk vs what you're INFERRING.
+
+Report only. After I see the evidence we decide the fix (likely: separate the
+plan/follow-up state per project, add a project-scope marker, and/or quarantine the
+Solomon plan file). Do not propose or apply that fix in this pass — Rule 1.
