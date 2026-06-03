@@ -109,7 +109,7 @@ async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: 
                 f"Привіт, {user.first_name or user_first_name}! 👨‍💻\n\n"
                 f"Чим можу допомогти?"
             )
-        elif user.access_level == "admin_hr":
+        elif user.access_level == "hr_admin":
             greeting = (
                 f"⚙️ *HR Admin Panel Available*\n\n"
                 f"Привіт, {user.first_name or user_first_name}! 👋\n\n"
@@ -297,7 +297,7 @@ async def create_whitelisted_user(db: Session, chat_id: int, telegram_id: int,
             f"✅ /stats - Статистика\n\n"
             f"Готова допомогти!"
         )
-    elif whitelist_entry.access_level == "admin_hr":
+    elif whitelist_entry.access_level == "hr_admin":
         message = (
             f"⚙️ *HR Admin Access*\n\n"
             f"Привіт, {whitelist_entry.full_name}! 👋\n\n"
@@ -484,7 +484,7 @@ async def handle_verification_failure(db: Session, chat_id: int, telegram_id: in
 async def notify_hr_admins_about_failed_registration(db: Session, telegram_id: int,
                                                       phone: str, user_info: dict):
     admins = db.query(HRUser).filter(
-        HRUser.access_level.in_(['admin_hr', 'developer']),
+        HRUser.access_level.in_(['hr_admin', 'developer']),
         HRUser.is_active == True,
         HRUser.telegram_id != telegram_id
     ).all()
@@ -548,7 +548,7 @@ async def sync_user_with_sed(db: Session, telegram_id: int, phone: str):
 
 async def handle_admin_command(chat_id: int, telegram_id: int, db: Session):
     access = get_access_level(db, telegram_id)
-    if not access or access not in ["developer", "admin_hr", "admin_it"]:
+    if not access or access not in ["developer", "hr_admin", "admin_it"]:
         await send_message(chat_id, "❌ У тебе немає доступу до адмін-панелі")
         return
 
@@ -595,7 +595,7 @@ async def handle_admin_command(chat_id: int, telegram_id: int, db: Session):
 
 async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str, db: Session):
     access = get_access_level(db, telegram_id)
-    if not access or access not in ["developer", "admin_hr"]:
+    if not access or access not in ["developer", "hr_admin"]:
         await send_message(chat_id, "❌ У тебе немає прав додавати користувачів")
         return
 
@@ -611,7 +611,7 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
             "*Рівні доступу:*\n"
             "• `employee` - співробітник TD AV\n"
             "• `contractor` - підрядник\n"
-            "• `admin_hr` - HR адміністратор\n"
+            "• `hr_admin` - HR адміністратор\n"
             "• `admin_it` - IT адміністратор\n"
             "• `developer` - розробник системи\n\n"
             "*Приклади:*\n"
@@ -639,14 +639,14 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
     if not phone:
         phone = phone_raw
 
-    valid_levels = ["employee", "contractor", "admin_hr", "admin_it", "developer"]
+    valid_levels = ["employee", "contractor", "hr_admin", "admin_it", "developer"]
     if access_level_new not in valid_levels:
         await send_message(
             chat_id,
             "❌ Невірний рівень доступу. Доступні:\n"
             "• `employee` - співробітник\n"
             "• `contractor` - підрядник\n"
-            "• `admin_hr` - HR адміністратор\n"
+            "• `hr_admin` - HR адміністратор\n"
             "• `admin_it` - IT адміністратор\n"
             "• `developer` - розробник\n\n"
             "Приклад:\n"
@@ -692,7 +692,7 @@ async def handle_adduser_command(chat_id: int, telegram_id: int, args_text: str,
 
 async def handle_logs_command(chat_id: int, telegram_id: int, db: Session):
     access = get_access_level(db, telegram_id)
-    if not access or access not in ["developer", "admin_hr", "admin_it"]:
+    if not access or access not in ["developer", "hr_admin", "admin_it"]:
         await send_plain_message(chat_id, "❌ Немає доступу")
         return
 
@@ -737,7 +737,7 @@ async def handle_logs_command(chat_id: int, telegram_id: int, db: Session):
 
 async def handle_stats_command(chat_id: int, telegram_id: int, db: Session):
     access = get_access_level(db, telegram_id)
-    if not access or access not in ["developer", "admin_hr", "admin_it"]:
+    if not access or access not in ["developer", "hr_admin", "admin_it"]:
         await send_message(chat_id, "❌ Немає доступу")
         return
 
@@ -829,7 +829,7 @@ def get_inline_menu_for_access_level(access_level: str) -> dict:
             {"text": "➕ Add User", "callback_data": "admin_cmd:adduser"},
             {"text": "👥 List Users", "callback_data": "admin_cmd:listusers"}
         ])
-    elif access_level in ("admin_hr", "admin_it"):
+    elif access_level in ("hr_admin", "admin_it"):
         buttons.append([
             {"text": "⚙️ Admin", "callback_data": "admin_cmd:admin"},
             {"text": "➕ Add User", "callback_data": "admin_cmd:adduser"},

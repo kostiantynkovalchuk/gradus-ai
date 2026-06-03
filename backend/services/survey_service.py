@@ -27,7 +27,7 @@ def _get_conn():
 
 async def get_survey_observers() -> list[int]:
     """
-    Returns telegram_ids of developer + admin_hr users.
+    Returns telegram_ids of developer + hr_admin users.
     Fetched live from hr_users — no hardcoded IDs.
     """
     conn = _get_conn()
@@ -36,7 +36,7 @@ async def get_survey_observers() -> list[int]:
             cur.execute(
                 """
                 SELECT telegram_id FROM hr_users
-                WHERE access_level IN ('developer', 'admin_hr')
+                WHERE access_level IN ('developer', 'hr_admin')
                   AND telegram_id IS NOT NULL
                   AND is_active = true
                 """

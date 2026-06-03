@@ -830,7 +830,7 @@ class ContentScheduler:
                             from models.hr_auth_models import HRUser
                             
                             admins = db.query(HRUser).filter(
-                                HRUser.access_level.in_(['developer', 'admin_hr']),
+                                HRUser.access_level.in_(['developer', 'hr_admin']),
                                 HRUser.is_active == True
                             ).all()
                             

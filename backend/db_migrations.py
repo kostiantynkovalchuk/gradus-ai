@@ -1471,6 +1471,14 @@ MIGRATIONS = [
             "ALTER TABLE solcon_legal_opinions ADD COLUMN IF NOT EXISTS docx_bytes BYTEA",
         ]
     },
+    {
+        "version": "057_hr_access_level_normalize",
+        "statements": [
+            "UPDATE hr_whitelist SET access_level='hr_admin' WHERE access_level='admin_hr'",
+            """ALTER TABLE hr_users ADD CONSTRAINT hr_users_access_level_check
+               CHECK (access_level IN ('employee','contractor','hr_admin','admin_it','developer'))""",
+        ]
+    },
 ]
 
 

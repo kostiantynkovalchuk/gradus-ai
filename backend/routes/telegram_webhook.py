@@ -2299,7 +2299,7 @@ async def handle_document_upload(message: dict, db: Session):
     caption = message.get("caption", "")
 
     access = get_access_level(db, telegram_id)
-    if not access or access not in ("developer", "admin_hr", "admin_it"):
+    if not access or access not in ("developer", "hr_admin", "admin_it"):
         await send_telegram_message(
             chat_id,
             "⚠️ Завантаження документів доступне лише для HR-адміністраторів."
