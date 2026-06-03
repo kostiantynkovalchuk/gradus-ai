@@ -25,6 +25,7 @@ from services.hr_keyboards import (
     create_feedback_keyboard, create_back_keyboard,
     create_content_navigation_keyboard,
     get_inline_menu_for_access_level,
+    get_candidate_fork_keyboard, get_candidate_root_keyboard,
     MENU_TITLES, split_long_message, LEGAL_CONTRACTS, CATEGORY_NAMES
 )
 from services.maya_hr_content import get_direct_content, has_direct_content
@@ -65,6 +66,9 @@ TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
 HUNT_SUPERGROUP_ID = int(os.getenv("HUNT_TG_SUPERGROUP_ID", "0"))
 BROADCAST_GROUP_ID = int(os.getenv("MAYA_BROADCAST_GROUP_ID", "0"))
 API_BASE_URL = os.getenv("APP_URL", "http://localhost:8000")
+VIKTORIA_TG_ID = int(os.getenv("VIKTORIA_TG_ID", "0"))
+
+CANDIDATE_AWAITING_RESUME: dict = {}   # telegram_id → True; cleared after forward attempt
 
 HR_KEYWORDS = [
     'зарплата', 'зп', 'виплата', 'аванс', 'нарахування',
@@ -326,6 +330,10 @@ async def _process_webhook_update(request: Request, db: Session):
                 result = await handle_hr_callback(data['callback_query'])
                 logger.info(f"✓ AV Post callback processed")
                 return result
+            elif callback_data.startswith('cand_'):
+                result = await handle_candidate_callback(data['callback_query'], db)
+                logger.info(f"✓ Candidate callback processed: {callback_data}")
+                return result
             elif callback_data.startswith('hr_'):
                 result = await handle_hr_callback(data['callback_query'])
                 logger.info(f"✓ HR callback processed")
@@ -350,6 +358,7 @@ async def _process_webhook_update(request: Request, db: Session):
             message = data["message"]
             logger.info(f"💬 Chat ID: {message.get('chat', {}).get('id')} | Type: {message.get('chat', {}).get('type')} | Text: {message.get('text', '')[:50]}")
             chat_id = message.get("chat", {}).get("id")
+            telegram_id = message.get("from", {}).get("id", chat_id)
             text = message.get("text", "")
 
             # ── BROADCAST GROUP INTERCEPT ─────────────────────────────────
@@ -423,6 +432,11 @@ async def _process_webhook_update(request: Request, db: Session):
             if message.get("contact"):
                 logger.info(f"📱 Contact shared by user")
                 await handle_contact_shared(message, db)
+                return {"ok": True}
+
+            if message.get("document") and CANDIDATE_AWAITING_RESUME.get(telegram_id):
+                logger.info(f"📎 Candidate resume received from {telegram_id}")
+                await handle_candidate_resume(message, db)
                 return {"ok": True}
 
             if message.get("document") and not text:
@@ -540,8 +554,9 @@ async def process_telegram_message(message: dict):
         
         try:
             if text.startswith("/"):
-                if text == "/start":
-                    await handle_start_command(chat_id, telegram_id, user_name, db)
+                if text == "/start" or text.startswith("/start "):
+                    _payload = text[7:].strip() if text.startswith("/start ") else ""
+                    await handle_start_command(chat_id, telegram_id, user_name, db, payload=_payload)
                 elif text == "/help":
                     await send_telegram_message(
                         chat_id,
@@ -613,6 +628,21 @@ async def process_telegram_message(message: dict):
         try:
             user = get_user_by_telegram_id(auth_db, telegram_id)
             if not user:
+                # Unit 7: candidates get buttons-only nudge, no phone keyboard
+                try:
+                    _cand = auth_db.execute(
+                        text("SELECT 1 FROM hr_candidates WHERE telegram_id=:tid"),
+                        {"tid": telegram_id},
+                    ).fetchone()
+                    if _cand:
+                        await send_telegram_message_with_keyboard(
+                            chat_id,
+                            "Скористайтесь, будь ласка, кнопками нижче.",
+                            get_candidate_root_keyboard(),
+                        )
+                        return
+                except Exception as _e:
+                    logger.warning(f"[candidate nudge] {_e}")
                 share_contact_keyboard = {
                     "keyboard": [
                         [{"text": "📱 Поділитися номером телефону", "request_contact": True}]
@@ -1277,6 +1307,168 @@ async def answer_callback(callback_id: str, text: str = ""):
         logger.warning(f"Error answering callback: {e}")
 
 
+async def copy_message_to_chat(
+    to_chat_id: int,
+    from_chat_id: int,
+    message_id: int,
+    caption: str = None,
+) -> bool:
+    """Forward a message by file_id using Telegram copyMessage (no file download)."""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.error("[copyMessage] TELEGRAM_MAYA_BOT_TOKEN not set")
+        return False
+    payload = {"chat_id": to_chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
+    if caption:
+        payload["caption"] = caption
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/copyMessage",
+                json=payload,
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                logger.info(f"[copyMessage] ok → chat {to_chat_id}")
+                return True
+            logger.error(f"[copyMessage] failed: {resp.text}")
+            return False
+    except Exception as e:
+        logger.error(f"[copyMessage] exception: {e}")
+        return False
+
+
+async def handle_candidate_resume(message: dict, db):
+    """Receive a candidate CV document, record it idempotently, and forward to Viktoria."""
+    chat_id = message.get("chat", {}).get("id")
+    telegram_id = message.get("from", {}).get("id", chat_id)
+    user_info = message.get("from", {})
+    first_name = user_info.get("first_name", "")
+    last_name = user_info.get("last_name", "")
+    full_name = f"{first_name} {last_name}".strip() or f"id {telegram_id}"
+    username = user_info.get("username")
+    username_str = f"@{username}" if username else f"id {telegram_id}"
+
+    try:
+        doc = message.get("document", {})
+        file_size = doc.get("file_size", 0)
+        file_name = doc.get("file_name", "") or ""
+        file_id = doc.get("file_id", "")
+        file_unique_id = doc.get("file_unique_id", "")
+        mime_type = doc.get("mime_type", "") or ""
+
+        # 20 MB guard — forward by file_id, never downloads
+        if file_size > 20 * 1024 * 1024:
+            CANDIDATE_AWAITING_RESUME.pop(telegram_id, None)
+            await send_telegram_message(
+                chat_id,
+                "⚠️ Файл завеликий. Максимальний розмір — 20 МБ. Будь ласка, надішліть менший файл.",
+            )
+            return
+
+        # Accept PDF/Word only; wrong type → nudge and keep await flag
+        ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+        allowed_exts = {"pdf", "doc", "docx"}
+        allowed_mimes = {
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        if ext not in allowed_exts and mime_type not in allowed_mimes:
+            await send_telegram_message(
+                chat_id, "📎 Надішліть, будь ласка, файл PDF або Word."
+            )
+            return  # await flag stays set
+
+        # Idempotent insert (Rule 4)
+        result = db.execute(
+            text(
+                "INSERT INTO hr_candidate_resumes "
+                "  (telegram_id, file_unique_id, file_id, file_name, forward_status) "
+                "  VALUES (:tid, :fuid, :fid, :fname, 'pending') "
+                "ON CONFLICT (telegram_id, file_unique_id) DO NOTHING "
+                "RETURNING id"
+            ),
+            {"tid": telegram_id, "fuid": file_unique_id, "fid": file_id, "fname": file_name or None},
+        )
+        db.commit()
+        resume_row = result.fetchone()
+
+        if resume_row is None:
+            # Duplicate send — confirm and clear
+            CANDIDATE_AWAITING_RESUME.pop(telegram_id, None)
+            await send_telegram_message(chat_id, "✅ Дякуємо, ваше резюме надіслано.")
+            return
+
+        resume_id = resume_row[0]
+
+        # Resolve source for caption
+        src_row = db.execute(
+            text("SELECT source FROM hr_candidates WHERE telegram_id=:tid"),
+            {"tid": telegram_id},
+        ).fetchone()
+        source = src_row[0] if src_row else "direct"
+
+        caption = f"📄 Нове резюме (джерело: {source}) від {full_name}, {username_str}"
+
+        # Resolve Viktoria's telegram_id: env → DB lookup by name
+        recipient_id = VIKTORIA_TG_ID or 0
+        if not recipient_id:
+            v_row = db.execute(
+                text(
+                    "SELECT telegram_id FROM hr_users "
+                    "WHERE first_name ILIKE '%Вікторія%' AND last_name ILIKE '%Куцая%' "
+                    "LIMIT 1"
+                )
+            ).fetchone()
+            if v_row:
+                recipient_id = v_row[0]
+
+        # Forward by file_id via copyMessage
+        forward_ok = False
+        if recipient_id:
+            forward_ok = await copy_message_to_chat(
+                to_chat_id=recipient_id,
+                from_chat_id=chat_id,
+                message_id=message.get("message_id"),
+                caption=caption,
+            )
+        else:
+            logger.error(
+                f"[CandidateResume] Cannot forward: VIKTORIA_TG_ID not set and "
+                f"Viktoria not found in hr_users. resume_id={resume_id}"
+            )
+
+        if forward_ok:
+            db.execute(
+                text(
+                    "UPDATE hr_candidate_resumes "
+                    "SET forward_status='forwarded', forwarded_at=now() WHERE id=:rid"
+                ),
+                {"rid": resume_id},
+            )
+        else:
+            db.execute(
+                text("UPDATE hr_candidate_resumes SET forward_status='failed' WHERE id=:rid"),
+                {"rid": resume_id},
+            )
+            if recipient_id:
+                logger.error(
+                    f"[CandidateResume] copyMessage failed, resume_id={resume_id}, "
+                    f"recipient={recipient_id}"
+                )
+        db.commit()
+
+        CANDIDATE_AWAITING_RESUME.pop(telegram_id, None)
+        await send_telegram_message(chat_id, "✅ Дякуємо, ваше резюме надіслано.")
+
+    except Exception as e:
+        logger.error(f"[handle_candidate_resume] unhandled error: {e}", exc_info=True)
+        CANDIDATE_AWAITING_RESUME.pop(telegram_id, None)
+        try:
+            await send_telegram_message(chat_id, "✅ Дякуємо, ваше резюме надіслано.")
+        except Exception:
+            pass
+
+
 async def handle_admin_button_callback(callback_query: dict, db):
     """Handle admin button callbacks from inline keyboard"""
     callback_id = callback_query.get('id')
@@ -1477,6 +1669,75 @@ async def handle_survey_callback(callback_query: dict):
             logger.error(f"[survey_callback] update_scoreboard error: {e}")
 
 
+async def handle_candidate_callback(callback_query: dict, db):
+    """Handle cand_fork:*, cand_about and cand_resume:* callbacks."""
+    callback_id = callback_query.get("id")
+    callback_data = callback_query.get("data", "")
+    message = callback_query.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    telegram_id = callback_query.get("from", {}).get("id")
+
+    await answer_callback(callback_id)
+
+    try:
+        if callback_data == "cand_fork:employee":
+            # Redirect to the existing share-phone auth flow; no hr_candidates row created
+            share_contact_keyboard = {
+                "keyboard": [
+                    [{"text": "📱 Поділитися номером телефону", "request_contact": True}]
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True,
+            }
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                "👋 Для початку роботи поділіться своїм номером телефону ⚡",
+                share_contact_keyboard,
+            )
+
+        elif callback_data == "cand_fork:candidate":
+            try:
+                db.execute(
+                    text(
+                        "INSERT INTO hr_candidates (telegram_id, source) "
+                        "VALUES (:tid, 'direct') ON CONFLICT (telegram_id) DO NOTHING"
+                    ),
+                    {"tid": telegram_id},
+                )
+                db.commit()
+            except Exception as e:
+                logger.warning(f"[Candidate] upsert failed for {telegram_id}: {e}")
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                "👋 Вітаємо! Оберіть дію нижче 👇",
+                get_candidate_root_keyboard(),
+            )
+
+        elif callback_data == "cand_about":
+            # Serve the shared About section; back-button guard in handle_hr_callback
+            # catches hr_menu:main so candidates return here, not the employee tree.
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                f"📖 *{MENU_TITLES.get('about', 'Про компанію')}*\n\nОберіть підрозділ:",
+                create_category_keyboard("about"),
+            )
+
+        elif callback_data == "cand_resume:start":
+            CANDIDATE_AWAITING_RESUME[telegram_id] = True
+            await send_telegram_message(
+                chat_id, "📄 Прикріпіть резюме файлом — PDF або Word."
+            )
+
+    except Exception as e:
+        logger.error(f"[handle_candidate_callback] {e}", exc_info=True)
+        try:
+            await send_telegram_message(chat_id, "⚠️ Виникла помилка. Спробуйте ще раз.")
+        except Exception:
+            pass
+
+    return {"ok": True}
+
+
 async def handle_hr_callback(callback_query: dict):
     """Handle HR bot callbacks"""
     callback_id = callback_query.get('id')
@@ -1484,11 +1745,40 @@ async def handle_hr_callback(callback_query: dict):
     message = callback_query.get('message', {})
     chat_id = message.get('chat', {}).get('id')
     message_id = message.get('message_id')
+    telegram_id = callback_query.get('from', {}).get('id')
     is_video_message = 'video' in message
-    
+
     if not callback_data.startswith('hr_pulse:'):
         await answer_callback(callback_id)
-    
+
+    # Back-button guard: a candidate who taps "🏠 Головне меню" (hr_menu:main)
+    # must land on the candidate root, not the employee menu.
+    if callback_data == 'hr_menu:main' and telegram_id:
+        try:
+            _gdb_gen = get_db()
+            _gdb = next(_gdb_gen)
+            try:
+                _is_emp = _gdb.execute(
+                    text("SELECT 1 FROM hr_users WHERE telegram_id=:tid"),
+                    {"tid": telegram_id},
+                ).fetchone()
+                if not _is_emp:
+                    _is_cand = _gdb.execute(
+                        text("SELECT 1 FROM hr_candidates WHERE telegram_id=:tid"),
+                        {"tid": telegram_id},
+                    ).fetchone()
+                    if _is_cand:
+                        await send_telegram_message_with_keyboard(
+                            chat_id,
+                            "Оберіть дію нижче 👇",
+                            get_candidate_root_keyboard(),
+                        )
+                        return {"ok": True}
+            finally:
+                _gdb.close()
+        except Exception as _e:
+            logger.warning(f"[candidate back-guard] {_e}")
+
     try:
         if callback_data.startswith('hr_menu:'):
             menu_id = callback_data.split(':')[1]

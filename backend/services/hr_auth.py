@@ -4,11 +4,16 @@ import asyncio
 import httpx
 import logging
 from datetime import datetime
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from models.hr_auth_models import HRUser, HRWhitelist, VerificationLog
 from services.hr_sed_service import sed_service
-from services.hr_keyboards import get_inline_menu_for_access_level
+from services.hr_keyboards import (
+    get_inline_menu_for_access_level,
+    get_candidate_fork_keyboard,
+    get_candidate_root_keyboard,
+)
 from services.hr_phone_cache_service import find_employee_by_phone_sync
 from utils.phone_normalizer import normalize_phone, format_for_display
 
@@ -94,7 +99,7 @@ def clear_pending_state(telegram_id: int):
     PENDING_VERIFICATIONS.pop(telegram_id, None)
 
 
-async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: str, db: Session):
+async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: str, db: Session, payload: str = ""):
     user = get_user_by_telegram_id(db, telegram_id)
 
     if user:
@@ -125,23 +130,32 @@ async def handle_start_command(chat_id: int, telegram_id: int, user_first_name: 
         await send_message_with_keyboard(chat_id, greeting, keyboard)
         return True
 
-    welcome_text = (
-        f"👋 Привіт, {user_first_name}! Я Maya — твій HR-асистент у Торговому Домі АВ.\n\n"
-        f"🎯 Допоможу з:\n"
-        f"• Відпустками та зарплатою 💰\n"
-        f"• Техпідтримкою (Бліц, УРС, доступи) 🔧\n"
-        f"• Документами та процедурами 📋\n"
-        f"• Контактами спеціалістів 📞\n\n"
-        f"Для початку роботи натисни кнопку нижче, щоб поділитися своїм номером телефону ⚡"
-    )
-    share_contact_keyboard = {
-        "keyboard": [
-            [{"text": "📱 Поділитися номером телефону", "request_contact": True}]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
-    await send_message_with_keyboard(chat_id, welcome_text, share_contact_keyboard)
+    # Not an authenticated employee — check for deep-link payload
+    if payload in ('insta', 'uni'):
+        try:
+            db.execute(
+                text(
+                    "INSERT INTO hr_candidates (telegram_id, source) "
+                    "VALUES (:tid, :src) ON CONFLICT (telegram_id) DO NOTHING"
+                ),
+                {"tid": telegram_id, "src": payload}
+            )
+            db.commit()
+        except Exception as e:
+            logger.warning(f"[Candidate] upsert failed for {telegram_id}: {e}")
+        await send_message_with_keyboard(
+            chat_id,
+            f"👋 Привіт, {user_first_name}! Раді бачити тебе в Торговому Домі АВ.\n\n"
+            f"Оберіть дію нижче 👇",
+            get_candidate_root_keyboard()
+        )
+    else:
+        await send_message_with_keyboard(
+            chat_id,
+            f"👋 Привіт, {user_first_name}! Я Maya — HR-асистент Торгового Дому АВ.\n\n"
+            f"Оберіть, хто ви 👇",
+            get_candidate_fork_keyboard()
+        )
     return True
 
 

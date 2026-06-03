@@ -6,6 +6,29 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "059_hr_candidates",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS hr_candidates (
+                telegram_id BIGINT PRIMARY KEY,
+                source      VARCHAR NOT NULL DEFAULT 'direct',
+                created_at  TIMESTAMP NOT NULL DEFAULT now(),
+                CHECK (source IN ('insta','uni','direct','unknown'))
+            )""",
+            """CREATE TABLE IF NOT EXISTS hr_candidate_resumes (
+                id             BIGSERIAL PRIMARY KEY,
+                telegram_id    BIGINT NOT NULL,
+                file_unique_id VARCHAR NOT NULL,
+                file_id        VARCHAR NOT NULL,
+                file_name      VARCHAR,
+                forward_status VARCHAR NOT NULL DEFAULT 'pending',
+                forwarded_at   TIMESTAMP NULL,
+                created_at     TIMESTAMP NOT NULL DEFAULT now(),
+                CONSTRAINT hr_candidate_resumes_dedup UNIQUE (telegram_id, file_unique_id),
+                CHECK (forward_status IN ('pending','forwarded','failed'))
+            )"""
+        ]
+    },
+    {
         "version": "054_hr_broadcast_recipients",
         "statements": [
             "ALTER TABLE hr_broadcast_log ADD COLUMN IF NOT EXISTS payload JSONB",

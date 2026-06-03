@@ -555,6 +555,29 @@ def get_inline_menu_for_access_level(access_level: str) -> Dict:
     return {"inline_keyboard": buttons}
 
 
+def get_candidate_fork_keyboard() -> Dict:
+    """Pre-auth fork keyboard — shown before authentication so the user can
+    identify as a candidate (job seeker) or an employee."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "👤 Кандидат",      "callback_data": "cand_fork:candidate"},
+                {"text": "🧑‍💼 Співробітник", "callback_data": "cand_fork:employee"},
+            ]
+        ]
+    }
+
+
+def get_candidate_root_keyboard() -> Dict:
+    """Root menu for candidates — buttons only, no free-text Q&A."""
+    return {
+        "inline_keyboard": [
+            [{"text": "ℹ️ Про компанію",     "callback_data": "cand_about"}],
+            [{"text": "📄 Надіслати резюме", "callback_data": "cand_resume:start"}],
+        ]
+    }
+
+
 def split_long_message(text: str, max_length: int = 3800) -> List[str]:
     """Split long message into chunks"""
     if len(text) <= max_length:
