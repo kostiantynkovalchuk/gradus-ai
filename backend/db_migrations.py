@@ -1479,6 +1479,12 @@ MIGRATIONS = [
                CHECK (access_level IN ('employee','contractor','hr_admin','admin_it','developer'))""",
         ]
     },
+    {
+        "version": "058_hr_drop_redundant_access_level_constraint",
+        "statements": [
+            "ALTER TABLE hr_users DROP CONSTRAINT hr_users_access_level_valid",
+        ]
+    },
 ]
 
 
