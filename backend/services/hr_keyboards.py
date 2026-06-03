@@ -528,13 +528,31 @@ MENU_TITLES = {
 
 def get_inline_menu_for_access_level(access_level: str) -> Dict:
     """Return the appropriate inline keyboard based on user access level.
-    Employees get the standard HR menu; admins/developers get an extra admin row."""
+    Employees get the standard HR menu; admins get a row of live admin shortcuts.
+    developer  → two rows: [Admin, Stats, Logs] + [Add User, List Users]
+    hr_admin / admin_it → one row: [Admin, Add User, Stats]
+    employee / other    → base menu only, no admin row."""
     base = create_main_menu_keyboard()
-    if access_level in ('hr_admin', 'developer'):
-        base["inline_keyboard"].append([
-            {"text": "⚙️ Адмін-панель", "callback_data": "admin_cmd:panel"}
+    buttons = list(base.get("inline_keyboard", []))
+
+    if access_level == "developer":
+        buttons.append([
+            {"text": "👨‍💻 Admin",    "callback_data": "admin_cmd:admin"},
+            {"text": "📊 Stats",      "callback_data": "admin_cmd:stats"},
+            {"text": "🔍 Logs",       "callback_data": "admin_cmd:logs"}
         ])
-    return base
+        buttons.append([
+            {"text": "➕ Add User",    "callback_data": "admin_cmd:adduser"},
+            {"text": "👥 List Users", "callback_data": "admin_cmd:listusers"}
+        ])
+    elif access_level in ("hr_admin", "admin_it"):
+        buttons.append([
+            {"text": "⚙️ Admin",      "callback_data": "admin_cmd:admin"},
+            {"text": "➕ Add User",    "callback_data": "admin_cmd:adduser"},
+            {"text": "📊 Stats",      "callback_data": "admin_cmd:stats"}
+        ])
+
+    return {"inline_keyboard": buttons}
 
 
 def split_long_message(text: str, max_length: int = 3800) -> List[str]:

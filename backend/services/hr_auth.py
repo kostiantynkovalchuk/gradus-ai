@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from models.hr_auth_models import HRUser, HRWhitelist, VerificationLog
 from services.hr_sed_service import sed_service
+from services.hr_keyboards import get_inline_menu_for_access_level
 from services.hr_phone_cache_service import find_employee_by_phone_sync
 from utils.phone_normalizer import normalize_phone, format_for_display
 
@@ -812,31 +813,6 @@ async def handle_listusers_command(chat_id: int, telegram_id: int, db: Session):
         header = f"👥 Користувачі (page {i}/{total_chunks}):\n"
         await send_plain_message(chat_id, header + chunk)
         await asyncio.sleep(0.05)
-
-
-def get_inline_menu_for_access_level(access_level: str) -> dict:
-    from services.hr_keyboards import create_main_menu_keyboard
-    base = create_main_menu_keyboard()
-    buttons = list(base.get("inline_keyboard", []))
-
-    if access_level == "developer":
-        buttons.append([
-            {"text": "👨‍💻 Admin", "callback_data": "admin_cmd:admin"},
-            {"text": "📊 Stats", "callback_data": "admin_cmd:stats"},
-            {"text": "🔍 Logs", "callback_data": "admin_cmd:logs"}
-        ])
-        buttons.append([
-            {"text": "➕ Add User", "callback_data": "admin_cmd:adduser"},
-            {"text": "👥 List Users", "callback_data": "admin_cmd:listusers"}
-        ])
-    elif access_level in ("hr_admin", "admin_it"):
-        buttons.append([
-            {"text": "⚙️ Admin", "callback_data": "admin_cmd:admin"},
-            {"text": "➕ Add User", "callback_data": "admin_cmd:adduser"},
-            {"text": "📊 Stats", "callback_data": "admin_cmd:stats"}
-        ])
-
-    return {"inline_keyboard": buttons}
 
 
 async def send_plain_message(chat_id: int, text: str) -> bool:
