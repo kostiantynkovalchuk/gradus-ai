@@ -1670,7 +1670,7 @@ async def handle_survey_callback(callback_query: dict):
 
 
 async def handle_candidate_callback(callback_query: dict, db):
-    """Handle cand_fork:*, cand_about and cand_resume:* callbacks."""
+    """Handle cand_fork:*, cand_info:*, cand_root and cand_resume:* callbacks."""
     callback_id = callback_query.get("id")
     callback_data = callback_query.get("data", "")
     message = callback_query.get("message", {})
@@ -1713,13 +1713,51 @@ async def handle_candidate_callback(callback_query: dict, db):
                 get_candidate_root_keyboard(),
             )
 
-        elif callback_data == "cand_about":
-            # Serve the shared About section; back-button guard in handle_hr_callback
-            # catches hr_menu:main so candidates return here, not the employee tree.
+        elif callback_data.startswith("cand_info:"):
+            _CAND_INFO_MAP = {
+                "overview":  "video_overview",
+                "values":    "video_values",
+                "history":   "video_history",
+                "structure": "section_4_structure",
+            }
+            suffix = callback_data.split(":", 1)[1]
+            content_key = _CAND_INFO_MAP.get(suffix)
+            _cand_nav = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "cand_root"}]]}
+            if not content_key:
+                await send_telegram_message_with_keyboard(
+                    chat_id, "⚠️ Розділ не знайдено.", _cand_nav
+                )
+            else:
+                item = get_direct_content(content_key)
+                if not item:
+                    await send_telegram_message_with_keyboard(
+                        chat_id, "⚠️ Контент тимчасово недоступний.", _cand_nav
+                    )
+                elif item.get("type") == "video" and item.get("video_url"):
+                    success = await send_telegram_video(
+                        chat_id,
+                        item["video_url"],
+                        f"🎬 *{item.get('title', '')}*",
+                        _cand_nav,
+                    )
+                    if not success:
+                        await send_telegram_message_with_keyboard(
+                            chat_id,
+                            f"⚠️ Відео тимчасово недоступне.\n\n*{item.get('title', '')}*\n\n{item.get('content', '')}",
+                            _cand_nav,
+                        )
+                else:
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        f"*{item.get('title', '')}*\n\n{item.get('content', '')}",
+                        _cand_nav,
+                    )
+
+        elif callback_data == "cand_root":
             await send_telegram_message_with_keyboard(
                 chat_id,
-                f"📖 *{MENU_TITLES.get('about', 'Про компанію')}*\n\nОберіть підрозділ:",
-                create_category_keyboard("about"),
+                "Оберіть дію нижче 👇",
+                get_candidate_root_keyboard(),
             )
 
         elif callback_data == "cand_resume:start":
