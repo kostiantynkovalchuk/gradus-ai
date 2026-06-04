@@ -6,6 +6,22 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "060_hr_candidate_vacancies",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS hr_candidate_vacancies (
+                id         BIGSERIAL PRIMARY KEY,
+                job_id     VARCHAR NOT NULL,
+                title      VARCHAR NOT NULL,
+                url        VARCHAR NOT NULL,
+                region     VARCHAR NOT NULL DEFAULT 'dnipro',
+                is_active  BOOLEAN NOT NULL DEFAULT true,
+                fetched_at TIMESTAMP NOT NULL DEFAULT now(),
+                UNIQUE (job_id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_hr_cand_vac_active ON hr_candidate_vacancies (region, is_active)",
+        ]
+    },
+    {
         "version": "059_hr_candidates",
         "statements": [
             """CREATE TABLE IF NOT EXISTS hr_candidates (

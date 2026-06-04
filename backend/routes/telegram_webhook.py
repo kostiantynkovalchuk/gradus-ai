@@ -1760,6 +1760,47 @@ async def handle_candidate_callback(callback_query: dict, db):
                 get_candidate_root_keyboard(),
             )
 
+        elif callback_data == "cand_vacancies":
+            _cand_nav = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "cand_root"}]]}
+            try:
+                from sqlalchemy import text as _text
+                rows = db.execute(
+                    _text(
+                        "SELECT title, url FROM hr_candidate_vacancies "
+                        "WHERE is_active=true ORDER BY title"
+                    )
+                ).fetchall()
+                if rows:
+                    _MAX_SHOWN = 20
+                    buttons = []
+                    for row in rows[:_MAX_SHOWN]:
+                        label = row[0][:60] if len(row[0]) > 60 else row[0]
+                        buttons.append([{"text": label, "url": row[1]}])
+                    if len(rows) > _MAX_SHOWN:
+                        buttons.append([{
+                            "text": "Усі вакансії на Work.ua",
+                            "url":  "https://www.work.ua/jobs/by-company/304819/?region=34",
+                        }])
+                    buttons.append([{"text": "🔙 Назад", "callback_data": "cand_root"}])
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        "💼 *Відкриті вакансії в Дніпрі:*",
+                        {"inline_keyboard": buttons},
+                    )
+                else:
+                    await send_telegram_message_with_keyboard(
+                        chat_id,
+                        "Наразі немає відкритих вакансій у Дніпрі. Завітайте пізніше 👇",
+                        _cand_nav,
+                    )
+            except Exception as _ve:
+                logger.error(f"[cand_vacancies] DB error: {_ve}", exc_info=True)
+                await send_telegram_message_with_keyboard(
+                    chat_id,
+                    "⚠️ Не вдалося завантажити вакансії. Спробуйте пізніше.",
+                    _cand_nav,
+                )
+
         elif callback_data == "cand_resume:start":
             CANDIDATE_AWAITING_RESUME[telegram_id] = True
             await send_telegram_message(

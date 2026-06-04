@@ -1,0 +1,101 @@
+IMPLEMENTATION. New candidate feature: a "Вакансії" button showing live AVTD/Dnipro
+vacancies from Work.ua (vacancy title + direct work.ua link). Cache-backed: a
+scheduled job fetches into a new table; the button reads from the table. Per the
+completed audit — fetch path is confirmed reachable (no Cloudflare), request layer is
+reusable, URL buttons are supported. This is MAYA HR — no Solomon. Follow the Rules.
+Grep each symbol before editing; if a signature differs from the audit, STOP and
+report (Rule 2).
+
+== UNIT 1: MIGRATION 060 (Rule 6, append-only) ==
+- Confirm next number: SELECT max(version) FROM schema_migrations (audit says 059 →
+  use 060). Append 060_hr_candidate_vacancies.
+- Table:
+    hr_candidate_vacancies:
+      id          BIGSERIAL PRIMARY KEY,
+      job_id      VARCHAR NOT NULL,          -- work.ua numeric id, extracted from URL
+      title       VARCHAR NOT NULL,
+      url         VARCHAR NOT NULL,          -- https://www.work.ua/jobs/{job_id}/
+      region      VARCHAR NOT NULL DEFAULT 'dnipro',
+      is_active   BOOLEAN NOT NULL DEFAULT true,
+      fetched_at  TIMESTAMP NOT NULL DEFAULT now(),
+      UNIQUE (job_id)                         -- one row per vacancy; refresh upserts
+- CHECK constraint optional here (region is free-ish); skip unless trivial.
+
+== UNIT 2: SCRAPER — vacancy parser (hunt_workua_scraper.py) ==
+- Add a NEW function fetch_avtd_dnipro_vacancies() that REUSES the existing
+  _get_public_session() and _rate_limit() verbatim. Do NOT touch the CV functions.
+- URL: https://www.work.ua/jobs/by-company/304819/?region=34  (AVTD company id 304819,
+  region 34 = Dnipro). Static GET, timeout=15, same session/headers as CV path.
+- PARSER — be SELECTIVE, not greedy. The page contains /jobs/{id}/ links that are NOT
+  vacancies (anchor-jump links like /jobs/by-company/304819#NNN, the canonical, the
+  "all vacancies" link). Target the vacancy TITLE links specifically: anchors whose
+  href matches ^https?://www\.work\.ua/jobs/(\d+)/?$ (full job URL, trailing id only —
+  NOT the #anchor company-page links). These are the heading-level title links. For
+  each: extract job_id (the digits), title (anchor text), url (normalize to
+  https://www.work.ua/jobs/{job_id}/).
+- DEDUP by job_id (same vacancy may appear more than once in the HTML).
+- PAGINATION CHECK: after parsing page 1, look for a next-page link (?page=2 /
+  region=34&page=2). If present, follow it (reuse _rate_limit between fetches), up to
+  a small cap (e.g. 5 pages) to avoid runaway. ~3 Dnipro items will likely fit page 1,
+  but don't silently truncate.
+- LOGGING: log "[vacancies] parsed N unique vacancies" so a markup change that yields
+  0 is visible. Return a list of {job_id, title, url}. On any fetch/parse exception,
+  log and return None (caller treats None as "fetch failed, keep existing cache").
+- Scope: TITLE + LINK only. Do NOT attempt to parse salary, location detail, or
+  "open to students" — Work.ua markup for those is inconsistent; the link carries
+  full detail.
+
+== UNIT 3: REFRESH JOB (scheduler.py) ==
+- Add a periodic job following the CronTrigger pattern (audit quoted it):
+    self.scheduler.add_job(self.refresh_avtd_vacancies_task,
+        CronTrigger(hour=H, minute=M), id='refresh_vacancies',
+        name='Refresh AVTD Dnipro vacancies from Work.ua', replace_existing=True)
+  Suggest twice daily (e.g. hour='6,18') — AVTD vacancies don't change fast.
+- refresh_avtd_vacancies_task:
+    * call fetch_avtd_dnipro_vacancies().
+    * If None (fetch failed) → log warning, DO NOT wipe the table (keep last-good
+      cache). Return.
+    * If a list (even empty) → UPSERT each into hr_candidate_vacancies
+      (INSERT ... ON CONFLICT (job_id) DO UPDATE SET title, url, fetched_at,
+      is_active=true), then mark any job_id NOT in this fetch as is_active=false
+      (vacancy closed/filled). This way the button only shows currently-open roles.
+    * Use the same DB access pattern other scheduler jobs use (grep one; note Maya
+      Hunt background tasks used raw psycopg2 due to async/SQLAlchemy session issues —
+      match whatever the working scheduler jobs do).
+    * Wrap in try/except, log, never crash the scheduler.
+- Run the job ONCE at startup (or trigger manually after deploy) so the table isn't
+  empty before the first scheduled run.
+
+== UNIT 4: CANDIDATE BUTTON + 2-PER-ROW LAYOUT (hr_keyboards.py + telegram_webhook.py) ==
+- get_candidate_root_keyboard(): re-lay the 6 buttons two-per-row, grouped:
+    [ 🎬 Загальна інформація ] [ 🎬 Цінності компанії ]
+    [ 🎬 Історія компанії ]    [ 📊 Структура компанії ]
+    [ 💼 Вакансії ]            [ 📄 Надіслати резюме ]
+  (Each row = a nested array. cand_info:* callbacks unchanged; new button
+  callback_data 'cand_vacancies'; resume button 'cand_resume:start' unchanged.)
+- In handle_candidate_callback, add a cand_vacancies branch:
+    * Query hr_candidate_vacancies WHERE is_active=true ORDER BY fetched_at DESC (or
+      title). 
+    * If rows exist → build a keyboard: one URL button per vacancy
+      [{"text": title (truncate to ~60 chars if long), "url": url}], one per row, plus
+      a final [{"text":"🔙 Назад","callback_data":"cand_root"}]. Send via
+      send_telegram_message_with_keyboard with a header like "💼 Відкриті вакансії в
+      Дніпрі:". (URL buttons confirmed supported — audit cited live examples.)
+    * If NO active rows → send "Наразі немає відкритих вакансій у Дніпрі. Завітайте
+      пізніше 👇" with just the back-to-cand_root button. Never an empty/dead menu
+      (Rule 3).
+    * Wrap in try/except → text fallback.
+- Telegram inline-keyboard button cap is generous, but if active vacancies ever exceed
+  ~20, cap the list and add a final URL button to the full company page
+  https://www.work.ua/jobs/by-company/304819/?region=34 labelled "Усі вакансії на
+  Work.ua". (For ~3 this won't trigger, but code the cap.)
+
+== UNIT 5: VERIFY (Rule 5) ==
+- grep candidate paths: confirm cand_vacancies stays in cand_ space (back → cand_root,
+  no hr_ callbacks). Quote.
+- Confirm all three modules import cleanly; migration 060 applied; report the number.
+- Run the refresh job once and confirm hr_candidate_vacancies populates with the live
+  Dnipro vacancies (report the count + titles fetched).
+- Confirm the candidate keyboard now renders 6 buttons in 3 rows of 2.
+
+Report each unit with evidence. Two-row layout lands with this feature as specified.

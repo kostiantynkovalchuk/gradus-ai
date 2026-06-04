@@ -569,14 +569,21 @@ def get_candidate_fork_keyboard() -> Dict:
 
 
 def get_candidate_root_keyboard() -> Dict:
-    """Root menu for candidates — flat company-info leaves + resume, all cand_ callbacks."""
+    """Root menu for candidates — 3 rows of 2, all cand_ callbacks."""
     return {
         "inline_keyboard": [
-            [{"text": "🎬 Загальна інформація", "callback_data": "cand_info:overview"}],
-            [{"text": "🎬 Цінності компанії",   "callback_data": "cand_info:values"}],
-            [{"text": "🎬 Історія компанії",    "callback_data": "cand_info:history"}],
-            [{"text": "📊 Структура компанії",  "callback_data": "cand_info:structure"}],
-            [{"text": "📄 Надіслати резюме",    "callback_data": "cand_resume:start"}],
+            [
+                {"text": "🎬 Загальна інформація", "callback_data": "cand_info:overview"},
+                {"text": "🎬 Цінності компанії",   "callback_data": "cand_info:values"},
+            ],
+            [
+                {"text": "🎬 Історія компанії",   "callback_data": "cand_info:history"},
+                {"text": "📊 Структура компанії", "callback_data": "cand_info:structure"},
+            ],
+            [
+                {"text": "💼 Вакансії",         "callback_data": "cand_vacancies"},
+                {"text": "📄 Надіслати резюме", "callback_data": "cand_resume:start"},
+            ],
         ]
     }
 

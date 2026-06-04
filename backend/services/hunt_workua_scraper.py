@@ -366,6 +366,78 @@ def scrape_workua_candidates(
     return candidates
 
 
+AVTD_COMPANY_VACANCIES_URL = "https://www.work.ua/jobs/by-company/304819/?region=34"
+_VACANCY_HREF_RE = re.compile(r'^https?://www\.work\.ua/jobs/(\d+)/?$')
+_VACANCY_HREF_PATH_RE = re.compile(r'^/jobs/(\d+)/?$')
+
+
+def fetch_avtd_dnipro_vacancies():
+    """
+    Fetch open AVTD vacancies in Dnipro from Work.ua company page.
+    Returns a list of {job_id, title, url} dicts, or None on fetch failure
+    (caller keeps existing cache on None).
+    Uses the same _get_public_session() / _rate_limit() as the CV scraper.
+    """
+    from bs4 import BeautifulSoup
+
+    session = _get_public_session()
+    vacancies = {}
+    page = 1
+    max_pages = 5
+
+    try:
+        while page <= max_pages:
+            url = AVTD_COMPANY_VACANCIES_URL if page == 1 else f"{AVTD_COMPANY_VACANCIES_URL}&page={page}"
+            _rate_limit()
+            resp = session.get(url, timeout=15, allow_redirects=True)
+            if resp.status_code != 200:
+                logger.warning(f"[vacancies] HTTP {resp.status_code} fetching {url}")
+                return None
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            found_on_page = 0
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                # Accept both full URLs and path-only hrefs
+                m = _VACANCY_HREF_RE.match(href) or _VACANCY_HREF_PATH_RE.match(href)
+                if not m:
+                    continue
+                job_id = m.group(1)
+                title = a.get_text(strip=True)
+                if not title or job_id in vacancies:
+                    continue
+                vacancies[job_id] = {
+                    "job_id": job_id,
+                    "title":  title,
+                    "url":    f"https://www.work.ua/jobs/{job_id}/",
+                }
+                found_on_page += 1
+
+            logger.info(f"[vacancies] page {page}: {found_on_page} new links; running total {len(vacancies)}")
+
+            # Check for a next-page link before continuing
+            next_link = soup.find("a", href=re.compile(r'[?&]page=\d+'))
+            if not next_link:
+                break
+            # Make sure this is actually a higher page number
+            next_href = next_link.get("href", "")
+            next_m = re.search(r'[?&]page=(\d+)', next_href)
+            if not next_m or int(next_m.group(1)) <= page:
+                break
+            page += 1
+
+        result = list(vacancies.values())
+        logger.info(f"[vacancies] parsed {len(result)} unique vacancies from AVTD Dnipro page")
+        return result
+
+    except Exception as e:
+        logger.error(f"[vacancies] fetch_avtd_dnipro_vacancies error: {e}")
+        return None
+    finally:
+        session.close()
+
+
 async def search_workua(vacancy: dict, depth_days: int = None) -> list:
     import asyncio
     from config.hunt_config import HUNT_CONFIG

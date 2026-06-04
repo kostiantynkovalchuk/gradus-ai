@@ -3,6 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
 import logging
 import os
+import threading
 from sqlalchemy.exc import IntegrityError
 from services.news_scraper import news_scraper
 from services.translation_service import translation_service
@@ -1261,6 +1262,10 @@ class ContentScheduler:
             logger.info("Scheduler already running, skipping start")
             return
 
+        # Populate vacancy cache on every startup regardless of scheduler state,
+        # so the candidate button works immediately in all environments.
+        threading.Thread(target=self.refresh_avtd_vacancies_task, daemon=True).start()
+
         # Safety guard: disable scheduler in development (Replit)
         if os.getenv("DISABLE_SCHEDULER", "").lower() == "true":
             logger.info("⚠️ Scheduler DISABLED via DISABLE_SCHEDULER env var")
@@ -1516,6 +1521,15 @@ class ContentScheduler:
             misfire_grace_time=7200,
         )
 
+        # AVTD Dnipro vacancies cache — twice daily at 06:00 and 18:00 UTC
+        self.scheduler.add_job(
+            self.refresh_avtd_vacancies_task,
+            CronTrigger(hour='6,18', minute=0),
+            id='refresh_vacancies',
+            name='Refresh AVTD Dnipro vacancies from Work.ua',
+            replace_existing=True,
+        )
+
         self.scheduler.start()
 
         if _paused:
@@ -1651,6 +1665,47 @@ class ContentScheduler:
             logger.info("[SCHEDULER] KB edition check done")
         except Exception as e:
             logger.error(f"[SCHEDULER] KB edition check failed: {e}", exc_info=True)
+
+    def refresh_avtd_vacancies_task(self):
+        """
+        Refresh AVTD Dnipro vacancies from Work.ua into hr_candidate_vacancies.
+        Runs twice daily (06:00 and 18:00 UTC).
+        On fetch failure (None) keeps the existing cache untouched.
+        On success upserts active rows and marks absent job_ids inactive.
+        """
+        logger.info("[SCHEDULER] Refreshing AVTD Dnipro vacancies from Work.ua...")
+        try:
+            from services.hunt_workua_scraper import fetch_avtd_dnipro_vacancies
+            from sqlalchemy import text as _text
+
+            vacancies = fetch_avtd_dnipro_vacancies()
+            if vacancies is None:
+                logger.warning("[SCHEDULER] Vacancy fetch failed — keeping existing cache")
+                return
+
+            db = self._get_db_session()
+            try:
+                # Mark all Dnipro rows inactive first; upsert will re-activate present ones
+                db.execute(_text(
+                    "UPDATE hr_candidate_vacancies SET is_active=false WHERE region='dnipro'"
+                ))
+                for v in vacancies:
+                    db.execute(_text("""
+                        INSERT INTO hr_candidate_vacancies (job_id, title, url, region, is_active, fetched_at)
+                        VALUES (:job_id, :title, :url, 'dnipro', true, now())
+                        ON CONFLICT (job_id) DO UPDATE
+                          SET title=EXCLUDED.title,
+                              url=EXCLUDED.url,
+                              fetched_at=now(),
+                              is_active=true
+                    """), {"job_id": v["job_id"], "title": v["title"], "url": v["url"]})
+                db.commit()
+                logger.info(f"[SCHEDULER] Vacancy cache updated: {len(vacancies)} active vacancy(-ies)")
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"[SCHEDULER] refresh_avtd_vacancies_task failed: {e}", exc_info=True)
 
     def stop(self):
         """Stop the scheduler (idempotent)"""
