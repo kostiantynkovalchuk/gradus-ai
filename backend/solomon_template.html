@@ -564,6 +564,8 @@ async function submitFeedback(docId, safeCase, feedback, btn) {
 // ══════════════════════════════════════════════════════════════
 let _engagements = [];
 let _currentEng = null;
+let _solconFindings = [];  // live-patched by updateFindingState for instant button updates
+let _solconDocs     = [];  // populated on workspace load; protocols[] used by buildProtoBtn
 
 function renderContractsView(view) {
   if (!view || view === 'list') renderContractsList();
@@ -626,6 +628,8 @@ async function renderEngagementWorkspace(eid) {
     const eng = data.engagement;
     const docs = data.documents || [];
     const findings = data.findings || [];
+    _solconDocs     = docs;      // cache for renderDocProtocolBtn
+    _solconFindings = findings;  // cache for renderDocProtocolBtn
     const sevSum   = data.severity_summary || {};
     const opinion  = data.latest_opinion  || null;
 
@@ -717,11 +721,7 @@ async function renderEngagementWorkspace(eid) {
           </div>
           <div style="display:flex;gap:8px;align-items:flex-start">
             ${(noText || isOcrFailed) ? `<button class="btn btn-secondary btn-sm" title="Переекстрагувати текст" onclick="reExtract(${d.id}, ${eid})">↺ Текст</button>` : ''}
-            ${(d.protocols||[]).length > 0
-              ? `<button class="btn btn-secondary btn-sm" title="Завантажити протокол (v${(d.protocols||[])[0]?.version})" onclick="downloadProtocol(${eid}, ${d.id})">↓ Протокол DOCX</button>`
-              : findings.filter(f=>f.document_id===d.id&&f.workflow_state==='included_in_protocol').length > 0
-                ? `<button class="btn btn-secondary btn-sm" title="Згенерувати протокол розбіжностей" onclick="genProtocol(${eid}, ${d.id})">↓ Згенерувати протокол</button>`
-                : ''}
+            <span id="proto-btn-${d.id}">${buildProtoBtn(eid, d.id)}</span>
             <button class="btn btn-secondary btn-sm" style="color:#c0392b" title="Видалити документ" onclick="deleteDoc(${d.id}, ${eid}, ${JSON.stringify(d.original_filename).replace(/"/g, '&quot;')})">✕</button>
           </div>
         </div>`;
@@ -771,7 +771,7 @@ async function renderEngagementWorkspace(eid) {
           ${f.monetary_exposure_uah ? `<div style="font-size:12px;color:var(--sev-high);margin-bottom:8px">≈ ${Number(f.monetary_exposure_uah).toLocaleString('uk-UA')} грн</div>` : ''}
           ${altHtml}
           <div class="finding-actions">
-            <select class="form-input" style="width:auto;padding:4px 8px;font-size:11px" onchange="updateFindingState(${f.id}, this.value)">
+            <select class="form-input" style="width:auto;padding:4px 8px;font-size:11px" onchange="updateFindingState(${f.id}, this.value, ${eid}, ${f.document_id})">
               ${stateOptions(f.workflow_state)}
             </select>
           </div>
@@ -1049,11 +1049,38 @@ async function startAnalysis(eid) {
   setTimeout(poll, POLL_MS);
 }
 
-async function updateFindingState(fid, state) {
+// Returns the HTML for the protocol button in three states.
+// Reads _solconFindings / _solconDocs so it can be called without DOM re-render.
+function buildProtoBtn(eid, did) {
+  const d       = _solconDocs.find(x => x.id === did);
+  if (!d) return '';
+  const hasProto = (d.protocols || []).length > 0;
+  const inProto  = _solconFindings.filter(f => f.document_id === did && f.workflow_state === 'included_in_protocol').length > 0;
+  if (hasProto) {
+    const v = (d.protocols[0] || {}).version;
+    return `<button class="btn btn-secondary btn-sm" title="Завантажити протокол (v${v})" onclick="downloadProtocol(${eid},${did})">↓ Протокол DOCX</button>`;
+  }
+  if (inProto) {
+    return `<button class="btn btn-secondary btn-sm" title="Згенерувати протокол розбіжностей" onclick="genProtocol(${eid},${did},this)">↓ Згенерувати протокол</button>`;
+  }
+  return `<button class="btn btn-secondary btn-sm" disabled style="opacity:.45;cursor:not-allowed" title="Позначте пункти «До протоколу», щоб згенерувати протокол">↓ Протокол DOCX</button>`;
+}
+
+// Patches just the protocol button span for document `did` without a full re-render.
+function renderDocProtocolBtn(eid, did) {
+  const el = document.getElementById('proto-btn-' + did);
+  if (el) el.innerHTML = buildProtoBtn(eid, did);
+}
+
+async function updateFindingState(fid, state, eid, did) {
   await fetch('/api/contracts/findings/' + fid + '/state', {
     method:'PATCH', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ workflow_state: state })
   });
+  // Patch the local cache so renderDocProtocolBtn sees the new state immediately.
+  const f = _solconFindings.find(x => x.id === fid);
+  if (f) f.workflow_state = state;
+  if (eid != null && did != null) renderDocProtocolBtn(eid, did);
 }
 
 async function updateFindingJudgment(fid, judgment) {
