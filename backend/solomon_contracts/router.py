@@ -22,6 +22,7 @@ from .analyzer import (
     scan_document,
     split_into_sections,
     _remove_subsumed_findings,
+    _dedup_cross_section_findings,
 )
 from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
 from .corpus import ingest_incoterms_pdf, ingest_incoterms_summary, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
@@ -377,6 +378,10 @@ def _analyze_one_document(doc: dict, eid: int):
 
     # Post-merge cross-section range dedup (idempotent; also ran per section)
     all_findings = _remove_subsumed_findings(all_findings)
+
+    # Soft dedup: collapse same (normalized_ref, category) findings from different
+    # sections. Different categories on the same ref survive as distinct rows.
+    all_findings = _dedup_cross_section_findings(all_findings)
 
     findings_with_alts = generate_alternatives(doc_id, eid, all_findings)
 

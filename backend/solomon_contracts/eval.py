@@ -177,7 +177,7 @@ def run_solomon_on_contract(
     gt_findings: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict], str, int]:
     from .ingestion import extract_text, parse_clauses, scan_all_refs
-    from .analyzer import scan_document, split_into_sections, _remove_subsumed_findings
+    from .analyzer import scan_document, split_into_sections, _remove_subsumed_findings, _dedup_cross_section_findings
 
     logger.info(f"Extracting text from: {contract_path.name}")
     raw_text, _extraction_method = extract_text(contract_path)  # returns (text, method)
@@ -251,13 +251,9 @@ def run_solomon_on_contract(
 
     elapsed = time.time() - t0
 
-    # Confidence-based dedup across sections (keeps highest-confidence per ref)
-    seen_f: dict = {}
-    for f in all_findings:
-        key = normalize_ref(f["clause_ref"])
-        if key not in seen_f or f.get("confidence", 0) > seen_f[key].get("confidence", 0):
-            seen_f[key] = f
-    findings = list(seen_f.values())
+    # Soft dedup: same (normalized_ref, category) across sections →
+    # keep most specific ref, then highest confidence, then highest severity.
+    findings = _dedup_cross_section_findings(all_findings)
 
     logger.info(
         f"Scan complete in {elapsed:.1f}s — "

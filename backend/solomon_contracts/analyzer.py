@@ -732,6 +732,73 @@ def _remove_subsumed_findings(findings: list[dict]) -> list[dict]:
     return result
 
 
+# ─── §7.2b Cross-section soft dedup ──────────────────────────────────────────
+
+_SEV_RANK: dict[str, int] = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+def _norm_ref(ref: str) -> str:
+    """Normalize clause ref for dedup keying: lowercase, strip п./П. prefix, collapse spaces."""
+    ref = ref.strip().lower()
+    ref = re.sub(r"^п\.\s*", "", ref)
+    ref = re.sub(r"\.\s+", ".", ref)
+    ref = ref.rstrip(".")
+    return ref
+
+
+def _ref_specificity(ref: str) -> int:
+    """Higher = more specific. Range (3) > sub-clause (2) > bare section (1)."""
+    n = _norm_ref(ref)
+    if re.search(r"\d+\.\d+\s*[-–—]\s*\d+", ref):
+        return 3
+    if re.match(r"\d+\.\d+", n):
+        return 2
+    return 1
+
+
+def _dedup_cross_section_findings(findings: list[dict]) -> list[dict]:
+    """
+    Soft dedup: collapse findings that share (normalized_ref, category) produced
+    by different section scans. Keeps the most informative copy using:
+      1. more specific ref  (9.3 or 9.3–9.11 beats bare "9")
+      2. highest confidence
+      3. highest severity
+    Findings with different categories on the same clause_ref are preserved as
+    distinct rows (the data model legitimately allows e.g. 7.10 as both
+    'payment_terms' and 'penalty').
+    """
+    grouped: dict[tuple, dict] = {}
+    for f in findings:
+        key = (_norm_ref(f["clause_ref"]), f.get("category", "other"))
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = f
+            continue
+        sp_new = _ref_specificity(f["clause_ref"])
+        sp_old = _ref_specificity(existing["clause_ref"])
+        if sp_new != sp_old:
+            if sp_new > sp_old:
+                grouped[key] = f
+            continue
+        cn = float(f.get("confidence") or 0)
+        co = float(existing.get("confidence") or 0)
+        if cn != co:
+            if cn > co:
+                grouped[key] = f
+            continue
+        if _SEV_RANK.get(f.get("severity", ""), 0) > _SEV_RANK.get(existing.get("severity", ""), 0):
+            grouped[key] = f
+
+    result = list(grouped.values())
+    dropped = len(findings) - len(result)
+    if dropped:
+        logger.info(
+            "[SolCon] Cross-section dedup: %d duplicate(s) dropped (%d → %d unique findings)",
+            dropped, len(findings), len(result),
+        )
+    return result
+
+
 def _safe_num(val) -> Optional[float]:
     if val is None:
         return None
