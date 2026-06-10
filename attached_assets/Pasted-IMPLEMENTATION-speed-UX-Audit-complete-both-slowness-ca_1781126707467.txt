@@ -1,0 +1,45 @@
+IMPLEMENTATION — speed + UX. Audit complete: both slowness causes are per-call
+client re-creation; fixing them also unlocks the parallelism (executor is already
+correct). Three changes. Repo rules: open files first, report import reconcile.
+
+FIX 1 — Cache the Pinecone index handle (corpus.py)
+- _pinecone_index() (lines 24-27) creates a new Pinecone() client + Index handle on
+  every call, each doing a describe HTTP round-trip. It's called on every
+  retrieve_similar (and at lines 233, 257, 300, 599, 667).
+- Cache it: create the Index handle ONCE and reuse. Use a module-level
+  _INDEX_CACHE = None guarded inside the function (or @lru_cache(maxsize=1)),
+  preserving the lazy `from pinecone import Pinecone` import so startup ordering is
+  unaffected. Index.query() is thread-safe for reads — safe to share across the 5
+  worker threads.
+- Confirm all 6 call sites now reuse the cached handle.
+
+FIX 2 — Cache the OpenAI embeddings client (corpus.py)
+- _embed() (line 31) creates a new openai.OpenAI() client per call. Cache it the
+  same way (module-level singleton or lru_cache). Stateless for embeddings calls,
+  safe to share across threads.
+
+FIX 3 — Frontend: replace the scary alert with calm persistent status
+(solomon_template.html ~lines 1022-1044)
+- Current: a hard 3-minute TIMEOUT_MS check that fires
+  alert('Аналіз тривалий — оновіть сторінку вручну.') and STOPS polling (returns,
+  never resumes). This makes a working analysis look broken.
+- Change: REMOVE the alert + the return-that-stops-polling. Instead, on each poll
+  tick update a calm status label (reuse the '⏳ Аналіз…' element on line 1020) so
+  the user sees "⏳ Аналізую… зачекайте, це може зайняти кілька хвилин" and the
+  poll KEEPS GOING.
+- Keep the existing terminal-state branch (status==='analysis_failed' ||
+  docs.some(d => d.analyzed_at)) → renderEngagementWorkspace — that already handles
+  done/failed correctly.
+- Optional safety ceiling: a long one (e.g. 15 min) that shows a non-blocking
+  message ("Аналіз триває довше звичайного — сторінка оновиться автоматично коли
+  буде готово") but STILL keeps polling. No blocking alert(), ever.
+- Keep POLL_MS at 8s.
+
+After deploy, re-run silpo ONCE and report:
+(a) generate_alternatives wall-clock (expect well under 60s, ideally ~30-40s).
+(b) Confirm logs no longer show "Describing index" per finding — just once.
+(c) Confirm the alternative calls now overlap (5 concurrent Anthropic calls in the
+    log), not strictly serial.
+(d) Still 45 findings, severity 10/29/6, total==distinct (behaviour unchanged).
+(e) Click Аналізувати and confirm the UI shows the calm "Аналізую…" status, never
+    the "refresh manually" alert, and lands on 45 findings on its own.

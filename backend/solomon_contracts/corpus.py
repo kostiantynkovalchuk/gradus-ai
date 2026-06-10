@@ -21,15 +21,36 @@ EMBED_MODEL = "text-embedding-3-small"
 CHUNK_MAX_TOKENS = 800
 
 
+# Module-level singletons — created once on first call, reused forever.
+# Both are thread-safe for concurrent reads (Index.query, client.embeddings.create).
+_INDEX_CACHE = None
+_OPENAI_CLIENT_CACHE = None
+
+
 def _pinecone_index():
-    from pinecone import Pinecone
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-    return pc.Index(os.getenv("PINECONE_INDEX_NAME", "gradus-media"))
+    """Return the cached Pinecone Index handle, creating it once on first call.
+
+    Preserves lazy import so PINECONE_API_KEY / PINECONE_INDEX_NAME only need to
+    be set by the time the first retrieve/upsert happens, not at module import.
+    Thread-safe: worst case two threads race to set _INDEX_CACHE on the very first
+    call; the second write is idempotent (same object type, no side-effects).
+    """
+    global _INDEX_CACHE
+    if _INDEX_CACHE is None:
+        from pinecone import Pinecone
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        _INDEX_CACHE = pc.Index(os.getenv("PINECONE_INDEX_NAME", "gradus-media"))
+        logger.info("[SolCon] Pinecone Index client created (cached for process lifetime)")
+    return _INDEX_CACHE
 
 
 def _embed(text: str) -> list[float]:
-    client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    resp = client.embeddings.create(model=EMBED_MODEL, input=text[:8192])
+    """Embed text using a cached OpenAI client (one client for the process)."""
+    global _OPENAI_CLIENT_CACHE
+    if _OPENAI_CLIENT_CACHE is None:
+        _OPENAI_CLIENT_CACHE = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        logger.info("[SolCon] OpenAI embeddings client created (cached for process lifetime)")
+    resp = _OPENAI_CLIENT_CACHE.embeddings.create(model=EMBED_MODEL, input=text[:8192])
     return resp.data[0].embedding
 
 
