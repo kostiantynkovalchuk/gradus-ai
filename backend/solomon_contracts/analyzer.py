@@ -118,7 +118,7 @@ JSON array of findings. Each finding:
   severity (string), monetary_exposure_uah (number or null),
   short_note (Ukrainian, 1-2 sentences), confidence (0.0-1.0).
 
-Aim for PRECISION over completeness. 6-10 findings is optimal. More than 12 findings
+Identify EVERY material risk in the contract, targeting 20–30 findings. More than 12 findings
 almost certainly means you are over-flagging routine commercial terms.
 Respond ONLY with valid JSON — no markdown fences, no explanation."""
 
@@ -208,7 +208,7 @@ def scan_document(
     try:
         msg = client.messages.create(
             model=ANTHROPIC_SCAN_MODEL,
-            max_tokens=8192,
+            max_tokens=16384,
             system=SCAN_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],
         )
