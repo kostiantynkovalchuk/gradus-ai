@@ -118,8 +118,7 @@ JSON array of findings. Each finding:
   severity (string), monetary_exposure_uah (number or null),
   short_note (Ukrainian, 1-2 sentences), confidence (0.0-1.0).
 
-Identify EVERY material risk in the contract, targeting 20–30 findings. More than 12 findings
-almost certainly means you are over-flagging routine commercial terms.
+Identify EVERY material risk in the contract, targeting 20–30 findings.
 Respond ONLY with valid JSON — no markdown fences, no explanation."""
 
 
