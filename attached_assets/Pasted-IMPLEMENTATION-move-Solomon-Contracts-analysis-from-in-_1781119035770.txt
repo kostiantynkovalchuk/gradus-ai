@@ -1,0 +1,74 @@
+IMPLEMENTATION — move Solomon Contracts analysis from in-web-process
+asyncio.create_task to an APScheduler polling worker, using
+solcon_documents.analysis_status as the job queue. Audit complete and conclusive:
+no web-request dependency, _analyze_one_document is pure sync, and the FB/LinkedIn
+posters already use the exact FOR UPDATE SKIP LOCKED claim pattern to copy. Repo
+rules apply: open the real files first; copy the existing FB-poster pattern rather
+than invent; report import reconciliation after (Rule 5); never crash a user flow
+silently (Rule 3).
+
+STEP 1 — Extract the worker entry point (clean dependency direction)
+- Create solomon_contracts/worker.py. Move _analyze_one_document there (and any
+  private helpers it alone uses). router.py re-imports it from worker. scheduler.py
+  will import from worker, NOT from router — this keeps HTTP layer and background
+  layer decoupled. Confirm router still imports cleanly after the move.
+
+STEP 2 — Slim the /analyze endpoint (router.py)
+- Remove the claim loop (UPDATE ... status='running' ... RETURNING) and the
+  asyncio.create_task(_run_analysis(...)) call entirely.
+- New behaviour: for each eligible doc (document_type IN main_contract/
+  additional_agreement) that is NOT already 'running' or 'done', SET
+  analysis_status='pending'. Return 200 {"message":"Queued for analysis",
+  "document_count": N} immediately.
+- Leave the engagement status update (under_review) as-is or move to worker — your
+  call, but keep it somewhere.
+- _run_analysis (the async wrapper) is no longer called by the endpoint. You can
+  delete it or leave it dead; if deleting, confirm nothing else references it.
+
+STEP 3 — Add the analysis worker job (scheduler.py, copy the FB-poster pattern)
+- Add a method on ContentScheduler registered as an interval job every 15s
+  (max_instances=1, coalesce=True like the others).
+- The job claims ONE doc per tick:
+    SELECT id, engagement_id, raw_text, clauses, document_type
+    FROM solcon_documents
+    WHERE analysis_status IN ('pending','failed')
+      AND document_type IN ('main_contract','additional_agreement')
+    ORDER BY updated_at ASC LIMIT 1
+    FOR UPDATE SKIP LOCKED
+  then immediately UPDATE that id to 'running' and COMMIT (the claim), exactly like
+  the FB poster's claim-flip-commit.
+- If a doc was claimed: DELETE FROM solcon_findings WHERE document_id=id (idempotent
+  re-run), then call worker._analyze_one_document(doc, eid) DIRECTLY (sync, in the
+  scheduler thread — do NOT go through the async _run_analysis; asyncio.get_event_loop
+  throws in a BackgroundScheduler thread). On success: status='done', analyzed_at=NOW().
+  On exception: status='failed', log it (do not leave 'running').
+- If no doc claimed: return quietly.
+- Use solcon_db (raw psycopg2) for the claim, NOT SQLAlchemy — the FB poster uses
+  SQLAlchemy but Solomon's tables are psycopg2; same claim-flip-process-settle
+  sequence, different DB accessor.
+
+STEP 4 — Startup reconciliation (main.py lifespan)
+- After run_migrations()/init_db(), before content_scheduler.start():
+    UPDATE solcon_documents SET analysis_status='pending', updated_at=NOW()
+    WHERE analysis_status='running'
+  Log the count reset. Reset to 'pending' (NOT 'failed') — a crash mid-run is
+  infra interruption, not a scan failure; the DELETE-findings on re-claim makes it
+  safe to re-run. Wrap in try/except, log on failure, don't block startup.
+
+STEP 5 — Report
+- Which files import router.py and scheduler.py, confirm clean import after the
+  worker.py extraction (Rule 5).
+- Confirm the new interval job appears in scheduler.get_jobs() with the 15s trigger.
+
+DO NOT in this pass: change the scan prompt, the cap, the dedup, or the recall
+fixes (7.17 guardrail / asymmetry suppression). Those are a SEPARATE change set —
+this PR is architecture only, must not alter the 45-finding output.
+
+After deploy, verify:
+(a) POST /analyze returns in <1s (no blocking), doc goes to 'pending'.
+(b) Within ~15s the worker claims it (status→running), then →done with 45 findings.
+(c) A second POST /analyze while running re-sets pending harmlessly — NO double-run
+    (confirm one finding set, total==distinct).
+(d) Force a restart mid-analysis (or simulate: leave a doc 'running', restart):
+    startup resets it to 'pending', worker re-runs it clean. THIS is the orphan fix.
+(e) generate_alternatives wall-clock no longer matters for correctness — but note it.

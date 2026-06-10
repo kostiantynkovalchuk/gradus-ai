@@ -1530,6 +1530,19 @@ class ContentScheduler:
             replace_existing=True,
         )
 
+        # Solomon Contracts analysis worker — every 15 s
+        # Claims one pending doc per tick via FOR UPDATE SKIP LOCKED (multi-replica safe).
+        self.scheduler.add_job(
+            self.run_analysis_worker_task,
+            'interval',
+            seconds=15,
+            id='solcon_analysis_worker',
+            name='Solomon Contracts analysis worker (15s)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         self.scheduler.start()
 
         if _paused:
@@ -1706,6 +1719,85 @@ class ContentScheduler:
 
         except Exception as e:
             logger.error(f"[SCHEDULER] refresh_avtd_vacancies_task failed: {e}", exc_info=True)
+
+    def run_analysis_worker_task(self):
+        """
+        Solomon Contracts analysis worker — polls every 15 s.
+
+        Claims ONE pending/failed document per tick using FOR UPDATE SKIP LOCKED
+        (safe across multiple Render replicas — only one replica wins each row).
+        Calls worker.analyze_one_document() directly in this thread (sync, no
+        asyncio.get_event_loop() — BackgroundScheduler threads have no event loop).
+
+        Claim-flip-process-settle pattern mirrors post_to_facebook_task.
+        """
+        try:
+            from solomon_contracts import db as solcon_db
+            from solomon_contracts.worker import analyze_one_document
+
+            # ── Atomic claim: SELECT + UPDATE in one transaction ──────────────
+            c = solcon_db.conn()
+            doc = None
+            try:
+                cur = c.cursor()
+                cur.execute(
+                    """SELECT id, engagement_id, raw_text, clauses, document_type
+                       FROM solcon_documents
+                       WHERE analysis_status IN ('pending', 'failed')
+                         AND document_type IN ('main_contract', 'additional_agreement')
+                       ORDER BY updated_at ASC
+                       LIMIT 1
+                       FOR UPDATE SKIP LOCKED"""
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    doc = dict(row)
+                    cur.execute(
+                        "UPDATE solcon_documents SET analysis_status='running',"
+                        " updated_at=NOW() WHERE id=%s",
+                        (doc["id"],),
+                    )
+                c.commit()
+                cur.close()
+            except Exception:
+                c.rollback()
+                raise
+            finally:
+                c.close()
+
+            if doc is None:
+                return
+
+            doc_id = doc["id"]
+            eid = doc["engagement_id"]
+            logger.info("[SolCon Worker] Claimed doc %d (eng=%d) — starting analysis", doc_id, eid)
+
+            # ── Idempotent pre-clean ──────────────────────────────────────────
+            solcon_db.execute(
+                "DELETE FROM solcon_findings WHERE document_id=%s",
+                (doc_id,),
+            )
+
+            # ── Run the analysis (sync, blocks this scheduler thread) ─────────
+            try:
+                findings, rejected = analyze_one_document(doc, eid)
+                logger.info(
+                    "[SolCon Worker] doc=%d done — %d finding(s), %d rejected",
+                    doc_id, len(findings), rejected,
+                )
+            except Exception as exc:
+                logger.exception("[SolCon Worker] Analysis failed for doc %d: %s", doc_id, exc)
+                try:
+                    solcon_db.execute(
+                        "UPDATE solcon_documents SET analysis_status='failed',"
+                        " updated_at=NOW() WHERE id=%s",
+                        (doc_id,),
+                    )
+                except Exception:
+                    pass
+
+        except Exception as exc:
+            logger.error("[SolCon Worker] Unexpected error in analysis worker: %s", exc, exc_info=True)
 
     def stop(self):
         """Stop the scheduler (idempotent)"""

@@ -108,9 +108,23 @@ async def lifespan(app: FastAPI):
         raise
     
     init_db()
-    
+
+    # Reset any docs that were interrupted mid-analysis by a prior crash/restart.
+    # 'running' means the worker died before it could stamp 'done' or 'failed'.
+    # Reset to 'pending' (not 'failed') — the DELETE-findings on re-claim makes
+    # a clean re-run safe; infra interruption is not a scan failure.
+    try:
+        from solomon_contracts import db as solcon_db
+        solcon_db.execute(
+            "UPDATE solcon_documents SET analysis_status='pending', updated_at=NOW()"
+            " WHERE analysis_status='running'"
+        )
+        logger.info("[SolCon] Startup: stale 'running' docs reset to 'pending'")
+    except Exception as _e:
+        logger.error(f"[SolCon] Startup reset failed (non-fatal): {_e}")
+
     log_appendix_mapping_diagnostic()
-    
+
     content_scheduler.start()
     logger.info("✅ Scheduler started - automation enabled!")
 

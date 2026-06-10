@@ -16,18 +16,11 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import db as solcon_db
-from .analyzer import (
-    generate_alternatives,
-    generate_legal_opinion,
-    scan_document,
-    split_into_sections,
-    _remove_subsumed_findings,
-    _dedup_cross_section_findings,
-)
+from .analyzer import generate_legal_opinion
 from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
 from .corpus import ingest_incoterms_pdf, ingest_incoterms_summary, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
 from .kb_sources import get_active_kb_sources, invalidate_cache as _invalidate_kb_cache
-from .citation_filter import filter_citations
+from .worker import analyze_one_document
 import threading
 from pathlib import Path as _Path
 from .ingestion import ingest_file, process_zip, run_background_ocr
@@ -292,18 +285,16 @@ def _save_document(eid: int, doc_dict: dict) -> int:
 
 # ─── Analysis ────────────────────────────────────────────────────────────────
 
-_ANALYSIS_STATUS_ELIGIBLE = ("pending", "failed")
-
 @router.post("/engagements/{eid}/analyze")
 async def analyze_engagement(request: Request, eid: int):
     """
-    Trigger full analysis of all unanalyzed documents in the engagement.
-    Long-running — returns immediately; actual work runs in background.
+    Queue all unanalyzed documents in the engagement for background analysis.
+    Returns immediately (<1 s).  The APScheduler worker polls every 15 s,
+    claims one doc per tick via FOR UPDATE SKIP LOCKED, and calls
+    worker.analyze_one_document() directly in its thread — no asyncio dependency.
 
-    Re-entrancy guard: atomically claims each document by flipping
-    analysis_status pending/failed → running. A second concurrent click
-    finds no claimable rows and receives "already in progress" — no second
-    task is spawned and no duplicate findings are written.
+    Re-entrancy: docs already 'running' or 'done' are left untouched.
+    'failed' docs are reset to 'pending' for a clean retry.
     """
     _auth_check(request)
     eng = solcon_db.fetchone("SELECT * FROM solcon_engagements WHERE id=%s", (eid,))
@@ -318,207 +309,27 @@ async def analyze_engagement(request: Request, eid: int):
         (eid,),
     )
     if not eligible:
-        return {"message": "No documents to analyze", "analyzed": 0}
+        return {"message": "No documents to analyze", "document_count": 0}
 
-    # Atomically claim docs that are pending or failed — one winner per doc.
-    claimed_ids: list[int] = []
+    queued = 0
     for row in eligible:
-        claimed = solcon_db.fetchone(
+        result = solcon_db.fetchone(
             """UPDATE solcon_documents
-               SET analysis_status = 'running', updated_at = NOW()
-               WHERE id = %s AND analysis_status = ANY(%s)
+               SET analysis_status = 'pending', updated_at = NOW()
+               WHERE id = %s AND analysis_status NOT IN ('running', 'done')
                RETURNING id""",
-            (row["id"], list(_ANALYSIS_STATUS_ELIGIBLE)),
+            (row["id"],),
         )
-        if claimed:
-            claimed_ids.append(claimed["id"])
-
-    if not claimed_ids:
-        logger.info("[SolCon] analyze_engagement eid=%d — all docs already running/done, no task spawned", eid)
-        return {"message": "Analysis already in progress or completed", "analyzed": 0, "already_running": True}
-
-    # Fetch full doc rows for the docs we just claimed.
-    claimed_docs = solcon_db.fetchall(
-        "SELECT * FROM solcon_documents WHERE id = ANY(%s)",
-        (claimed_ids,),
-    )
+        if result:
+            queued += 1
 
     solcon_db.execute(
         "UPDATE solcon_engagements SET status='under_review', updated_at=NOW() WHERE id=%s",
         (eid,),
     )
 
-    asyncio.create_task(_run_analysis(eid, [dict(d) for d in claimed_docs]))
-    return {"message": "Analysis started", "document_count": len(claimed_docs)}
-
-
-async def _run_analysis(eid: int, docs: list[dict]):
-    loop = asyncio.get_event_loop()
-    total_findings = 0
-    any_success = False
-    for doc in docs:
-        doc_id = doc["id"]
-        try:
-            # Idempotent: remove any findings from a prior (failed/interrupted) run
-            # before inserting the new set. The doc is already in 'running' state so
-            # no concurrent analysis can insert findings for the same doc_id right now.
-            solcon_db.execute(
-                "DELETE FROM solcon_findings WHERE document_id = %s",
-                (doc_id,),
-            )
-            findings, rejected = await loop.run_in_executor(
-                None, _analyze_one_document, doc, eid
-            )
-            total_findings += len(findings)
-            any_success = True
-        except Exception as e:
-            logger.exception(f"[SolCon] Analysis failed for doc {doc_id}: {e}")
-            try:
-                solcon_db.execute(
-                    "UPDATE solcon_documents SET analysis_status='failed', updated_at=NOW() WHERE id=%s",
-                    (doc_id,),
-                )
-            except Exception:
-                pass
-    if not any_success:
-        try:
-            solcon_db.execute(
-                "UPDATE solcon_engagements SET status='analysis_failed', updated_at=NOW() WHERE id=%s",
-                (eid,),
-            )
-        except Exception:
-            pass
-    logger.info("[SolCon] Analysis complete for eng=%d, total findings=%d", eid, total_findings)
-
-
-def _analyze_one_document(doc: dict, eid: int):
-    raw_clauses = doc.get("clauses") or "[]"
-    clauses = raw_clauses if isinstance(raw_clauses, list) else json.loads(raw_clauses)
-    raw_text = doc.get("raw_text", "")
-    doc_id = doc["id"]
-
-    # ── Section-aware scan ────────────────────────────────────────────────────
-    # Split raw_text on uppercase ДОДАТОК content headers. Each section is
-    # scanned independently so the §10.1 guardrail only validates against that
-    # section's own clause set (body vs appendix:N). Findings are merged after
-    # all sections complete; _remove_subsumed_findings runs once on the full
-    # merged list to catch cross-section range subsumptions.
-    sections = split_into_sections(raw_text, clauses)
-
-    all_findings: list[dict] = []
-    total_rejected = 0
-    for section in sections:
-        sec_findings, sec_rejected = scan_document(
-            doc_id, eid,
-            section["text"],
-            section["clauses"],
-        )
-        logger.info(
-            "[SolCon] Section %r → %d finding(s), %d rejected (doc=%d)",
-            section["name"], len(sec_findings), sec_rejected, doc_id,
-        )
-        all_findings.extend(sec_findings)
-        total_rejected += sec_rejected
-
-    # Post-merge cross-section range dedup (idempotent; also ran per section)
-    all_findings = _remove_subsumed_findings(all_findings)
-
-    # Soft dedup: collapse same (normalized_ref, category) findings from different
-    # sections. Different categories on the same ref survive as distinct rows.
-    all_findings = _dedup_cross_section_findings(all_findings)
-
-    # ── Global cap ────────────────────────────────────────────────────────────
-    # Safety ceiling: keep top FINDINGS_CAP by severity → confidence → verified first.
-    # Protects generate_alternatives wall-clock and keeps the protocol table usable.
-    # Not a recall budget — the scan still runs fully; only the lowest-ranked
-    # findings are withheld from the lawyer view.
-    _FINDINGS_CAP = 45
-    _CAP_SEV = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-    all_findings.sort(key=lambda f: (
-        -_CAP_SEV.get(f.get("severity", ""), 0),
-        -(float(f.get("confidence") or 0)),
-        1 if f.get("clause_ref_unverified") else 0,
-    ))
-    if len(all_findings) > _FINDINGS_CAP:
-        _cap_dropped = len(all_findings) - _FINDINGS_CAP
-        logger.info(
-            "[SolCon] Cap applied: kept %d / %d findings (%d low-ranked dropped) doc=%d",
-            _FINDINGS_CAP, len(all_findings), _cap_dropped, doc_id,
-        )
-        all_findings = all_findings[:_FINDINGS_CAP]
-
-    findings_with_alts = generate_alternatives(doc_id, eid, all_findings)
-
-    inserted_ids = []
-    for f in findings_with_alts:
-        # Phase 5: apply citation filter before persisting
-        raw_cit = f.get("legal_citations", "[]")
-        try:
-            raw_cit_list = json.loads(raw_cit) if isinstance(raw_cit, str) else (raw_cit or [])
-        except (json.JSONDecodeError, TypeError):
-            raw_cit_list = []
-        filter_failed = False
-        dropped: list = []
-        kept = raw_cit_list
-        grounding = f.get("grounding_status", "ungrounded")
-        try:
-            kept, dropped = filter_citations(raw_cit_list)
-            if not kept and raw_cit_list:
-                grounding = "out_of_approved_kb"
-        except Exception as _cfe:
-            filter_failed = True
-            logger.exception(f"[CitFilter] Failed for doc {doc_id}: {_cfe}")
-            kept, grounding = raw_cit_list, f.get("grounding_status", "ungrounded")
-
-        result = solcon_db.fetchone(
-            """INSERT INTO solcon_findings
-                 (document_id, engagement_id, clause_ref, clause_text, category,
-                  severity, monetary_exposure_uah, short_note, proposed_alternative,
-                  grounding_status, legal_citations, workflow_state, detected_by, confidence,
-                  citation_filter_failed, clause_ref_unverified)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-               RETURNING id""",
-            (
-                f["document_id"], f["engagement_id"], f["clause_ref"], f["clause_text"],
-                f["category"], f["severity"], f.get("monetary_exposure_uah"),
-                f["short_note"], f.get("proposed_alternative"),
-                grounding,
-                json.dumps(kept),
-                f.get("workflow_state", "triage"), f["detected_by"],
-                f.get("confidence"),
-                filter_failed,
-                f.get("clause_ref_unverified", False),
-            ),
-        )
-        finding_id = result["id"]
-        inserted_ids.append(finding_id)
-
-        if dropped and not filter_failed:
-            try:
-                solcon_db.execute(
-                    """INSERT INTO solcon_citation_filter_log
-                         (finding_id, original_citations, filtered_citations, dropped_citations)
-                       VALUES (%s, %s, %s, %s)""",
-                    (
-                        finding_id,
-                        json.dumps(raw_cit_list),
-                        json.dumps(kept),
-                        json.dumps(dropped),
-                    ),
-                )
-            except Exception as _log_e:
-                logger.warning(f"[CitFilter] Log write failed for finding {finding_id}: {_log_e}")
-
-    # analyzed_at + analysis_status='done' stamp ONCE — after all sections scanned
-    # and all findings inserted. The 'done' transition is the authoritative signal
-    # that the document's findings are complete.
-    solcon_db.execute(
-        """UPDATE solcon_documents
-           SET analyzed_at=NOW(), analysis_status='done', updated_at=NOW()
-           WHERE id=%s""",
-        (doc_id,),
-    )
-    return findings_with_alts, total_rejected
+    logger.info("[SolCon] analyze_engagement eid=%d — queued %d doc(s) for analysis", eid, queued)
+    return {"message": "Queued for analysis", "document_count": queued}
 
 
 # ─── Findings management ──────────────────────────────────────────────────────
