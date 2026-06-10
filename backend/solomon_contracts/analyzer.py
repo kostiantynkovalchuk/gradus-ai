@@ -4,6 +4,7 @@ Solomon Contracts analyzer.
 §7.3 — Alternative wording generation (Pinecone RAG + Sonnet)
 §10  — Correctness guardrails (clause-ref + legal grounding)
 """
+import concurrent.futures
 import json
 import logging
 import re
@@ -503,15 +504,18 @@ def generate_alternatives(
 ) -> list[dict]:
     """
     For each finding where severity ≥ medium, generate proposed_alternative via RAG + Sonnet.
-    Modifies and returns the findings list with alternatives filled in.
+    Modifies findings in-place and returns the list.
+
+    Uses bounded concurrency (ThreadPoolExecutor max_workers=5). Each thread
+    opens its own Anthropic client and DB connection — fully thread-safe given
+    that solcon_db opens a fresh psycopg2 connection per call.
     """
     HIGH_SEV = {"medium", "high", "critical"}
-    client = anthropic.Anthropic()
 
-    for finding in findings:
+    def _process_one(finding: dict) -> None:
         if finding["severity"] not in HIGH_SEV:
             finding["grounding_status"] = "not_applicable"
-            continue
+            return
 
         short_note = finding.get("short_note", "")
         try:
@@ -538,6 +542,7 @@ def generate_alternatives(
             f"Retrieved legal sources:\n{sources_text}"
         )
 
+        client = anthropic.Anthropic()
         t0 = time.time()
         try:
             msg = client.messages.create(
@@ -552,7 +557,7 @@ def generate_alternatives(
                 engagement_id, document_id, "alternative", ANTHROPIC_ALT_MODEL,
                 0, 0, int((time.time() - t0) * 1000), "error",
             )
-            continue
+            return
 
         duration_ms = int((time.time() - t0) * 1000)
         solcon_db.log_llm_call(
@@ -572,7 +577,7 @@ def generate_alternatives(
                 result = json.loads(raw_alt)
             except json.JSONDecodeError:
                 logger.exception(f"[SolCon] Alternative JSON parse failed, raw={raw_alt[:200]!r}")
-                continue
+                return
 
         grounding = result.get("grounding_status", "ungrounded")
         if grounding not in VALID_GROUNDING:
@@ -608,6 +613,9 @@ def generate_alternatives(
                 [{"id": s["id"], "score": s["score"]} for s in top_sources],
                 [c["official_url"] for c in valid_citations],
             )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        list(executor.map(_process_one, findings))
 
     return findings
 

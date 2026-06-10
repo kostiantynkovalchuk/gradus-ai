@@ -6,6 +6,21 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "062_solcon_analysis_status",
+        "statements": [
+            """ALTER TABLE solcon_documents
+               ADD COLUMN IF NOT EXISTS analysis_status TEXT NOT NULL DEFAULT 'pending'
+               CONSTRAINT chk_solcon_analysis_status CHECK (
+                   analysis_status IN ('pending','running','done','failed')
+               )""",
+            """UPDATE solcon_documents
+               SET analysis_status = CASE
+                   WHEN analyzed_at IS NOT NULL THEN 'done'
+                   ELSE 'pending'
+               END""",
+        ],
+    },
+    {
         "version": "061_solcon_rejected_findings",
         "statements": [
             """CREATE TABLE IF NOT EXISTS solcon_rejected_findings (
