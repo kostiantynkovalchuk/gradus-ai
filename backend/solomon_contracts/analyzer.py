@@ -40,6 +40,84 @@ DISCLAIMER = (
 )
 
 
+# ─── Section-aware splitting ──────────────────────────────────────────────────
+
+# Matches UPPERCASE "ДОДАТОК № N ..." at the start of a line.
+# Title-case "Додаток" (TOC stubs in §12.8) are intentionally excluded —
+# case-sensitivity here is the discriminator between content headers and stubs.
+_SECTION_HDR_RE = re.compile(r"(?m)^(ДОДАТОК\s*№?\s*\d+[^\n]*)")
+_SECTION_CLAUSE_RE = re.compile(r"(?m)^\d{1,2}\.\d{1,3}")  # line-start X.Y
+_SECTION_MIN_CHARS = 1_000
+_SECTION_APPNUM_RE = re.compile(r"\d+")
+
+
+def split_into_sections(raw_text: str, clauses: list[dict]) -> list[dict]:
+    """
+    Split raw_text into scannable sections for section-aware LLM scanning.
+
+    Only uppercase ДОДАТОК headers are split points. Title-case "Додаток" lines
+    (the §12.8 table-of-contents stubs) are not split points, so they do not
+    produce spurious micro-sections.
+
+    A segment is included only if:
+      - len(text) > _SECTION_MIN_CHARS (1 000 chars), OR
+      - it contains ≥ 1 line-start numbered clause (X.Y pattern)
+
+    Each returned dict:
+      name     — "body" | "appendix:N"
+      text     — raw text slice for this section
+      clauses  — clauses whose scope matches this section (for §10.1 guardrail)
+                 scope="unknown" clauses (from scan_all_refs) are included in
+                 every section as a safe fallback.
+
+    Falls back to a single body section if no uppercase headers are found.
+    """
+    parts = _SECTION_HDR_RE.split(raw_text)
+    # re.split with one capture group → [pre, hdr1, post1, hdr2, post2, …]
+
+    raw_segs: list[tuple[str, str]] = []
+    raw_segs.append(("body", parts[0]))
+    i = 1
+    while i < len(parts):
+        header = parts[i].strip()
+        body = parts[i + 1] if i + 1 < len(parts) else ""
+        num_m = _SECTION_APPNUM_RE.search(header)
+        name = f"appendix:{num_m.group(0)}" if num_m else f"appendix:{i // 2}"
+        raw_segs.append((name, header + "\n" + body))
+        i += 2
+
+    # Build a fast scope → [clauses] index
+    scope_index: dict[str, list[dict]] = {}
+    for c in clauses:
+        sc = c.get("scope", "body")
+        scope_index.setdefault(sc, []).append(c)
+    unknown_clauses = scope_index.get("unknown", [])
+
+    sections: list[dict] = []
+    for name, text in raw_segs:
+        n_numbered = len(_SECTION_CLAUSE_RE.findall(text))
+        if len(text) <= _SECTION_MIN_CHARS and n_numbered == 0:
+            logger.debug(
+                "[SolCon] split_into_sections: skipping %r (%d chars, 0 numbered clauses)",
+                name, len(text),
+            )
+            continue
+        sec_clauses = (
+            scope_index.get("body", []) + unknown_clauses
+            if name == "body"
+            else scope_index.get(name, []) + unknown_clauses
+        )
+        sections.append({"name": name, "text": text, "clauses": sec_clauses})
+
+    logger.info(
+        "[SolCon] split_into_sections: %d raw seg(s) → %d kept: %s",
+        len(raw_segs),
+        len(sections),
+        [(s["name"], len(s["text"]), len(s["clauses"])) for s in sections],
+    )
+    return sections if sections else [{"name": "body", "text": raw_text, "clauses": clauses}]
+
+
 # ─── §7.2 Free-form scan ─────────────────────────────────────────────────────
 
 SCAN_SYSTEM = """You are a senior legal analyst reviewing a Ukrainian supply contract from the
@@ -190,17 +268,34 @@ def scan_document(
 
     user_msg = f"<contract>\n{raw_text[:120000]}\n</contract>"
 
-    # §10.1 degenerate-list detection — before the LLM call so we can log it
+    # §10.1 flag-mode detection — controls whether unmatched findings are
+    # dropped (normal) or flagged with clause_ref_unverified=True (flag mode).
+    #
+    # Two conditions trigger flag mode:
+    #   _no_clauses   — section has zero parsed clauses (e.g. Додаток №12 whose
+    #                   content is a table with no line-start numbered labels).
+    #                   All findings must survive so the lawyer can review them.
+    #   _is_degenerate — large text but suspiciously few clauses, probably a
+    #                   numbering-extraction failure on the full document.
+    _no_clauses = not clauses
     _is_degenerate = (
         len(raw_text) > _DEGENERATE_MIN_CHARS
         and len(clauses) < _DEGENERATE_MAX_CLAUSES
-        and bool(clauses)  # non-empty list that is implausibly small
+        and bool(clauses)
     )
+    _flag_mode = _no_clauses or _is_degenerate
+
     if _is_degenerate:
         logger.warning(
             "[SolCon] §10.1 Degenerate clause list for doc=%d: %d clauses for %d chars — "
             "guardrail will FLAG unmatched findings instead of dropping them.",
             document_id, len(clauses), len(raw_text),
+        )
+    elif _no_clauses:
+        logger.info(
+            "[SolCon] §10.1 Zero-clause section for doc=%d (%d chars) — "
+            "all findings flagged clause_ref_unverified=True.",
+            document_id, len(raw_text),
         )
 
     t0 = time.time()
@@ -287,13 +382,13 @@ def scan_document(
                 found = True
                 break
 
-        if not found and clauses:
-            if _is_degenerate:
-                # Degenerate list: flag the finding rather than silently dropping it.
-                # The lawyer sees it with a visible warning; it is not counted as rejected.
+        if not found:
+            if _flag_mode:
+                # Flag mode (zero-clause section OR degenerate list):
+                # keep the finding but mark it for lawyer verification.
                 logger.info(
-                    "[SolCon] §10.1 Flagged (degenerate list) clause_ref=%r doc=%d",
-                    clause_ref, document_id,
+                    "[SolCon] §10.1 Flagged clause_ref=%r doc=%d (no_clauses=%s degenerate=%s)",
+                    clause_ref, document_id, _no_clauses, _is_degenerate,
                 )
                 flagged_count += 1
                 _persist_rejected(
@@ -301,7 +396,8 @@ def scan_document(
                     "clause_count_degenerate", short_note[:500],
                 )
                 # Fall through to accepted[] with clause_ref_unverified=True
-            else:
+            elif clauses:
+                # Normal rejection: clause list is healthy but ref not found in it.
                 logger.info(
                     "[SolCon] §10.1 Rejected finding: clause_ref=%r doc=%d",
                     clause_ref, document_id,
@@ -335,7 +431,7 @@ def scan_document(
             "workflow_state": "triage",
             "detected_by": "llm_scan",
             "confidence": _safe_float(f.get("confidence", 0.7)),
-            "clause_ref_unverified": not found and _is_degenerate,
+            "clause_ref_unverified": not found and _flag_mode,
         })
 
     if rejected_count:

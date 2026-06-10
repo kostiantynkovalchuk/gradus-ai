@@ -177,10 +177,10 @@ def run_solomon_on_contract(
     gt_findings: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict], str, int]:
     from .ingestion import extract_text, parse_clauses, scan_all_refs
-    from .analyzer import scan_document
+    from .analyzer import scan_document, split_into_sections, _remove_subsumed_findings
 
     logger.info(f"Extracting text from: {contract_path.name}")
-    raw_text = extract_text(contract_path)
+    raw_text, _extraction_method = extract_text(contract_path)  # returns (text, method)
     if not raw_text.strip():
         logger.error("Contract text extraction returned empty string")
         sys.exit(1)
@@ -221,18 +221,39 @@ def run_solomon_on_contract(
         f"{len(clauses_ctx)} contextual, {len(merged)} total merged"
     )
 
-    logger.info("Running Solomon free-form scan (Claude Sonnet)… this takes ~30-90s")
+    # ── Section-aware scan (mirrors production _analyze_one_document) ─────────
+    logger.info("Splitting contract into sections for section-aware scan…")
+    sections = split_into_sections(raw_text, merged)
+    logger.info(f"Sections: {[(s['name'], len(s['text'])) for s in sections]}")
+
     t0 = time.time()
-    findings, rejected_count = scan_document(
-        document_id=0,
-        engagement_id=0,
-        raw_text=raw_text,
-        clauses=merged,
-    )
+    all_findings: list[dict] = []
+    total_rejected = 0
+    for section in sections:
+        logger.info(
+            f"Scanning section {section['name']!r} "
+            f"({len(section['text'])} chars, {len(section['clauses'])} clauses)…"
+        )
+        sec_findings, sec_rejected = scan_document(
+            document_id=0,
+            engagement_id=0,
+            raw_text=section["text"],
+            clauses=section["clauses"],
+        )
+        logger.info(
+            f"  → {len(sec_findings)} finding(s), {sec_rejected} rejected"
+        )
+        all_findings.extend(sec_findings)
+        total_rejected += sec_rejected
+
+    # Post-merge cross-section range dedup (matches production path)
+    all_findings = _remove_subsumed_findings(all_findings)
+
     elapsed = time.time() - t0
 
+    # Confidence-based dedup across sections (keeps highest-confidence per ref)
     seen_f: dict = {}
-    for f in findings:
+    for f in all_findings:
         key = normalize_ref(f["clause_ref"])
         if key not in seen_f or f.get("confidence", 0) > seen_f[key].get("confidence", 0):
             seen_f[key] = f
@@ -240,9 +261,9 @@ def run_solomon_on_contract(
 
     logger.info(
         f"Scan complete in {elapsed:.1f}s — "
-        f"{len(findings)} findings accepted (after dedup), {rejected_count} rejected by guardrail §10.1"
+        f"{len(findings)} findings accepted (after dedup), {total_rejected} rejected by guardrail §10.1"
     )
-    return findings, merged, raw_text, rejected_count
+    return findings, merged, raw_text, total_rejected
 
 
 def run_alternatives(findings: list[dict]) -> list[dict]:

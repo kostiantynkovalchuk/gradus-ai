@@ -16,7 +16,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import db as solcon_db
-from .analyzer import generate_alternatives, generate_legal_opinion, scan_document
+from .analyzer import (
+    generate_alternatives,
+    generate_legal_opinion,
+    scan_document,
+    split_into_sections,
+    _remove_subsumed_findings,
+)
 from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
 from .corpus import ingest_incoterms_pdf, ingest_incoterms_summary, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
 from .kb_sources import get_active_kb_sources, invalidate_cache as _invalidate_kb_cache
@@ -346,8 +352,33 @@ def _analyze_one_document(doc: dict, eid: int):
     raw_text = doc.get("raw_text", "")
     doc_id = doc["id"]
 
-    findings_dicts, rejected = scan_document(doc_id, eid, raw_text, clauses)
-    findings_with_alts = generate_alternatives(doc_id, eid, findings_dicts)
+    # ── Section-aware scan ────────────────────────────────────────────────────
+    # Split raw_text on uppercase ДОДАТОК content headers. Each section is
+    # scanned independently so the §10.1 guardrail only validates against that
+    # section's own clause set (body vs appendix:N). Findings are merged after
+    # all sections complete; _remove_subsumed_findings runs once on the full
+    # merged list to catch cross-section range subsumptions.
+    sections = split_into_sections(raw_text, clauses)
+
+    all_findings: list[dict] = []
+    total_rejected = 0
+    for section in sections:
+        sec_findings, sec_rejected = scan_document(
+            doc_id, eid,
+            section["text"],
+            section["clauses"],
+        )
+        logger.info(
+            "[SolCon] Section %r → %d finding(s), %d rejected (doc=%d)",
+            section["name"], len(sec_findings), sec_rejected, doc_id,
+        )
+        all_findings.extend(sec_findings)
+        total_rejected += sec_rejected
+
+    # Post-merge cross-section range dedup (idempotent; also ran per section)
+    all_findings = _remove_subsumed_findings(all_findings)
+
+    findings_with_alts = generate_alternatives(doc_id, eid, all_findings)
 
     inserted_ids = []
     for f in findings_with_alts:
@@ -409,11 +440,12 @@ def _analyze_one_document(doc: dict, eid: int):
             except Exception as _log_e:
                 logger.warning(f"[CitFilter] Log write failed for finding {finding_id}: {_log_e}")
 
+    # analyzed_at stamps ONCE — after all sections scanned + all findings inserted.
     solcon_db.execute(
         "UPDATE solcon_documents SET analyzed_at=NOW(), updated_at=NOW() WHERE id=%s",
         (doc_id,),
     )
-    return findings_with_alts, rejected
+    return findings_with_alts, total_rejected
 
 
 # ─── Findings management ──────────────────────────────────────────────────────
