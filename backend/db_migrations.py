@@ -6,6 +6,28 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "061_solcon_rejected_findings",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS solcon_rejected_findings (
+                id               BIGSERIAL PRIMARY KEY,
+                document_id      INTEGER NOT NULL,
+                engagement_id    INTEGER NOT NULL,
+                clause_ref       VARCHAR(500) NOT NULL,
+                rejection_reason VARCHAR(80) NOT NULL,
+                short_note       TEXT NOT NULL DEFAULT '',
+                detected_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+                CONSTRAINT chk_solcon_rejected_reason CHECK (
+                    rejection_reason IN ('clause_ref_not_found', 'clause_count_degenerate')
+                ),
+                CONSTRAINT uq_solcon_rejected_doc_ref UNIQUE (document_id, clause_ref)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_rejected_doc ON solcon_rejected_findings (document_id)",
+            "CREATE INDEX IF NOT EXISTS idx_solcon_rejected_eng ON solcon_rejected_findings (engagement_id)",
+            """ALTER TABLE solcon_findings
+               ADD COLUMN IF NOT EXISTS clause_ref_unverified BOOLEAN NOT NULL DEFAULT FALSE""",
+        ],
+    },
+    {
         "version": "060_hr_candidate_vacancies",
         "statements": [
             """CREATE TABLE IF NOT EXISTS hr_candidate_vacancies (

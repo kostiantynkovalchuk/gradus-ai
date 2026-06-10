@@ -1,0 +1,44 @@
+IMPLEMENTATION TASK — Solomon Contracts. Audit is complete; root cause confirmed:
+extract_text_from_docx (python-docx p.text) drops Word auto-numbering, so body
+clause numbers never reach the text, parse_clauses finds only 16 refs, and the
+§10.1 guardrail rejects every body finding. Fix below. Follow the repo rules:
+open and grep the actual files before writing; new migrations get the next
+number; nothing fails silently; handlers with side effects stay idempotent;
+report import reconciliation after deploy.
+
+STEP 1 — Extraction (the core fix)
+- Open ingestion.py. Locate extract_text_from_docx (≈lines 54–63) and confirm
+  the current body.
+- Replace it with the validated numbering-aware implementation (attached file
+  extract_text_numbering_aware.py — it resolves numPr against numbering.xml).
+  Integrate it, keep the existing table-extraction behaviour.
+- Re-run it against the actual Silpo prod document (doc 57). Report: total chars,
+  and confirm lines for п.2.8, 5.4, 7.10, 11.5, 12.7 now begin with their number.
+- Then run parse_clauses on the new text and report the clause count — expect
+  ~200+, not 16. Do NOT change CLAUSE_RE; it already matches a leading number.
+
+STEP 2 — Clause scoping in parse_clauses
+- Make each stored clause carry the section/appendix it belongs to (Додаток
+  headers are already detected). Goal: a body "5.4" and an appendix "5.4" are
+  distinguishable so the guardrail can't validate a finding against the wrong one.
+- Report the data shape change for solcon_documents.clauses and every reader of
+  that field (grep for it) so nothing downstream breaks.
+
+STEP 3 — Guardrail hardening (analyzer.py §10.1, ≈lines 198–215)
+- Remove the dead clause_refs_set.
+- Persist rejected findings instead of dropping them silently: write each reject
+  with its clause_ref and a rejection_reason. New migration (next number), and
+  put a CHECK constraint on rejection_reason's allowed values. Re-ingestion must
+  be idempotent — don't duplicate reject rows on re-run.
+- Change the degenerate-list behaviour: if parsed clause count is implausibly low
+  for the document (define a threshold, e.g. < N clauses for > M chars), downgrade
+  from drop to flag (clause_ref_unverified=true on the finding) rather than
+  rejecting. A finding the lawyer can see-and-verify beats a silent drop.
+
+STEP 4 — Re-run and report
+- Re-ingest doc 57, re-run the scan, and report: clauses parsed, findings the
+  model produced, findings accepted, findings flagged, findings rejected (with
+  reasons). This is the before/after for the fix.
+
+Report after each step. Do not proceed to the next step until the previous one's
+numbers are confirmed.

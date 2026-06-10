@@ -375,8 +375,8 @@ def _analyze_one_document(doc: dict, eid: int):
                  (document_id, engagement_id, clause_ref, clause_text, category,
                   severity, monetary_exposure_uah, short_note, proposed_alternative,
                   grounding_status, legal_citations, workflow_state, detected_by, confidence,
-                  citation_filter_failed)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                  citation_filter_failed, clause_ref_unverified)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (
                 f["document_id"], f["engagement_id"], f["clause_ref"], f["clause_text"],
@@ -387,6 +387,7 @@ def _analyze_one_document(doc: dict, eid: int):
                 f.get("workflow_state", "triage"), f["detected_by"],
                 f.get("confidence"),
                 filter_failed,
+                f.get("clause_ref_unverified", False),
             ),
         )
         finding_id = result["id"]

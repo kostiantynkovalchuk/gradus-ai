@@ -137,6 +137,44 @@ def _truncate_clause(text: str, max_chars: int = 1200) -> str:
     return (cut[:space_idx] if space_idx > 0 else cut).rstrip() + " […]"
 
 
+# ─── §10.1 degenerate-list thresholds ────────────────────────────────────────
+# If a document is large but has very few parsed clauses, the extractor likely
+# dropped Word auto-numbering. In that case we flag findings instead of dropping
+# them so a lawyer can still see and verify them.
+_DEGENERATE_MIN_CHARS = 20_000   # document must be at least this long to apply
+_DEGENERATE_MAX_CLAUSES = 30     # fewer parsed clauses than this → suspect
+
+
+def _persist_rejected(
+    document_id: int,
+    engagement_id: int,
+    clause_ref: str,
+    reason: str,
+    short_note: str = "",
+) -> None:
+    """
+    Upsert a rejected/flagged finding into solcon_rejected_findings.
+    Idempotent: ON CONFLICT (document_id, clause_ref) DO UPDATE.
+    Swallows DB errors so a log-write failure never aborts analysis.
+    """
+    try:
+        solcon_db.execute(
+            """INSERT INTO solcon_rejected_findings
+                 (document_id, engagement_id, clause_ref, rejection_reason, short_note)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (document_id, clause_ref)
+               DO UPDATE SET rejection_reason = EXCLUDED.rejection_reason,
+                             short_note       = EXCLUDED.short_note,
+                             detected_at      = NOW()""",
+            (document_id, engagement_id, clause_ref, reason, short_note or ""),
+        )
+    except Exception as exc:
+        logger.warning(
+            "[SolCon] _persist_rejected failed for doc=%d ref=%r: %s",
+            document_id, clause_ref, exc,
+        )
+
+
 def scan_document(
     document_id: int,
     engagement_id: int,
@@ -145,14 +183,26 @@ def scan_document(
 ) -> tuple[list[dict], int]:
     """
     Run free-form scan (§7.2).
-    Returns list of raw finding dicts (not yet in DB).
-    Guardrail §10.1 applied here.
+    Returns (accepted_findings, rejected_count).
+    Guardrail §10.1 applied here; rejected findings are persisted to
+    solcon_rejected_findings for auditability.
     """
     client = anthropic.Anthropic()
 
-    clause_refs_set = {c["ref"].lower() for c in clauses}
-
     user_msg = f"<contract>\n{raw_text[:120000]}\n</contract>"
+
+    # §10.1 degenerate-list detection — before the LLM call so we can log it
+    _is_degenerate = (
+        len(raw_text) > _DEGENERATE_MIN_CHARS
+        and len(clauses) < _DEGENERATE_MAX_CLAUSES
+        and bool(clauses)  # non-empty list that is implausibly small
+    )
+    if _is_degenerate:
+        logger.warning(
+            "[SolCon] §10.1 Degenerate clause list for doc=%d: %d clauses for %d chars — "
+            "guardrail will FLAG unmatched findings instead of dropping them.",
+            document_id, len(clauses), len(raw_text),
+        )
 
     t0 = time.time()
     try:
@@ -195,24 +245,74 @@ def scan_document(
             )
             return [], 0
 
+    logger.info(
+        "[SolCon] §7.2 Scan raw output: doc=%d produced %d finding(s) before guardrail",
+        document_id, len(findings_raw) if isinstance(findings_raw, list) else 0,
+    )
+
     accepted = []
     rejected_count = 0
+    flagged_count = 0
 
-    for f in findings_raw:
+    for f in findings_raw if isinstance(findings_raw, list) else []:
         clause_ref = str(f.get("clause_ref", "")).strip()
-        # §10.1: verify clause_ref exists in parsed clauses
-        # Normalize both sides: lowercase, no spaces, strip leading п. for comparison
+        short_note = str(f.get("short_note", ""))
+
+        # §10.1: verify clause_ref exists in parsed clauses.
+        # Normalise both sides: lowercase, no spaces, strip leading п.
         norm_ref = clause_ref.lower().replace(" ", "").lstrip("п.")
-        found = any(
-            c["ref"].lower().replace(" ", "").lstrip("п.") == norm_ref
-            or norm_ref in c["ref"].lower().replace(" ", "").lstrip("п.")
-            or c["ref"].lower().replace(" ", "").lstrip("п.") in norm_ref
-            for c in clauses
-        )
+
+        # Scope-aware matching: a body ref (e.g. "5.4") should not validate against
+        # an appendix clause with the same number, and vice versa.
+        is_appendix_ref = bool(re.match(r"(?i)^додаток", clause_ref))
+
+        found = False
+        for c in clauses:
+            c_norm = c["ref"].lower().replace(" ", "").lstrip("п.")
+            c_scope = c.get("scope", "unknown")
+
+            # Scope guard
+            if c_scope == "unknown":
+                scope_ok = True
+            elif is_appendix_ref:
+                scope_ok = c_scope.startswith("appendix")
+            else:
+                scope_ok = (c_scope == "body")
+
+            if not scope_ok:
+                continue
+
+            if (c_norm == norm_ref
+                    or norm_ref in c_norm
+                    or c_norm in norm_ref):
+                found = True
+                break
+
         if not found and clauses:
-            logger.info(f"[SolCon] Rejected finding: ungrounded clause_ref={clause_ref!r}")
-            rejected_count += 1
-            continue
+            if _is_degenerate:
+                # Degenerate list: flag the finding rather than silently dropping it.
+                # The lawyer sees it with a visible warning; it is not counted as rejected.
+                logger.info(
+                    "[SolCon] §10.1 Flagged (degenerate list) clause_ref=%r doc=%d",
+                    clause_ref, document_id,
+                )
+                flagged_count += 1
+                _persist_rejected(
+                    document_id, engagement_id, clause_ref,
+                    "clause_count_degenerate", short_note[:500],
+                )
+                # Fall through to accepted[] with clause_ref_unverified=True
+            else:
+                logger.info(
+                    "[SolCon] §10.1 Rejected finding: clause_ref=%r doc=%d",
+                    clause_ref, document_id,
+                )
+                rejected_count += 1
+                _persist_rejected(
+                    document_id, engagement_id, clause_ref,
+                    "clause_ref_not_found", short_note[:500],
+                )
+                continue
 
         category = f.get("category", "other")
         if category not in VALID_CATEGORIES:
@@ -229,17 +329,21 @@ def scan_document(
             "category": category,
             "severity": severity,
             "monetary_exposure_uah": _safe_num(f.get("monetary_exposure_uah")),
-            "short_note": str(f.get("short_note", ""))[:2000],
+            "short_note": short_note[:2000],
             "proposed_alternative": None,
             "grounding_status": "ungrounded",
             "legal_citations": "[]",
             "workflow_state": "triage",
             "detected_by": "llm_scan",
             "confidence": _safe_float(f.get("confidence", 0.7)),
+            "clause_ref_unverified": not found and _is_degenerate,
         })
 
     if rejected_count:
-        logger.info(f"[SolCon] Guardrail §10.1: rejected {rejected_count} finding(s) for doc={document_id}")
+        logger.info(
+            "[SolCon] Guardrail §10.1: rejected %d, flagged %d finding(s) for doc=%d",
+            rejected_count, flagged_count, document_id,
+        )
 
     accepted = _remove_subsumed_findings(accepted)
     return accepted, rejected_count

@@ -51,15 +51,153 @@ VALID_DOC_TYPES = {
 
 # ─── Text extraction ─────────────────────────────────────────────────────────
 
+_OOXML_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_RE_PCNT = re.compile(r"%(\d+)")   # matches %1, %2, … in Word lvlText patterns
+
+
+def _ow(tag: str) -> str:
+    """Return Clark-notation tag for the w: namespace."""
+    return f"{{{_OOXML_W}}}{tag}"
+
+
+def _load_numbering(path: Path) -> tuple:
+    """
+    Parse word/numbering.xml from a .docx ZIP.
+
+    Returns
+    -------
+    abstract_levels : {abstractNumId_str: {ilvl_int: {"lvlText": str, "start": int}}}
+    num_to_abstract : {numId_str: abstractNumId_str}
+    lvl_overrides   : {(numId_str, ilvl_int): startOverride_int}
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    abstract_levels: dict = {}
+    num_to_abstract: dict = {}
+    lvl_overrides: dict = {}
+
+    try:
+        with zipfile.ZipFile(str(path)) as zf:
+            if "word/numbering.xml" not in zf.namelist():
+                return abstract_levels, num_to_abstract, lvl_overrides
+            root = ET.fromstring(zf.read("word/numbering.xml"))
+    except Exception as exc:
+        logger.debug("[SolCon] numbering.xml not parseable (%s): %s", path.name, exc)
+        return abstract_levels, num_to_abstract, lvl_overrides
+
+    for abn in root.findall(_ow("abstractNum")):
+        aid = abn.get(_ow("abstractNumId"))
+        if aid is None:
+            continue
+        lvls: dict = {}
+        for lvl_el in abn.findall(_ow("lvl")):
+            raw_ilvl = lvl_el.get(_ow("ilvl"))
+            if raw_ilvl is None:
+                continue
+            ilvl = int(raw_ilvl)
+            lt_el = lvl_el.find(_ow("lvlText"))
+            lvl_text = (lt_el.get(_ow("val")) or "") if lt_el is not None else ""
+            st_el = lvl_el.find(_ow("start"))
+            start = int(st_el.get(_ow("val")) or 1) if st_el is not None else 1
+            lvls[ilvl] = {"lvlText": lvl_text, "start": start}
+        abstract_levels[aid] = lvls
+
+    for num_el in root.findall(_ow("num")):
+        nid = num_el.get(_ow("numId"))
+        if nid is None:
+            continue
+        abs_el = num_el.find(_ow("abstractNumId"))
+        if abs_el is not None:
+            num_to_abstract[nid] = abs_el.get(_ow("val")) or ""
+        for ov_el in num_el.findall(_ow("lvlOverride")):
+            raw_olvl = ov_el.get(_ow("ilvl"))
+            so_el = ov_el.find(_ow("startOverride"))
+            if raw_olvl is not None and so_el is not None:
+                try:
+                    lvl_overrides[(nid, int(raw_olvl))] = int(so_el.get(_ow("val")) or 1)
+                except (ValueError, TypeError):
+                    pass
+
+    return abstract_levels, num_to_abstract, lvl_overrides
+
+
 def extract_text_from_docx(path: Path) -> str:
+    """
+    Extract text from .docx preserving Word auto-numbering.
+
+    Resolves w:numPr → numbering.xml so clause numbers like 2.8, 5.4, 7.10
+    appear as literal text prefixes on each paragraph line. Without this fix,
+    python-docx p.text returns only the run text — the numbering label, which
+    is synthesised by the renderer from numbering.xml, is silently dropped.
+
+    Table rows are appended verbatim (unchanged from prior behaviour).
+    """
     from docx import Document as DocxDocument
+
     doc = DocxDocument(str(path))
-    paras = [p.text for p in doc.paragraphs if p.text.strip()]
+    abstract_levels, num_to_abstract, lvl_overrides = _load_numbering(path)
+
+    counters: dict = {}     # (numId, ilvl) → current 1-based counter value
+    last_ilvl: dict = {}    # numId → last ilvl processed
+
+    def _lvl_info(num_id: str, ilvl: int) -> dict:
+        aid = num_to_abstract.get(num_id, "")
+        return abstract_levels.get(aid, {}).get(ilvl, {"lvlText": "", "start": 1})
+
+    def _render_label(num_id: str, ilvl: int) -> str:
+        lvl_text = _lvl_info(num_id, ilvl)["lvlText"]
+        return _RE_PCNT.sub(
+            lambda m: str(counters.get((num_id, int(m.group(1)) - 1), 0)),
+            lvl_text,
+        ).strip()
+
+    paras: list = []
+    for p in doc.paragraphs:
+        raw = p.text
+        pPr = p._element.find(_ow("pPr"))
+        num_pr = pPr.find(_ow("numPr")) if pPr is not None else None
+
+        if num_pr is not None:
+            nid_el = num_pr.find(_ow("numId"))
+            ilvl_el = num_pr.find(_ow("ilvl"))
+            num_id = nid_el.get(_ow("val")) if nid_el is not None else None
+            ilvl = int(ilvl_el.get(_ow("val")) or 0) if ilvl_el is not None else 0
+
+            # numId "0" = numbering explicitly disabled for this paragraph
+            if num_id and num_id != "0":
+                prev_ilvl = last_ilvl.get(num_id)
+
+                if prev_ilvl is not None and ilvl <= prev_ilvl:
+                    # Same or higher level: reset all sub-levels, then increment current
+                    for deeper in range(ilvl + 1, 10):
+                        counters.pop((num_id, deeper), None)
+                    counters[(num_id, ilvl)] = counters.get((num_id, ilvl), 0) + 1
+                else:
+                    # Going deeper or first occurrence: initialise if not present
+                    if (num_id, ilvl) not in counters:
+                        info = _lvl_info(num_id, ilvl)
+                        counters[(num_id, ilvl)] = lvl_overrides.get(
+                            (num_id, ilvl), info["start"]
+                        )
+
+                last_ilvl[num_id] = ilvl
+                label = _render_label(num_id, ilvl)
+                if label:
+                    raw = f"{label} {raw}" if raw.strip() else label
+
+        if raw.strip():
+            paras.append(raw)
+
+    # Table extraction — unchanged from prior behaviour
     for table in doc.tables:
         for row in table.rows:
-            row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            row_text = " | ".join(
+                cell.text.strip() for cell in row.cells if cell.text.strip()
+            )
             if row_text:
                 paras.append(row_text)
+
     return "\n".join(paras)
 
 
@@ -511,7 +649,8 @@ def scan_all_refs(raw_text: str, appendix_prefix: str = "") -> list[dict]:
     """
     Find all X.Y[.Z] clause refs mentioned ANYWHERE in the text (cross-refs, etc.)
     Used to supplement line-start parsing for table-formatted documents.
-    Returns list of {ref, text, parent_ref} with empty text (ref-only entries).
+    Returns list of {ref, text, parent_ref, scope} with empty text (ref-only entries).
+    Scope is "unknown" because context cannot be determined from a position-agnostic scan.
     Filters out obvious dates (dd.mm.yyyy pattern).
     """
     DATE_RE = re.compile(r"\d{2}\.\d{2}\.\d{4}")
@@ -531,19 +670,30 @@ def scan_all_refs(raw_text: str, appendix_prefix: str = "") -> list[dict]:
             "ref": appendix_prefix + norm,
             "text": "",
             "parent_ref": _parent_ref(norm),
+            "scope": "unknown",
         })
     return clauses
+
+
+_APPENDIX_RE = re.compile(r"(?i)^додаток")
+_APPENDIX_NUM_RE = re.compile(r"\d+")
 
 
 def parse_clauses(raw_text: str, appendix_prefix: str = "") -> list[dict]:
     """
     Extract clause refs from text using Ukrainian contract numbering conventions.
-    Returns list of {ref, text, parent_ref}.
+    Returns list of {ref, text, parent_ref, scope}.
+
+    scope values:
+      "body"         — clause in the main contract body (sections 1–N)
+      "appendix:N"   — clause inside Appendix N (Додаток №N)
+      "unknown"      — could not be determined (should not occur from this function)
     """
     clauses = []
     lines = raw_text.split("\n")
     current_ref = None
     current_lines: list[str] = []
+    current_scope = "body"
 
     def _flush():
         if current_ref:
@@ -551,6 +701,7 @@ def parse_clauses(raw_text: str, appendix_prefix: str = "") -> list[dict]:
                 "ref": (appendix_prefix + current_ref).strip(),
                 "text": " ".join(current_lines).strip(),
                 "parent_ref": _parent_ref(current_ref),
+                "scope": current_scope,
             })
 
     for line in lines:
@@ -559,6 +710,11 @@ def parse_clauses(raw_text: str, appendix_prefix: str = "") -> list[dict]:
             _flush()
             current_ref = m.group("ref").strip()
             current_lines = [line[m.end():].strip()]
+            # Update scope: entering a new appendix resets it; body refs inside an
+            # appendix keep the appendix scope (never revert to "body" once past appendices).
+            if _APPENDIX_RE.match(current_ref):
+                num_m = _APPENDIX_NUM_RE.search(current_ref)
+                current_scope = f"appendix:{num_m.group(0)}" if num_m else "appendix"
         else:
             if current_ref:
                 current_lines.append(line.strip())
