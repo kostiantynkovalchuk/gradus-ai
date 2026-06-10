@@ -1,0 +1,56 @@
+AUDIT ONLY — do not change code. We now have a lawyer ground-truth set (Andrey's
+29 manual findings) scored against Solomon's 45. Recall is ~0.63, BELOW the 0.70
+bar. The misses are NOT random — they cluster into two mechanical causes. Confirm
+both against the real files and the doc 69 data.
+
+CAUSE 1 — THE CAP IS DROPPING REAL RISKS
+Andrey flagged 7.17 (10% penalty for errors in appendix/accompanying docs). Solomon
+FOUND 7.17 in the pre-cap 127 run but it is NOT in the capped 45. The cap ranked a
+lawyer-confirmed risk out.
+1a. Open the cap block in router.py (after _dedup_cross_section_findings, ~line 388).
+    Paste it. Confirm the sort keys (severity, confidence, clause_ref_unverified)
+    and the limit (45).
+1b. Query doc 69's findings BEFORE the cap is conceptually applied — i.e. can you
+    reconstruct the 66 post-dedup findings, or are only the 45 persisted? Confirm
+    whether the 21 dropped findings are recoverable from anywhere (logged? or gone).
+    If gone, we can only see what survived.
+1c. What severity did 7.17 carry in the 127 run? (From the earlier full output it
+    was "ВИСОКИЙ/Штрафи".) If a HIGH-severity finding was dropped by a cap of 45,
+    that means 45 < (count of critical+high alone) OR the sort isn't protecting
+    high. Count: in the 66 post-dedup set, how many were critical + high? If that
+    number is >45, the cap is mathematically guaranteed to drop high-severity risks.
+1d. Report what a SEVERITY-AWARE cap would look like: never drop critical or high,
+    only cap the medium/low tail. Where the data for that sits at the cap line.
+    Do not implement.
+
+CAUSE 2 — SECTION COVERAGE HOLES
+Andrey flagged these clauses that Solomon MISSED ENTIRELY (not dropped by cap —
+never surfaced): 3.1.4, 3.2.5, 3.4.3 (delivery deadlines / temperature regime),
+5.8 (buyer inspects our production), 5.1.7–5.1.9 (duty to collect goods), 6.3–6.5
+(packaging-return / utilization), 12.7 (100k confidentiality penalty).
+2a. split_into_sections logged: body(73757,242 clauses), appendix:3(6035,0),
+    appendix:8(20810,0), appendix:11(4623,0), appendix:12(3123,0). The MAIN BODY
+    has 242 resolved clauses. So 3.1.4, 3.2.5, 3.4.3, 5.8, 6.3-6.5, 12.7 — are
+    these in the BODY segment or in an appendix? Grep the extracted text for "3.2.5",
+    "3.4.3", "5.8", "6.3", "12.7" and report which section each falls in.
+2b. If they're in the BODY (which scanned 242 clauses and produced 31 findings):
+    the scan SAW them but didn't flag them. Is that a scan-recall problem (model
+    didn't consider them risky) or are they being cut by the per-section finding
+    target? Report the body scan's raw finding count vs how many clauses it covered.
+2c. If they're in an appendix scanned as "0 clauses": confirm those sections are
+    being scanned at all, or whether the 0-clause flag path suppresses/limits them.
+    §12.7 specifically — is §12 even in a scanned segment, or did the splitter drop
+    it? The split shows appendix:3,8,11,12 — where is the §12.7 confidentiality
+    clause? Is it body or a missing segment?
+2d. Is there a section that exists in the contract but is MISSING from the 5 kept
+    segments? The contract has §1-§17ish + appendices. List which contract sections
+    map to which of the 5 scanned segments, and flag any that fall through.
+
+CAUSE 3 — sanity on what Andrey-missed means
+3a. For 5.1.7-5.1.9 and 6.3-6.5: these are sub-clause ranges. Does the body scan
+    cover §5.1.x and §6.x sub-clauses, or does the clause resolver stop at some
+    depth? Report the deepest clause level resolved in the body (e.g. does it
+    resolve 5.1.7 three-deep, or only 5.1?).
+
+Report all. Two fixes likely follow: (A) severity-aware cap (never drop high+),
+(B) section-coverage patch for the missed regions. Implementation prompt after.
