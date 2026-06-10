@@ -17,7 +17,12 @@ class SearchRequest(BaseModel):
 
 @router.get("/", response_class=HTMLResponse)
 async def solomon_page():
-    return get_solomon_html()
+    # no-store prevents the browser from serving a stale cached copy of the
+    # template after a backend deploy; the file is read from disk per request.
+    return HTMLResponse(
+        content=get_solomon_html(),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @router.get("/health")

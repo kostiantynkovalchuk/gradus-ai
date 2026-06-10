@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from typing import Optional
 
@@ -21,26 +22,25 @@ EMBED_MODEL = "text-embedding-3-small"
 CHUNK_MAX_TOKENS = 800
 
 
-# Module-level singletons — created once on first call, reused forever.
-# Both are thread-safe for concurrent reads (Index.query, client.embeddings.create).
+# Module-level singletons — created once on first call, reused for the process
+# lifetime.  Both Index.query() and client.embeddings.create() are thread-safe.
+# Double-checked locking (DCL) via _CACHE_LOCK prevents the burst-init race that
+# caused "Pinecone Index client created" ×5 in logs when 5 threads raced to init.
 _INDEX_CACHE = None
 _OPENAI_CLIENT_CACHE = None
+_CACHE_LOCK = threading.Lock()
 
 
 def _pinecone_index():
-    """Return the cached Pinecone Index handle, creating it once on first call.
-
-    Preserves lazy import so PINECONE_API_KEY / PINECONE_INDEX_NAME only need to
-    be set by the time the first retrieve/upsert happens, not at module import.
-    Thread-safe: worst case two threads race to set _INDEX_CACHE on the very first
-    call; the second write is idempotent (same object type, no side-effects).
-    """
+    """Return the cached Pinecone Index handle, creating it once on first call."""
     global _INDEX_CACHE
     if _INDEX_CACHE is None:
-        from pinecone import Pinecone
-        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-        _INDEX_CACHE = pc.Index(os.getenv("PINECONE_INDEX_NAME", "gradus-media"))
-        logger.info("[SolCon] Pinecone Index client created (cached for process lifetime)")
+        with _CACHE_LOCK:
+            if _INDEX_CACHE is None:   # re-check after acquiring the lock
+                from pinecone import Pinecone
+                pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+                _INDEX_CACHE = pc.Index(os.getenv("PINECONE_INDEX_NAME", "gradus-media"))
+                logger.info("[SolCon] Pinecone Index client created (cached for process lifetime)")
     return _INDEX_CACHE
 
 
@@ -48,8 +48,10 @@ def _embed(text: str) -> list[float]:
     """Embed text using a cached OpenAI client (one client for the process)."""
     global _OPENAI_CLIENT_CACHE
     if _OPENAI_CLIENT_CACHE is None:
-        _OPENAI_CLIENT_CACHE = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        logger.info("[SolCon] OpenAI embeddings client created (cached for process lifetime)")
+        with _CACHE_LOCK:
+            if _OPENAI_CLIENT_CACHE is None:   # re-check after acquiring the lock
+                _OPENAI_CLIENT_CACHE = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                logger.info("[SolCon] OpenAI embeddings client created (cached for process lifetime)")
     resp = _OPENAI_CLIENT_CACHE.embeddings.create(model=EMBED_MODEL, input=text[:8192])
     return resp.data[0].embedding
 

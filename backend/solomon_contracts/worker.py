@@ -10,6 +10,7 @@ from an APScheduler BackgroundScheduler thread.
 Imports from: analyzer, citation_filter, db (all psycopg2 / sync).
 Imported by:  router.py (re-export),  services/scheduler.py (analysis job).
 """
+import concurrent.futures
 import json
 import logging
 
@@ -51,12 +52,15 @@ def analyze_one_document(doc: dict, eid: int):
     raw_text = doc.get("raw_text", "")
     doc_id = doc["id"]
 
-    # ── Section-aware scan ────────────────────────────────────────────────────
+    # ── Section-aware scan (parallel) ────────────────────────────────────────
+    # The 5 section scans are fully independent: each receives immutable text +
+    # clauses slices, produces its own result tuple, and uses psycopg2 via
+    # solcon_db.conn() which opens a fresh connection per call (thread-safe).
+    # Results are merged in the main thread after all futures resolve, so there
+    # is zero shared mutable state during the concurrent phase.
     sections = split_into_sections(raw_text, clauses)
 
-    all_findings: list[dict] = []
-    total_rejected = 0
-    for section in sections:
+    def _scan_section(section: dict) -> tuple[list, int]:
         sec_findings, sec_rejected = scan_document(
             doc_id, eid,
             section["text"],
@@ -66,6 +70,16 @@ def analyze_one_document(doc: dict, eid: int):
             "[SolCon] Section %r → %d finding(s), %d rejected (doc=%d)",
             section["name"], len(sec_findings), sec_rejected, doc_id,
         )
+        return sec_findings, sec_rejected
+
+    all_findings: list[dict] = []
+    total_rejected = 0
+    # max_workers=5 matches the section count; executor is released immediately
+    # after collect so threads don't linger into the alternatives phase.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        section_results = list(executor.map(_scan_section, sections))
+
+    for sec_findings, sec_rejected in section_results:
         all_findings.extend(sec_findings)
         total_rejected += sec_rejected
 

@@ -445,6 +445,23 @@ def scan_document(
     return accepted, rejected_count
 
 
+def _extract_json_object(text: str) -> str:
+    """Extract the outermost JSON object from *text*.
+
+    The model sometimes prefixes the JSON with prose such as:
+        "Here is my analysis of the retrieved sources: {\"grounding_status\": …}"
+    This helper finds the first `{` and the matching last `}` and returns just
+    that substring, which is then safe to pass to ``json.loads``.  If the text
+    contains no `{…}` pair, the original string is returned unchanged so that
+    the caller's ``json.loads`` raises ``JSONDecodeError`` and logs the warning.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start : end + 1]
+    return text
+
+
 # ─── §7.3 Alternative wording generation ─────────────────────────────────────
 
 ALT_SYSTEM = """You are a legal advisor helping an alcohol distributor (AVTD, supplier)
@@ -573,10 +590,19 @@ def generate_alternatives(
         if isinstance(raw_alt, (list, dict)):
             result = raw_alt
         else:
+            # Tolerant extraction: model sometimes prefixes with prose like
+            # "Here is my analysis...". Find the outermost {...} object and
+            # parse that; if absent, log and skip gracefully (finding is kept,
+            # alternative is lost — not a hard failure).
+            _js = _extract_json_object(raw_alt)
             try:
-                result = json.loads(raw_alt)
+                result = json.loads(_js)
             except json.JSONDecodeError:
-                logger.exception(f"[SolCon] Alternative JSON parse failed, raw={raw_alt[:200]!r}")
+                logger.warning(
+                    "[SolCon] Alternative JSON parse failed — no valid JSON in "
+                    "response (finding kept, alternative skipped). raw=%r",
+                    raw_alt[:300],
+                )
                 return
 
         grounding = result.get("grounding_status", "ungrounded")
