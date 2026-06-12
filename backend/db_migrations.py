@@ -1561,6 +1561,13 @@ MIGRATIONS = [
             "ALTER TABLE hr_users DROP CONSTRAINT hr_users_access_level_valid",
         ]
     },
+    {
+        "version": "063_solcon_engagement_hidden",
+        "statements": [
+            "ALTER TABLE solcon_engagements ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT false",
+            "UPDATE solcon_engagements SET is_hidden = true WHERE id BETWEEN 1 AND 23",
+        ]
+    },
 ]
 
 

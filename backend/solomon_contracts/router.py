@@ -90,6 +90,7 @@ async def list_engagements(request: Request):
            FROM solcon_engagements e
            LEFT JOIN solcon_documents d ON d.engagement_id = e.id
            LEFT JOIN solcon_findings f ON f.engagement_id = e.id
+           WHERE NOT e.is_hidden
            GROUP BY e.id
            ORDER BY e.created_at DESC"""
     )

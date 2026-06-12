@@ -169,6 +169,14 @@
   .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
   .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes dot { 0%, 80%, 100% { transform: scale(0.5); opacity: 0.2; } 40% { transform: scale(1); opacity: 1; } }
+  @media (prefers-reduced-motion: no-preference) {
+    .solcon-hourglass { display: inline-block; animation: solcon-hg-flip 3s ease-in-out infinite; }
+    @keyframes solcon-hg-flip {
+      0%,  35% { transform: rotate(0deg);   }
+      50%, 85% { transform: rotate(180deg); }
+      100%     { transform: rotate(360deg); }
+    }
+  }
   .status-label { margin-top: 14px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); }
   .empty-state { text-align: center; padding: 56px 0; color: var(--text-muted); font-size: 14px; }
   .error-msg { padding: 20px 24px; background: #fdf2f2; border: 1px solid #f5c6c6; border-radius: 8px; color: var(--accent-red); font-size: 13.5px; }
@@ -1046,7 +1054,10 @@ async function startAnalysis(eid) {
 
   // Auto-poll: re-render workspace once analysis finishes or fails
   const btn = document.querySelector('.btn-gold');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Аналіз…'; }
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="solcon-hourglass">⏳</span> <span class="solcon-ticker-text">Аналіз…</span>';
+  }
 
   const started = Date.now();
   const POLL_MS      = 8000;
@@ -1071,10 +1082,15 @@ async function startAnalysis(eid) {
     // ② Still running — update ticker only now, then reschedule.
     if (btn) {
       const elapsed = Math.round((Date.now() - started) / 1000);
+      const tickerText = btn.querySelector('.solcon-ticker-text');
       if (elapsed < SLOW_WARN_MS / 1000) {
-        btn.textContent = `⏳ Аналізую договір… це займає близько 5 хвилин (${elapsed}с)`;
+        const msg = `Аналізую договір… це займає близько 5 хвилин (${elapsed}с)`;
+        if (tickerText) tickerText.textContent = msg;
+        else btn.textContent = '⏳ ' + msg;
       } else {
-        btn.textContent = '⏳ Аналіз триває довше звичайного — зачекайте, сторінка оновиться автоматично';
+        const msg = 'Аналіз триває довше звичайного — зачекайте, сторінка оновиться автоматично';
+        if (tickerText) tickerText.textContent = msg;
+        else btn.textContent = '⏳ ' + msg;
       }
     }
     setTimeout(poll, POLL_MS);
