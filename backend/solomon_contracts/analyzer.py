@@ -350,136 +350,165 @@ def scan_document(
     flagged_count = 0
 
     for f in findings_raw if isinstance(findings_raw, list) else []:
-        clause_ref = str(f.get("clause_ref", "")).strip()
-        short_note = str(f.get("short_note", ""))
+        # Rule 3 — defense in depth: one malformed finding must never crash the whole
+        # doc.  Any unexpected exception inside this loop logs and skips that finding;
+        # all other findings in the batch continue normally.
+        try:
+            clause_ref = str(f.get("clause_ref", "")).strip()
+            short_note = str(f.get("short_note", ""))
 
-        # §10.1: verify clause_ref exists in parsed clauses.
-        # Normalise both sides: lowercase, no spaces, strip leading п.
-        norm_ref = clause_ref.lower().replace(" ", "").lstrip("п.")
+            # §10.1: verify clause_ref exists in parsed clauses.
+            # Normalise both sides: lowercase, no spaces, strip leading п.
+            norm_ref = clause_ref.lower().replace(" ", "").lstrip("п.")
 
-        # Scope-aware matching: a body ref (e.g. "5.4") should not validate against
-        # an appendix clause with the same number, and vice versa.
-        is_appendix_ref = bool(re.match(r"(?i)^додаток", clause_ref))
+            # Scope-aware matching: a body ref (e.g. "5.4") should not validate against
+            # an appendix clause with the same number, and vice versa.
+            is_appendix_ref = bool(re.match(r"(?i)^додаток", clause_ref))
 
-        # §10.1 range handling: model may emit a range ref such as '7.3–7.17' or
-        # '9.3–9.12' (Pattern A). The existing substring loop fails when the
-        # extractor mis-scopes the section's clauses (e.g. marks §7 body clauses as
-        # 'appendix'), blocking the scope guard before the substring check runs.
-        # Fix: when norm_ref looks like a range, validate both endpoints against ALL
-        # clauses (scope-free) and accept immediately if both are found.
-        # Single-clause refs: behaviour is byte-identical to before.
-        _range_dash = re.search(r'[–—-]', norm_ref)
-        if _range_dash:
-            _parts = re.split(r'[–—-]', norm_ref, maxsplit=1)
-            _ep_pattern = re.compile(r'^\d+(\.\d+)*$')
-            _ep_valid = (len(_parts) == 2
-                         and _ep_pattern.match(_parts[0])
-                         and _ep_pattern.match(_parts[1]))
-            if _ep_valid:
-                # Build a scope-free normalised ref set from the full clause list.
-                _all_c_norms = {
-                    c["ref"].lower().replace(" ", "").lstrip("п.")
-                    for c in clauses
-                }
-                _ep0_found = any(
-                    _parts[0] == cn or _parts[0] in cn or cn in _parts[0]
-                    for cn in _all_c_norms
-                )
-                _ep1_found = any(
-                    _parts[1] == cn or _parts[1] in cn or cn in _parts[1]
-                    for cn in _all_c_norms
-                )
-                if _ep0_found and _ep1_found:
-                    logger.info(
-                        "[SolCon] §10.1 Range accepted: clause_ref=%r "
-                        "(endpoints %r + %r validated) doc=%d",
-                        clause_ref, _parts[0], _parts[1], document_id,
+            # §10.1 range handling: model may emit a range ref such as '7.3–7.17' or
+            # '9.3–9.12' (Pattern A). The existing substring loop fails when the
+            # extractor mis-scopes the section's clauses (e.g. marks §7 body clauses as
+            # 'appendix'), blocking the scope guard before the substring check runs.
+            # Fix: when norm_ref looks like a range, validate both endpoints against ALL
+            # clauses (scope-free) and accept immediately if both are found.
+            # Single-clause refs: behaviour is byte-identical to before.
+            _range_dash = re.search(r'[–—-]', norm_ref)
+            if _range_dash:
+                _parts = re.split(r'[–—-]', norm_ref, maxsplit=1)
+                _ep_pattern = re.compile(r'^\d+(\.\d+)*$')
+                _ep_valid = (len(_parts) == 2
+                             and _ep_pattern.match(_parts[0])
+                             and _ep_pattern.match(_parts[1]))
+                if _ep_valid:
+                    # Build a scope-free normalised ref set from the full clause list.
+                    _all_c_norms = {
+                        c["ref"].lower().replace(" ", "").lstrip("п.")
+                        for c in clauses
+                    }
+                    _ep0_found = any(
+                        _parts[0] == cn or _parts[0] in cn or cn in _parts[0]
+                        for cn in _all_c_norms
                     )
-                    # Jump straight to accepted — skip the per-clause loop entirely.
-                    category = f.get("category", "other")
-                    if category not in VALID_CATEGORIES:
-                        category = "other"
-                    severity = f.get("severity", "low")
-                    if severity not in VALID_SEVERITIES:
-                        severity = "low"
-                    accepted.append({**f, "category": category, "severity": severity,
-                                     "clause_ref_unverified": False})
+                    _ep1_found = any(
+                        _parts[1] == cn or _parts[1] in cn or cn in _parts[1]
+                        for cn in _all_c_norms
+                    )
+                    if _ep0_found and _ep1_found:
+                        logger.info(
+                            "[SolCon] §10.1 Range accepted: clause_ref=%r "
+                            "(endpoints %r + %r validated) doc=%d",
+                            clause_ref, _parts[0], _parts[1], document_id,
+                        )
+                        # Fix 1a: build the same complete, sanitized dict the normal
+                        # accept path produces — NOT {**f} which lacks document_id,
+                        # engagement_id, detected_by, and sanitized field values.
+                        category = f.get("category", "other")
+                        if category not in VALID_CATEGORIES:
+                            category = "other"
+                        severity = f.get("severity", "low")
+                        if severity not in VALID_SEVERITIES:
+                            severity = "low"
+                        accepted.append({
+                            "document_id": document_id,
+                            "engagement_id": engagement_id,
+                            "clause_ref": clause_ref,
+                            "clause_text": _truncate_clause(f.get("clause_text", "")),
+                            "category": category,
+                            "severity": severity,
+                            "monetary_exposure_uah": _safe_num(f.get("monetary_exposure_uah")),
+                            "short_note": short_note[:2000],
+                            "proposed_alternative": None,
+                            "grounding_status": "ungrounded",
+                            "legal_citations": "[]",
+                            "workflow_state": "triage",
+                            "detected_by": "llm_scan",
+                            "confidence": _safe_float(f.get("confidence", 0.7)),
+                            "clause_ref_unverified": False,
+                        })
+                        continue
+                    # One or both endpoints missing → fall through to normal reject path.
+
+            found = False
+            for c in clauses:
+                c_norm = c["ref"].lower().replace(" ", "").lstrip("п.")
+                c_scope = c.get("scope", "unknown")
+
+                # Scope guard
+                if c_scope == "unknown":
+                    scope_ok = True
+                elif is_appendix_ref:
+                    scope_ok = c_scope.startswith("appendix")
+                else:
+                    scope_ok = (c_scope == "body")
+
+                if not scope_ok:
                     continue
-                # One or both endpoints missing → fall through to normal reject path.
 
-        found = False
-        for c in clauses:
-            c_norm = c["ref"].lower().replace(" ", "").lstrip("п.")
-            c_scope = c.get("scope", "unknown")
+                if (c_norm == norm_ref
+                        or norm_ref in c_norm
+                        or c_norm in norm_ref):
+                    found = True
+                    break
 
-            # Scope guard
-            if c_scope == "unknown":
-                scope_ok = True
-            elif is_appendix_ref:
-                scope_ok = c_scope.startswith("appendix")
-            else:
-                scope_ok = (c_scope == "body")
+            if not found:
+                if _flag_mode:
+                    # Flag mode (zero-clause section OR degenerate list):
+                    # keep the finding but mark it for lawyer verification.
+                    logger.info(
+                        "[SolCon] §10.1 Flagged clause_ref=%r doc=%d (no_clauses=%s degenerate=%s)",
+                        clause_ref, document_id, _no_clauses, _is_degenerate,
+                    )
+                    flagged_count += 1
+                    _persist_rejected(
+                        document_id, engagement_id, clause_ref,
+                        "clause_count_degenerate", short_note[:500],
+                    )
+                    # Fall through to accepted[] with clause_ref_unverified=True
+                elif clauses:
+                    # Normal rejection: clause list is healthy but ref not found in it.
+                    logger.info(
+                        "[SolCon] §10.1 Rejected finding: clause_ref=%r doc=%d",
+                        clause_ref, document_id,
+                    )
+                    rejected_count += 1
+                    _persist_rejected(
+                        document_id, engagement_id, clause_ref,
+                        "clause_ref_not_found", short_note[:500],
+                    )
+                    continue
 
-            if not scope_ok:
-                continue
+            category = f.get("category", "other")
+            if category not in VALID_CATEGORIES:
+                category = "other"
+            severity = f.get("severity", "low")
+            if severity not in VALID_SEVERITIES:
+                severity = "low"
 
-            if (c_norm == norm_ref
-                    or norm_ref in c_norm
-                    or c_norm in norm_ref):
-                found = True
-                break
+            accepted.append({
+                "document_id": document_id,
+                "engagement_id": engagement_id,
+                "clause_ref": clause_ref,
+                "clause_text": _truncate_clause(f.get("clause_text", "")),
+                "category": category,
+                "severity": severity,
+                "monetary_exposure_uah": _safe_num(f.get("monetary_exposure_uah")),
+                "short_note": short_note[:2000],
+                "proposed_alternative": None,
+                "grounding_status": "ungrounded",
+                "legal_citations": "[]",
+                "workflow_state": "triage",
+                "detected_by": "llm_scan",
+                "confidence": _safe_float(f.get("confidence", 0.7)),
+                "clause_ref_unverified": not found and _flag_mode,
+            })
 
-        if not found:
-            if _flag_mode:
-                # Flag mode (zero-clause section OR degenerate list):
-                # keep the finding but mark it for lawyer verification.
-                logger.info(
-                    "[SolCon] §10.1 Flagged clause_ref=%r doc=%d (no_clauses=%s degenerate=%s)",
-                    clause_ref, document_id, _no_clauses, _is_degenerate,
-                )
-                flagged_count += 1
-                _persist_rejected(
-                    document_id, engagement_id, clause_ref,
-                    "clause_count_degenerate", short_note[:500],
-                )
-                # Fall through to accepted[] with clause_ref_unverified=True
-            elif clauses:
-                # Normal rejection: clause list is healthy but ref not found in it.
-                logger.info(
-                    "[SolCon] §10.1 Rejected finding: clause_ref=%r doc=%d",
-                    clause_ref, document_id,
-                )
-                rejected_count += 1
-                _persist_rejected(
-                    document_id, engagement_id, clause_ref,
-                    "clause_ref_not_found", short_note[:500],
-                )
-                continue
-
-        category = f.get("category", "other")
-        if category not in VALID_CATEGORIES:
-            category = "other"
-        severity = f.get("severity", "low")
-        if severity not in VALID_SEVERITIES:
-            severity = "low"
-
-        accepted.append({
-            "document_id": document_id,
-            "engagement_id": engagement_id,
-            "clause_ref": clause_ref,
-            "clause_text": _truncate_clause(f.get("clause_text", "")),
-            "category": category,
-            "severity": severity,
-            "monetary_exposure_uah": _safe_num(f.get("monetary_exposure_uah")),
-            "short_note": short_note[:2000],
-            "proposed_alternative": None,
-            "grounding_status": "ungrounded",
-            "legal_citations": "[]",
-            "workflow_state": "triage",
-            "detected_by": "llm_scan",
-            "confidence": _safe_float(f.get("confidence", 0.7)),
-            "clause_ref_unverified": not found and _flag_mode,
-        })
+        except Exception as _finding_exc:
+            logger.exception(
+                "[SolCon] §10.1 Skipping malformed finding clause_ref=%r doc=%d: %s",
+                f.get("clause_ref") if isinstance(f, dict) else "?",
+                document_id,
+                _finding_exc,
+            )
 
     if rejected_count:
         logger.info(
