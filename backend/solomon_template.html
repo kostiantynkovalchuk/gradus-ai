@@ -1020,19 +1020,11 @@ async function startAnalysis(eid) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Аналіз…'; }
 
   const started = Date.now();
-  const POLL_MS        = 8000;
-  const SLOW_WARN_MS   = 5 * 60 * 1000;   // 5 min — show "longer than usual" note, keep polling
+  const POLL_MS      = 8000;
+  const SLOW_WARN_MS = 9 * 60 * 1000;   // 9 min — genuinely abnormal; ~5 min is normal
 
   async function poll() {
-    // Update button label on each tick so the user sees the analysis is alive.
-    if (btn) {
-      const elapsed = Math.round((Date.now() - started) / 1000);
-      if (elapsed < SLOW_WARN_MS / 1000) {
-        btn.textContent = `⏳ Аналізую… (${elapsed}с)`;
-      } else {
-        btn.textContent = '⏳ Аналіз триває довше звичайного — зачекайте, сторінка оновиться автоматично';
-      }
-    }
+    // ① Fetch first — terminal check before any label paint.
     try {
       const data = await (await fetch('/api/contracts/engagements/' + eid, {
         headers: { 'Cookie': document.cookie }
@@ -1040,10 +1032,22 @@ async function startAnalysis(eid) {
       const status = data.engagement && data.engagement.status;
       const docs   = data.documents || [];
       if (status === 'analysis_failed' || docs.some(d => d.analyzed_at)) {
+        // Done — re-render immediately. Label is NEVER updated on this tick so
+        // no warning flash; results appear automatically with no manual reload.
         await renderEngagementWorkspace(eid);
         return;
       }
     } catch (e) { /* network hiccup — keep polling */ }
+
+    // ② Still running — update ticker only now, then reschedule.
+    if (btn) {
+      const elapsed = Math.round((Date.now() - started) / 1000);
+      if (elapsed < SLOW_WARN_MS / 1000) {
+        btn.textContent = `⏳ Аналізую договір… це займає близько 5 хвилин (${elapsed}с)`;
+      } else {
+        btn.textContent = '⏳ Аналіз триває довше звичайного — зачекайте, сторінка оновиться автоматично';
+      }
+    }
     setTimeout(poll, POLL_MS);
   }
   setTimeout(poll, POLL_MS);
