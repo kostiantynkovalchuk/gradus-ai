@@ -26,6 +26,8 @@ from .citation_filter import filter_citations
 
 logger = logging.getLogger(__name__)
 
+FINDINGS_CAP = 45  # single dial: max findings kept per document
+
 
 def analyze_one_document(doc: dict, eid: int):
     """
@@ -88,20 +90,47 @@ def analyze_one_document(doc: dict, eid: int):
     all_findings = _dedup_cross_section_findings(all_findings)
 
     # ── Global cap ────────────────────────────────────────────────────────────
-    _FINDINGS_CAP = 45
-    _CAP_SEV = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-    all_findings.sort(key=lambda f: (
-        -_CAP_SEV.get(f.get("severity", ""), 0),
-        -(float(f.get("confidence") or 0)),
-        1 if f.get("clause_ref_unverified") else 0,
-    ))
-    if len(all_findings) > _FINDINGS_CAP:
-        _cap_dropped = len(all_findings) - _FINDINGS_CAP
+    # Selection is explicitly severity-aware:
+    #   1. Keep ALL critical + high findings (never drop these for a medium/low).
+    #   2. Fill remaining slots up to FINDINGS_CAP with top medium/low, ranked
+    #      by confidence desc, verified-first.
+    #   3. Edge case — critical+high alone exceed FINDINGS_CAP (e.g. a very dense
+    #      contract): trim lowest-ranked ones within that group; a critical is
+    #      never dropped while a high is kept.
+    #   4. Belt-and-suspenders hard ceiling: never silently exceed FINDINGS_CAP.
+    _HIGH_TIERS = {"critical", "high"}
+    _SEV_RANK   = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+    def _cap_key(f):
+        return (
+            -_SEV_RANK.get(f.get("severity", ""), 0),
+            -(float(f.get("confidence") or 0)),
+            1 if f.get("clause_ref_unverified") else 0,
+        )
+
+    critical_high = sorted(
+        (f for f in all_findings if f.get("severity") in _HIGH_TIERS),
+        key=_cap_key,
+    )
+    medium_low = sorted(
+        (f for f in all_findings if f.get("severity") not in _HIGH_TIERS),
+        key=_cap_key,
+    )
+
+    total_before_cap = len(all_findings)
+    if len(critical_high) >= FINDINGS_CAP:
+        all_findings = critical_high[:FINDINGS_CAP]
+    else:
+        slots = FINDINGS_CAP - len(critical_high)
+        all_findings = critical_high + medium_low[:slots]
+    all_findings = all_findings[:FINDINGS_CAP]  # hard ceiling
+
+    if len(all_findings) < total_before_cap:
         logger.info(
             "[SolCon] Cap applied: kept %d / %d findings (%d low-ranked dropped) doc=%d",
-            _FINDINGS_CAP, len(all_findings), _cap_dropped, doc_id,
+            len(all_findings), total_before_cap,
+            total_before_cap - len(all_findings), doc_id,
         )
-        all_findings = all_findings[:_FINDINGS_CAP]
 
     findings_with_alts = generate_alternatives(doc_id, eid, all_findings)
 
