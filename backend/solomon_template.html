@@ -665,10 +665,19 @@ async function renderEngagementWorkspace(eid) {
     // Documents section
     html += `<div class="section-header" style="margin-top:24px">
       <div class="section-title" style="font-size:16px">Документи</div>
-      <button class="btn btn-secondary btn-sm" onclick="openUploadPanel(${eid})">+ Завантажити</button>
+      ${docs.length ? `<button class="btn btn-secondary btn-sm" onclick="openUploadPanel(${eid})">+ Завантажити</button>` : ''}
     </div>`;
     if (!docs.length) {
-      html += `<div class="empty-state" style="padding:30px 0">Завантажте документи для аналізу</div>`;
+      html += `<div style="padding:8px 0 24px">
+        <div id="upload-drop-zone" class="upload-zone" style="cursor:pointer" onclick="document.getElementById('upload-file-input').click()">
+          <div style="font-size:28px;margin-bottom:6px">📎</div>
+          <div style="font-weight:600;color:var(--navy);font-size:14px">Перетягніть файли сюди</div>
+          <div class="upload-zone-label">або натисніть для вибору файлів</div>
+          <div class="upload-zone-label" style="margin-top:4px;font-size:11px;color:var(--text-dim)">.doc · .docx · .pdf · .xls · .xlsx · .zip</div>
+        </div>
+        <input type="file" id="upload-file-input" accept=".doc,.docx,.pdf,.xls,.xlsx,.zip" multiple style="display:none">
+        <div id="upload-queue" style="margin-top:10px"></div>
+      </div>`;
     } else {
       docs.forEach(d => {
         const NO_ANALYSIS_TYPES = ['protocol_draft','protocol_returned','protocol_agreed','risks_note','legal_opinion','specification','price_list','schedule','commercial_code','other'];
@@ -733,7 +742,6 @@ async function renderEngagementWorkspace(eid) {
     if (unanalyzed.length) {
       html += `<div style="margin:16px 0">
         <button class="btn btn-gold" onclick="startAnalysis(${eid})">🔍 Запустити аналіз (${unanalyzed.length} документ${unanalyzed.length===1?'':'ів'})</button>
-        <span style="font-size:11px;color:var(--text-muted);margin-left:12px">~60-120 секунд</span>
       </div>`;
     } else if (docs.length && !docs.some(d => ['main_contract','additional_agreement'].includes(d.document_type))) {
       html += `<div class="info-callout">ℹ Жоден документ не класифіковано як договір. Виберіть правильний тип у випадаючому списку навпроти кожного документа.</div>`;
@@ -815,6 +823,9 @@ async function renderEngagementWorkspace(eid) {
 
     html += `<div class="disclaimer">Автоматичний аналіз Solomon. Підлягає перевірці юристом. Не є юридичною консультацією.</div>`;
     root.innerHTML = html;
+
+    // Attach upload listeners to inline zone when engagement has no docs yet.
+    if (!docs.length) _initInlineUploadZone(eid);
 
     // Start background OCR polling for any pending/running docs in this engagement
     _startOcrPoll(eid, docs);
@@ -916,6 +927,24 @@ function _showUploadToast(msg) {
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 4500);
+}
+
+// Attach upload event listeners to the inline drop-zone rendered directly inside
+// renderEngagementWorkspace when an engagement has zero documents.
+// Uses the same IDs (upload-drop-zone, upload-file-input, upload-queue) that
+// _runUploadQueue reads, so disabling during upload and queue display work normally.
+function _initInlineUploadZone(eid) {
+  const fileInput = document.getElementById('upload-file-input');
+  const dropZone  = document.getElementById('upload-drop-zone');
+  if (!fileInput || !dropZone) return;
+  fileInput.addEventListener('change', () => _runUploadQueue(eid, fileInput.files));
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over'); });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    _runUploadQueue(eid, e.dataTransfer.files);
+  });
 }
 
 function openUploadPanel(eid) {
