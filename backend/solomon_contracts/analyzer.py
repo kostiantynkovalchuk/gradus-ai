@@ -361,6 +361,52 @@ def scan_document(
         # an appendix clause with the same number, and vice versa.
         is_appendix_ref = bool(re.match(r"(?i)^додаток", clause_ref))
 
+        # §10.1 range handling: model may emit a range ref such as '7.3–7.17' or
+        # '9.3–9.12' (Pattern A). The existing substring loop fails when the
+        # extractor mis-scopes the section's clauses (e.g. marks §7 body clauses as
+        # 'appendix'), blocking the scope guard before the substring check runs.
+        # Fix: when norm_ref looks like a range, validate both endpoints against ALL
+        # clauses (scope-free) and accept immediately if both are found.
+        # Single-clause refs: behaviour is byte-identical to before.
+        _range_dash = re.search(r'[–—-]', norm_ref)
+        if _range_dash:
+            _parts = re.split(r'[–—-]', norm_ref, maxsplit=1)
+            _ep_pattern = re.compile(r'^\d+(\.\d+)*$')
+            _ep_valid = (len(_parts) == 2
+                         and _ep_pattern.match(_parts[0])
+                         and _ep_pattern.match(_parts[1]))
+            if _ep_valid:
+                # Build a scope-free normalised ref set from the full clause list.
+                _all_c_norms = {
+                    c["ref"].lower().replace(" ", "").lstrip("п.")
+                    for c in clauses
+                }
+                _ep0_found = any(
+                    _parts[0] == cn or _parts[0] in cn or cn in _parts[0]
+                    for cn in _all_c_norms
+                )
+                _ep1_found = any(
+                    _parts[1] == cn or _parts[1] in cn or cn in _parts[1]
+                    for cn in _all_c_norms
+                )
+                if _ep0_found and _ep1_found:
+                    logger.info(
+                        "[SolCon] §10.1 Range accepted: clause_ref=%r "
+                        "(endpoints %r + %r validated) doc=%d",
+                        clause_ref, _parts[0], _parts[1], document_id,
+                    )
+                    # Jump straight to accepted — skip the per-clause loop entirely.
+                    category = f.get("category", "other")
+                    if category not in VALID_CATEGORIES:
+                        category = "other"
+                    severity = f.get("severity", "low")
+                    if severity not in VALID_SEVERITIES:
+                        severity = "low"
+                    accepted.append({**f, "category": category, "severity": severity,
+                                     "clause_ref_unverified": False})
+                    continue
+                # One or both endpoints missing → fall through to normal reject path.
+
         found = False
         for c in clauses:
             c_norm = c["ref"].lower().replace(" ", "").lstrip("п.")
