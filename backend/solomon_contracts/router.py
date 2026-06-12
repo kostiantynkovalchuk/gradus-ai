@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from . import db as solcon_db
 from .analyzer import generate_legal_opinion
-from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx
+from .artifacts import build_opinion_docx, build_protocol_docx, build_risk_note_docx, clause_sort_key
 from .corpus import ingest_incoterms_pdf, ingest_incoterms_summary, ingest_law_text, rebuild_corpus_namespace, run_sanity_queries
 from .kb_sources import get_active_kb_sources, invalidate_cache as _invalidate_kb_cache
 from .worker import analyze_one_document
@@ -132,11 +132,12 @@ async def get_engagement(request: Request, eid: int):
            FROM solcon_findings f
            JOIN solcon_documents d ON d.id = f.document_id
            WHERE f.engagement_id = %s
-           ORDER BY f.severity DESC, f.clause_ref""",
+           ORDER BY f.id""",
         (eid,),
     )
+    findings = sorted(findings or [], key=lambda f: clause_sort_key(f.get("clause_ref", "")))
     sev_summary = {}
-    for f in (findings or []):
+    for f in findings:
         sev_summary[f["severity"]] = sev_summary.get(f["severity"], 0) + 1
 
     latest_op = solcon_db.fetchone(
@@ -564,7 +565,7 @@ async def generate_protocol(request: Request, eid: int, did: int):
     findings = solcon_db.fetchall(
         """SELECT * FROM solcon_findings
            WHERE document_id=%s AND workflow_state='included_in_protocol'
-           ORDER BY clause_ref""",
+           ORDER BY id""",
         (did,),
     )
     if not findings:

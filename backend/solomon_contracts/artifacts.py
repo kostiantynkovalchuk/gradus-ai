@@ -20,6 +20,54 @@ from docx.oxml import OxmlElement
 logger = logging.getLogger(__name__)
 
 
+def clause_sort_key(clause_ref: str) -> tuple:
+    """
+    Natural numeric sort key for display ordering of clause refs.
+
+    Tier 0 = body / sub-clause refs, sorted numerically ascending.
+    Tier 1 = appendix refs ("Додаток …"), sorted numerically among themselves.
+    Tier 2 = unparseable, floated to the very end.
+
+    Examples
+    --------
+    "7.2"        → (0, (7, 2))
+    "7.10"       → (0, (7, 10))   # numeric, not lexicographic
+    "7.3–7.17"   → (0, (7, 3))    # range → use start endpoint
+    "п.4"        → (0, (4,))      # strip п. prefix
+    "3"          → (0, (3,))      # bare section number
+    "1.4.2"      → (0, (1, 4, 2))
+    "Додаток 8"  → (1, (8,))
+    ""           → (2, ())
+    """
+    try:
+        ref = (clause_ref or "").strip()
+        if not ref:
+            return (2, ())
+
+        # Appendix refs sort after all body clauses
+        if re.match(r"(?i)^додаток", ref):
+            sub = re.search(r"п\s*\.\s*([\d.]+)", ref, flags=re.IGNORECASE)
+            if sub:
+                nums = tuple(int(x) for x in sub.group(1).split(".") if x.isdigit())
+            else:
+                m = re.search(r"(\d+)", ref)
+                nums = (int(m.group(1)),) if m else ()
+            return (1, nums) if nums else (2, ())
+
+        # Strip leading "п." prefix  ("п.4" → "4", "п.2.1" → "2.1")
+        clean = re.sub(r"^п\s*\.\s*", "", ref, flags=re.IGNORECASE).strip()
+
+        # Range refs "7.3–7.17" / "7.3—7.17" / "7.3-7.17" → use start endpoint
+        clean = re.split(r"[–—]|-(?=\d)", clean, maxsplit=1)[0].strip()
+
+        # Parse numeric components ("7.10" → (7, 10), "1.4.2" → (1, 4, 2))
+        parts = tuple(int(x) for x in re.split(r"[.\s]+", clean) if x.isdigit())
+
+        return (0, parts) if parts else (2, ())
+    except Exception:
+        return (2, ())
+
+
 def _safe_jsonb(value, default=None):
     """Parse a JSONB column that may already be a Python object (psycopg2 auto-parses JSONB)."""
     if default is None:
@@ -393,6 +441,8 @@ def build_protocol_docx(
     for i in range(1, 4):
         _style_header_cell(hdr[i], headers[i])
         _set_cell_width_dxa(hdr[i], COL_WIDTHS_DXA[i])
+
+    findings = sorted(findings, key=lambda f: clause_sort_key(f.get("clause_ref", "")))
 
     for ordinal, f in enumerate(findings, start=1):
         row = tbl.add_row().cells
