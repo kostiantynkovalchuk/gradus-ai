@@ -1,0 +1,32 @@
+IMPLEMENTATION. The vacancy preset was inserted into the WRONG table —
+alex_preset_answers (Alex Gradus bot) instead of hr_preset_answers (Maya HR bot).
+Maya HR reads only from hr_preset_answers, so the preset is invisible to it and
+vacancy questions fall through to RAG (returning a wrong salary answer). Fix: put the
+preset in the table Maya HR actually reads. This is MAYA HR — no Solomon.
+
+1. CONFIRM SCHEMA: quote the hr_preset_answers columns (via the HRPresetAnswer model
+   in models/hr_models.py and/or \d hr_preset_answers). Note the exact column names —
+   they may differ from alex_preset_answers (e.g. pattern vs question_pattern). Insert
+   must match hr_preset_answers' real columns.
+2. INSERT into hr_preset_answers:
+     pattern (or the real column name): ваканс|робота в компанії
+     answer (real column): Відкриті вакансії ТД АВ: https://www.work.ua/jobs/by-company/304819/
+     category: hr (or match the table's convention)
+     priority: 10
+     is_active: true
+   Match the regex-pattern + answer + priority shape the loader expects (the loader
+   orders by priority.desc() and does re.search(pattern, query)).
+3. REMOVE THE WRONG ROW: delete id=11 from alex_preset_answers. Reasoning to confirm
+   in your report: Alex Gradus is the PUBLIC bar-consultant bot — an AVTD recruitment
+   Work.ua link does not belong there; it was an accidental cross-bot insert. (If for
+   some reason you believe Alex SHOULD answer vacancy questions, STOP and flag it
+   rather than deleting — but default is delete.)
+4. RELOAD: confirm how Maya HR's _presets_cache refreshes — does it need a restart or
+   does _load_presets() pick up the new row on next query? If a restart/cache-clear is
+   needed for it to take effect, do it (the previous "live immediately" claim was
+   about the wrong table's loader — verify Maya's).
+5. VERIFY: re-query hr_preset_answers for the ваканс pattern — confirm it's present
+   and active. Confirm alex_preset_answers no longer has id=11.
+
+Report with quoted evidence. Then I will live-test "Які є вакансії" again — it must
+return the Work.ua link, NOT the salary RAG answer.
