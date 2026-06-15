@@ -1,0 +1,96 @@
+# Add Fuzzy Matching to Best Brands Video Trigger
+
+## Problem
+Typos like "best brEnds", "best brends", "bast brands" don't trigger the video - user gets text response instead.
+
+## Solution
+Add fuzzy string matching to handle common typos.
+
+### Implementation
+
+**In `backend/services/bestbrands_video.py`:**
+
+Add fuzzy matching library and update trigger detection:
+```python
+from difflib import SequenceMatcher
+
+def fuzzy_match(str1: str, str2: str, threshold: float = 0.85) -> bool:
+    """
+    Check if two strings are similar (handles typos).
+    
+    Args:
+        str1: First string
+        str2: Second string  
+        threshold: Similarity threshold (0.0 to 1.0)
+        
+    Returns:
+        True if strings are similar enough
+    """
+    ratio = SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+    return ratio >= threshold
+
+def detect_bestbrands_trigger(message_text: str) -> bool:
+    """
+    Detects if user is asking about Best Brands company.
+    Now includes fuzzy matching for typos.
+    """
+    message_lower = message_text.lower().strip()
+    
+    # Core company name variations (exact and fuzzy)
+    company_names = [
+        'best brands',
+        'бест брендс',
+        'bestbrands',
+        'avtd'
+    ]
+    
+    # Question patterns
+    question_patterns = [
+        'розкажи про', 'що таке', 'хто такі',
+        'расскажи о', 'что такое', 'кто такие',
+        'tell me about', 'who is', 'who are', 'about'
+    ]
+    
+    # Check for exact matches first (faster)
+    for name in company_names:
+        if name in message_lower:
+            return True
+    
+    # Check for fuzzy matches (handles typos)
+    words = message_lower.split()
+    for i in range(len(words) - 1):
+        two_word_phrase = f"{words[i]} {words[i+1]}"
+        
+        # Fuzzy match against "best brands"
+        if fuzzy_match(two_word_phrase, "best brands", threshold=0.85):
+            return True
+        if fuzzy_match(two_word_phrase, "бест брендс", threshold=0.85):
+            return True
+    
+    # Check for single-word company references
+    if any(pattern in message_lower for pattern in ['компанію', 'компании', 'про вас']):
+        return True
+    
+    return False
+```
+
+### Test Cases
+
+After implementation, these should ALL trigger video:
+
+**Exact matches (already work):**
+- "розкажи про best brands" ✅
+- "tell me about best brands" ✅
+
+**Typos (should now work):**
+- "best brends" ✅
+- "best brEnds" ✅  
+- "bast brands" ✅
+- "best brandz" ✅
+- "бест бренд" ✅
+
+**Should NOT trigger:**
+- "best practice" ❌
+- "brand new" ❌
+
+Threshold of 0.85 allows 1-2 character differences while avoiding false positives.

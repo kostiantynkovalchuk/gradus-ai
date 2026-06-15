@@ -1,0 +1,367 @@
+You are extending an existing FastAPI + Telegram bot project (Maya HR / Gradus AI).
+Do NOT break any existing functionality. Add Maya Hunt as a new recruitment module.
+
+## CONTEXT
+- Existing bot token env var: TELEGRAM_BOT_TOKEN
+- Existing DB connection: use the same async SQLAlchemy pattern already in the project
+- Existing Claude client: use the same Anthropic client already in the project (Haiku model: claude-haiku-4-5-20251001)
+- Existing webhook handler: backend/routes/telegram_webhook.py
+- Supergroup Chat ID env var: HUNT_TG_SUPERGROUP_ID (value: -1003782695736)
+
+## NEW ENV VARIABLES (already added to Secrets, just use them)
+HUNT_TG_SUPERGROUP_ID          # Telegram supergroup chat ID
+TELETHON_API_ID                # Will be added later
+TELETHON_API_HASH              # Will be added later  
+TELETHON_SESSION               # Will be added later
+WORKUA_EMAIL                   # Will be added later
+WORKUA_PASSWORD                # Will be added later
+
+## DATABASE CHANGES
+Add these tables to the existing Neon PostgreSQL database.
+Create a new migration file following the existing migration pattern in the project:
+
+CREATE TABLE IF NOT EXISTS hunt_vacancies (
+    id SERIAL PRIMARY KEY,
+    tg_message_id BIGINT,
+    tg_thread_id BIGINT,
+    tg_chat_id BIGINT,
+    raw_text TEXT NOT NULL,
+    position VARCHAR(200),
+    city VARCHAR(100),
+    requirements TEXT,
+    salary_max INTEGER,
+    status VARCHAR(50) DEFAULT 'searching',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hunt_candidates (
+    id SERIAL PRIMARY KEY,
+    vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+    source VARCHAR(50),
+    full_name VARCHAR(200),
+    age INTEGER,
+    city VARCHAR(100),
+    experience_years FLOAT,
+    current_role VARCHAR(200),
+    skills TEXT,
+    salary_expectation INTEGER,
+    contact VARCHAR(200),
+    profile_url TEXT,
+    raw_text TEXT,
+    ai_score INTEGER,
+    ai_summary TEXT,
+    hr_decision VARCHAR(20) DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hunt_sources (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100),
+    tg_channel VARCHAR(100),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO hunt_sources (name, tg_channel) VALUES
+('UA Jobs', '@ua_jobs'),
+('Robota UA', '@robota_ua'),
+('Kyiv Jobs', '@kyiv_jobs'),
+('UA Work', '@ua_work'),
+('Jobs Ukraine', '@jobs_ukraine')
+ON CONFLICT DO NOTHING;
+
+## NEW FILES TO CREATE
+
+### backend/services/hunt_vacancy_parser.py
+Use Claude Haiku to parse raw vacancy text into structured data.
+
+async def parse_vacancy(text: str) -> dict:
+    """
+    Call Claude Haiku with this prompt:
+    
+    You are an HR assistant. Parse this job vacancy text and return JSON only.
+    No preamble, no markdown, just raw JSON.
+    
+    Text: {text}
+    
+    Return:
+    {
+      "position": "job title in Ukrainian",
+      "city": "city name or null",
+      "requirements": ["requirement 1", "requirement 2"],
+      "salary_max": integer or null,
+      "keywords": ["keyword1", "keyword2", "keyword3"]
+    }
+    """
+    # Call Claude Haiku, parse JSON response, return dict
+    # If parsing fails return {"position": text[:100], "city": null, 
+    #                          "requirements": [], "salary_max": null, 
+    #                          "keywords": []}
+
+### backend/services/hunt_tg_scraper.py
+Search Telegram job channels for candidates using Telethon.
+
+async def search_tg_channels(vacancy: dict, channels: list) -> list:
+    """
+    If TELETHON_API_ID or TELETHON_API_HASH or TELETHON_SESSION not set:
+        log warning "Telethon credentials not configured, skipping TG scrape"
+        return []
+    
+    Otherwise:
+    - Connect using TelegramClient with session string
+    - For each channel in channels list:
+        - Get messages from last 30 days
+        - Filter messages containing any keyword from vacancy["keywords"]
+        - Filter messages that contain phone number pattern or @username
+        - Extract: text, sender info, message link
+    - Return list of raw candidate dicts:
+      [{"raw_text": "...", "source": "telegram", 
+        "contact": "...", "profile_url": "..."}]
+    """
+
+### backend/services/hunt_workua_scraper.py
+Placeholder for Work.ua CV database search.
+
+async def search_workua(vacancy: dict) -> list:
+    """
+    If WORKUA_EMAIL not set:
+        log warning "Work.ua credentials not configured, skipping"
+        return []
+    
+    Otherwise (implement later):
+    - Authenticate via httpx session
+    - Search: https://www.work.ua/resumes/?search={keywords}&city={city}
+    - Parse results
+    - Return candidate dicts
+    """
+    import os
+    if not os.getenv("WORKUA_EMAIL"):
+        import logging
+        logging.getLogger(__name__).warning(
+            "Work.ua credentials not configured, skipping"
+        )
+        return []
+    return []
+
+### backend/services/hunt_scorer.py
+Score each candidate against vacancy using Claude Haiku.
+
+async def score_candidate(candidate: dict, vacancy: dict) -> dict:
+    """
+    Call Claude Haiku with this prompt:
+    
+    You are an HR assistant scoring a candidate for a vacancy.
+    Return JSON only. No preamble, no markdown.
+    
+    Vacancy: {vacancy_json}
+    Candidate text: {candidate_raw_text}
+    
+    Return:
+    {
+      "score": 0-100,
+      "full_name": "extracted name or Невідомо",
+      "age": integer or null,
+      "city": "extracted city or null",
+      "experience_years": float or null,
+      "current_role": "extracted role or null",
+      "skills": "comma separated skills",
+      "salary_expectation": integer or null,
+      "contact": "phone or @username",
+      "summary": "2 sentence summary in Ukrainian",
+      "strengths": ["strength 1", "strength 2"],
+      "concerns": ["concern 1"]
+    }
+    
+    If parsing fails return {"score": 0, "summary": "Помилка аналізу", 
+                             "strengths": [], "concerns": []}
+    """
+
+### backend/services/hunt_card_formatter.py
+Format candidate data into a Telegram message string.
+
+def format_candidate_card(candidate: dict, score_result: dict, index: int) -> str:
+    """
+    Return formatted string:
+    
+    #{index} | ⭐ {score}/100 | {source_emoji} {source}
+    
+    👤 {full_name}{", " + str(age) + " р." if age else ""}
+    📍 {city or "Місто не вказано"}
+    💼 {experience_years or "?"} р. — {current_role or "Не вказано"}
+    🎯 {strengths joined by " · "}
+    ⚠️ {concerns joined by " · "}
+    💰 {salary_expectation or "?"} $/міс
+    📞 {contact or "Контакт не вказано"}
+    {("🔗 " + profile_url) if profile_url else ""}
+    
+    {summary}
+    """
+    
+source_emoji mapping:
+    "telegram" → "📱"
+    "work.ua" → "💼"
+    "robota.ua" → "🔍"
+    default → "📋"
+
+### backend/services/hunt_service.py
+Main orchestration service.
+
+async def run_hunt(vacancy_id: int, vacancy_text: str, 
+                   thread_id: int, chat_id: int, db):
+    """
+    1. Parse vacancy → update hunt_vacancies with parsed fields
+    
+    2. Send status message to TG thread:
+       "🔍 Шукаю кандидатів...\n⏳ Це займе 1-2 хвилини"
+       Save this message_id for potential editing later
+    
+    3. Get active sources from hunt_sources table
+    
+    4. Run scrapers in parallel:
+       results = await asyncio.gather(
+           search_tg_channels(vacancy, sources),
+           search_workua(vacancy),
+           return_exceptions=True
+       )
+       Flatten results, ignore exceptions (log them)
+    
+    5. If total results == 0:
+       Send to thread: 
+       "⚠️ Кандидатів не знайдено.\n💡 Спробуйте переформулювати вакансію або розширити вимоги."
+       Update vacancy status to 'no_results'
+       Return
+    
+    6. Score all candidates with Claude Haiku in parallel (max 10):
+       scored = await asyncio.gather(*[
+           score_candidate(c, vacancy) for c in results[:10]
+       ])
+    
+    7. Merge score_result back into candidate dicts
+    
+    8. Sort by score descending, take top 5
+    
+    9. Save ALL scored candidates to hunt_candidates table
+    
+    10. Edit status message to:
+        "✅ Знайдено {total} кандидатів. Показую топ {min(5,total)}:"
+    
+    11. For each top candidate (index 1-5):
+        - Format card using format_candidate_card()
+        - Send to TG thread with inline keyboard:
+          [✅ В роботу] [❌ Пропустити] [💾 Зберегти]
+          callback_data: 
+            "hunt_approve_{candidate_id}"
+            "hunt_reject_{candidate_id}"  
+            "hunt_save_{candidate_id}"
+        - Small delay between cards: await asyncio.sleep(0.5)
+    
+    12. Send final message to thread:
+        "──────────────────\n🔄 Потрібно більше кандидатів?\nВідправте вакансію ще раз або уточніть вимоги."
+    
+    13. Update vacancy status to 'completed'
+    """
+
+## MODIFICATIONS TO EXISTING FILES
+
+### backend/routes/telegram_webhook.py
+
+CHANGE 1 — Add supergroup routing at the very beginning of message handling.
+Find where "message" is extracted from update and add routing BEFORE 
+any existing HR logic:
+
+import os
+HUNT_SUPERGROUP_ID = int(os.getenv("HUNT_TG_SUPERGROUP_ID", "0"))
+
+# Inside message handler, right after extracting chat_id:
+if chat_id == HUNT_SUPERGROUP_ID:
+    # Only process messages from Topics (thread_id exists) 
+    # or from General (no thread) — never process bot's own messages
+    from_bot = message.get("from", {}).get("is_bot", False)
+    if not from_bot:
+        asyncio.create_task(handle_hunt_vacancy(message, db))
+    return  # Don't process through normal HR flow
+
+async def handle_hunt_vacancy(message: dict, db):
+    """
+    - Extract: text, message_id, thread_id (message_thread_id), chat_id
+    - If text is empty or None: return silently
+    - If text starts with /: return silently (ignore commands)
+    - Save to hunt_vacancies table
+    - Call run_hunt(vacancy_id, text, thread_id, chat_id, db)
+    """
+
+CHANGE 2 — Add callback handler for hunt decisions.
+Find existing callback_query handler and add hunt decision handling:
+
+if callback_data.startswith("hunt_"):
+    await handle_hunt_decision(callback_query, db)
+    return
+
+async def handle_hunt_decision(callback_query: dict, db):
+    """
+    - Parse callback_data: "hunt_{decision}_{candidate_id}"
+    - decision options: approve, reject, save
+    - Update hunt_candidates.hr_decision:
+        approve → "approved"
+        reject  → "rejected"
+        save    → "saved"
+    - Edit the message reply_markup to show only the chosen action:
+        approve → "✅ Взято в роботу"
+        reject  → "❌ Відхилено"
+        save    → "💾 Збережено"
+    - Answer callback query with confirmation text
+    - Log decision
+    """
+
+### backend/routes/hr_routes.py (or wherever admin dashboard routes are)
+Add new endpoint: GET /hr/hunt
+
+Return JSON with:
+{
+  "total_vacancies": count,
+  "total_candidates": count,
+  "decisions": {
+    "approved": count,
+    "rejected": count,
+    "saved": count,
+    "pending": count
+  },
+  "recent_vacancies": [
+    {
+      "id": ...,
+      "position": ...,
+      "city": ...,
+      "status": ...,
+      "candidates_count": ...,
+      "created_at": ...
+    }
+  ] // last 10
+}
+
+## DEPENDENCIES TO ADD to requirements.txt
+telethon
+beautifulsoup4
+
+(httpx is likely already installed)
+
+## CRITICAL RULES
+- ALL Telegram messages must be in Ukrainian
+- If any scraper fails or returns empty → continue with other sources, never crash
+- If ALL scrapers return empty → send friendly message to TG thread
+- Never respond to bot's own messages in supergroup (check is_bot flag)
+- Never process command messages (starting with /) in supergroup
+- Use asyncio.create_task() for run_hunt to avoid blocking the webhook response
+- Keep all existing HR bot functionality 100% intact
+- Use same DB session/connection pattern as existing code
+- Use same error handling pattern as existing code
+- Log all hunt operations with logger.info/warning/error
+
+## TESTING
+After implementation, add a test endpoint:
+POST /hunt/test
+Body: {"text": "Шукаємо торгового представника, Київ, досвід від 1 року, права B"}
+
+This should:
+1. Parse the vacancy
+2. Return parsed JSON (skip actual scraping)
+3. Confirm the module is working

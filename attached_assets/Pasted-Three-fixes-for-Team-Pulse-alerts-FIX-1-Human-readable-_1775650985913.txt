@@ -1,0 +1,60 @@
+Three fixes for Team Pulse alerts:
+
+=== FIX 1: Human-readable trigger types in Ukrainian ===
+
+In the HR alert message builder (alert_hr_team_identified and alert_hr_pulse_problem 
+in telegram_webhook.py or pulse_service.py), add a translation dict:
+
+TRIGGER_LABELS = {
+    "звільнення": "Звільнення",
+    "resignation": "Звільнення",
+    "conflict": "Конфлікт з колегами",
+    "burnout": "Вигорання / втома",
+    "rights": "Питання про права",
+    "survey_colleagues": "Опитування: проблема з колегами",
+    "survey_manager": "Опитування: проблема з керівником",
+    "survey_tasks": "Опитування: складність задач",
+    "survey_other": "Опитування: інше",
+}
+
+Use it everywhere trigger_type is displayed:
+  label = TRIGGER_LABELS.get(trigger_type, trigger_type)
+
+Apply in:
+a) HR alert message text (the history lines: "🟡 08.04 — surveymanager" → "🟡 08.04 — Проблема з керівником")
+b) Dashboard pulse-alerts endpoint (return translated labels)
+c) Dashboard pulse-risk-history endpoint
+
+=== FIX 2: Double video on "як звільнитися" ===
+
+When user sends "як звільнитися":
+1. Pulse trigger detection fires → sends pulse_decision video
+2. Preset q26 also fires → sends offboarding video
+
+Result: user gets TWO videos — one from pulse, one from preset.
+
+Fix: In the trigger processing code in telegram_webhook.py, 
+when trigger_type is "звільнення" (resignation), do NOT send pulse video.
+The preset system will handle the video response.
+
+Find the line that calls send_pulse_video() for resignation triggers 
+and skip it:
+
+if trigger_type != "звільнення" and trigger_type != "resignation":
+    await send_pulse_video(chat_id, video_id)
+
+OR simply remove video sending for red (resignation) triggers entirely — 
+the HR alert is the important part, the video comes from the preset.
+
+=== FIX 3: Risk score capped at 10 ===
+
+Current: "Рівень ризику: 15/10" — makes no sense.
+
+In update_risk_score(), cap the score:
+  current_score = LEAST(current_score + :pts, 10)
+
+And in the alert message builder, cap display:
+  risk_display = min(risk_score, 10)
+
+Also in the DB update:
+  SET current_score = LEAST(pulse_risk_scores.current_score + :pts, 10)

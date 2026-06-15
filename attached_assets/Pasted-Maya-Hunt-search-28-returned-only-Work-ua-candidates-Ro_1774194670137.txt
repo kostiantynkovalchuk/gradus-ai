@@ -1,0 +1,52 @@
+Maya Hunt search #28 returned only Work.ua candidates. Robota.ua and Telegram scrapers 
+appear to be silent — no log lines from them at all.
+
+Diagnose and fix:
+
+1. Read backend/services/hunt_service.py — find the _scrape_round() function.
+   Show me the exact asyncio.gather call. Are all 4 sources actually called?
+   Is search_robotaua imported correctly?
+
+2. Check if there are any try/except blocks swallowing errors silently.
+   Each scraper should log at least ONE line even if it returns [].
+   
+3. Add explicit logging at the START of each scraper function:
+   - hunt_tg_scraper.py → scrape_telegram_channels(): 
+     logger.info(f"TG scraper started: {len(channels)} channels, depth={depth_days}d")
+   - hunt_robotaua_scraper.py → search_robotaua():
+     logger.info(f"Robota.ua CV search started: position={vacancy.get('position')}, city={vacancy.get('city')}")
+   - hunt_robotaua_applies.py → search_robotaua_applies():
+     logger.info(f"Robota.ua applies search started")
+   - hunt_workua_scraper.py already logs — OK
+
+4. At the END of each scraper, ensure there's a log line:
+     logger.info(f"Robota.ua CV search complete: {len(candidates)} candidates")
+     logger.info(f"TG scraper complete: {len(candidates)} candidates")
+     logger.info(f"Robota.ua applies complete: {len(candidates)} candidates")
+
+5. In _scrape_round(), after asyncio.gather, add:
+     logger.info(f"Round {round_num} scrape results: TG={len(tg_results)}, WorkUA={len(workua_results)}, RobotaUA={len(robotaua_results)}, Applies={len(applies_results)}")
+
+6. Check if the Robota.ua scraper is failing silently:
+   - Is ROBOTAUA_EMAIL set in env? 
+   - Is ROBOTAUA_PASSWORD set in env?
+   - Does login_robotaua() succeed?
+   - Does the /cvdb/resumes endpoint return data?
+   
+   Run a quick test:
+   python3 -c "
+   import asyncio
+   from services.robotaua_auth import login_robotaua
+   async def test():
+       token = await login_robotaua()
+       print(f'Token: {token[:20]}...' if token else 'NO TOKEN')
+   asyncio.run(test())
+   "
+
+7. Check Telegram scraper:
+   - Are TELETHON_API_ID, TELETHON_API_HASH, TELETHON_SESSION set?
+   - Is the scraper returning [] because of missing credentials?
+
+8. After adding logging, trigger a test search and show me the full log output.
+
+Do NOT change scraping logic — only add logging and diagnose.

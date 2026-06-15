@@ -1,0 +1,37 @@
+AUDIT ONLY — read and report, change nothing. Final pre-flight before the
+access_level normalization fix. Decided: canonical value is 'hr_admin'; all 4
+hr_admin users confirmed legitimate; the CHECK constraint goes on hr_users ONLY
+(hr_whitelist is left unconstrained because it intentionally carries non-standard
+values); Фелікс's hr_whitelist row is OUT OF SCOPE — do not touch, delete, or
+investigate it; code + migration ship together. This audit confirms the mechanics
+before we write the fix. Report as a list. Do not write the fix.
+
+1. RE-CONFIRM the 4 hr_admin users in hr_users by full_name + access_level only:
+   Natalia Reshetilova, Борко Юлия, Куцая Виктория, Михайлова Ирина. Confirm each is
+   access_level='hr_admin' and is_active=true. These 4 GAIN /admin, /adduser, /logs,
+   /stats, and document-upload the moment the code ships — list this back as the
+   explicit grant so I sign off on what YOU see.
+
+2. NATALIA'S WHITELIST ROW: confirm the hr_whitelist row with access_level='admin_hr'
+   is Natalia Reshetilova (full_name only). Report whether a matching hr_users row
+   already exists for her (by telegram_id or phone) and, if so, its access_level. We
+   need to know if fixing the whitelist row alone suffices or if an hr_users row also
+   needs correcting. (This is the ONLY hr_whitelist row in scope.)
+
+3. EXHAUSTIVE string sweep: re-grep all of backend/ for the literal 'admin_hr'
+   (word-boundary, to exclude 'hr_admin'). Produce the COMPLETE file:line list.
+   Cross-check against the 10 known sites; report any NOT already listed. We must not
+   miss one and re-create the split.
+
+4. CHECK CONSTRAINT target (hr_users ONLY): GROUP BY access_level on hr_users. Report
+   the value set and confirm it is fully covered by
+   ('employee','contractor','hr_admin','admin_it','developer'). Flag anything that
+   would violate that constraint. Do NOT analyze hr_whitelist for the constraint — it
+   is deliberately unconstrained.
+
+5. MIGRATION NUMBER: SELECT max(version) FROM schema_migrations. Report it and the
+   next integer.
+
+Report only. On sign-off, the implementation covers: one migration (fix Natalia's
+whitelist row + add CHECK on hr_users only) + code rename at all sites + Rule 5
+import reconciliation. Фелікс's row and hr_whitelist constraints are NOT part of it.

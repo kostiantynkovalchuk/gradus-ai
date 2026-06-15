@@ -1,0 +1,97 @@
+We are adding a Telegram public channel auto-posting feature to the GradusMedia backend.
+
+## Context
+- Backend: Python/FastAPI on Render (gradus-ai.onrender.com)
+- DB: Neon PostgreSQL with automated migration system at backend/db_migrations.py
+- Bot: @gradusai_bot (token in env var TELEGRAM_BOT_TOKEN)
+- Existing flow: articles go through Telegram approval group → ✅ Approve button already works
+- Public channel: @gradus_media_ua (ID: -1003885641833), stored in env var GRADUS_CHANNEL_ID
+
+## Task: Add publish queue + scheduler
+
+### Step 1 — DB Migration
+Add a new migration to backend/db_migrations.py (next in sequence after existing ones):
+```sql
+ALTER TABLE articles 
+  ADD COLUMN IF NOT EXISTS channel_status VARCHAR(20) DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS channel_scheduled_at TIMESTAMP WITH TIME ZONE,
+  ADD COLUMN IF NOT EXISTS channel_posted_at TIMESTAMP WITH TIME ZONE;
+
+-- channel_status values: 'pending' | 'queued' | 'posted' | 'failed'
+
+CREATE INDEX IF NOT EXISTS idx_articles_channel_queue 
+  ON articles(channel_status, channel_scheduled_at) 
+  WHERE channel_status = 'queued';
+```
+
+### Step 2 — Queue on Approval
+When an article is approved (existing approval handler), after saving approved status, also:
+1. Find the next available posting slot that has no article assigned
+2. Posting slots (Kyiv time UTC+2): 08:00, 13:00, 19:00
+3. If today's next slot is still free → schedule for today, else schedule for tomorrow's 08:00
+4. Set channel_status = 'queued', channel_scheduled_at = computed slot (stored as UTC in DB)
+5. Send confirmation message back in the approval group:
+   "📅 Стаття додана в чергу публікації: [дата] о [час] за Києвом"
+
+### Step 3 — Scheduler
+Use APScheduler (AsyncIOScheduler) integrated into the FastAPI app startup.
+
+Schedule a job to run every 5 minutes that:
+1. Queries articles WHERE channel_status = 'queued' AND channel_scheduled_at <= NOW()
+2. For each found article (should be max 1 per slot normally):
+   a. Download the image from the article's image_url field
+   b. Build the caption (Ukrainian only, max 1024 characters):
+  📌 {article.title}
+
+  {truncated article.content — fit within 1024 chars total including title and link below}
+
+  👉 Читати повністю: https://gradusmedia-frontend.pages.dev/article/{article.id}
+
+  #GradusAI #HoReCa #Бар #Маркетинг
+      Truncate content so the full caption stays under 1024 characters. Add "..." after truncated content.
+   c. Send photo to GRADUS_CHANNEL_ID (-1003885641833) using:
+      bot.send_photo(chat_id, photo=image_bytes, caption=caption, parse_mode='HTML')
+   d. On success: set channel_status = 'posted', channel_posted_at = NOW()
+   e. On failure: set channel_status = 'failed', log the error, notify the approval group:
+      "❌ Помилка публікації в канал: {article.title} — {error}"
+
+### Step 4 — Startup Recovery
+On FastAPI app startup, before the scheduler begins:
+- Query any articles WHERE channel_status = 'queued' AND channel_scheduled_at <= NOW()
+- Post them immediately (they were missed due to Render cold start or downtime)
+- This prevents articles from being permanently stuck in the queue
+
+### Step 5 — New API Endpoint
+Add GET /api/channel-queue endpoint that returns:
+```json
+{
+  "queued": [
+    {
+      "id": 1,
+      "title": "...",
+      "scheduled_at": "2026-03-16T08:00:00+02:00"
+    }
+  ],
+  "posted_today": 2,
+  "next_slot": "2026-03-16T13:00:00+02:00"
+}
+```
+
+### Step 6 — Environment Variables
+The following env var must be present in Render:
+- GRADUS_CHANNEL_ID = -1003885641833
+
+Add apscheduler to requirements.txt if not already present.
+
+### Important constraints:
+- Max 1 article per time slot per day — if a slot is already taken, move to the next available one
+- If multiple articles are approved back-to-back, they queue into future slots in order:
+  08:00 → 13:00 → 19:00 → next day 08:00 → next day 13:00 → etc.
+- All times stored as UTC in DB, displayed as Kyiv time (Europe/Kyiv, UTC+2) in Telegram messages
+- Do NOT re-post articles where channel_status = 'posted' under any circumstance
+- Image is already stored in article.image_url — download and send as bytes, do not regenerate
+
+Run the migration on startup. After deploying, test by approving a test article and confirming:
+1. Approval group receives "📅 Стаття додана в чергу..." message with correct Kyiv time
+2. GET /api/channel-queue returns the queued article with correct scheduled_at
+3. At the next scheduled slot, the article is posted to @gradus_media_ua with image and caption

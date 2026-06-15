@@ -1,0 +1,441 @@
+Perfect! Now let's add Telegram Quick Approval - the ability to approve/reject content directly from Telegram notifications with inline buttons!
+
+🎯 OBJECTIVE:
+Enable one-click approval/rejection of content directly from Telegram notifications using inline keyboard buttons.
+
+📋 IMPLEMENTATION:
+
+1. UPDATE backend/services/notification_service.py:
+
+Modify send_approval_notification to send photo with inline keyboard:
+```python
+import os
+import requests
+from typing import Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
+class NotificationService:
+    def __init__(self):
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+        self.app_url = os.getenv('APP_URL', 'http://localhost:8000')  # For webhook callbacks
+    
+    def send_approval_notification(self, content_data: Dict[str, Any]) -> bool:
+        """
+        Send notification with photo and inline approval buttons
+        
+        Args:
+            content_data: Dict with content info including image_url
+        """
+        if not self.bot_token or not self.chat_id:
+            logger.error("Telegram credentials not configured")
+            return False
+        
+        content_id = content_data.get('id')
+        title = content_data.get('title', 'No title')
+        translated_text = content_data.get('translated_text', '')
+        image_url = content_data.get('image_url')
+        source = content_data.get('source', 'The Spirits Business')
+        
+        # Truncate text to 150 chars for preview
+        preview_text = translated_text[:150] + "..." if len(translated_text) > 150 else translated_text
+        
+        # Caption with preview
+        caption = f"""🆕 <b>Новий контент для перевірки</b>
+
+📰 <b>{title}</b>
+
+🇺🇦 {preview_text}
+
+📰 {source}
+🔗 ID: {content_id}
+⏰ {content_data.get('created_at', '')}"""
+        
+        # Inline keyboard with buttons
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Approve & Post", "callback_data": f"approve_{content_id}"},
+                    {"text": "❌ Reject", "callback_data": f"reject_{content_id}"}
+                ],
+                [
+                    {"text": "👁️ View Full in Dashboard", "url": f"http://localhost:5000/content-approval"}
+                ]
+            ]
+        }
+        
+        try:
+            if image_url:
+                # Send photo with caption and buttons
+                url = f"{self.base_url}/sendPhoto"
+                payload = {
+                    "chat_id": self.chat_id,
+                    "photo": image_url,
+                    "caption": caption,
+                    "parse_mode": "HTML",
+                    "reply_markup": keyboard
+                }
+            else:
+                # Send text message with buttons
+                url = f"{self.base_url}/sendMessage"
+                payload = {
+                    "chat_id": self.chat_id,
+                    "text": caption,
+                    "parse_mode": "HTML",
+                    "reply_markup": keyboard
+                }
+            
+            response = requests.post(url, json=payload, timeout=15)
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info(f"Approval notification sent for content {content_id}")
+                return True
+            else:
+                logger.error(f"Telegram API error: {result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to send approval notification: {e}")
+            return False
+    
+    # Keep existing methods: notify_content_approved, notify_content_posted
+```
+
+2. UPDATE backend/services/translation_service.py:
+
+Ensure image_url is passed to notification:
+```python
+def translate_article_with_notification(self, article_data: Dict, article_id: int, image_url: str = None) -> tuple:
+    """
+    Translate article and send notification with image
+    
+    Returns:
+        Tuple of (translation, notification_sent)
+    """
+    translation = self.translate_article(article_data)
+    
+    if translation:
+        # Send Telegram notification with image
+        notification_data = {
+            'id': article_id,
+            'source': 'The Spirits Business',
+            'title': article_data.get('title', 'No title'),
+            'translated_text': translation,
+            'image_url': image_url,  # Include image URL
+            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')
+        }
+        
+        try:
+            notification_sent = self.notification_service.send_approval_notification(notification_data)
+            logger.info(f"Notification sent for article {article_id}")
+        except Exception as e:
+            logger.error(f"Failed to send notification: {e}")
+            notification_sent = False
+        
+        return (translation, notification_sent)
+    
+    return (None, False)
+```
+
+3. CREATE backend/services/telegram_webhook.py:
+
+Handle Telegram callback queries:
+```python
+import logging
+from typing import Dict
+from sqlalchemy.orm import Session
+from models import ContentQueue
+from datetime import datetime
+from services.facebook_poster import FacebookPoster
+from services.notification_service import NotificationService
+
+logger = logging.getLogger(__name__)
+
+class TelegramWebhookHandler:
+    def __init__(self):
+        self.facebook_poster = FacebookPoster()
+        self.notification_service = NotificationService()
+    
+    def handle_callback_query(self, callback_query: Dict, db: Session) -> Dict:
+        """
+        Handle Telegram inline button callbacks
+        
+        Args:
+            callback_query: Telegram callback query data
+            db: Database session
+            
+        Returns:
+            Dict with status and message
+        """
+        callback_id = callback_query.get('id')
+        callback_data = callback_query.get('data')
+        message = callback_query.get('message')
+        
+        if not callback_data:
+            return {"status": "error", "message": "No callback data"}
+        
+        # Parse callback data
+        if callback_data.startswith('approve_'):
+            content_id = int(callback_data.split('_')[1])
+            return self._approve_content(content_id, callback_id, message, db)
+            
+        elif callback_data.startswith('reject_'):
+            content_id = int(callback_data.split('_')[1])
+            return self._reject_content(content_id, callback_id, message, db)
+        
+        return {"status": "error", "message": "Unknown callback data"}
+    
+    def _approve_content(self, content_id: int, callback_id: str, message: Dict, db: Session) -> Dict:
+        """Approve content and post to Facebook"""
+        
+        try:
+            # Get article from database
+            article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
+            
+            if not article:
+                return {"status": "error", "message": "Article not found"}
+            
+            if article.status != 'pending_approval':
+                return {"status": "error", "message": f"Article already {article.status}"}
+            
+            # Update status
+            article.status = 'approved'
+            article.reviewed_at = datetime.now()
+            article.reviewed_by = 'telegram_bot'
+            db.commit()
+            
+            # Prepare data for Facebook posting
+            post_data = {
+                'translated_title': article.translated_title or (article.extra_metadata.get('title', '') if article.extra_metadata else ''),
+                'translated_content': article.translated_text or '',
+                'url': article.source_url,
+                'source': article.extra_metadata.get('source', 'The Spirits Business') if article.extra_metadata else 'The Spirits Business',
+                'author': article.extra_metadata.get('author', '') if article.extra_metadata else '',
+                'image_url': article.image_url
+            }
+            
+            # Post to Facebook
+            fb_result = self.facebook_poster.post_with_image(post_data)
+            
+            if fb_result:
+                # Update database
+                article.status = 'posted'
+                article.posted_at = datetime.now()
+                
+                if not article.extra_metadata:
+                    article.extra_metadata = {}
+                article.extra_metadata['fb_post_id'] = fb_result['post_id']
+                article.extra_metadata['fb_post_url'] = fb_result['post_url']
+                
+                db.commit()
+                
+                # Update Telegram message
+                self._update_telegram_message(
+                    message,
+                    f"✅ <b>Затверджено і опубліковано!</b>\n\n📱 Facebook: {fb_result['post_url']}\n⏰ {datetime.now().strftime('%H:%M, %d %b %Y')}"
+                )
+                
+                # Answer callback query
+                self._answer_callback_query(callback_id, "✅ Posted to Facebook!")
+                
+                # Send posted notification
+                posted_data = {
+                    'id': content_id,
+                    'title': post_data['translated_title'],
+                    'platforms': ['Facebook'],
+                    'fb_post_url': fb_result['post_url'],
+                    'posted_at': fb_result['posted_at']
+                }
+                self.notification_service.notify_content_posted(posted_data)
+                
+                return {"status": "success", "fb_post_url": fb_result['post_url']}
+            else:
+                # Posting failed but approved
+                self._answer_callback_query(callback_id, "⚠️ Approved but posting failed")
+                return {"status": "partial_success", "message": "Approved but Facebook posting failed"}
+                
+        except Exception as e:
+            logger.error(f"Error approving content {content_id}: {e}")
+            self._answer_callback_query(callback_id, f"❌ Error: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    def _reject_content(self, content_id: int, callback_id: str, message: Dict, db: Session) -> Dict:
+        """Reject content"""
+        
+        try:
+            article = db.query(ContentQueue).filter(ContentQueue.id == content_id).first()
+            
+            if not article:
+                return {"status": "error", "message": "Article not found"}
+            
+            # Update status
+            article.status = 'rejected'
+            article.reviewed_at = datetime.now()
+            article.reviewed_by = 'telegram_bot'
+            article.rejection_reason = 'Rejected via Telegram'
+            db.commit()
+            
+            # Update Telegram message
+            self._update_telegram_message(
+                message,
+                f"❌ <b>Відхилено</b>\n\n🗑️ Контент відхилено через Telegram\n⏰ {datetime.now().strftime('%H:%M, %d %b %Y')}"
+            )
+            
+            # Answer callback query
+            self._answer_callback_query(callback_id, "❌ Rejected")
+            
+            return {"status": "success", "message": "Content rejected"}
+            
+        except Exception as e:
+            logger.error(f"Error rejecting content {content_id}: {e}")
+            self._answer_callback_query(callback_id, f"❌ Error: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    def _update_telegram_message(self, message: Dict, new_text: str):
+        """Update Telegram message text"""
+        import requests
+        
+        chat_id = message['chat']['id']
+        message_id = message['message_id']
+        
+        url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/editMessageCaption"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "caption": new_text,
+            "parse_mode": "HTML"
+        }
+        
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            logger.error(f"Failed to update message: {e}")
+    
+    def _answer_callback_query(self, callback_id: str, text: str):
+        """Answer callback query to remove loading state"""
+        import requests
+        
+        url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/answerCallbackQuery"
+        payload = {
+            "callback_query_id": callback_id,
+            "text": text,
+            "show_alert": False
+        }
+        
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            logger.error(f"Failed to answer callback: {e}")
+```
+
+4. ADD WEBHOOK ENDPOINT in backend/main.py:
+```python
+from services.telegram_webhook import TelegramWebhookHandler
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(update: dict, db: Session = Depends(get_db)):
+    """
+    Telegram webhook endpoint for callback queries
+    Handles approve/reject button clicks from Telegram
+    """
+    logger.info(f"Received Telegram update: {update}")
+    
+    if 'callback_query' in update:
+        webhook_handler = TelegramWebhookHandler()
+        result = webhook_handler.handle_callback_query(update['callback_query'], db)
+        return result
+    
+    return {"ok": True}
+
+@app.get("/api/telegram/set-webhook")
+async def set_telegram_webhook():
+    """
+    Set Telegram webhook URL
+    Call this once to configure the webhook
+    """
+    import requests
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    # Get webhook URL - use Replit URL or your deployed URL
+    webhook_url = f"{os.getenv('APP_URL', 'https://your-repl-url.repl.co')}/api/telegram/webhook"
+    
+    url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
+    payload = {"url": webhook_url}
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        result = response.json()
+        
+        if result.get('ok'):
+            return {
+                "status": "success",
+                "message": "Webhook set successfully",
+                "webhook_url": webhook_url
+            }
+        else:
+            return {
+                "status": "error",
+                "message": result.get('description', 'Unknown error')
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/telegram/webhook-info")
+async def get_webhook_info():
+    """Get current webhook information"""
+    import requests
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    url = f"https://api.telegram.org/bot{bot_token}/getWebhookInfo"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+5. UPDATE scheduler to pass image_url to notification:
+
+In backend/services/scheduler.py, modify translate_pending_task:
+```python
+# After image generation, send notification with image
+notification_data = {
+    'id': article.id,
+    'source': article.extra_metadata.get('source', '') if article.extra_metadata else '',
+    'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+    'translated_text': article.translated_text,
+    'image_url': article.image_url,  # Include image URL!
+    'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
+}
+notification_service.send_approval_notification(notification_data)
+```
+
+🧪 SETUP & TESTING:
+
+1. Get your Replit URL:
+   - Find it in the webview URL bar
+   - Format: https://[repl-name].[username].repl.co
+
+2. Set webhook:
+curl "http://localhost:8000/api/telegram/set-webhook"
+
+3. Test notification:
+   - Trigger scrape → translate → image → notification
+   - Check Telegram - should have image + buttons!
+
+4. Test approval:
+   - Click "✅ Approve & Post" in Telegram
+   - Should auto-post to Facebook
+   - Message updates to show "Posted!"
+
+⚠️ IMPORTANT:
+- Webhook needs public URL (Replit provides this automatically)
+- Each Replit restart changes the URL - webhook needs re-setting
+- For production, use Railway with stable URL
+
+Please implement Telegram Quick Approval with inline buttons!

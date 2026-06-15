@@ -1,0 +1,98 @@
+Fix the court search in backend/solomon_search.py. The API returns HTML, not JSON — we need to parse an embedded JavaScript variable from the response.
+Full replacement for the search_decisions() function:
+pythondef search_decisions(params: dict) -> list:
+    JUSTICE_CODES = {
+        "цивільні": 1, "кримінальні": 5,
+        "господарські": 3, "адміністративні": 4, "всі": None,
+    }
+    JUDGMENT_CODES = {
+        "постанови": 2, "рішення": 4, "всі": None,
+    }
+
+    justice_code = JUSTICE_CODES.get(params.get("justice_type", "всі"))
+    judgment_code = JUDGMENT_CODES.get(params.get("judgment_type", "постанови"), 2)
+    date_range = params.get("date_range", "2")
+    limit = int(params.get("limit", 5))
+    search_text = " ".join(params.get("search_text", "").split()[:5])
+
+    query_params = {
+        "text": search_text,
+        "stage": "cassation",
+    }
+    if judgment_code:
+        query_params["justice_code"] = str(judgment_code)
+    if justice_code:
+        query_params["judgment_code"] = str(justice_code)
+    if date_range and date_range != "0":
+        query_params["adjudication_date_year"] = str(date_range)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://court.opendatabot.ua/",
+        "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.8",
+    }
+
+    resp = requests.get(
+        "https://court.opendatabot.ua/search",
+        params=query_params,
+        headers=headers,
+        timeout=30,
+    )
+    logger.info(f"Court status: {resp.status_code}")
+    logger.info(f"Court URL: {resp.url}")
+
+    if resp.status_code != 200:
+        logger.warning(f"Court error: {resp.text[:200]}")
+        return []
+
+    # Response is HTML with embedded window.__INITIAL_STATE__ JSON
+    html = resp.text
+    marker = "window.__INITIAL_STATE__='"
+    idx = html.find(marker)
+    if idx == -1:
+        logger.warning("Solomon: __INITIAL_STATE__ not found in response")
+        logger.info(f"Court preview: {html[:300]}")
+        return []
+
+    start = idx + len(marker)
+    end = html.find("';</script>", start)
+    if end == -1:
+        end = html.find("'</script>", start)
+    if end == -1:
+        logger.warning("Solomon: could not find end of __INITIAL_STATE__")
+        return []
+
+    raw_json = html[start:end]
+    # Unescape the embedded JSON
+    raw_json = raw_json.replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
+
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        logger.error(f"Solomon: JSON parse error: {e}")
+        logger.info(f"Raw JSON preview: {raw_json[:300]}")
+        return []
+
+    judgments = data.get("pageData", {}).get("judgments", [])
+    logger.info(f"Solomon: found {len(judgments)} judgments")
+
+    results = []
+    for j in judgments[:limit]:
+        link = j.get("link", "")
+        if link and not link.startswith("http"):
+            link = f"https://court.opendatabot.ua{link}"
+        results.append({
+            "cause_number": j.get("cause_number", "—"),
+            "adjudication_date": j.get("adjudication_date", "")[:10],
+            "judge": j.get("judge", "—"),
+            "court_name": j.get("court_name", ""),
+            "justice_name": j.get("justice_name", ""),
+            "link": link,
+            "doc_id": str(j.get("doc_id", "")),
+        })
+
+    return results
+Also add import json at the top of solomon_search.py if not already present.
+
+The root cause was the Accept header — the server requires text/html and returns 404 for anything else. Plus the response parsing was wrong (it's HTML, not JSON).

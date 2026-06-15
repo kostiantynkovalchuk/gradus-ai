@@ -1,0 +1,203 @@
+# Edition-date gap fix
+
+**Context:** Phase 4 ingest left `current_edition_date` NULL on all 19 active sources because `/print1` pages don't carry the "Редакція від" header — that lives on the canonical (non-print) page, rendered above the document body. `_fetch_current_edition()` and `_parse_edition_header()` are already correct; they just need to be wired against the canonical page while `_chunk_by_article()` keeps consuming the `/print1` body.
+
+**Scope:** surgical. Split the single fetch into two. Add a backfill that updates the 19 existing rows without touching Pinecone.
+
+**Branch:** `fix/kb-edition-date-backfill`
+
+---
+
+## Step 1 — Verify the header parses on at least one real page
+
+Before writing code, confirm the regex still matches. Pick ЦК (435-15):
+
+```bash
+curl -s "https://zakon.rada.gov.ua/laws/show/435-15" | grep -oE "Редакція від [0-9]{2}\.[0-9]{2}\.[0-9]{4}, підстава - [^<\s]+" | head -3
+```
+
+Expected output along the lines of:
+```
+Редакція від 25.05.2026, підстава - 4824-IX
+```
+
+If the regex doesn't match, the page structure changed — inspect the HTML around "Редакція від" and update the regex in `_parse_edition_header()` before continuing. Test it against at least 3 sources spanning different doc types (a кодекс, a закон, a наказ — say 435-15, 1023-12, z0128-98) to confirm the pattern is consistent.
+
+Possible variants the regex must tolerate:
+- Standard: `Редакція від 25.05.2026, підстава - 4824-IX`
+- Laws never amended (no edition history): pattern absent entirely — function should return `(None, None, None, None)` without raising
+- Future-edition line: `Остання подія — Редакція, відбудеться пізніше, підстава - 3153-IX` — already handled by existing `m_next` regex
+
+If `_parse_edition_header()` raises on the never-amended case, wrap the regex calls in defensive `if m is not None` checks.
+
+## Step 2 — Split the fetch in `ingest_law()`
+
+`backend/solomon/contracts/kb_ingest.py`. The current flow fetches once and feeds the result to both the header parser and the chunker. Change it to two fetches:
+
+```python
+def ingest_law(law_code: str) -> dict:
+    source = db.session.query(SolomonKbSource).filter_by(law_code=law_code).first()
+    if not source:
+        raise ValueError(f"Law {law_code} not in approved registry")
+    if source.status != 'active':
+        raise ValueError(f"Law {law_code} has status {source.status}, not active")
+
+    # 1. Fetch CANONICAL page for the edition header.
+    #    `_fetch_current_edition` follows the "Це не поточна редакція" redirect if present,
+    #    so `final_canonical_url` is the URL of the CURRENT edition.
+    canonical_html, final_canonical_url = _fetch_current_edition(
+        source.canonical_url, max_hops=3
+    )
+    edition_date, edition_basis, next_basis, next_date = _parse_edition_header(canonical_html)
+
+    # 2. Fetch /print1 of THE SAME current edition for the body text.
+    #    Append /print1 to `final_canonical_url`, NOT to `source.canonical_url` —
+    #    otherwise you risk pulling the print form of a stale edition while your
+    #    header reports the current one.
+    print_url = final_canonical_url.rstrip("/") + "/print1"
+    print_resp = requests.get(print_url, timeout=30)
+    print_resp.raise_for_status()
+    print_html = print_resp.text
+
+    chunks = _chunk_by_article(
+        print_html,
+        source_id=source.id,
+        source_title=source.law_name,
+        official_url=print_url,
+    )
+
+    # 3-6. Embed, delete-existing, upsert (unchanged from current implementation)
+    ...
+
+    # 7. Persist edition info to registry
+    source.current_edition_date = edition_date
+    source.current_edition_basis = edition_basis
+    source.next_edition_basis = next_basis
+    source.next_edition_date_estimated = next_date
+    source.last_verified_at = datetime.now()
+    db.session.commit()
+
+    return {
+        "chunks_added": len(vectors),
+        "edition_date": edition_date,
+        "edition_basis": edition_basis,
+    }
+```
+
+The only line-level changes:
+- One additional `requests.get()` call for `/print1`
+- `_chunk_by_article()` now receives `print_html` (was canonical_html)
+- `official_url` passed into chunker is now `print_url` derived from `final_canonical_url`, preserving the `/print1` form that downstream metadata uses
+
+Nothing else changes. Phase 5's `normalize_url()` already strips `/print1` for filter comparisons, so chunk metadata using the `/print1` URL still matches the registry's `canonical_url` (without `/print1`) at filter time.
+
+## Step 3 — Backfill the 19 existing rows without re-chunking
+
+Pinecone already has the right chunks. Don't touch it. The backfill is registry-only.
+
+`backend/scripts/backfill_edition_dates.py`:
+
+```python
+"""
+One-shot: populate current_edition_date / basis / next_basis on existing
+solomon_kb_sources rows. Does NOT re-ingest chunks. Skips INCOTERMS.
+"""
+from datetime import datetime
+from backend.db import db
+from backend.solomon.contracts.kb_sources import SolomonKbSource
+from backend.solomon.contracts.kb_ingest import (
+    _fetch_current_edition,
+    _parse_edition_header,
+)
+
+
+def backfill():
+    active = (
+        db.session.query(SolomonKbSource)
+        .filter_by(status="active")
+        .order_by(SolomonKbSource.law_code)
+        .all()
+    )
+    print(f"Backfilling editions for {len(active)} active sources\n")
+
+    succeeded, failed = [], []
+    for source in active:
+        try:
+            html, final_url = _fetch_current_edition(source.canonical_url, max_hops=3)
+            edition_date, edition_basis, next_basis, next_date = _parse_edition_header(html)
+
+            source.current_edition_date = edition_date
+            source.current_edition_basis = edition_basis
+            source.next_edition_basis = next_basis
+            source.next_edition_date_estimated = next_date
+            source.last_verified_at = datetime.now()
+            db.session.commit()
+
+            print(f"  ✓ {source.law_code:12s}  ред. {edition_date}  підстава {edition_basis}")
+            succeeded.append(source.law_code)
+        except Exception as e:
+            db.session.rollback()
+            print(f"  ✗ {source.law_code:12s}  FAILED: {e}")
+            failed.append((source.law_code, str(e)))
+
+    print(f"\nDone. Succeeded: {len(succeeded)}, Failed: {len(failed)}")
+    if failed:
+        print("\nFailures (require manual inspection):")
+        for code, err in failed:
+            print(f"  {code}: {err}")
+
+
+if __name__ == "__main__":
+    backfill()
+```
+
+Run once. If any laws fail (e.g. never-amended ones where the regex doesn't match), inspect the HTML for those specifically and either tighten the regex or accept NULL for those rows — never-amended laws legitimately have no "Редакція від" date and the UI should handle NULL gracefully (Phase 7 already does — renders "—").
+
+## Step 4 — Verify
+
+After backfill runs:
+
+```sql
+SELECT law_code, law_name, current_edition_date, current_edition_basis, next_edition_basis
+FROM solomon_kb_sources
+WHERE status = 'active'
+ORDER BY law_code;
+```
+
+Expected: all 19 active rows have non-NULL `current_edition_date` and `current_edition_basis`. If any are NULL, those are the never-amended cases — confirm by manually checking the page on zakon.rada.
+
+```sql
+SELECT COUNT(*) FROM solomon_kb_sources
+WHERE status = 'active' AND current_edition_date IS NULL;
+```
+
+Expected: 0 in the normal case, or N where N matches the never-amended-laws count.
+
+## Step 5 — UI smoke test
+
+Open the Lvivholod engagement at `/law`. Citations in the finding cards should now render:
+
+```
+Ст. 658-1 ЦК України (ред. від 25.05.2026 · перевірено 18.05.2026)
+```
+
+Generate the legal opinion DOCX. Same format inline next to each citation.
+
+Protocol DOCX — no change, no edition info (regression check on Workstream A).
+
+## Acceptance
+
+- [ ] `curl` test on at least 3 sources confirms the regex matches
+- [ ] `ingest_law()` updated to dual-fetch
+- [ ] Backfill script run; 19 (or 19 minus never-amended count) active rows have `current_edition_date` populated
+- [ ] Lvivholod findings render with edition dates in the UI
+- [ ] Legal opinion DOCX shows edition + verification dates inline with citations
+- [ ] Protocol DOCX still has zero edition info
+- [ ] Next nightly run of `kb_edition_check.py` produces correct diffs — for sources where editions are current, history rows are `status='no_change'`; no spurious "edition flipped" entries
+
+## Out of scope
+
+- Re-ingesting chunks — current chunk content is fine, just metadata-incomplete
+- Touching Pinecone in any way
+- The INCOTERMS row — stays `awaiting_source`
+- The 4 testing engagements — once UI renders the edition info, that's sufficient verification; no need to re-analyze

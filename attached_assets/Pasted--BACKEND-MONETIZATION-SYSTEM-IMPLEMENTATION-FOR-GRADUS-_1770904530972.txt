@@ -1,0 +1,870 @@
+# BACKEND MONETIZATION SYSTEM IMPLEMENTATION FOR GRADUS AI
+
+## PROJECT CONTEXT
+You are implementing the backend monetization system for Gradus Media's AI chatbot "Alex Gradus". The frontend is COMPLETE and deployed - it's making API calls that need backend support.
+
+**Backend Tech Stack:**
+- Framework: FastAPI + Python 3.11
+- Database: PostgreSQL on Neon
+- Hosting: Render.com (gradus-ai.onrender.com)
+- AI: Claude API (Anthropic) via existing integration
+- Payment: LiqPay (Ukrainian payment gateway)
+
+**Current Backend State:**
+- Basic chat endpoint exists but doesn't track users/limits
+- No user registration system
+- No subscription management
+- No payment integration
+
+**Business Model:**
+- FREE: 5 questions/day per email (resets daily)
+- STANDARD: $7/month (unlimited questions + weekly reports)
+- PREMIUM: $10/month (everything + monthly consultation + AVTD discounts)
+
+---
+
+## FRONTEND API REQUIREMENTS
+
+The deployed frontend is calling these endpoints - implement them exactly as specified:
+
+### 1. POST /api/maya/register
+**What frontend sends:**
+```json
+{
+  "name": "Олександр Коваль",
+  "email": "oleksandr@restaurant.ua",
+  "position": "owner"
+}
+```
+
+**What backend must return:**
+```json
+{
+  "success": true,
+  "existing_user": false,
+  "remaining_questions": 5
+}
+```
+
+**Business Logic:**
+- Check if email already exists in `maya_users` table
+- If existing user:
+  - Check if it's a new day → reset `questions_today` to 0
+  - Return remaining questions: `questions_limit - questions_today`
+- If new user:
+  - Insert into `maya_users` with default values
+  - Return `remaining_questions: 5`
+
+---
+
+### 2. POST /api/maya/chat
+**What frontend sends:**
+```json
+{
+  "message": "Які коктейлі тренд цього сезону?",
+  "email": "oleksandr@restaurant.ua",
+  "session_id": "session_1234567890_abc"
+}
+```
+
+**What backend must return:**
+```json
+{
+  "reply": "Згідно з останніми трендами від The Spirits Business...",
+  "remaining_questions": 4
+}
+```
+
+**Business Logic:**
+1. Verify user exists in database
+2. Check subscription tier:
+   - **FREE tier**: Check if `questions_today < questions_limit`
+     - If new day: reset `questions_today = 0`
+     - If limit reached: return special message + `remaining_questions: 0`
+   - **PAID tier (standard/premium)**: No limits, always allow
+3. Generate AI response using existing Claude integration
+4. Increment `questions_today` for free users
+5. Update `last_question_at` timestamp
+6. Return reply + remaining questions count
+
+**Special Response When Limit Reached (Free Tier):**
+```json
+{
+  "reply": "Ви досягли ліміту безкоштовних питань на сьогодні. Поверніться завтра або оформіть підписку для безлімітного доступу.",
+  "remaining_questions": 0
+}
+```
+
+---
+
+## DATABASE SCHEMA
+
+### Table 1: maya_users (User Management)
+```sql
+CREATE TABLE IF NOT EXISTS maya_users (
+    email VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    position VARCHAR(100),
+    
+    -- Usage tracking
+    questions_today INT DEFAULT 0,
+    questions_limit INT DEFAULT 5,
+    last_question_at TIMESTAMP,
+    last_reset_date DATE DEFAULT CURRENT_DATE,
+    
+    -- Subscription
+    subscription_tier VARCHAR(50) DEFAULT 'free',
+    subscription_status VARCHAR(50) DEFAULT 'active',
+    subscription_started_at TIMESTAMP,
+    subscription_expires_at TIMESTAMP,
+    
+    -- Payment tracking
+    liqpay_order_id VARCHAR(255),
+    
+    -- Metadata
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Constraints
+    CONSTRAINT valid_tier CHECK (subscription_tier IN ('free', 'standard', 'premium')),
+    CONSTRAINT valid_status CHECK (subscription_status IN ('active', 'cancelled', 'expired', 'trial'))
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_maya_users_email ON maya_users(email);
+CREATE INDEX IF NOT EXISTS idx_maya_users_subscription ON maya_users(subscription_tier, subscription_expires_at);
+CREATE INDEX IF NOT EXISTS idx_maya_users_reset_date ON maya_users(last_reset_date);
+```
+
+### Table 2: maya_subscriptions (Payment History)
+```sql
+CREATE TABLE IF NOT EXISTS maya_subscriptions (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) REFERENCES maya_users(email) ON DELETE CASCADE,
+    
+    -- Subscription details
+    tier VARCHAR(50) NOT NULL,
+    billing_cycle VARCHAR(20) NOT NULL,
+    amount DECIMAL(10, 2) NOT NULL,
+    currency VARCHAR(3) DEFAULT 'USD',
+    
+    -- Payment tracking
+    liqpay_order_id VARCHAR(255) UNIQUE,
+    payment_status VARCHAR(50) DEFAULT 'pending',
+    payment_data JSONB,
+    
+    -- Period tracking
+    started_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Constraints
+    CONSTRAINT valid_tier CHECK (tier IN ('standard', 'premium')),
+    CONSTRAINT valid_cycle CHECK (billing_cycle IN ('monthly', 'annual')),
+    CONSTRAINT valid_payment_status CHECK (payment_status IN ('pending', 'success', 'failed', 'refunded'))
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_subscriptions_email ON maya_subscriptions(email);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_order ON maya_subscriptions(liqpay_order_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON maya_subscriptions(payment_status);
+```
+
+### Table 3: maya_query_log (Analytics)
+```sql
+CREATE TABLE IF NOT EXISTS maya_query_log (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) REFERENCES maya_users(email) ON DELETE CASCADE,
+    
+    -- Query details
+    query_text TEXT NOT NULL,
+    response_text TEXT,
+    tokens_used INT,
+    response_time_ms INT,
+    
+    -- Context
+    session_id VARCHAR(255),
+    user_tier VARCHAR(50),
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Index for analytics
+    INDEX idx_query_log_email (email),
+    INDEX idx_query_log_created (created_at),
+    INDEX idx_query_log_tier (user_tier)
+);
+```
+
+---
+
+## IMPLEMENTATION TASKS
+
+### TASK 1: Database Setup & Migrations
+
+**File: `server/migrations/001_create_maya_tables.sql`**
+
+Create the migration file with all three tables above. Then create a migration runner:
+
+**File: `server/db_migrations.py`**
+```python
+import asyncpg
+import os
+from pathlib import Path
+
+async def run_migrations(db_pool: asyncpg.Pool):
+    """Run all SQL migrations in order"""
+    migrations_dir = Path(__file__).parent / "migrations"
+    
+    async with db_pool.acquire() as conn:
+        # Create migrations tracking table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version VARCHAR(255) PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Get applied migrations
+        applied = await conn.fetch("SELECT version FROM schema_migrations")
+        applied_versions = {row['version'] for row in applied}
+        
+        # Run pending migrations
+        for migration_file in sorted(migrations_dir.glob("*.sql")):
+            version = migration_file.stem
+            
+            if version in applied_versions:
+                print(f"✓ Migration {version} already applied")
+                continue
+            
+            print(f"→ Running migration {version}...")
+            sql = migration_file.read_text()
+            
+            await conn.execute(sql)
+            await conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES ($1)",
+                version
+            )
+            print(f"✓ Migration {version} completed")
+
+# Add to main.py startup:
+# await run_migrations(db_pool)
+```
+
+---
+
+### TASK 2: User Registration Endpoint
+
+**File: `server/routes/maya_routes.py`**
+```python
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, EmailStr
+from datetime import datetime, date
+import logging
+
+router = APIRouter(prefix="/api/maya", tags=["maya"])
+logger = logging.getLogger(__name__)
+
+class UserRegistration(BaseModel):
+    name: str
+    email: EmailStr
+    position: str
+
+class RegistrationResponse(BaseModel):
+    success: bool
+    existing_user: bool
+    remaining_questions: int
+
+@router.post("/register", response_model=RegistrationResponse)
+async def register_user(user: UserRegistration, db):
+    """Register new user or return existing user's remaining questions"""
+    try:
+        # Check if user exists
+        existing = await db.fetchrow(
+            "SELECT * FROM maya_users WHERE email = $1",
+            user.email
+        )
+        
+        if existing:
+            today = date.today()
+            questions_today = existing['questions_today']
+            last_reset = existing['last_reset_date']
+            
+            # Reset counter if new day
+            if last_reset != today:
+                await db.execute("""
+                    UPDATE maya_users 
+                    SET questions_today = 0, 
+                        last_reset_date = $1,
+                        updated_at = NOW()
+                    WHERE email = $2
+                """, today, user.email)
+                questions_today = 0
+            
+            remaining = existing['questions_limit'] - questions_today
+            
+            logger.info(f"Existing user login: {user.email}, remaining: {remaining}")
+            
+            return RegistrationResponse(
+                success=True,
+                existing_user=True,
+                remaining_questions=max(0, remaining)
+            )
+        
+        # Create new user
+        await db.execute("""
+            INSERT INTO maya_users 
+            (email, name, position, questions_today, questions_limit, last_reset_date)
+            VALUES ($1, $2, $3, 0, 5, $4)
+        """, user.email, user.name, user.position, date.today())
+        
+        logger.info(f"New user registered: {user.email}")
+        
+        return RegistrationResponse(
+            success=True,
+            existing_user=False,
+            remaining_questions=5
+        )
+        
+    except Exception as e:
+        logger.error(f"Registration error for {user.email}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail="Помилка реєстрації. Спробуйте пізніше."
+        )
+```
+
+---
+
+### TASK 3: Chat Endpoint with Rate Limiting
+
+**File: `server/routes/maya_routes.py` (add to existing file)**
+```python
+from typing import Optional
+
+class ChatRequest(BaseModel):
+    message: str
+    email: EmailStr
+    session_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    reply: str
+    remaining_questions: int
+
+async def generate_ai_response(message: str, email: str) -> str:
+    """
+    Generate AI response using existing Claude integration
+    TODO: Connect to your existing Claude API client
+    """
+    # PLACEHOLDER - Replace with your actual Claude API call
+    from anthropic import Anthropic
+    
+    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    
+    system_prompt = """Ти Alex Gradus - експерт HoReCa індустрії України. 
+Ти знаєш про:
+- Світові тренди алкогольних напоїв (The Spirits Business, Just Drinks)
+- Українське законодавство про алкоголь
+- Постачальників преміум алкоголю (AVTD - найбільший дистриб'ютор)
+- Управління барами та ресторанами
+- Коктейльні тренди та винну культуру
+
+Відповідай українською мовою, професійно, практично та конкретно."""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1000,
+        system=system_prompt,
+        messages=[{"role": "user", "content": message}]
+    )
+    
+    return response.content[0].text
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest, db):
+    """Process chat message with rate limiting and AI response"""
+    try:
+        # Get user
+        user = await db.fetchrow(
+            "SELECT * FROM maya_users WHERE email = $1",
+            request.email
+        )
+        
+        if not user:
+            raise HTTPException(
+                status_code=401, 
+                detail="Користувач не зареєстрований"
+            )
+        
+        # Check subscription tier
+        tier = user['subscription_tier']
+        
+        if tier == 'free':
+            today = date.today()
+            questions_today = user['questions_today']
+            last_reset = user['last_reset_date']
+            
+            # Reset if new day
+            if last_reset != today:
+                await db.execute("""
+                    UPDATE maya_users 
+                    SET questions_today = 0, 
+                        last_reset_date = $1
+                    WHERE email = $2
+                """, today, request.email)
+                questions_today = 0
+            
+            # Check limit
+            if questions_today >= user['questions_limit']:
+                return ChatResponse(
+                    reply="Ви досягли ліміту безкоштовних питань на сьогодні. Поверніться завтра або оформіть підписку для безлімітного доступу.",
+                    remaining_questions=0
+                )
+        
+        # Generate AI response
+        start_time = datetime.now()
+        reply = await generate_ai_response(request.message, request.email)
+        response_time = int((datetime.now() - start_time).total_seconds() * 1000)
+        
+        # Log query
+        await db.execute("""
+            INSERT INTO maya_query_log 
+            (email, query_text, response_text, response_time_ms, session_id, user_tier)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        """, request.email, request.message, reply, response_time, 
+             request.session_id, tier)
+        
+        # Update usage for free tier
+        if tier == 'free':
+            await db.execute("""
+                UPDATE maya_users 
+                SET questions_today = questions_today + 1,
+                    last_question_at = NOW(),
+                    updated_at = NOW()
+                WHERE email = $1
+            """, request.email)
+            
+            remaining = user['questions_limit'] - questions_today - 1
+        else:
+            remaining = 999  # Unlimited for paid users
+        
+        logger.info(f"Chat processed for {request.email}, tier: {tier}, remaining: {remaining}")
+        
+        return ChatResponse(
+            reply=reply,
+            remaining_questions=max(0, remaining)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chat error for {request.email}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Помилка обробки запиту. Спробуйте пізніше."
+        )
+```
+
+---
+
+### TASK 4: LiqPay Payment Integration
+
+**File: `server/routes/payment_routes.py`**
+```python
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, EmailStr
+from datetime import datetime, timedelta
+import hashlib
+import base64
+import json
+import logging
+
+router = APIRouter(prefix="/api/payments", tags=["payments"])
+logger = logging.getLogger(__name__)
+
+# LiqPay credentials (add to environment variables)
+LIQPAY_PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY")
+LIQPAY_PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY")
+
+class CheckoutRequest(BaseModel):
+    email: EmailStr
+    tier: str  # "standard" or "premium"
+    billing_cycle: str  # "monthly" or "annual"
+
+class CheckoutResponse(BaseModel):
+    data: str
+    signature: str
+    liqpay_url: str
+
+def generate_liqpay_signature(data: str) -> str:
+    """Generate LiqPay signature"""
+    sign_string = LIQPAY_PRIVATE_KEY + data + LIQPAY_PRIVATE_KEY
+    signature = base64.b64encode(
+        hashlib.sha1(sign_string.encode()).digest()
+    ).decode()
+    return signature
+
+@router.post("/create-checkout", response_model=CheckoutResponse)
+async def create_checkout(checkout: CheckoutRequest, db):
+    """Create LiqPay payment form for subscription"""
+    try:
+        # Validate tier
+        if checkout.tier not in ['standard', 'premium']:
+            raise HTTPException(400, "Invalid tier")
+        
+        if checkout.billing_cycle not in ['monthly', 'annual']:
+            raise HTTPException(400, "Invalid billing cycle")
+        
+        # Calculate amount
+        prices = {
+            'standard': {'monthly': 7.00, 'annual': 70.00},
+            'premium': {'monthly': 10.00, 'annual': 100.00}
+        }
+        amount = prices[checkout.tier][checkout.billing_cycle]
+        
+        # Generate order ID
+        order_id = f"SUB-{checkout.email}-{int(datetime.now().timestamp())}"
+        
+        # Create payment data
+        payment_data = {
+            "version": 3,
+            "public_key": LIQPAY_PUBLIC_KEY,
+            "action": "subscribe",  # Recurring subscription
+            "amount": amount,
+            "currency": "USD",
+            "description": f"Gradus Media {checkout.tier.capitalize()} - {checkout.billing_cycle}",
+            "order_id": order_id,
+            "subscribe_date_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "subscribe_periodicity": "month" if checkout.billing_cycle == "monthly" else "year",
+            "result_url": "https://gradusmedia.org/payment/success",
+            "server_url": "https://gradus-ai.onrender.com/api/payments/webhook",
+            "language": "uk"
+        }
+        
+        # Encode data
+        data_encoded = base64.b64encode(
+            json.dumps(payment_data).encode()
+        ).decode()
+        
+        # Generate signature
+        signature = generate_liqpay_signature(data_encoded)
+        
+        # Store pending subscription
+        await db.execute("""
+            INSERT INTO maya_subscriptions 
+            (email, tier, billing_cycle, amount, currency, liqpay_order_id, payment_status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+        """, checkout.email, checkout.tier, checkout.billing_cycle, 
+             amount, "USD", order_id)
+        
+        logger.info(f"Checkout created: {order_id} for {checkout.email}")
+        
+        return CheckoutResponse(
+            data=data_encoded,
+            signature=signature,
+            liqpay_url="https://www.liqpay.ua/api/3/checkout"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Checkout error: {e}")
+        raise HTTPException(500, "Помилка створення платежу")
+
+@router.post("/webhook")
+async def liqpay_webhook(request: Request, db):
+    """Handle LiqPay payment callbacks"""
+    try:
+        form_data = await request.form()
+        data = form_data.get('data')
+        signature = form_data.get('signature')
+        
+        # Verify signature
+        expected_signature = generate_liqpay_signature(data)
+        if signature != expected_signature:
+            logger.error("Invalid LiqPay signature")
+            raise HTTPException(401, "Invalid signature")
+        
+        # Decode payment data
+        payment_info = json.loads(base64.b64decode(data))
+        
+        order_id = payment_info.get('order_id')
+        status = payment_info.get('status')
+        
+        logger.info(f"LiqPay webhook: {order_id}, status: {status}")
+        
+        # Get subscription from DB
+        subscription = await db.fetchrow("""
+            SELECT * FROM maya_subscriptions 
+            WHERE liqpay_order_id = $1
+        """, order_id)
+        
+        if not subscription:
+            logger.error(f"Subscription not found: {order_id}")
+            return {"status": "error", "message": "Subscription not found"}
+        
+        email = subscription['email']
+        tier = subscription['tier']
+        billing_cycle = subscription['billing_cycle']
+        
+        # Handle successful subscription
+        if status == 'subscribed' or status == 'success':
+            # Calculate expiry
+            if billing_cycle == 'monthly':
+                expires_at = datetime.now() + timedelta(days=30)
+            else:  # annual
+                expires_at = datetime.now() + timedelta(days=365)
+            
+            # Update subscription
+            await db.execute("""
+                UPDATE maya_subscriptions
+                SET payment_status = 'success',
+                    started_at = NOW(),
+                    expires_at = $1,
+                    payment_data = $2,
+                    updated_at = NOW()
+                WHERE liqpay_order_id = $3
+            """, expires_at, json.dumps(payment_info), order_id)
+            
+            # Update user
+            await db.execute("""
+                UPDATE maya_users
+                SET subscription_tier = $1,
+                    subscription_status = 'active',
+                    subscription_started_at = NOW(),
+                    subscription_expires_at = $2,
+                    liqpay_order_id = $3,
+                    updated_at = NOW()
+                WHERE email = $4
+            """, tier, expires_at, order_id, email)
+            
+            logger.info(f"Subscription activated: {email} -> {tier}")
+        
+        elif status == 'failure' or status == 'error':
+            # Update as failed
+            await db.execute("""
+                UPDATE maya_subscriptions
+                SET payment_status = 'failed',
+                    payment_data = $1,
+                    updated_at = NOW()
+                WHERE liqpay_order_id = $2
+            """, json.dumps(payment_info), order_id)
+            
+            logger.error(f"Payment failed: {order_id}")
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+```
+
+---
+
+### TASK 5: Background Job - Check Expired Subscriptions
+
+**File: `server/jobs/subscription_checker.py`**
+```python
+import asyncio
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def check_expired_subscriptions(db_pool):
+    """Background job to expire subscriptions"""
+    while True:
+        try:
+            async with db_pool.acquire() as db:
+                # Find expired subscriptions
+                expired = await db.fetch("""
+                    SELECT email, subscription_tier 
+                    FROM maya_users
+                    WHERE subscription_tier IN ('standard', 'premium')
+                    AND subscription_expires_at < NOW()
+                    AND subscription_status = 'active'
+                """)
+                
+                if expired:
+                    logger.info(f"Found {len(expired)} expired subscriptions")
+                    
+                    for user in expired:
+                        # Downgrade to free
+                        await db.execute("""
+                            UPDATE maya_users
+                            SET subscription_tier = 'free',
+                                subscription_status = 'expired',
+                                updated_at = NOW()
+                            WHERE email = $1
+                        """, user['email'])
+                        
+                        logger.info(f"Expired: {user['email']} from {user['subscription_tier']}")
+                
+                # TODO: Send expiry warning emails (3 days before expiry)
+                
+        except Exception as e:
+            logger.error(f"Subscription checker error: {e}")
+        
+        # Run every hour
+        await asyncio.sleep(3600)
+
+# Add to main.py startup:
+# asyncio.create_task(check_expired_subscriptions(db_pool))
+```
+
+---
+
+### TASK 6: Update Main Application
+
+**File: `server/main.py`** (add these)
+```python
+from routes.maya_routes import router as maya_router
+from routes.payment_routes import router as payment_router
+from db_migrations import run_migrations
+from jobs.subscription_checker import check_expired_subscriptions
+
+# Include routers
+app.include_router(maya_router)
+app.include_router(payment_router)
+
+@app.on_event("startup")
+async def startup():
+    # Run migrations
+    await run_migrations(db_pool)
+    
+    # Start background jobs
+    asyncio.create_task(check_expired_subscriptions(db_pool))
+    
+    logger.info("Backend monetization system started")
+```
+
+---
+
+### TASK 7: Environment Variables
+
+**File: `.env` (add these)**
+```bash
+# LiqPay credentials (get from AVTD owner or LiqPay merchant account)
+LIQPAY_PUBLIC_KEY=your_public_key_here
+LIQPAY_PRIVATE_KEY=your_private_key_here
+
+# Anthropic API (already exists)
+ANTHROPIC_API_KEY=your_existing_key
+
+# Database (already exists)
+DATABASE_URL=postgresql://...
+```
+
+---
+
+## TESTING CHECKLIST
+
+After implementation, test in this order:
+
+### 1. Database Setup
+```bash
+# Verify tables created
+psql $DATABASE_URL -c "\dt maya_*"
+
+# Expected output:
+# maya_users
+# maya_subscriptions
+# maya_query_log
+```
+
+### 2. Registration Endpoint
+```bash
+curl -X POST https://gradus-ai.onrender.com/api/maya/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test User",
+    "email": "test@example.com",
+    "position": "owner"
+  }'
+
+# Expected: {"success": true, "existing_user": false, "remaining_questions": 5}
+```
+
+### 3. Chat Endpoint (First Question)
+```bash
+curl -X POST https://gradus-ai.onrender.com/api/maya/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Які коктейлі тренд?",
+    "email": "test@example.com"
+  }'
+
+# Expected: {"reply": "...", "remaining_questions": 4}
+```
+
+### 4. Chat Endpoint (Limit Reached)
+```bash
+# Send 5 questions, then 6th should return:
+# {"reply": "Ви досягли ліміту...", "remaining_questions": 0}
+```
+
+### 5. Payment Checkout
+```bash
+curl -X POST https://gradus-ai.onrender.com/api/payments/create-checkout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "tier": "standard",
+    "billing_cycle": "monthly"
+  }'
+
+# Expected: {"data": "...", "signature": "...", "liqpay_url": "..."}
+```
+
+### 6. Check User in DB
+```sql
+SELECT email, name, questions_today, subscription_tier 
+FROM maya_users 
+WHERE email = 'test@example.com';
+```
+
+---
+
+## SUCCESS CRITERIA
+
+- [ ] All three database tables created successfully
+- [ ] `/api/maya/register` endpoint working (200 OK)
+- [ ] `/api/maya/chat` endpoint working with AI responses
+- [ ] Question counter decrements correctly (5→4→3→2→1→0)
+- [ ] Limit message appears at 0 remaining
+- [ ] Daily reset logic works (new day = reset counter)
+- [ ] `/api/payments/create-checkout` returns LiqPay form data
+- [ ] Webhook receives and processes payment callbacks
+- [ ] Paid users get unlimited questions
+- [ ] Background job expires subscriptions
+- [ ] All existing endpoints still work
+- [ ] No errors in logs
+
+---
+
+## CRITICAL NOTES
+
+1. **Don't break existing chat functionality** - integrate with existing Claude API client
+2. **Use existing database connection** - don't create a new one
+3. **Add proper logging** - log every registration, chat, payment event
+4. **Handle timezones** - Ukraine is UTC+2/+3, use aware datetimes
+5. **Error handling** - all endpoints need try/catch with user-friendly errors
+6. **Security** - validate LiqPay signatures, sanitize inputs
+7. **Performance** - add indexes, use connection pooling
+
+---
+
+## IMPLEMENTATION ORDER
+
+1. **Database migrations** (Task 1) - Foundation
+2. **Registration endpoint** (Task 2) - Test with curl
+3. **Chat endpoint** (Task 3) - Integrate with existing AI
+4. **Test free tier** - Verify 5 question limit works
+5. **Payment endpoints** (Task 4) - Placeholder for now
+6. **Background jobs** (Task 5) - Subscription expiry
+7. **Full integration test** - Frontend + Backend
+
+Start with Tasks 1-3, test thoroughly, then move to payments.

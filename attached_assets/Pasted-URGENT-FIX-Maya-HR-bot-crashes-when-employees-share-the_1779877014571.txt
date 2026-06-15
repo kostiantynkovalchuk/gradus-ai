@@ -1,0 +1,49 @@
+URGENT FIX — Maya HR bot crashes when employees share their contact.
+
+Symptom in production logs:
+  ❌ Webhook error: cannot import name 'get_inline_menu_for_access_level' 
+     from 'services.hr_keyboards'
+  File "/app/backend/routes/telegram_webhook.py", line 493, in handle_contact_shared
+    from services.hr_keyboards import get_inline_menu_for_access_level
+
+User impact: employees who tap "Share contact" to authenticate get 
+ZERO response — the handler crashes silently after the auth check 
+succeeds, before any menu is rendered. Webhook returns 200 OK so 
+Telegram never retries, and the user just sees the bot ignoring them.
+
+This was introduced in commit 5d9a5b4 (the broadcast-recall deploy). 
+The broadcast fix itself works — this is collateral damage from a 
+half-finished change to handle_contact_shared().
+
+Investigate:
+1. Open routes/telegram_webhook.py around line 493. Show me the full 
+   handle_contact_shared() function so I can see what menu is being 
+   rendered and what arguments are passed.
+2. Open services/hr_keyboards.py. List every function exported. 
+   Identify whether there's an existing function with a similar name 
+   (e.g. get_menu_for_role, role_menu, build_inline_keyboard) that 
+   was renamed or that should be called instead.
+
+Fix (pick one based on step 2):
+  (a) If a similar function exists with a different name → rename 
+      the import + call in telegram_webhook.py to match.
+  (b) If no similar function exists → write get_inline_menu_for_access_level 
+      in hr_keyboards.py. It should accept access_level ('employee' | 
+      'hr_admin' | 'developer') and return an InlineKeyboardMarkup 
+      with the appropriate buttons. Match the style of any other menu 
+      builders already in that file.
+
+After the fix:
+- Manually test: have a test user share their contact, confirm they 
+  receive the role-appropriate menu and no errors appear in logs.
+- Also check whether any OTHER call sites reference 
+  get_inline_menu_for_access_level — fix them too if they exist.
+- Add a basic try/except around the menu render specifically so if 
+  it ever fails again, the user at least gets a generic "Дякуємо, 
+  ви авторизовані!" text response instead of nothing.
+
+Keep the diff small. Do NOT touch broadcast code, do NOT touch auth 
+logic, do NOT add tests. Just fix the import error and ensure 
+contact-share renders something.
+
+Paste the diff when done.

@@ -1,0 +1,73 @@
+Three fixes for Alex AVTD bot analytics. Audit first, then implement.
+
+## STEP 1 — AUDIT (read only)
+
+1. Open `backend/routes/alex_avtd_webhook.py` — find the `log_query` function.
+   What columns does it currently INSERT into hr_query_log?
+   Is `user_name` included? 
+
+2. Open the file that serves the `/alex` dashboard endpoint.
+   It's likely `backend/routes/alex_routes.py` or similar.
+   What API endpoints does it expose? 
+   Does any endpoint query `hr_query_log` with `bot_source = 'alex_avtd'`?
+
+3. Open the file serving `/hr` dashboard recent-queries.
+   Find the SELECT from hr_query_log.
+   Does it filter by bot_source? If not, confirm.
+
+## STEP 2 — IMPLEMENT
+
+### Fix 1 — user_name in logs
+In `alex_avtd_webhook.py`, after the auth check passes, query hr_users 
+for full_name and pass it to log_query:
+
+```python
+# After is_authorized() returns True, add:
+row = db.execute(
+    text("SELECT full_name FROM hr_users WHERE telegram_id = :tid"),
+    {"tid": telegram_id}
+).fetchone()
+user_name = row[0] if row else "Unknown"
+```
+
+Update log_query() signature to accept user_name and include it in INSERT:
+```sql
+INSERT INTO hr_query_log 
+    (user_id, user_name, query, preset_matched, response_time_ms, bot_source, created_at)
+VALUES 
+    (:uid, :name, :q, :pm, :rt, 'alex_avtd', NOW())
+```
+
+### Fix 2 — route alex_avtd logs to /alex dashboard
+In whatever file serves the /alex dashboard API, add a recent-queries 
+endpoint if it doesn't exist:
+
+```python
+@alex_router.get("/alex/api/recent-queries")
+async def alex_recent_queries(limit: int = 50):
+    # SELECT from hr_query_log WHERE bot_source = 'alex_avtd'
+    # ORDER BY created_at DESC LIMIT limit
+    # Return same shape as /hr/api/recent-queries
+```
+
+### Fix 3 — filter /hr dashboard to maya_hr only
+Find the recent-queries endpoint serving /hr dashboard.
+Add WHERE clause if missing:
+```sql
+WHERE bot_source = 'hr_maya' OR bot_source IS NULL
+```
+This keeps /hr clean — alex_avtd queries go to /alex only.
+
+### Fix 4 — /help command
+In alex_avtd_webhook.py, in the message handler where /start is handled:
+```python
+if text in ("/start", "/menu", "/help"):
+    await tg_send(chat_id, "👋 ...", main_menu_keyboard())
+    return {"ok": True}
+```
+
+## DO NOT TOUCH
+- telegram_webhook.py (Maya HR)
+- alex_tg_webhook.py (Alex Gradus public)  
+- photo_report/ directory
+- hr_pinecone_index or any embeddings

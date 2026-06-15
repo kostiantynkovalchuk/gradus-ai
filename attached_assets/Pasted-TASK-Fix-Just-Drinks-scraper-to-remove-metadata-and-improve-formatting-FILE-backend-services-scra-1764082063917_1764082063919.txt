@@ -1,0 +1,97 @@
+TASK: Fix Just Drinks scraper to remove metadata and improve formatting
+
+FILE: backend/services/scrapers/just_drinks_scraper.py
+
+PROBLEMS:
+1. Author name appearing in text ("Крістіан Бейфорд")
+2. Date appearing in text ("24 листопада, 2025")
+3. Poor line break formatting
+4. No clear paragraph separation
+
+KEEP:
+- Title (do NOT remove)
+- Source tag " Just Drinks" at end (do NOT remove)
+
+REQUIRED CHANGES:
+
+=== 1. REMOVE METADATA ELEMENTS ===
+Before text extraction, remove:
+- .author, .post-author, .byline
+- .date, .post-date, .published-date, .timestamp
+- .article-meta, .meta, .post-meta
+- .social-share, .share-buttons
+
+=== 2. EXCLUDE TEXT PATTERNS ===
+Filter out lines containing:
+- Author names (single line with 2-3 words, capitalized)
+- Date patterns: "DD month, YYYY", "month DD, YYYY"
+- Social sharing text
+
+=== 3. FIX LINE BREAKS ===
+- Detect paragraph boundaries
+- Add double newline between paragraphs
+- Remove multiple consecutive newlines
+- Ensure quotes are properly separated
+
+=== 4. ADD CLEANING METHOD ===
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean Just Drinks article content"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Split into lines
+    lines = content.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Skip empty lines
+        if not line:
+            continue
+        
+        # Skip author names (2-3 words, all capitalized)
+        words = line.split()
+        if len(words) <= 3 and all(w[0].isupper() for w in words if w):
+            continue
+        
+        # Skip date patterns
+        if re.match(r'\d{1,2}\s+\w+,?\s+\d{4}', line):
+            continue
+        
+        # Keep everything else (including title and source tag)
+        cleaned_lines.append(line)
+    
+    # Join and add paragraph breaks
+    content = '\n\n'.join(cleaned_lines)
+    
+    # Fix paragraph spacing at sentence boundaries
+    content = re.sub(r'\.(\s+)([A-ZА-ЯІЇЄ])', r'.\n\n\2', content)
+    
+    # Remove excessive newlines
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
+```
+
+=== 5. UPDATE EXTRACTION ===
+```python
+title = self._extract_title(article)
+raw_content = self._extract_content(article)
+content = self._clean_content(raw_content, title)
+```
+
+=== 6. TEST ===
+Scrape 1 test article and verify:
+- Title present at start ✓
+- No author name
+- No date
+- Source tag " Just Drinks" at end ✓
+- Proper paragraph breaks
+- Minimum 100 chars
+
+OUTPUT:
+Show before/after comparison

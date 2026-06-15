@@ -1,0 +1,79 @@
+TASK: Fix Delo.ua duplicate title - final attempt with explicit pattern matching
+
+FILE: backend/services/scrapers/delo_ua_scraper.py
+
+EXACT PROBLEM:
+Title appears twice at the very start:
+Line 1: "Розумні покупки: як українці зустрічають Чорну п'ятницю 2025"
+Line 2: "Розумні покупки: як українці зустрічають Чорну п'ятницю 2025 Цьогорічна..."
+
+Pattern: Title on line 1, then title again at start of line 2 followed by content
+
+SOLUTION - Replace _clean_content with this explicit fix:
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean Delo.ua content - explicit duplicate title removal"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove "Новини компаній" prefix
+    content = re.sub(r'Новини компаній', '', content)
+    
+    # EXPLICIT FIX: Check if content starts with title repeated
+    # Pattern: "Title\nTitle Rest of content"
+    title_pattern = re.escape(title)
+    
+    # Check if title appears twice at the very start
+    double_title_pattern = f'^{title_pattern}\\s*\\n\\s*{title_pattern}'
+    if re.match(double_title_pattern, content, re.MULTILINE):
+        # Remove first occurrence only
+        content = re.sub(f'^{title_pattern}\\s*\\n', '', content, count=1, flags=re.MULTILINE)
+    
+    # Also check if title appears twice on same line with space between
+    double_title_same_line = f'{title_pattern}\\s+{title_pattern}'
+    content = re.sub(double_title_same_line, title, content)
+    
+    # Get lines and clean
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    
+    # Skip metadata lines
+    filtered = []
+    for line in lines:
+        if line in ['Категорія', 'Новини', 'Дата публікації']:
+            continue
+        filtered.append(line)
+    
+    # Join all text
+    text = ' '.join(filtered)
+    
+    # Fix spacing
+    text = re.sub(r'  +', ' ', text)
+    
+    # Add paragraph breaks at sentence boundaries
+    text = re.sub(r'([.!?»"]\s+)([A-ZА-ЯІЇЄ])', r'\1\n\n\2', text)
+    
+    # Clean excessive newlines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+```
+
+TEST:
+1. Scrape "Розумні покупки" article
+2. Show first 300 characters of cleaned content
+3. Verify title appears EXACTLY ONCE at start
+4. Verify content starts immediately after first title occurrence
+
+EXPECTED OUTPUT:
+Розумні покупки: як українці зустрічають Чорну п'ятницю 2025
+Цьогорічна Чорна п'ятниця обіцяє бути не просто перегонами...
+
+NOT:
+Розумні покупки...
+Розумні покупки... Цьогорічна...
+
+Show confirmation that duplicate title is removed.
+
+Paste into Replit Agent for final Delo.ua fix.RetryClaude can make mistakes. Please double-check responses. Sonnet 4.5

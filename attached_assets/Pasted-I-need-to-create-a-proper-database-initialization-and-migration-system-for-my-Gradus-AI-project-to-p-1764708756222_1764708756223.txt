@@ -1,0 +1,75 @@
+I need to create a proper database initialization and migration system for my Gradus AI project to prevent schema mismatch issues when deploying to new environments.
+
+CONTEXT:
+- FastAPI backend with PostgreSQL database
+- Currently deployed on Render.com
+- Just experienced a schema mismatch where the `image_data BYTEA` column was missing after migration
+- Database tracks content queue, approval logs, and scraping state
+
+CURRENT DATABASE SCHEMA (from production):
+Table: content_queue
+- id (PRIMARY KEY)
+- source_name
+- source_url
+- title
+- content
+- original_language
+- scraped_at
+- translated_title
+- translated_content
+- translated_at
+- image_url
+- image_data (BYTEA) - for persistent image storage
+- image_generated_at
+- telegram_sent_at
+- approved
+- approved_at
+- posted_linkedin
+- posted_facebook
+- rejected
+- rejected_at
+
+Table: scrape_log (for tracking last scrape times)
+- source_name (PRIMARY KEY)
+- last_scraped_at
+
+WHAT I NEED:
+
+1. **Database initialization script** (`init_db.py`):
+   - Connect using DATABASE_URL environment variable
+   - Create all tables with complete schema if they don't exist
+   - Add any missing columns to existing tables
+   - Should be idempotent (safe to run multiple times)
+   - Include indexes for performance (on scraped_at, approved, posted_*, etc.)
+
+2. **Schema documentation** (`docs/database_schema.md`):
+   - Complete table definitions
+   - Column descriptions and purposes
+   - Relationships and constraints
+   - Migration history
+
+3. **Migration setup** (optional but recommended):
+   - Set up Alembic for future schema changes
+   - Create initial migration from current schema
+   - Instructions for creating new migrations
+
+4. **Deployment checklist** (`docs/deployment_checklist.md`):
+   - Steps to set up database on new environment
+   - Environment variables needed
+   - How to verify schema is correct
+
+REQUIREMENTS:
+- Use psycopg2 for database connection
+- Handle connection failures gracefully
+- Log what changes are being made
+- Should work with both local and production databases
+- Include instructions for running the script on Render.com
+
+DELIVERABLES:
+1. `backend/init_db.py` - Main initialization script
+2. `docs/database_schema.md` - Complete schema documentation
+3. `docs/deployment_checklist.md` - Deployment instructions
+4. Updated README with database setup instructions
+5. (Optional) Alembic setup for migrations
+
+Please create these files and show me how to run the initialization script both locally and on Render.com.

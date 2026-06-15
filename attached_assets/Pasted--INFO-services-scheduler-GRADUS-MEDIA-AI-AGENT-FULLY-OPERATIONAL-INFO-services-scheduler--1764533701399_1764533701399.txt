@@ -1,0 +1,110 @@
+===
+INFO:services.scheduler:✅ GRADUS MEDIA AI AGENT - FULLY OPERATIONAL
+INFO:services.scheduler:============================================================
+INFO:services.scheduler:
+INFO:services.scheduler:📰 CONTENT SOURCES:
+INFO:services.scheduler:   LinkedIn (Mon/Wed/Fri):
+INFO:services.scheduler:      • The Spirits Business 🇬🇧
+INFO:services.scheduler:      • Drinks International 🇬🇧
+INFO:services.scheduler:
+INFO:services.scheduler:   Facebook (Daily):
+INFO:services.scheduler:      • Delo.ua 🇺🇦
+INFO:services.scheduler:      • HoReCa-Україна 🇺🇦
+INFO:services.scheduler:      • Just Drinks 🇬🇧
+INFO:services.scheduler:
+INFO:services.scheduler:📅 SCRAPING SCHEDULE:
+INFO:services.scheduler:   • LinkedIn: Mon/Wed/Fri 1:00 AM
+INFO:services.scheduler:   • Facebook: Daily 2:00 AM
+INFO:services.scheduler:
+INFO:services.scheduler:🔄 PROCESSING:
+INFO:services.scheduler:   • Translation: 3x/day at 6am, 2pm, 8pm
+INFO:services.scheduler:   • Images: 3x/day at 6:15am, 2:15pm, 8:15pm
+INFO:services.scheduler:
+INFO:services.scheduler:📢 POSTING SCHEDULE:
+INFO:services.scheduler:   • LinkedIn: Mon/Wed/Fri 9:00 AM
+INFO:services.scheduler:   • Facebook: Daily 6:00 PM
+INFO:services.scheduler:
+INFO:services.scheduler:🔧 MAINTENANCE:
+INFO:services.scheduler:   • API monitoring: Daily 8:00 AM
+INFO:services.scheduler:   • Cleanup: Daily 3:00 AM
+INFO:services.scheduler:
+INFO:services.scheduler:============================================================
+INFO:services.scheduler:🚀 System ready! Waiting for next scheduled task...
+INFO:services.scheduler:============================================================
+INFO:main:✅ Scheduler started - automation enabled!
+INFO:services.scheduler:🔍 [SCHEDULER] Checking for missed scraping tasks...
+INFO:main:🔍 Checking for missed scraping tasks in background...
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:services.scheduler:📭 No Facebook articles in database, running initial scrape...
+INFO:services.scheduler:🤖 [SCHEDULER] Scraping Facebook sources...
+INFO:services.scrapers.manager:✅ ScraperManager initialized with 5 sources
+INFO:services.scrapers.delo_ua:🔍 Scraping Delo.ua (Ukrainian) with Playwright...
+INFO:     127.0.0.1:43342 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+ERROR:services.scrapers.delo_ua:❌ Delo.ua scraping failed: BrowserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     playwright install                                     ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+INFO:services.scrapers.manager:✅ delo_ua: scraped 0 articles
+INFO:services.scheduler:  📊 delo_ua: 0 articles scraped
+INFO:services.scrapers.restorator_ua:🔍 Scraping HoReCa-Україна (Ukrainian)...
+INFO:services.scrapers.restorator_ua:  Found 15 potential articles
+==> Your service is live 🎉
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://gradus-ai.onrender.com
+==> 
+==> ///////////////////////////////////////////////////////////
+INFO:services.scrapers.spirits_business:  📄 Found: Nova Scotia to sell $14m US alcohol stockpile...
+INFO:services.scrapers.spirits_business:  📄 Found: Catoctin Creek seeks investors...
+INFO:services.scrapers.spirits_business:  📄 Found: IWA launches ‘landmark’ tourism initiative for Iri...
+INFO:services.scrapers.spirits_business:✅ Scraped 3 articles from The Spirits Business
+INFO:services.scrapers.manager:✅ spirits_business: scraped 3 articles
+INFO:services.scheduler:  📊 spirits_business: 3 articles scraped
+INFO:services.scheduler:    ✅ 🇬🇧 Nova Scotia to sell $14m US alcohol stockpile...
+INFO:services.scheduler:    ✅ 🇬🇧 Catoctin Creek seeks investors...
+INFO:services.scheduler:    ✅ 🇬🇧 IWA launches ‘landmark’ tourism initiative for Iri...
+INFO:services.scrapers.drinks_international:🔍 Scraping Drinks International (English)...
+INFO:services.scrapers.drinks_international:  Found 81 potential articles
+INFO:services.scrapers.drinks_international:  ✅ Altamura Distilleries expands into Asia...
+INFO:services.scrapers.drinks_international:  ✅ Le Philtre vodka joins Spiribam...
+INFO:services.scrapers.drinks_international:  ✅ Desi Daru vodka enters South Asia and the Middle E...
+INFO:services.scrapers.drinks_international:✅ Scraped 3 English articles from Drinks International
+INFO:services.scrapers.manager:✅ drinks_international: scraped 3 articles
+INFO:services.scheduler:  📊 drinks_international: 3 articles scraped
+INFO:services.scheduler:    ✅ 🇬🇧 Altamura Distilleries expands into Asia...
+INFO:services.scheduler:    ✅ 🇬🇧 Le Philtre vodka joins Spiribam...
+INFO:services.scheduler:    ✅ 🇬🇧 Desi Daru vodka enters South Asia and the Middle E...
+INFO:services.scheduler:✅ [SCHEDULER] LinkedIn: Scraped 6 new articles
+INFO:services.scheduler:✅ Catch-up check completed
+==> Detected a new open port HTTP:8000
+INFO:apscheduler.executors.default:Running job "Translate pending articles (3x/day) (trigger: cron[hour='6,14,20', minute='0'], next run at: 2025-11-30 20:00:00 UTC)" (scheduled at 2025-11-30 20:00:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Starting translation task...
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgHG7rWc5BiHdrbvyq'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgHorxEkLULhG7nQbE'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgJHdq7Ebr4PiXdHaw'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgJqd6RHRMjTSgB7sc'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgKRMBTfbGRGFV889i'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgKvN2fZd3rMQxbjPV'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgLU74124bfTemquRg'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgLyrqZdikJCa8z5NJ'}
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 401 Unauthorized"
+ERROR:services.translation_service:Translation failed: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CVefgMXMUj3HwVtbdWhcy'}
+INFO:services.scheduler:✅ [SCHEDULER] Translated 0 articles (notifications will be sent with images)
+INFO:apscheduler.executors.default:Job "Translate pending articles (3x/day) (trigger: cron[hour='6,14,20', minute='0'], next run at: 2025-12-01 06:00:00 UTC)" executed successfully
+==> Detected service running on port 5000 with additional ports HTTP:8000
+==> Docs on specifying a port: https://render.com/docs/web-services#port-binding

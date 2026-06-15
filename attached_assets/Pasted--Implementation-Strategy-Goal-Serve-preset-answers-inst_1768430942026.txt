@@ -1,0 +1,331 @@
+
+🎯 Implementation Strategy
+Goal: Serve preset answers instantly (no API calls) while keeping Claude API for other questions
+
+📋 Step 1: Create Preset Service
+Prompt for Replit Agent:
+Create a preset answer service to serve static answers instantly.
+
+Location: `backend/services/preset_service.py`
+
+Requirements:
+
+1. **Load preset answers from JSON**
+   - File: `backend/data/preset_answers.json`
+   - Load once on startup (cache in memory)
+   - Hot reload on file change (optional)
+
+2. **Match user query to preset**
+   - Exact match (case-insensitive)
+   - Fuzzy match (>80% similarity using fuzzywuzzy or similar)
+   - Keyword detection (extract key terms)
+
+3. **Return preset or None**
+   - If match found: return answer instantly
+   - If no match: return None (fallback to Claude API)
+
+4. **Track usage**
+   - Log when preset is used
+   - Track API cost savings
+
+Implementation:
+```python
+"""Preset Answer Service - Instant responses for common questions"""
+
+import json
+import os
+from typing import Optional, Dict
+from fuzzywuzzy import fuzz
+import logging
+
+logger = logging.getLogger(__name__)
+
+class PresetService:
+    def __init__(self):
+        self.presets: Dict[str, str] = {}
+        self.load_presets()
+        
+        # Track savings
+        self.preset_hits = 0
+        self.api_calls_saved = 0
+        self.estimated_savings = 0.0  # in USD
+    
+    def load_presets(self):
+        """Load preset answers from JSON file"""
+        preset_file = "backend/data/preset_answers.json"
+        
+        try:
+            with open(preset_file, 'r', encoding='utf-8') as f:
+                self.presets = json.load(f)
+            
+            logger.info(f"✅ Loaded {len(self.presets)} preset answers")
+        except FileNotFoundError:
+            logger.warning(f"⚠️  Preset file not found: {preset_file}")
+            self.presets = {}
+        except Exception as e:
+            logger.error(f"❌ Error loading presets: {e}")
+            self.presets = {}
+    
+    def get_preset_answer(self, question: str) -> Optional[str]:
+        """
+        Try to match question to a preset answer
+        
+        Returns:
+            - Preset answer if found
+            - None if no match (fallback to Claude API)
+        """
+        
+        # Normalize question
+        question_normalized = question.strip().lower()
+        
+        # Method 1: Exact match (case-insensitive)
+        for preset_q, answer in self.presets.items():
+            if preset_q.lower() == question_normalized:
+                self._track_usage()
+                logger.info(f"✅ [PRESET] Exact match: {preset_q[:50]}...")
+                return answer
+        
+        # Method 2: Fuzzy match (>85% similarity)
+        best_match = None
+        best_score = 0
+        
+        for preset_q in self.presets.keys():
+            score = fuzz.ratio(question_normalized, preset_q.lower())
+            
+            if score > best_score:
+                best_score = score
+                best_match = preset_q
+        
+        if best_score >= 85:  # 85% similarity threshold
+            self._track_usage()
+            logger.info(f"✅ [PRESET] Fuzzy match ({best_score}%): {best_match[:50]}...")
+            return self.presets[best_match]
+        
+        # Method 3: Keyword detection (for common variations)
+        keywords_map = {
+            "коктейлі тренд": "Які коктейлі тренд цього сезону?",
+            "постачальники алкоголю": "Кращі постачальники преміум алкоголю?",
+            "знизити витрати бар": "Як знизити витрати на бар на 20%?",
+            "ліцензія алкоголь": "Що потрібно для ліцензії на алкоголь?",
+            "зимове меню": "Ідеї для зимового коктейльного меню?",
+            "craft spirits": "Топ-5 українських craft spirits?"
+        }
+        
+        for keywords, preset_q in keywords_map.items():
+            if all(word in question_normalized for word in keywords.split()):
+                self._track_usage()
+                logger.info(f"✅ [PRESET] Keyword match: {keywords}")
+                return self.presets[preset_q]
+        
+        # No match - return None to fallback to Claude API
+        logger.info(f"ℹ️  [API] No preset match, using Claude: {question[:50]}...")
+        return None
+    
+    def _track_usage(self):
+        """Track preset usage and estimated savings"""
+        self.preset_hits += 1
+        self.api_calls_saved += 1
+        
+        # Estimate: Sonnet 4 costs ~$0.015 per response (average)
+        self.estimated_savings += 0.015
+        
+        if self.preset_hits % 10 == 0:  # Log every 10 hits
+            logger.info(
+                f"💰 Preset savings: {self.api_calls_saved} API calls, "
+                f"~${self.estimated_savings:.2f} saved"
+            )
+    
+    def get_stats(self) -> Dict:
+        """Get usage statistics"""
+        return {
+            "preset_hits": self.preset_hits,
+            "api_calls_saved": self.api_calls_saved,
+            "estimated_savings_usd": round(self.estimated_savings, 2),
+            "presets_loaded": len(self.presets)
+        }
+
+# Global instance
+preset_service = PresetService()
+```
+
+Add dependency to `requirements.txt`:
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.21.1
+
+Testing script `test_preset_service.py`:
+```python
+from services.preset_service import preset_service
+
+# Test exact match
+q1 = "Які коктейлі тренд цього сезону?"
+answer1 = preset_service.get_preset_answer(q1)
+assert answer1 is not None
+print(f"✅ Exact match: {len(answer1)} chars")
+
+# Test fuzzy match (minor typo)
+q2 = "які коктейлі тренд цого сезону?"  # missing 'ь'
+answer2 = preset_service.get_preset_answer(q2)
+assert answer2 is not None
+print(f"✅ Fuzzy match: {len(answer2)} chars")
+
+# Test keyword match
+q3 = "Які найкращі постачальники преміум алкоголю в Україні?"
+answer3 = preset_service.get_preset_answer(q3)
+assert answer3 is not None
+print(f"✅ Keyword match: {len(answer3)} chars")
+
+# Test no match (should return None)
+q4 = "Розкажи про історію коньяку"
+answer4 = preset_service.get_preset_answer(q4)
+assert answer4 is None
+print(f"✅ No match (correct fallback)")
+
+# Check stats
+stats = preset_service.get_stats()
+print(f"\n📊 Stats: {stats}")
+```
+
+Please implement this preset service with all three matching methods and testing.
+
+📋 Step 2: Integrate into Chat Endpoint
+Prompt for Replit Agent:
+Update the chat endpoint to check presets BEFORE calling Claude API.
+
+File: `backend/main.py` or wherever the `/api/chat` endpoint is
+
+Logic:
+```python
+from services.preset_service import preset_service
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Chat endpoint with preset answer optimization
+    
+    Flow:
+    1. Check preset answers first (instant, free)
+    2. If no preset, use Claude API (costs money)
+    3. Log which method was used
+    """
+    
+    user_message = request.message
+    
+    # Step 1: Try preset answers first
+    preset_answer = preset_service.get_preset_answer(user_message)
+    
+    if preset_answer:
+        # Return preset instantly (no API call)
+        logger.info(f"✅ [PRESET] Served instant answer")
+        
+        return {
+            "response": preset_answer,
+            "source": "preset",
+            "avatar": "alex",
+            "cost": 0.0
+        }
+    
+    # Step 2: No preset found, use Claude API
+    logger.info(f"🤖 [API] Calling Claude API")
+    
+    # Your existing Claude API logic here
+    claude_response = await call_claude_api(user_message)
+    
+    return {
+        "response": claude_response,
+        "source": "claude_api",
+        "avatar": "alex",
+        "cost": 0.015  # Approximate
+    }
+```
+
+Also add a stats endpoint:
+```python
+@app.get("/api/preset-stats")
+async def get_preset_stats():
+    """Get preset usage statistics"""
+    return preset_service.get_stats()
+```
+
+Please implement this integration with proper logging and error handling.
+
+📋 Step 3: Update Frontend (Optional UX Enhancement)
+Show users when they get instant answers:
+javascript// In your chat component
+const response = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message: userQuestion })
+});
+
+const data = await response.json();
+
+if (data.source === 'preset') {
+    // Show instant answer indicator
+    console.log('⚡ Instant answer (preset)');
+    // Maybe add a small badge: "⚡ Instant"
+} else {
+    console.log('🤖 AI-generated answer');
+}
+
+displayAnswer(data.response);
+```
+
+---
+
+## 📊 **Step 4: Monitor Savings**
+
+**Add monitoring dashboard:**
+```
+Create endpoint: GET /api/admin/preset-dashboard
+
+Returns:
+- Total preset hits
+- Total API calls saved
+- Estimated cost savings
+- Most popular preset questions
+- Preset hit rate (% of queries using presets)
+
+Example response:
+{
+    "total_queries": 1000,
+    "preset_hits": 450,
+    "api_calls": 550,
+    "preset_hit_rate": 45%,
+    "estimated_savings": "$6.75",
+    "top_presets": [
+        {"question": "Які коктейлі тренд...", "hits": 120},
+        {"question": "Кращі постачальники...", "hits": 98},
+        ...
+    ]
+}
+
+💰 Expected Cost Savings
+Current Situation (No Presets)
+
+Every query = Claude API call
+Cost per call: ~$0.015 (Sonnet 4)
+1000 queries/month = $15/month
+
+With Presets (Optimized)
+
+6 preset questions cover ~40-50% of queries
+500 preset hits = $0 (instant)
+500 API calls = $7.50
+Monthly cost: $7.50 (50% savings)
+
+If Presets Cover 60% of Traffic
+
+600 preset hits = $0
+400 API calls = $6.00
+Monthly cost: $6.00 (60% savings)
+
+
+✅ Implementation Checklist
+After Replit Agent completes:
+
+ backend/services/preset_service.py created
+ backend/data/preset_answers.json exists with 6 answers
+ /api/chat endpoint updated to check presets first
+ fuzzywuzzy added to requirements.txt
+ Test script passes all tests
+ /api/preset-stats endpoint working
+ Deploy to Render

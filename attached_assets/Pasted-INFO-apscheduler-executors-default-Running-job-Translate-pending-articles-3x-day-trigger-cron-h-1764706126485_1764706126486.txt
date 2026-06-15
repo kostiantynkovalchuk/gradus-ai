@@ -1,0 +1,122 @@
+INFO:apscheduler.executors.default:Running job "Translate pending articles (3x/day) (trigger: cron[hour='6,14,20', minute='0'], next run at: 2025-12-03 06:00:00 UTC)" (scheduled at 2025-12-02 20:00:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Starting translation task...
+INFO:services.scheduler:[SCHEDULER] No articles need translation
+INFO:apscheduler.executors.default:Job "Translate pending articles (3x/day) (trigger: cron[hour='6,14,20', minute='0'], next run at: 2025-12-03 06:00:00 UTC)" executed successfully
+     ==> Deploying...
+========================================
+  Gradus Media AI Agent - Starting...
+========================================
+[2025-12-02 20:04:49] Starting FastAPI backend on port 5000...
+Backend will serve both API and frontend static files
+INFO:main:Frontend dist found at: /app/frontend/dist
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:main:🚀 Starting Gradus Media AI Agent...
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Added job "Scrape LinkedIn sources (TSB, Drinks Int)" to job store "default"
+INFO:apscheduler.scheduler:Added job "Scrape Facebook sources (Delo, HoReCa, Just Drinks)" to job store "default"
+INFO:apscheduler.scheduler:Added job "Translate pending articles (3x/day)" to job store "default"
+INFO:apscheduler.scheduler:Added job "Generate images & send Telegram notifications (3x/day)" to job store "default"
+INFO:apscheduler.scheduler:Added job "Post to LinkedIn" to job store "default"
+INFO:apscheduler.scheduler:Added job "Post to Facebook" to job store "default"
+INFO:apscheduler.scheduler:Added job "Cleanup old rejected content" to job store "default"
+INFO:apscheduler.scheduler:Added job "Check all API services" to job store "default"
+INFO:apscheduler.scheduler:Scheduler started
+INFO:services.scheduler:============================================================
+INFO:services.scheduler:✅ GRADUS MEDIA AI AGENT - FULLY OPERATIONAL
+INFO:services.scheduler:============================================================
+INFO:services.scheduler:
+INFO:services.scheduler:📰 CONTENT SOURCES:
+INFO:services.scheduler:   LinkedIn (Mon/Wed/Fri):
+INFO:services.scheduler:      • The Spirits Business 🇬🇧
+INFO:services.scheduler:      • Drinks International 🇬🇧
+INFO:services.scheduler:
+INFO:services.scheduler:   Facebook (Daily):
+INFO:services.scheduler:      • Delo.ua 🇺🇦
+INFO:services.scheduler:      • HoReCa-Україна 🇺🇦
+INFO:services.scheduler:      • Just Drinks 🇬🇧
+INFO:services.scheduler:
+INFO:services.scheduler:📅 SCRAPING SCHEDULE:
+INFO:services.scheduler:   • LinkedIn: Mon/Wed/Fri 1:00 AM
+INFO:services.scheduler:   • Facebook: Daily 2:00 AM
+INFO:services.scheduler:
+INFO:services.scheduler:🔄 PROCESSING:
+INFO:services.scheduler:   • Translation: 3x/day at 6am, 2pm, 8pm
+INFO:services.scheduler:   • Images: 3x/day at 6:15am, 2:15pm, 8:15pm
+INFO:services.scheduler:
+INFO:services.scheduler:📢 POSTING SCHEDULE:
+INFO:services.scheduler:   • LinkedIn: Mon/Wed/Fri 9:00 AM
+INFO:services.scheduler:   • Facebook: Daily 6:00 PM
+INFO:services.scheduler:
+INFO:services.scheduler:🔧 MAINTENANCE:
+INFO:services.scheduler:   • API monitoring: Daily 8:00 AM
+INFO:services.scheduler:   • Cleanup: Daily 3:00 AM
+INFO:services.scheduler:
+INFO:services.scheduler:============================================================
+INFO:services.scheduler:🚀 System ready! Waiting for next scheduled task...
+INFO:services.scheduler:============================================================
+INFO:main:✅ Scheduler started - automation enabled!
+INFO:services.scheduler:🔍 [SCHEDULER] Checking for missed scraping tasks...
+INFO:main:🔍 Checking for missed scraping tasks in background...
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:5000 (Press CTRL+C to quit)
+INFO:services.scheduler:📊 Facebook sources: last scraped 18.1 hours ago
+INFO:services.scheduler:✅ Facebook sources up-to-date
+INFO:services.scheduler:📊 LinkedIn sources: last scraped 48.1 hours ago
+INFO:services.scheduler:⚠️ LinkedIn sources overdue (>48h) - running catch-up...
+INFO:services.scheduler:🤖 [SCHEDULER] Scraping LinkedIn sources...
+INFO:services.scrapers.manager:✅ ScraperManager initialized with 5 sources
+INFO:services.scrapers.spirits_business:🔍 Scraping The Spirits Business...
+INFO:main:Frontend dist found at: /app/frontend/dist
+INFO:     127.0.0.1:41882 - "HEAD / HTTP/1.1" 200 OK
+INFO:services.scrapers.spirits_business:  📄 Found: Pernod completes Imperial Blue whisky sale...
+INFO:services.scrapers.spirits_business:  📄 Found: TWE unveils its Whisky of the Year...
+INFO:services.scrapers.spirits_business:  📄 Found: Lake Hour hires first CEO...
+INFO:services.scrapers.spirits_business:✅ Scraped 3 articles from The Spirits Business
+INFO:services.scrapers.manager:✅ spirits_business: scraped 3 articles
+INFO:services.scheduler:  📊 spirits_business: 3 articles scraped
+INFO:services.scheduler:    ✅ 🇬🇧 Pernod completes Imperial Blue whisky sale...
+INFO:services.scheduler:    ✅ 🇬🇧 TWE unveils its Whisky of the Year...
+INFO:services.scheduler:    ✅ 🇬🇧 Lake Hour hires first CEO...
+INFO:services.scrapers.drinks_international:🔍 Scraping Drinks International (English)...
+INFO:services.scrapers.drinks_international:  Found 81 potential articles
+INFO:services.scrapers.drinks_international:  ✅ Altamura Distilleries expands into Asia...
+INFO:services.scrapers.drinks_international:  ✅ Le Philtre vodka joins Spiribam...
+INFO:services.scrapers.drinks_international:  ✅ Desi Daru vodka enters South Asia and the Middle E...
+INFO:services.scrapers.drinks_international:✅ Scraped 3 English articles from Drinks International
+INFO:services.scrapers.manager:✅ drinks_international: scraped 3 articles
+INFO:services.scheduler:  📊 drinks_international: 3 articles scraped
+INFO:services.scheduler:    ⏭️  Duplicate skipped: Altamura Distilleries expands into Asia...
+INFO:services.scheduler:    ⏭️  Duplicate skipped: Le Philtre vodka joins Spiribam...
+INFO:services.scheduler:    ⏭️  Duplicate skipped: Desi Daru vodka enters South Asia and the Middle E...
+ERROR:services.scheduler:❌ [SCHEDULER] LinkedIn scraping failed: (psycopg2.errors.UndefinedColumn) column "image_data" of relation "content_queue" does not exist
+LINE 1: ..._text, image_url, image_prompt, local_image_path, image_data...
+                                                             ^
+[SQL: INSERT INTO content_queue (status, source, source_url, source_title, original_text, translated_title, translated_text, image_url, image_prompt, local_image_path, image_data, scheduled_post_time, platforms, reviewed_at, reviewed_by, rejection_reason,  ... 1815 characters truncated ... ORDER BY sen_counter RETURNING content_queue.id, content_queue.created_at, content_queue.id AS id__1]
+[parameters: {'platforms__0': ['linkedin'], 'rejection_reason__0': None, 'extra_metadata__0': '{"title": "Pernod completes Imperial Blue whisky sale", "published_date": "2025-12-01", "author": "Miona Madsen", "content_hash": "b57478f8c9cd050f1a40a73dde12e75b", "scraped_at": "2025-12-02T20:04:57.313647"}', 'scheduled_post_time__0': None, 'source_title__0': None, 'image_url__0': None, 'translated_title__0': None, 'image_prompt__0': None, 'needs_translation__0': True, 'status__0': 'draft', 'posted_at__0': None, 'local_image_path__0': None, 'language__0': 'en', 'source__0': 'The Spirits Business', 'reviewed_by__0': None, 'source_url__0': 'https://www.thespiritsbusiness.com/2025/12/pernod-completes-imperial-blue-whisky-sale/', 'original_text__0': 'Indian spirits producer Tilaknagar Industries has finalised its purchase of the Imperial Blue business division from Pernod Ricard for €412.6 million ... (2304 characters truncated) ... y, and external debt. \n\nLast month, Tilaknagar Industries launched Seven Islands Pure Malt Whisky, described as an ‘Indo-Scottish style’ pure malt.', 'translated_text__0': None, 'image_data__0': None, 'reviewed_at__0': None, 'platforms__1': ['linkedin'], 'rejection_reason__1': None, 'extra_metadata__1': '{"title": "TWE unveils its Whisky of the Year", "published_date": "2025-12-01", "author": "Georgie Collins", "content_hash": "30f73824a7364826b48d711407e90539", "scraped_at": "2025-12-02T20:04:57.314217"}', 'scheduled_post_time__1': None, 'source_title__1': None, 'image_url__1': None, 'translated_title__1': None, 'image_prompt__1': None, 'needs_translation__1': True, 'status__1': 'draft', 'posted_at__1': None, 'local_image_path__1': None, 'language__1': 'en', 'source__1': 'The Spirits Business', 'reviewed_by__1': None, 'source_url__1': 'https://www.thespiritsbusiness.com/2025/12/twe-unveils-its-whisky-of-the-year/', 'original_text__1': 'For the first time, spirits retailer The Whisky Exchange (TWE) has named an English single malt as its Whisky of the Year 2026. \n\nWire Works Bourbo ... (4185 characters truncated) ...  to every distillery we’ve partnered with so far, and all those still to come.” All of the winners are available to purchase via The Whisky Exchange.', 'translated_text__1': None, 'image_data__1': None, 'reviewed_at__1': None, 'platforms__2': ['linkedin'], 'rejection_reason__2': None, 'extra_metadata__2': '{"title": "Lake Hour hires first CEO", "published_date": "2025-12-01", "author": "Georgie Collins", "content_hash": "87eb3e2f44d46b32db2bd2fa7c4cd93c", "scraped_at": "2025-12-02T20:04:57.314349"}', 'scheduled_post_time__2': None, 'source_title__2': None, 'image_url__2': None, 'translated_title__2': None, 'image_prompt__2': None, 'needs_translation__2': True, 'status__2': 'draft', 'posted_at__2': None, 'local_image_path__2': None, 'language__2': 'en', 'source__2': 'The Spirits Business', 'reviewed_by__2': None, 'source_url__2': 'https://www.thespiritsbusiness.com/2025/12/lake-hour-hires-first-ceo/', 'original_text__2': 'Ready-to-drink (RTD) brand Lake Hour, co-founded by Marvel actor Wyatt Russell, has named industry veteran Michelle Ivey as its first CEO. \n\nLake H ... (1979 characters truncated) ... al spirits, real juice, and pure cane sugar, without artificial ingredients. \n\nIt is available in-store in select markets and online across the US.', 'translated_text__2': None, 'image_data__2': None, 'reviewed_at__2': None}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+INFO:services.scheduler:✅ Catch-up check completed
+     ==> Your service is live 🎉
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> 
+     ==> Available at your primary URL https://gradus-ai.onrender.com
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+INFO:main:Frontend dist found at: /app/frontend/dist
+INFO:     10.21.156.101:41822 - "GET / HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:main:Shutting down scheduler...
+INFO:apscheduler.scheduler:Scheduler has been shut down
+INFO:services.scheduler:Scheduler stopped
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1]
+Need better ways to work with logs? Try theRender CLI, Render MCP Server, or set up a log stream integration 

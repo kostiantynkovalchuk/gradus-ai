@@ -1,0 +1,607 @@
+# TEAM PULSE — CORRECTION & ENHANCEMENT PROMPT
+# Run this AFTER the base implementation from the previous task is complete.
+# This adds the missing critical components.
+
+"""
+=== TEAM PULSE — PHASE 2: CRITICAL ENHANCEMENTS ===
+
+The base implementation is done. Now we need to add the components that make 
+Team Pulse actually useful: risk score accumulation, HR action tracking, 
+survey response branching, and identified alerts.
+
+Read all pulse-related code first, then make these changes:
+
+=== 1. MIGRATION 025 — ADD 3 MISSING TABLES ===
+
+Append a NEW migration "025_pulse_risk_and_actions" to the MIGRATIONS list 
+in backend/db_migrations.py. Do NOT modify migration 024.
+
+```sql
+CREATE TABLE IF NOT EXISTS pulse_risk_scores (
+    id SERIAL PRIMARY KEY,
+    employee_id BIGINT NOT NULL UNIQUE,
+    employee_name VARCHAR(255),
+    department VARCHAR(200),
+    current_score INTEGER NOT NULL DEFAULT 0,
+    alert_status VARCHAR(20) DEFAULT 'none',
+    last_trigger_at TIMESTAMP,
+    last_calculated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pulse_hr_actions (
+    id SERIAL PRIMARY KEY,
+    trigger_id INTEGER REFERENCES pulse_triggers(id),
+    risk_score_id INTEGER REFERENCES pulse_risk_scores(id),
+    action VARCHAR(30) NOT NULL,
+    notes TEXT,
+    hr_user VARCHAR(100),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pulse_video_views (
+    id SERIAL PRIMARY KEY,
+    employee_hash VARCHAR(64) NOT NULL,
+    video_id VARCHAR(50) NOT NULL,
+    viewed_at TIMESTAMP DEFAULT NOW(),
+    completed BOOLEAN DEFAULT FALSE
+);
+```
+
+Also ALTER the pulse_triggers table to add missing columns:
+```sql
+ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255);
+ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS employee_id BIGINT;
+ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS trigger_text TEXT;
+ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS severity VARCHAR(10) DEFAULT 'yellow';
+ALTER TABLE pulse_triggers ADD COLUMN IF NOT EXISTS risk_points INTEGER DEFAULT 1;
+```
+
+=== 2. FIX pulse_service.py — ADD RISK SCORE ENGINE ===
+
+Add these functions to the existing pulse_service.py:
+
+```python
+# === RISK SCORE ENGINE ===
+
+RISK_POINTS = {
+    "resignation": 3,
+    "conflict": 1,
+    "rights": 1,
+    "burnout": 1,
+}
+
+RISK_THRESHOLD_ALERT = 4
+RISK_THRESHOLD_URGENT = 7
+
+def update_risk_score(employee_id: int, employee_name: str, department: str, points: int):
+    """
+    Update rolling risk score for an employee.
+    Uses UPSERT — creates if first signal, increments if exists.
+    """
+    db = SessionLocal()
+    try:
+        db.execute(text("""
+            INSERT INTO pulse_risk_scores 
+                (employee_id, employee_name, department, current_score, last_trigger_at, last_calculated_at)
+            VALUES (:eid, :ename, :dept, :pts, NOW(), NOW())
+            ON CONFLICT (employee_id) DO UPDATE SET
+                current_score = pulse_risk_scores.current_score + :pts,
+                employee_name = :ename,
+                department = :dept,
+                last_trigger_at = NOW(),
+                last_calculated_at = NOW(),
+                alert_status = CASE
+                    WHEN pulse_risk_scores.current_score + :pts >= :urgent THEN 'urgent'
+                    WHEN pulse_risk_scores.current_score + :pts >= :alert THEN 'red'
+                    ELSE pulse_risk_scores.alert_status
+                END
+        """), {
+            "eid": employee_id, "ename": employee_name, "dept": department,
+            "pts": points, "urgent": RISK_THRESHOLD_URGENT, "alert": RISK_THRESHOLD_ALERT
+        })
+        db.commit()
+        
+        # Check if threshold crossed → return True if HR alert needed
+        result = db.execute(text(
+            "SELECT current_score FROM pulse_risk_scores WHERE employee_id = :eid"
+        ), {"eid": employee_id}).fetchone()
+        
+        return result[0] >= RISK_THRESHOLD_ALERT if result else False
+    except Exception as e:
+        logger.error(f"Risk score update failed: {e}")
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
+def get_risk_history(employee_id: int) -> list:
+    """Get last 5 triggers for this employee within 30 days"""
+    db = SessionLocal()
+    try:
+        rows = db.execute(text("""
+            SELECT trigger_type, severity, risk_points, fired_at
+            FROM pulse_triggers
+            WHERE employee_id = :eid AND fired_at > NOW() - INTERVAL '30 days'
+            ORDER BY fired_at DESC LIMIT 5
+        """), {"eid": employee_id}).fetchall()
+        return rows
+    finally:
+        db.close()
+
+
+def log_hr_action(trigger_id: int, action: str, hr_user: str):
+    """Log HR response to an alert"""
+    db = SessionLocal()
+    try:
+        # Get employee_id from trigger
+        row = db.execute(text(
+            "SELECT employee_id FROM pulse_triggers WHERE id = :tid"
+        ), {"tid": trigger_id}).fetchone()
+        
+        risk_score_id = None
+        if row:
+            r = db.execute(text(
+                "SELECT id FROM pulse_risk_scores WHERE employee_id = :eid"
+            ), {"eid": row[0]}).fetchone()
+            risk_score_id = r[0] if r else None
+        
+        db.execute(text("""
+            INSERT INTO pulse_hr_actions (trigger_id, risk_score_id, action, hr_user)
+            VALUES (:tid, :rsid, :action, :hr)
+        """), {"tid": trigger_id, "rsid": risk_score_id, "action": action, "hr": hr_user})
+        
+        # If resolved/false_positive → reduce risk score by 2
+        if action in ("resolved", "false_positive") and row:
+            db.execute(text("""
+                UPDATE pulse_risk_scores 
+                SET current_score = GREATEST(0, current_score - 2),
+                    alert_status = CASE WHEN current_score - 2 <= 0 THEN 'none' ELSE alert_status END,
+                    last_calculated_at = NOW()
+                WHERE employee_id = :eid
+            """), {"eid": row[0]})
+        
+        db.commit()
+    except Exception as e:
+        logger.error(f"HR action logging failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
+```
+
+=== 3. FIX TRIGGER DETECTION — STORE FULL CONTEXT + RISK SCORE ===
+
+Modify the trigger detection flow in pulse_service.py and telegram_webhook.py:
+
+When a trigger fires:
+a) Store employee_id, employee_name, trigger_text in pulse_triggers (not just department)
+b) Call update_risk_score() with the appropriate points
+c) If risk score crosses threshold → send IDENTIFIED HR alert WITH employee name
+
+The current log_trigger() function needs these params added:
+```python
+def log_trigger(employee_id: int, employee_name: str, department: str, 
+                position: str, trigger_type: str, trigger_text: str):
+    severity = "red" if trigger_type == "resignation" else "yellow"
+    points = RISK_POINTS.get(trigger_type, 1)
+    
+    db = SessionLocal()
+    try:
+        result = db.execute(text("""
+            INSERT INTO pulse_triggers 
+                (department, position, trigger_type, fired_at, employee_id, employee_name, 
+                 trigger_text, severity, risk_points)
+            VALUES (:dept, :pos, :ttype, NOW(), :eid, :ename, :ttext, :sev, :pts)
+            RETURNING id
+        """), {
+            "dept": department, "pos": position, "ttype": trigger_type,
+            "eid": employee_id, "ename": employee_name, 
+            "ttext": trigger_text[:500], "sev": severity, "pts": points
+        })
+        trigger_id = result.fetchone()[0]
+        db.commit()
+        return trigger_id
+    except Exception as e:
+        logger.error(f"Trigger logging failed: {e}")
+        db.rollback()
+        return None
+    finally:
+        db.close()
+```
+
+In telegram_webhook.py, update the trigger processing inside process_telegram_message():
+```python
+# After detecting trigger:
+trigger_type = detect_pulse_trigger(text)
+if trigger_type:
+    # Get employee info from hr_users
+    user_row = db.execute(text(
+        "SELECT full_name, department, position FROM hr_users WHERE telegram_id = :tid"
+    ), {"tid": telegram_id}).fetchone()
+    
+    emp_name = user_row[0] if user_row else "Невідомий"
+    emp_dept = user_row[1] if user_row else "Невідомий"
+    emp_pos = user_row[2] if user_row else ""
+    
+    # Log trigger with full context
+    trigger_id = log_trigger(
+        employee_id=telegram_id,  # using telegram_id as employee_id
+        employee_name=emp_name,
+        department=emp_dept,
+        position=emp_pos,
+        trigger_type=trigger_type,
+        trigger_text=text
+    )
+    
+    # Update risk score
+    points = RISK_POINTS.get(trigger_type, 1)
+    should_alert = update_risk_score(telegram_id, emp_name, emp_dept, points)
+    
+    # Send HR alert — IDENTIFIED (with name) for red triggers or threshold crossed
+    severity = "red" if trigger_type == "resignation" else "yellow"
+    if severity == "red" or should_alert:
+        await alert_hr_team_identified(
+            trigger_type=trigger_type,
+            employee_name=emp_name,
+            department=emp_dept,
+            trigger_id=trigger_id,
+            chat_id=chat_id  # for sending response
+        )
+    
+    # Send support video to employee
+    await send_pulse_video(chat_id, trigger_type)
+    
+    # IMPORTANT: Do NOT return here — continue to handle_hr_question()
+```
+
+=== 4. ADD IDENTIFIED HR ALERT WITH ACTION BUTTONS ===
+
+Add to pulse_service.py:
+
+```python
+async def alert_hr_team_identified(trigger_type: str, employee_name: str, 
+                                    department: str, trigger_id: int, chat_id: int):
+    """
+    Send IDENTIFIED alert to HR with employee name and action buttons.
+    This is for RED triggers and threshold crossings only.
+    """
+    hr_chat_id = os.getenv("PULSE_HR_CHAT_ID") or os.getenv("HUNT_TG_SUPERGROUP_ID")
+    if not hr_chat_id:
+        logger.warning("No HR chat ID configured for pulse alerts")
+        return
+    
+    # Get risk score
+    db = SessionLocal()
+    try:
+        row = db.execute(text(
+            "SELECT current_score FROM pulse_risk_scores WHERE employee_id = :eid"
+        ), {"eid": chat_id}).fetchone()
+        risk_score = row[0] if row else 0
+        
+        # Get history
+        history_rows = db.execute(text("""
+            SELECT trigger_type, severity, risk_points, fired_at
+            FROM pulse_triggers
+            WHERE employee_id = :eid AND fired_at > NOW() - INTERVAL '30 days'
+            ORDER BY fired_at DESC LIMIT 5
+        """), {"eid": chat_id}).fetchall()
+    finally:
+        db.close()
+    
+    severity_emoji = "🔴" if trigger_type == "resignation" else "🟡"
+    
+    history_lines = []
+    for row in history_rows:
+        t_type, t_sev, t_pts, t_date = row
+        date_str = t_date.strftime("%d.%m") if t_date else "?"
+        sev_icon = "🔴" if t_sev == "red" else "🟡"
+        history_lines.append(f"  {sev_icon} {date_str} — {t_type} (+{t_pts})")
+    
+    history_text = "\n".join(history_lines) if history_lines else "  (перший сигнал)"
+    
+    alert_text = (
+        f"{severity_emoji} Team Pulse — Тривога\n\n"
+        f"👤 {employee_name}\n"
+        f"🏢 Відділ: {department or 'Невідомий'}\n"
+        f"⚠️ Рівень ризику: {risk_score}/10\n"
+        f"📌 Тригер: {trigger_type}\n\n"
+        f"📊 Історія сигналів (30 днів):\n{history_text}"
+    )
+    
+    # Send with action buttons
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ Взяв в роботу", "callback_data": f"hr_pulse:hr_action:reviewing:{trigger_id}"},
+            {"text": "✔️ Вирішено", "callback_data": f"hr_pulse:hr_action:resolved:{trigger_id}"},
+            {"text": "❌ Хибна тривога", "callback_data": f"hr_pulse:hr_action:false_positive:{trigger_id}"}
+        ]]
+    }
+    
+    await send_telegram_message_with_keyboard(hr_chat_id, alert_text, keyboard)
+```
+
+=== 5. ADD HR ACTION BUTTON HANDLER ===
+
+In the callback handler (where hr_pulse: callbacks are routed), add:
+
+```python
+# Inside handle_pulse_callback() or handle_hr_callback():
+if callback_data.startswith('hr_pulse:hr_action:'):
+    parts = callback_data.split(':')
+    # hr_pulse:hr_action:{action}:{trigger_id}
+    action = parts[2]  # reviewing, resolved, false_positive
+    trigger_id = int(parts[3])
+    hr_name = callback_query.get("from", {}).get("first_name", "HR")
+    
+    log_hr_action(trigger_id, action, hr_name)
+    
+    action_labels = {
+        "reviewing": "✅ Взято в роботу",
+        "resolved": "✔️ Вирішено", 
+        "false_positive": "❌ Хибна тривога",
+    }
+    
+    await answer_callback(callback_id, action_labels.get(action, action))
+    
+    # Edit original message to show action taken
+    original_text = callback_query.get("message", {}).get("text", "")
+    new_text = original_text + f"\n\n— {action_labels.get(action, action)} ({hr_name})"
+    await edit_telegram_message(chat_id, message_id, new_text)
+```
+
+=== 6. FIX SURVEY RESPONSE BRANCHING ===
+
+Currently the survey handler gives the same response for all scores.
+Fix the mood callback handler to branch:
+
+```python
+# When handling hr_pulse:mood:N callback:
+score = int(parts[-1])  # 1-5
+
+if score >= 3:
+    # Happy path: ❤️💚💙 — just thank you
+    await answer_callback(callback_id, "Дякую! 🙏")
+    await edit_telegram_message(chat_id, message_id,
+        "💚 Пульс команди\n\n"
+        f"Твоя відповідь збережена. Дякую! 🙏"
+    )
+
+elif score == 2:
+    # Concerned path: 🖤 — thank you + offer video
+    await answer_callback(callback_id, "Дякую за чесність 🤍")
+    keyboard = {"inline_keyboard": [[
+        {"text": "🎥 Коротке відео підтримки", "callback_data": "hr_pulse:video:breathing"},
+        {"text": "📩 Написати HR", "callback_data": "hr_pulse:contact_hr"},
+    ]]}
+    await edit_telegram_message_with_keyboard(chat_id, message_id,
+        "💚 Пульс команди\n\n"
+        "Дякую за чесність. 🤍\n"
+        "Ось коротке відео — можливо, допоможе.",
+        keyboard
+    )
+
+elif score == 1:
+    # Distress path: 💔 — video + HR button + dismiss
+    await answer_callback(callback_id, "Я чую тебе 💙")
+    keyboard = {"inline_keyboard": [
+        [
+            {"text": "🎥 Подивитись відео", "callback_data": "hr_pulse:video:breathing"},
+            {"text": "📩 Написати HR", "callback_data": "hr_pulse:contact_hr"},
+        ],
+        [
+            {"text": "🙏 Дякую, все ок", "callback_data": "hr_pulse:dismiss"},
+        ]
+    ]}
+    await edit_telegram_message_with_keyboard(chat_id, message_id,
+        "💚 Пульс команди\n\n"
+        "Я чую тебе. 💙\n"
+        "Подивись це відео — воно саме для таких моментів.",
+        keyboard
+    )
+```
+
+=== 7. ADD VIDEO + DISMISS + CONTACT HR CALLBACKS ===
+
+Add these callback handlers inside the hr_pulse: branch:
+
+```python
+# hr_pulse:video:{video_id}
+if callback_data.startswith('hr_pulse:video:'):
+    video_id = callback_data.split(':')[2]
+    await answer_callback(callback_id, "Надсилаю відео...")
+    await send_pulse_video(chat_id, video_id)
+    # Log anonymous view
+    log_video_view(telegram_id, video_id)
+
+# hr_pulse:contact_hr
+elif callback_data == 'hr_pulse:contact_hr':
+    hr_contact = os.getenv("HR_CONTACT", "@avtd_hr")
+    await answer_callback(callback_id, "")
+    await send_telegram_message(chat_id,
+        f"📩 Напиши HR напряму: {hr_contact}\n\n"
+        f"Або скажи Майі: «хочу поговорити з HR» — і ми організуємо."
+    )
+
+# hr_pulse:dismiss
+elif callback_data == 'hr_pulse:dismiss':
+    await answer_callback(callback_id, "👍")
+    await edit_telegram_message(chat_id, message_id,
+        "💚 Пульс команди\n\nДякую. Якщо потрібна підтримка — Майя завжди тут."
+    )
+```
+
+=== 8. ADD VIDEO HELPER FUNCTIONS ===
+
+Add to pulse_service.py:
+
+```python
+import hashlib
+
+# Video mapping: trigger_type → video filename
+PULSE_VIDEOS = {
+    "breathing": "pulse_breathing.mp4",
+    "conflict": "pulse_conflict.mp4",
+    "burnout": "pulse_burnout.mp4",
+    "decision": "pulse_decision.mp4",
+    "resignation": "pulse_decision.mp4",  # alias
+    "rights": "pulse_conflict.mp4",       # alias — reuse conflict video
+    "stress": "pulse_burnout.mp4",        # alias
+}
+
+async def send_pulse_video(chat_id: int, trigger_or_video_id: str):
+    """Send support video to employee. Falls back to text if no video file."""
+    video_file = PULSE_VIDEOS.get(trigger_or_video_id)
+    video_path = f"backend/static/pulse_videos/{video_file}" if video_file else None
+    
+    if video_path and os.path.exists(video_path):
+        await send_telegram_video(chat_id, video_path)
+    else:
+        # Text fallback — videos not uploaded yet
+        fallback_messages = {
+            "breathing": (
+                "🫁 Пауза для дихання\n\n"
+                "Вдихни на 4 рахунки… затримай на 4… видихни на 4… пауза на 4.\n"
+                "Повтори 3 рази. Твоє тіло вже трохи розслабилось.\n\n"
+                "Якщо потрібна підтримка — напиши HR."
+            ),
+            "conflict": (
+                "🤝 Конфлікт — це не кінець\n\n"
+                "Спробуй замінити «Ти завжди…» на «Я відчуваю… коли…»\n"
+                "Це не слабкість — це навичка. HR може допомогти як нейтральна сторона."
+            ),
+            "burnout": (
+                "🌿 Зупинись і подивись\n\n"
+                "Назви 5 речей, які бачиш… 4 звуки… 3 дотики… 2 запахи… 1 смак.\n"
+                "Що забирає твою енергію сьогодні? Що її дає?\n"
+                "Іноді достатньо змінити одну маленьку річ."
+            ),
+            "decision": (
+                "📋 Перед рішенням\n\n"
+                "Візьми аркуш паперу. Зліва: що тримає мене тут. Справа: що штовхає звідси.\n"
+                "Подивись через день, коли емоції вляжуться.\n"
+                "Поговори з HR — не щоб звільнитися, а щоб подивитися варіанти."
+            ),
+        }
+        
+        # Map trigger types to video fallbacks
+        fallback_key = trigger_or_video_id
+        if fallback_key == "resignation":
+            fallback_key = "decision"
+        elif fallback_key == "rights":
+            fallback_key = "conflict"
+        elif fallback_key == "stress":
+            fallback_key = "burnout"
+        
+        msg = fallback_messages.get(fallback_key, fallback_messages["breathing"])
+        await send_telegram_message(chat_id, msg)
+
+
+def log_video_view(telegram_id: int, video_id: str):
+    """Log anonymous video view"""
+    salt = os.getenv("PULSE_ANONYMOUS_SALT", "teamPulse2026avtd")
+    emp_hash = hashlib.sha256(f"{telegram_id}:{salt}".encode()).hexdigest()
+    
+    db = SessionLocal()
+    try:
+        db.execute(text("""
+            INSERT INTO pulse_video_views (employee_hash, video_id)
+            VALUES (:hash, :vid)
+        """), {"hash": emp_hash, "vid": video_id})
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to log video view: {e}")
+        db.rollback()
+    finally:
+        db.close()
+```
+
+=== 9. DASHBOARD ENHANCEMENTS ===
+
+Add these endpoints to hr_admin.py:
+
+GET /hr/api/pulse-alerts — Active alerts with employee names:
+```python
+@router.get("/hr/api/pulse-alerts")
+async def pulse_alerts():
+    db = SessionLocal()
+    try:
+        rows = db.execute(text("""
+            SELECT rs.id, rs.employee_name, rs.department, rs.current_score, 
+                   rs.alert_status, rs.last_trigger_at,
+                   (SELECT trigger_type FROM pulse_triggers 
+                    WHERE employee_id = rs.employee_id 
+                    ORDER BY fired_at DESC LIMIT 1) as last_trigger
+            FROM pulse_risk_scores rs
+            WHERE rs.current_score >= 4 AND rs.alert_status != 'none'
+            ORDER BY rs.current_score DESC
+        """)).fetchall()
+        
+        return {"active_alerts": [
+            {"employee_name": r[1], "department": r[2], "risk_score": r[3],
+             "status": r[4], "last_trigger_date": str(r[5]) if r[5] else None,
+             "last_trigger": r[6]}
+            for r in rows
+        ]}
+    finally:
+        db.close()
+```
+
+GET /hr/api/pulse-videos — Video engagement stats:
+```python
+@router.get("/hr/api/pulse-videos")  
+async def pulse_videos():
+    db = SessionLocal()
+    try:
+        rows = db.execute(text("""
+            SELECT video_id, COUNT(*) as views, 
+                   COUNT(CASE WHEN completed THEN 1 END) as completed
+            FROM pulse_video_views
+            GROUP BY video_id
+        """)).fetchall()
+        
+        total = sum(r[1] for r in rows)
+        completed = sum(r[2] for r in rows)
+        
+        return {
+            "total_views": total,
+            "completion_rate": round(completed / total, 2) if total > 0 else 0,
+            "by_video": [
+                {"id": r[0], "views": r[1], "completion_rate": round(r[2]/r[1], 2) if r[1] > 0 else 0}
+                for r in rows
+            ]
+        }
+    finally:
+        db.close()
+```
+
+In the HTML dashboard, add an "Active Alerts" section to the Пульс команди tab 
+showing a table of at-risk employees (from /hr/api/pulse-alerts).
+
+=== 10. ADD 4TH TRIGGER CATEGORY: "DECISION/RESIGNATION" VIDEO ===
+
+In the TRIGGER_KEYWORDS dict, make sure "resignation" maps to the "decision" video:
+When someone asks about quitting → they get the "Перед рішенням" video (decision),
+NOT a generic breathing video. This is the highest-value intervention.
+
+=== IMPORTANT RULES ===
+
+1. ALL callback_data MUST start with "hr_pulse:" to route correctly through handle_hr_callback()
+2. HR alerts for RED triggers and threshold crossings MUST include employee name 
+   (this is the HYBRID anonymity model — surveys anonymous, triggers identified)
+3. Risk score uses UPSERT — first signal creates the row, subsequent signals increment
+4. Risk score is ROLLING — needs a weekly cron job to decay old signals:
+   Add to scheduler.py: weekly job that runs:
+   UPDATE pulse_risk_scores SET current_score = GREATEST(0, current_score - 1) WHERE last_trigger_at < NOW() - INTERVAL '7 days'
+5. Survey responses NEVER include employee name — only department + score + anonymous hash
+6. Video fallback text messages MUST work — videos won't be uploaded immediately
+7. Do NOT modify any existing handlers or tables — only ADD new code
+8. Use existing helper functions: send_telegram_message_with_keyboard(), 
+   send_telegram_video(), answer_callback(), edit_telegram_message()
+9. All new imports should be at the top of files, not inline
+
+After implementing, test:
+1. Send "як звільнитися" to Maya → verify trigger logged, HR alert with name, decision video sent
+2. Send "конфлікт з колегою" → verify trigger logged, conflict video sent, NO immediate HR alert (yellow)
+3. Open /hr dashboard → Пульс команди tab → verify alerts table shows data
+4. Click survey heart → verify branching (💔 shows video+HR, ❤️ shows just thanks)
+"""

@@ -1,0 +1,75 @@
+TASK: Create scraper for Class Magazine (UK bar industry source)
+Context:
+We're adding Class Magazine (https://www.classmagazine.com/) as a new content source for GradusMedia. This is a UK-based bar and cocktail industry publication that will diversify our content mix with European perspective and bar-specific focus, complementing our existing Modern Restaurant Management (restaurant-focused) content.
+Requirements:
+1. Create new scraper module:
+
+File location: backend/scrapers/class_magazine.py
+Follow the same pattern as existing scrapers (MRM, The Spirits Business, etc.)
+Class name: ClassMagazineScraper
+
+2. Scraping specifications:
+
+Base URL: https://www.classmagazine.com/
+Target: Recent articles from main news/articles section
+Frequency: Should integrate with existing scraping schedule
+Articles per run: 3-5 most recent articles
+
+3. Content extraction:
+Extract the following fields:
+
+title - Article headline (Ukrainian translation will happen separately)
+content - Full article body text
+original_url - Link to original article
+source - Always "Class Magazine"
+published_date - Original publication date if available
+category - Try to extract category/topic if available (e.g., "Cocktails", "Bar Design", "Industry News")
+
+4. Content filtering:
+
+Remove photo credits - Filter out lines like "Photo by...", "Image credit:", etc.
+Skip lists/rankings - We want editorial articles, not "Top 10" lists
+Minimum length - Articles should be at least 500 characters
+English only - No need to handle other languages, we translate to Ukrainian
+
+5. Integration with existing system:
+
+Save to same articles table in PostgreSQL
+Set initial status as 'pending' (for approval workflow)
+Generate DALL-E image using existing image generation logic
+Trigger translation to Ukrainian via existing Claude API integration
+Should work with existing Telegram approval workflow
+
+6. Error handling:
+
+Handle connection timeouts gracefully
+Skip articles that fail to parse (log error, continue)
+Avoid duplicate articles (check by URL before inserting)
+Rate limiting - respect website's robots.txt, add delays between requests
+
+7. Testing:
+
+Create test function to scrape 1-2 articles
+Verify all fields are populated correctly
+Check that content is clean (no photo credits, proper formatting)
+Ensure it doesn't break existing scrapers
+
+8. Configuration:
+Add Class Magazine to scraper registry/config so it runs automatically with other sources.
+Expected file structure:
+backend/
+  scrapers/
+    class_magazine.py          # New scraper
+    __init__.py                # Update to include new scraper
+  scripts/
+    test_class_scraper.py      # Optional: test script
+Success criteria:
+
+Scraper successfully extracts 3-5 recent articles from Class Magazine
+Articles appear in database with status='pending'
+Content is clean and properly formatted
+Integrates seamlessly with existing translation and approval workflow
+Can be run manually: python -m scrapers.class_magazine
+
+Tech stack: Python, FastAPI, PostgreSQL, BeautifulSoup4/requests for scraping
+Important: Follow the exact same patterns and conventions as existing scrapers in the codebase. Don't reinvent the wheel - reuse existing helper functions for translation, image generation, and database insertion.

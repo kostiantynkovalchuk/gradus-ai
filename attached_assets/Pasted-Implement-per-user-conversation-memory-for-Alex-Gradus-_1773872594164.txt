@@ -1,0 +1,211 @@
+Implement per-user conversation memory for Alex Gradus.
+This feature is for PAID users only (standard + premium tier).
+Free tier users get no memory — each session starts fresh.
+
+═══════════════════════════════════════
+STEP 1: DATABASE MIGRATIONS
+═══════════════════════════════════════
+
+Create migration 022_alex_memory:
+
+CREATE TABLE IF NOT EXISTS alex_conversations (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL,  -- 'user' or 'assistant'
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_alex_conv_email 
+ON alex_conversations(email, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS alex_user_profiles (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    business_data JSONB DEFAULT '{}',
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+Add migration to db_migrations.py as 022_alex_memory.
+
+═══════════════════════════════════════
+STEP 2: CONVERSATION STORAGE
+═══════════════════════════════════════
+
+In the Alex chat handler (maya route or 
+chat_endpoints.py), after every successful 
+Claude response:
+
+If user tier is 'standard' or 'premium':
+    Save user message to alex_conversations:
+    INSERT INTO alex_conversations 
+    (email, role, content) 
+    VALUES ($1, 'user', $2)
+
+    Save assistant response to alex_conversations:
+    INSERT INTO alex_conversations 
+    (email, role, content) 
+    VALUES ($1, 'assistant', $2)
+
+Do NOT save for free tier users.
+Do NOT save phone number messages 
+(already handled by lead capture).
+
+═══════════════════════════════════════
+STEP 3: CONTEXT RETRIEVAL ON SESSION START
+═══════════════════════════════════════
+
+When a paid user sends their FIRST message 
+of a session (conversation_history is empty):
+
+1. Retrieve last 10 messages from alex_conversations
+   for this email, ordered by created_at DESC, 
+   then reverse to chronological order:
+
+   SELECT role, content, created_at 
+   FROM alex_conversations 
+   WHERE email = $1 
+   ORDER BY created_at DESC 
+   LIMIT 10
+
+2. Retrieve business profile:
+   SELECT business_data 
+   FROM alex_user_profiles 
+   WHERE email = $1
+
+3. Inject into system prompt as additional context:
+
+MEMORY_CONTEXT = """
+═══ ПАМ'ЯТЬ ПРО КЛІЄНТА ═══
+Бізнес-профіль:
+{business_data}
+
+Остання розмова:
+{last_10_messages formatted as "User: ...\nAlex: ..."}
+═══════════════════════════
+Використовуй цю інформацію природньо — 
+не згадуй що ти "пам'ятаєш" з попередніх сесій,
+просто веди розмову як продовження.
+"""
+
+Append MEMORY_CONTEXT to the system prompt 
+before sending to Claude.
+
+═══════════════════════════════════════
+STEP 4: BUSINESS PROFILE AUTO-UPDATE
+═══════════════════════════════════════
+
+After every 3rd message exchange for paid users,
+run a background profile extraction.
+
+Call Claude Haiku (not Sonnet — keep cost low)
+with this prompt:
+
+EXTRACTION_PROMPT = """
+Проаналізуй розмову нижче та витягни 
+бізнес-факти про заклад клієнта.
+
+Розмова:
+{last_5_messages}
+
+Поточний профіль:
+{current_business_data}
+
+Поверни ТІЛЬКИ JSON з оновленими даними 
+(додай нові факти, не видаляй існуючі):
+{
+  "format": "бар/ресторан/кафе/готель/...",
+  "avg_check_uah": number or null,
+  "target_audience": "string or null",
+  "location_city": "string or null",
+  "staff_bartenders": number or null,
+  "current_suppliers": ["list"],
+  "menu_update_frequency": "string or null",
+  "beverage_revenue_pct": number or null,
+  "top_selling_categories": ["list"],
+  "business_goals": ["list"],
+  "pain_points": ["list"],
+  "notes": "any other relevant facts"
+}
+
+Якщо факт невідомий — залиш null.
+Поверни ТІЛЬКИ JSON, без пояснень.
+"""
+
+Update alex_user_profiles with extracted JSON:
+INSERT INTO alex_user_profiles (email, business_data)
+VALUES ($1, $2)
+ON CONFLICT (email) DO UPDATE 
+SET business_data = alex_user_profiles.business_data || $2,
+    updated_at = NOW()
+
+Use jsonb merge (||) so new facts are added 
+without overwriting existing ones.
+
+Run this extraction asynchronously — 
+do not block the chat response.
+
+═══════════════════════════════════════
+STEP 5: SESSION MANAGEMENT
+═══════════════════════════════════════
+
+Define a "session" as: no messages in the last 
+4 hours from this user.
+
+On chat load, the frontend already sends 
+conversation_history. If it's empty, treat as 
+new session and inject memory context.
+
+Add a cleanup job to prevent unlimited growth:
+Keep only last 50 messages per user 
+(delete older ones weekly).
+
+Add to scheduler:
+- Weekly cleanup: DELETE FROM alex_conversations 
+  WHERE id NOT IN (
+    SELECT id FROM alex_conversations 
+    WHERE email = e.email 
+    ORDER BY created_at DESC LIMIT 50
+  )
+
+═══════════════════════════════════════
+STEP 6: API ENDPOINT FOR PROFILE
+═══════════════════════════════════════
+
+Add endpoint for debugging/future use:
+
+GET /api/user/profile?email={email}
+Returns: { email, business_data, updated_at }
+Requires: same auth as subscription endpoint
+
+═══════════════════════════════════════
+LOGGING
+═══════════════════════════════════════
+
+Add these log lines:
+- "Memory loaded for {email}: {n} messages, 
+   profile: {yes/no}"
+- "Profile updated for {email}: {n} facts extracted"
+- "Memory skipped — free tier: {email}"
+
+═══════════════════════════════════════
+VERIFICATION
+═══════════════════════════════════════
+
+Test scenario:
+1. Paid user asks "У мене бар в Києві, 
+   середній чек 1500 грн"
+2. Alex responds normally
+3. User closes browser
+4. User returns next day, starts new session
+5. Alex should naturally reference 
+   the Kyiv bar context without being asked
+
+Confirm:
+- alex_conversations table has rows ✓
+- alex_user_profiles has extracted JSON ✓
+- Memory injected on new session ✓
+- Free tier gets no memory ✓
+- Log lines appear in Render logs ✓
+
+Push to GitHub when done.

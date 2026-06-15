@@ -1,0 +1,116 @@
+🐛 BUG FIX: Facebook Posts Missing Images (Error 324)
+
+## ISSUE SUMMARY
+Facebook posts are succeeding but WITHOUT images due to expired DALL-E URLs.
+
+Error logs show:
+- "Missing or invalid image file" (Facebook error 324)
+- System falls back to text-only posting
+- Images exist in database and serve correctly via /api/images/serve/{id}
+
+## DIAGNOSTIC STEP (DO THIS FIRST)
+
+Before making any changes, analyze the current architecture:
+
+1. Locate and read: backend/services/facebook_poster.py
+   - Find the post_to_facebook() or post_with_image() method
+   - Identify how it currently handles images
+   - Show me the relevant code section
+
+2. Verify image serving works:
+   - Confirm /api/images/serve/{article_id} endpoint exists in main.py
+   - Check if it returns images from database successfully
+   - Look for logs showing "INFO:     ... - "GET /api/images/serve/{id}" 200 OK"
+
+3. Confirm the issue:
+   - Look for warnings about local image paths not found
+   - Look for attempts to use DALL-E URLs
+   - Confirm error 324 from Facebook API
+
+After analysis, respond with:
+✅ "Analysis complete. I found the issue in [file] at [line]. Current code tries to use [X] but should use [Y]."
+
+## ROOT CAUSE
+The facebook_poster.py currently tries to:
+1. First: Use local file path (doesn't exist on Render - ephemeral filesystem)
+2. Fallback: Use DALL-E URL (expires after ~1 hour)
+
+But it should:
+3. Use the public /api/images/serve/{article_id} endpoint (always works, serves from database)
+
+## PROPOSED SOLUTION
+
+Update facebook_poster.py to use the database-backed image serving endpoint:
+```python
+# In post_to_facebook() method, replace image URL logic with:
+
+# Build public URL to database image endpoint
+backend_url = os.getenv("BACKEND_URL", "https://gradusmedia-backend.onrender.com")
+image_url = f"{backend_url}/api/images/serve/{article.id}"
+
+logger.info(f"Using database image via: {image_url}")
+
+# Post to Facebook /photos endpoint with this URL
+response = requests.post(
+    f"https://graph.facebook.com/v18.0/{self.page_id}/photos",
+    data={
+        "url": image_url,  # Facebook fetches from our backend
+        "message": post_message,
+        "access_token": self.access_token
+    }
+)
+```
+
+## IMPLEMENTATION STEPS
+
+1. **Backup first**: Show me the current post_to_facebook() method before changes
+
+2. **Update facebook_poster.py**:
+   - Remove logic that tries local file paths
+   - Remove logic that uses DALL-E URLs
+   - Add logic to use /api/images/serve/{article_id}
+   - Keep the text-only fallback as safety net
+
+3. **Add environment variable check**:
+   - Ensure BACKEND_URL is read from environment
+   - Add fallback default if not set
+   - Log the constructed image URL for debugging
+
+4. **Preserve existing functionality**:
+   - Keep text-only fallback if image URL fails
+   - Keep all logging statements
+   - Don't change the /photos endpoint or message format
+   - Don't change approval workflow or notification system
+
+## SAFETY CHECKS
+
+Before confirming the fix:
+- ✅ Verify /api/images/serve/ endpoint exists and works
+- ✅ Confirm article.id is available in the posting method
+- ✅ Ensure BACKEND_URL environment variable is set (or has default)
+- ✅ Keep text-only fallback in case of errors
+- ✅ Test that the constructed URL format is correct
+
+## VERIFICATION
+
+After implementation:
+1. Show me the updated code
+2. Confirm no other endpoints were affected
+3. List any new environment variables needed
+4. Explain how to test the fix
+
+## IMPORTANT CONSTRAINTS
+
+❌ DO NOT:
+- Change the /api/images/serve/ endpoint itself
+- Modify database schema or image storage
+- Change approval workflow or Telegram notifications
+- Remove the text-only fallback mechanism
+- Touch any other services or endpoints
+
+✅ ONLY:
+- Modify facebook_poster.py image URL construction
+- Update how images are passed to Facebook API
+- Improve logging for debugging
+
+Please analyze the current code first, confirm you understand the issue, then implement the fix safely.

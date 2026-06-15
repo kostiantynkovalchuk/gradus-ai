@@ -1,0 +1,50 @@
+Create a comprehensive article deletion tool for GradusMedia content management system.
+
+CONTEXT:
+- PostgreSQL database on Neon with tables: articles, facebook_posts, and potentially telegram_posts
+- Articles are published to multiple platforms: website (gradusmedia.org), Facebook, Telegram
+- Need safe deletion across all platforms with proper error handling
+
+REQUIREMENTS:
+
+1. Create `tools/delete_article.py` with:
+   - Interactive menu system (Ukrainian language)
+   - List recent articles (show: id, title, published_at, platforms where posted)
+   - Search articles by keyword/title
+   - Delete by ID with confirmation prompt
+   - Show what will be deleted before confirmation (article + all related platform posts)
+   - Delete from ALL related tables: facebook_posts, telegram_posts, etc
+   - Proper error handling and rollback on failures
+   - Success/failure messages with details
+
+2. Database connection:
+   - Use DATABASE_URL from environment
+   - Use psycopg2 with RealDictCursor
+   - Proper connection management (close connections)
+   - Transaction support (commit/rollback)
+
+3. Safety features:
+   - Always show article details before deletion
+   - Require explicit "yes" confirmation
+   - Show count of related records being deleted
+   - Support dry-run mode (show what would be deleted without actually deleting)
+   - Log deletion actions
+
+4. Display format:
+   - Clear Ukrainian headings with emojis
+   - Table-like layout for article lists
+   - Color-coded output if possible (success/warning/error)
+   - Show platform icons: 🌐 Website, 📱 Facebook, ✈️ Telegram
+
+5. Additional features:
+   - Bulk delete (multiple IDs at once)
+   - Delete by date range
+   - Export list to file before deletion
+   - Undo last deletion (if feasible)
+
+DATABASE SCHEMA to reference:
+- articles table: id, title, content, url, category, tags, published_at, source_url, image_url
+- facebook_posts table: id, article_id (foreign key), post_id, posted_at
+- telegram_posts table: may exist with similar structure
+
+Make the tool production-ready, user-friendly, and safe for daily use.

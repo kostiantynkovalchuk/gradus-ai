@@ -1,0 +1,290 @@
+✅ UPDATED PROMPT ДЛЯ REPLIT:
+Скопируй и добавь к предыдущему:
+
+🚨 CRITICAL ADDITION - Human-in-the-Loop for Stage 1:
+
+APPROVAL WORKFLOW:
+
+Database models needed:
+- ContentQueue table:
+  * id (primary key)
+  * status (enum: 'draft', 'pending_approval', 'approved', 'rejected', 'posted')
+  * source_url (original article link)
+  * original_text (English)
+  * translated_text (Ukrainian)
+  * image_url (generated image)
+  * image_prompt (prompt used for generation)
+  * scheduled_post_time (when to post if approved)
+  * created_at
+  * reviewed_at
+  * reviewed_by (moderator name/email)
+  * rejection_reason (if rejected)
+  * edit_history (JSON - track changes)
+  * platform (enum: 'facebook', 'linkedin', 'both')
+
+Backend endpoints:
+1. GET /api/content/pending - get all content waiting for approval
+2. POST /api/content/{id}/approve - approve content for posting
+3. POST /api/content/{id}/reject - reject with reason
+4. PUT /api/content/{id}/edit - edit translation/image before approval
+5. GET /api/content/history - view posted content history
+
+Frontend Dashboard Page: ContentApproval.jsx
+Must include:
+- List view of pending content (cards with preview)
+- Each card shows:
+  * Original text (collapsible)
+  * Ukrainian translation (editable textarea)
+  * Generated image (with preview)
+  * Source article link
+  * Metadata (date scraped, topic tags)
+- Action buttons:
+  * ✅ Approve & Schedule
+  * ❌ Reject (with reason modal)
+  * ✏️ Edit translation
+  * 🔄 Regenerate image (new DALL-E prompt)
+  * 👁️ Preview (how it will look on FB/LinkedIn)
+- Filters:
+  * By status
+  * By date
+  * By platform
+  * By source
+- Bulk actions:
+  * Approve multiple
+  * Delete multiple
+
+Stage 1 Workflow Update:
+1. Scraper finds new article → saves as 'draft'
+2. Claude translates → status = 'pending_approval'
+3. DALL-E generates image → status = 'pending_approval'
+4. HUMAN REVIEWS in dashboard → approves/rejects/edits
+5. If approved → status = 'approved', scheduled for posting
+6. Scheduler posts at scheduled time → status = 'posted'
+7. Save analytics (likes, shares, comments) → history
+
+Key Features:
+- Notifications when new content needs approval (email/Telegram)
+- Edit capability before approval
+- Side-by-side comparison (original vs translation)
+- Preview exactly how post will look
+- Scheduling (can set when to post)
+- Analytics on posted content
+- Rollback capability (unpublish if needed)
+
+Security:
+- Only authorized users can approve (add auth middleware)
+- Log all approvals/rejections for audit trail
+- Rate limiting on posting endpoints
+
+Please add this approval workflow to the Stage 1 implementation!
+
+📋 СТРУКТУРА APPROVAL DASHBOARD:
+Wireframe:
+╔═══════════════════════════════════════════════════════╗
+║  🍷 Gradus Media - Content Approval                  ║
+╠═══════════════════════════════════════════════════════╣
+║  [Pending: 3] [Approved: 12] [Posted: 45]           ║
+╠═══════════════════════════════════════════════════════╣
+║  Filters: [All▼] [This Week▼] [Facebook▼]           ║
+╠═══════════════════════════════════════════════════════╣
+║                                                       ║
+║  ┌─────────────────────────────────────────────┐    ║
+║  │ 📰 Article 1 - The Spirits Business         │    ║
+║  │ ⏰ Scraped: 2h ago | 📅 Scheduled: Tomorrow  │    ║
+║  ├─────────────────────────────────────────────┤    ║
+║  │ Original (EN):                               │    ║
+║  │ "New vodka trends in 2024..."              │    ║
+║  │ [Show full ▼]                               │    ║
+║  ├─────────────────────────────────────────────┤    ║
+║  │ Translation (UK): [Editable]                │    ║
+║  │ "Нові тренди горілки у 2024..."            │    ║
+║  ├─────────────────────────────────────────────┤    ║
+║  │ 🖼️ Generated Image:                         │    ║
+║  │ [Image Preview 800x600]                     │    ║
+║  │ Prompt: "vodka bottle modern design..."    │    ║
+║  │ [🔄 Regenerate]                             │    ║
+║  ├─────────────────────────────────────────────┤    ║
+║  │ Platform: [✓] Facebook [✓] LinkedIn        │    ║
+║  │ Post Time: [Select date/time ▼]            │    ║
+║  ├─────────────────────────────────────────────┤    ║
+║  │ [👁️ Preview] [✏️ Edit] [✅ Approve] [❌ Reject]│    ║
+║  └─────────────────────────────────────────────┘    ║
+║                                                       ║
+║  ┌─────────────────────────────────────────────┐    ║
+║  │ 📰 Article 2 - The Drinks Business          │    ║
+║  │ ...                                          │    ║
+║  └─────────────────────────────────────────────┘    ║
+╚═══════════════════════════════════════════════════════╝
+
+🎯 WORKFLOW DIAGRAM:
+📰 News Scraper
+    ↓
+📝 STATUS: draft
+    ↓
+🤖 Claude Translation
+    ↓
+🎨 DALL-E Image
+    ↓
+📊 STATUS: pending_approval
+    ↓
+┌─────────────────────────┐
+│  👤 HUMAN MODERATOR     │
+│  Reviews in Dashboard   │
+│                         │
+│  Options:               │
+│  ✅ Approve            │
+│  ❌ Reject             │
+│  ✏️ Edit & Re-submit   │
+│  🔄 Regenerate Image   │
+└─────────────────────────┘
+    ↓
+✅ If Approved
+    ↓
+📅 STATUS: approved (scheduled)
+    ↓
+⏰ Scheduler waits until post_time
+    ↓
+🚀 Auto-post to FB/LinkedIn
+    ↓
+📊 STATUS: posted
+    ↓
+📈 Track analytics
+
+💡 KEY FEATURES TO ADD:
+1. Email/Telegram Notifications:
+python# backend/services/notification_service.py
+
+async def notify_new_content():
+    """Send notification when content needs approval"""
+    # Email to moderator
+    # Telegram message to admin channel
+    # Include quick approve/reject links
+2. Preview Modal:
+javascript// frontend/src/components/PostPreview.jsx
+
+// Shows exactly how post will look:
+- Facebook card preview
+- LinkedIn post preview
+- Character counts
+- Image placement
+3. Edit Functionality:
+javascript// frontend/src/components/ContentEditor.jsx
+
+// Inline editing:
+- Edit translation (textarea)
+- Regenerate image (new prompt)
+- Change scheduling
+- Toggle platforms (FB/LI)
+4. Approval History:
+python# Track who approved what and when
+- Moderator name
+- Timestamp
+- Before/after changes
+- Rejection reasons
+
+🔒 SECURITY CONSIDERATIONS:
+python# backend/middleware/auth.py
+
+# Only authorized users can:
+- View pending content
+- Approve/reject
+- Edit translations
+- Regenerate images
+- Schedule posts
+
+# Implement:
+- JWT authentication
+- Role-based access (admin, moderator, viewer)
+- Audit log of all actions
+
+📊 DATABASE SCHEMA UPDATE:
+sqlCREATE TABLE content_queue (
+    id SERIAL PRIMARY KEY,
+    status VARCHAR(20) NOT NULL,  -- draft, pending_approval, approved, rejected, posted
+    source VARCHAR(255),           -- article URL
+    source_title TEXT,
+    original_text TEXT,
+    translated_text TEXT,
+    image_url VARCHAR(255),
+    image_prompt TEXT,
+    scheduled_post_time TIMESTAMP,
+    platforms TEXT[],              -- ['facebook', 'linkedin']
+    created_at TIMESTAMP DEFAULT NOW(),
+    reviewed_at TIMESTAMP,
+    reviewed_by VARCHAR(100),
+    rejection_reason TEXT,
+    edit_history JSONB,
+    analytics JSONB,               -- likes, shares, comments after posting
+    CONSTRAINT valid_status CHECK (status IN ('draft', 'pending_approval', 'approved', 'rejected', 'posted'))
+);
+
+CREATE TABLE approval_log (
+    id SERIAL PRIMARY KEY,
+    content_id INTEGER REFERENCES content_queue(id),
+    action VARCHAR(50),            -- approved, rejected, edited, regenerated
+    moderator VARCHAR(100),
+    timestamp TIMESTAMP DEFAULT NOW(),
+    details JSONB
+);
+```
+
+---
+
+## 🎓 **BEST PRACTICES:**
+
+### **Approval SLA:**
+```
+- Notify moderator within 5 min of new content
+- Target: review within 2 hours
+- Auto-reminder if pending > 4 hours
+- Escalate if pending > 24 hours
+```
+
+### **Quality Gates:**
+```
+Before allowing approval:
+✅ Translation exists (not empty)
+✅ Image generated successfully
+✅ No forbidden words (alcohol regulations)
+✅ Character limits OK (FB/LI limits)
+✅ Scheduled time is in future
+```
+
+### **Analytics Tracking:**
+```
+After posting, track:
+- Impressions
+- Likes/reactions
+- Shares
+- Comments
+- Click-through rate
+- Engagement rate
+
+Use for:
+- A/B testing translations
+- Optimize posting times
+- Improve image prompts
+```
+
+---
+
+## ✅ **UPDATED CHECKLIST:**
+```
+Stage 1 Implementation:
+
+□ News scraper (automatic)
+□ Claude translation (automatic)
+□ DALL-E image generation (automatic)
+□ Save to content_queue (status: pending_approval)
+□ Notify moderator (email/Telegram) ✨ NEW
+□ Dashboard page for approval ✨ NEW
+□ Preview functionality ✨ NEW
+□ Edit capability ✨ NEW
+□ Approve/reject buttons ✨ NEW
+□ Scheduling system ✨ NEW
+□ Auto-poster (only approved content) ✨ NEW
+□ Analytics tracking ✨ NEW
+□ Approval history/audit log ✨ NEW
+```
+
+---

@@ -1,0 +1,71 @@
+# AUDIT PROMPT — Sara groundwork (READ-ONLY)
+
+> Paste this to the Replit/Render agent **as-is**. This is an **audit, not an implementation**.
+> Do NOT combine it with an implementation prompt.
+
+---
+
+## Your task
+
+You are auditing the existing `gradus-ai` codebase to prepare for adding a new Telegram bot ("Sara"). **Read and report only. Do NOT write, edit, create, or delete any file. Do NOT propose fixes or code.** Your single deliverable is a findings report in the format at the bottom.
+
+For every claim in your report, you must have **actually opened the file and read it** — not inferred from filenames or memory. Where I ask you to grep, run the grep and paste the relevant lines (with file path + line numbers). If something does not exist, say "not found" explicitly rather than guessing.
+
+---
+
+## 1. Webhook & app entry
+
+- Open `main.py` (or the FastAPI app entrypoint). Report: how the app is structured, how routers/routes are registered, and where bot webhooks are wired in.
+- Find `setup_solomon_webhook()` (or the equivalent). Report exactly how a Telegram webhook is registered on startup — the pattern, the URL construction, and which env var supplies the base URL.
+- Report every existing Telegram webhook route currently mounted (path + which bot it serves).
+- Report: does any existing webhook handler do slow work **inline** before returning 200, or do they ack first and process in the background? Quote the pattern for ONE bot as the reference example.
+
+## 2. Background-task & DB-session pattern
+
+- Grep the codebase for `create_task`, `BackgroundTasks`, `psycopg2`, and `sessionmaker`/`Session`. Report where async background work happens and how each background path acquires and releases its DB connection.
+- Specifically confirm or correct this claim from our notes: "SQLAlchemy ORM in async background tasks returned empty results, and Maya Hunt switched those paths to explicit-connection raw psycopg2." Find the actual code and report what it really does.
+- Report the canonical way a background task should open/close a DB connection in THIS codebase (quote a working example).
+
+## 3. Migrations
+
+- Open `backend/db_migrations.py` (or the migration runner). Report how migrations are numbered, applied, and tracked.
+- Query/inspect the `schema_migrations` table (or wherever applied migrations are tracked). Report the **highest migration number currently applied to production**. (Our notes say 020 — confirm or correct.)
+- Report whether any migration number between 001 and the latest is skipped or marked "(taken)", and what the next free number is.
+- Report whether existing enum-like columns use `CHECK` constraints (look at `hunt_sources.channel_type`, `hr_decision`, any `status` columns). Quote one example if present.
+
+## 4. Reusable helpers
+
+- Find `safe_parse_json()` (referenced as being in the Maya Hunt scorer). Report its exact location, signature, and what repairs it performs. Confirm it is importable from a shared location or note that it's local to one service file.
+- Grep for any existing JSON-from-Claude parsing patterns and report how they handle truncation.
+- Report where the Anthropic client is instantiated and how model names are referenced (constant? env var? hardcoded per call?). List the model strings currently in use.
+
+## 5. Audio / voice (expected to be absent — confirm)
+
+- Grep for `sendVoice`, `send_voice`, `ogg`, `opus`, `ffmpeg`, `elevenlabs`, `ElevenLabs`. Report any existing audio handling anywhere in the codebase.
+- Report whether **ffmpeg** is available in the runtime: check for a `Dockerfile`, `apt`/`nixpacks`/build config, or any existing subprocess call to ffmpeg. State clearly: is ffmpeg currently installed/available on the Render service, yes or no, and what is your evidence?
+- Report whether **ElevenLabs** is integrated anywhere today (any client, any env var, any call). State yes/no with evidence.
+
+## 6. Env vars & config
+
+- Report how env vars are loaded and where the canonical list lives.
+- Report which of these already exist vs. are missing: `ANTHROPIC_API_KEY`, `DATABASE_URL`, `RENDER_EXTERNAL_URL`, and any `ELEVENLABS_*`, `SARA_*` vars.
+- Report whether there is an existing key/value config table or settings mechanism that a new bot could reuse for tunable thresholds.
+
+## 7. Blast radius (Rules.rtf §5)
+
+- List every file under `backend/services/` and one-line what each does.
+- Report which routes/handlers import from `main.py` or from shared service/util modules — i.e., if a new bot adds imports or a new router to `main.py`, what else touches those same files and could break.
+- Report any shared module (db utils, telegram utils, Claude client wrapper) that a new bot would naturally import, and who else currently imports it.
+
+---
+
+## Required report format
+
+Return findings as a numbered list mirroring sections 1–7 above. For each:
+- **Finding:** what you observed (with file path + line numbers).
+- **Evidence:** the actual grep output or quoted lines.
+- **Status:** `confirmed` / `differs from notes` / `not found`.
+
+End with a **"Surprises & risks"** section: anything that contradicts the assumptions above, anything that would block adding a new bot cleanly, and any file that looks fragile to touch.
+
+**Do not write any code or suggest changes. Reading and reporting only.**

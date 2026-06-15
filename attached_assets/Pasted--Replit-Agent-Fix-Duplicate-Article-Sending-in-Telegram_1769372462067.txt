@@ -1,0 +1,148 @@
+# Replit Agent: Fix Duplicate Article Sending in Telegram Approval Workflow
+
+## Problem Description
+The scheduler is sending duplicate articles to Telegram for approval. Specifically:
+- Article ID 317: sent twice with 2 different images
+- Article ID 318: sent twice with 2 different images  
+- Article ID 316: sent twice with 2 different images
+
+Each article should only be sent ONCE to Telegram for approval, regardless of how many images are generated.
+
+## Investigation Tasks
+
+### 1. Analyze Current Workflow
+- Locate the scheduler service that sends articles for Telegram approval
+- Identify the Telegram sending logic (likely in telegram_service.py or similar)
+- Find the image generation workflow and how it triggers article sending
+- Check if there's any deduplication logic currently in place
+
+### 2. Identify Root Cause
+Investigate these potential causes:
+- **Image generation loop**: Does the system send the article once per generated image instead of sending all images together?
+- **Scheduler timing**: Is the scheduler running multiple times for the same article?
+- **Race conditions**: Are there concurrent processes trying to send the same article?
+- **Database state**: Is the article status not being updated properly after first send?
+- **Job queue duplicates**: Are there duplicate jobs in the queue for the same article?
+
+### 3. Review Key Code Sections
+Focus on these areas:
+```python
+# Check for patterns like:
+- for image in generated_images:
+    send_to_telegram(article, image)  # WRONG: sends duplicate articles
+
+# Should be:
+- images = generate_all_images(article)
+  send_to_telegram(article, images)  # RIGHT: sends article once with all images
+```
+
+## Fix Requirements
+
+### Must Implement:
+1. **Single Send per Article**: Each article should be sent to Telegram exactly once, regardless of image count
+2. **Bundle Images**: All generated images for an article should be sent together in one message/batch
+3. **Deduplication Check**: Before sending, verify the article hasn't already been sent for approval
+4. **Status Tracking**: Update article status immediately after successful send to prevent re-sending
+5. **Transaction Safety**: Use database transactions to prevent race conditions
+
+### Recommended Implementation:
+
+```python
+async def send_article_for_approval(article_id: int):
+    """Send article with all images to Telegram for approval"""
+    
+    # 1. Check if already sent
+    article = await get_article(article_id)
+    if article.telegram_approval_sent:
+        logger.info(f"Article {article_id} already sent for approval")
+        return
+    
+    # 2. Generate ALL images for this article
+    images = await generate_all_images(article)
+    
+    # 3. Mark as sent BEFORE sending (with transaction)
+    async with database.transaction():
+        article.telegram_approval_sent = True
+        article.telegram_sent_at = datetime.now()
+        await article.save()
+        
+        # 4. Send once with all images
+        await telegram_service.send_for_approval(
+            article=article,
+            images=images  # All images in one send
+        )
+    
+    logger.info(f"Article {article_id} sent for approval with {len(images)} images")
+```
+
+### Database Schema Enhancement:
+Add these fields to articles table if missing:
+```sql
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS telegram_approval_sent BOOLEAN DEFAULT FALSE;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS telegram_sent_at TIMESTAMP;
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS telegram_message_ids TEXT[];  -- Store all message IDs
+```
+
+### Scheduler Fix:
+Ensure scheduler doesn't create duplicate jobs:
+```python
+# In scheduler service
+@scheduler.scheduled_job('cron', hour=10)  # Or whatever your schedule is
+async def schedule_approval_workflow():
+    # Get articles ready for approval that haven't been sent yet
+    articles = await Article.query.where(
+        Article.status == 'ready_for_approval',
+        Article.telegram_approval_sent == False  # Critical filter
+    ).gino.all()
+    
+    for article in articles:
+        # Process one at a time with proper error handling
+        try:
+            await send_article_for_approval(article.id)
+        except Exception as e:
+            logger.error(f"Failed to send article {article.id}: {e}")
+            # Don't mark as sent if it failed
+```
+
+## Testing Requirements
+
+After implementing fixes:
+
+1. **Test Single Article Flow**:
+   - Create test article with ID 999
+   - Generate 2 images for it
+   - Verify it's sent to Telegram exactly once
+   - Verify both images are included
+
+2. **Test Deduplication**:
+   - Try to send the same article again
+   - Verify it's blocked with appropriate log message
+
+3. **Test Scheduler**:
+   - Run scheduler multiple times
+   - Verify no duplicate sends occur
+
+4. **Check Database State**:
+   - Verify `telegram_approval_sent` flag is set correctly
+   - Verify `telegram_sent_at` timestamp is recorded
+
+## Deliverables
+
+1. **Fixed Code**: Complete working implementation
+2. **Migration Script**: Database schema updates if needed
+3. **Test Results**: Confirmation that articles 317, 318, 316 won't duplicate anymore
+4. **Logs**: Add comprehensive logging for debugging future issues
+
+## Success Criteria
+- ✅ Each article sent to Telegram exactly once
+- ✅ All generated images bundled in single send
+- ✅ Deduplication prevents re-sending
+- ✅ Proper error handling and logging
+- ✅ Database state correctly tracked
+- ✅ No race conditions or duplicate scheduler runs
+
+## Notes
+- Prioritize data integrity over speed
+- Use database transactions for critical state changes
+- Log every send attempt for debugging
+- Consider adding a manual re-send function for failed sends (but with proper checks)

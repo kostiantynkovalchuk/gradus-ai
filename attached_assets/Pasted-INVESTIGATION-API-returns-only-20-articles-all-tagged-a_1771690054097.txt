@@ -1,0 +1,58 @@
+INVESTIGATION: API returns only 20 articles all tagged as "news" despite DB 
+recategorization completing successfully on 128 articles.
+
+STEP 1 - FIND ALL ARTICLE-RELATED TABLES:
+Run this SQL to see every table in the database:
+
+  SELECT table_name FROM information_schema.tables 
+  WHERE table_schema = 'public' 
+  ORDER BY table_name;
+
+Then check article counts in ALL relevant tables:
+
+  SELECT 'content_queue' as tbl, category, COUNT(*) 
+  FROM content_queue GROUP BY category
+  UNION ALL
+  SELECT 'articles' as tbl, category, COUNT(*) 
+  FROM articles GROUP BY category;
+
+(adjust table names based on what actually exists)
+
+STEP 2 - FIND WHICH TABLE THE API READS FROM:
+Open backend/routes/articles.py (or wherever GET /api/articles is defined).
+What table/model does it query? ContentQueue or Article or something else?
+
+STEP 3 - ROOT CAUSE FIX:
+Likely scenario A - Two separate tables:
+  The recategorization updated content_queue but the API reads from a 
+  separate 'articles' table that is populated differently (e.g. only when 
+  articles are posted to Facebook). 
+  Fix: run the same categorization update on whichever table the API reads from.
+
+Likely scenario B - Single table, API ignores category filter:
+  Check the API route - if it has a hardcoded LIMIT 20 applied BEFORE 
+  the category filter, it will return 20 random articles then filter to 3.
+  Fix: apply category filter FIRST in the WHERE clause, then apply LIMIT.
+
+  Correct query order:
+    SELECT * FROM content_queue 
+    WHERE status = 'published' AND category = :category  ← filter first
+    ORDER BY published_at DESC 
+    LIMIT 20                                              ← limit after
+
+STEP 4 - APPLY CATEGORY UPDATE TO CORRECT TABLE:
+Once you identify the table the API reads from, run:
+
+  SELECT category, COUNT(*) FROM [correct_table] GROUP BY category;
+
+If all show 'news' or NULL, run the categorization update on that table
+using the same logic applied to content_queue.
+
+STEP 5 - VERIFY:
+After fix, confirm:
+  GET /api/articles?category=news    → ~20 news articles with Unsplash images
+  GET /api/articles?category=trends  → ~20 trends articles with Unsplash images  
+  GET /api/articles?category=reviews → available reviews articles (up to 20)
+
+The 20-article display limit per category page is acceptable and expected.
+Just ensure the LIMIT applies after category filtering, not before.

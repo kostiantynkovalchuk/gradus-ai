@@ -1,0 +1,66 @@
+🔍 Pre-Push Checklist
+1. Verify Files Exist
+bash# Check critical files are present
+ls -la app/api/admin_routes.py
+ls -la app/templates/hr_admin.html
+ls -la app/services/hr_rag_service.py
+ls -la app/services/hr_content_processor.py
+ls -la app/bot/hr_keyboards.py
+ls -la data/hr_knowledge_base.txt
+2. Check Git Status
+bashgit status
+You should see new/modified files like:
+
+app/api/admin_routes.py
+app/templates/hr_admin.html
+app/services/hr_rag_service.py
+app/services/hr_content_processor.py
+Other HR-related files
+
+3. Stage All Changes
+bash# Add all new files
+git add .
+
+# Or be selective
+git add app/api/admin_routes.py
+git add app/templates/
+git add app/services/hr_*.py
+git add app/bot/hr_keyboards.py
+git add data/hr_knowledge_base.txt
+4. Commit with Good Message
+bashgit commit -m "feat: Add Maya HR Bot system with admin dashboard
+
+- Implement HR RAG service with semantic search
+- Add 41 knowledge base items across 15 categories
+- Create 23 preset answers for instant responses
+- Build admin dashboard at /hr with analytics
+- Add Telegram bot integration with /hr command
+- Implement query logging and feedback tracking
+- Add 6-category interactive menu system
+
+Components:
+- hr_rag_service.py (RAG + preset matching)
+- hr_content_processor.py (content parsing)
+- hr_keyboards.py (Telegram menus)
+- admin_routes.py (dashboard API)
+- hr_admin.html (analytics UI)
+
+Performance: ~75ms preset response, 100% coverage
+Access: https://gradus-ai.onrender.com/hr (admin/Maya_2026)"
+5. Push to Trigger Deploy
+bashgit push origin main
+⚠️ Important Notes
+Before pushing, make sure:
+
+ Environment variables are set in Render (if needed any new ones)
+ Database migrations ran successfully (if you created new tables)
+ No sensitive data (passwords, API keys) in committed files
+ The code runs locally without errors (if you tested it)
+
+After pushing:
+
+Render will auto-deploy (takes ~3-5 minutes)
+Watch the build logs in Render dashboard
+Test the admin dashboard: https://gradus-ai.onrender.com/hr
+Verify Telegram bot /hr command works
+

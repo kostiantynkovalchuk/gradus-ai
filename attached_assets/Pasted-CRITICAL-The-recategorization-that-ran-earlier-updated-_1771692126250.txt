@@ -1,0 +1,55 @@
+CRITICAL: The recategorization that ran earlier updated the wrong database.
+Production Neon DB (used by Render) still has original data:
+- trends: 17 articles
+- reviews: 3 articles
+- news: ~200 articles (everything defaulted there)
+
+We need to re-run the recategorization directly against the PRODUCTION database.
+
+STEP 1 - VERIFY PRODUCTION DB CONNECTION:
+Check what DATABASE_URL is set to in the Render environment variables.
+In Replit, check if .env or replit.secrets has a different DATABASE_URL 
+than what Render uses.
+
+Print (masked): 
+  import os
+  url = os.getenv('DATABASE_URL', 'NOT SET')
+  # Show only the host portion so we can confirm it's Neon
+  print(url.split('@')[1].split('/')[0] if '@' in url else url)
+
+Confirm it points to Neon (should contain 'neon.tech' in the host).
+
+STEP 2 - CHECK CURRENT PRODUCTION STATE:
+Run against the production DB:
+
+  SELECT category, COUNT(*) 
+  FROM content_queue 
+  GROUP BY category 
+  ORDER BY category;
+
+Report the actual counts.
+
+STEP 3 - RE-RUN RECATEGORIZATION ON PRODUCTION:
+Run the categorization update script directly against production Neon DB.
+Use the same improved logic (expanded keyword lists, title weighting 3x,
+threshold score >= 1 for non-news categories).
+
+Process ALL articles currently categorized as 'news' or NULL and 
+reassign to trends/reviews where appropriate.
+
+Log how many articles change category.
+
+STEP 4 - REPLACE DALL-E IMAGES IN NEWLY CATEGORIZED ARTICLES:
+After recategorization, find articles in trends/reviews that have
+image_url set but image_photographer IS NULL (these are DALL-E images).
+Replace them with Unsplash images using the existing unsplash_service.
+
+STEP 5 - VERIFY FINAL STATE:
+  SELECT category, 
+         COUNT(*) as total,
+         SUM(CASE WHEN image_photographer IS NOT NULL THEN 1 ELSE 0 END) as unsplash,
+         SUM(CASE WHEN image_url IS NOT NULL AND image_photographer IS NULL THEN 1 ELSE 0 END) as dalle
+  FROM content_queue 
+  GROUP BY category;
+
+Expected result: trends ~90+, reviews ~15+, all with Unsplash images.

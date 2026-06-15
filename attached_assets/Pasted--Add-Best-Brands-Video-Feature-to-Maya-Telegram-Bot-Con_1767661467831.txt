@@ -1,0 +1,275 @@
+# Add Best Brands Video Feature to Maya Telegram Bot
+
+## Context
+We have a Maya AI Telegram bot that responds to users in the HoReCa industry. We need to add a feature where Maya sends a vertical (9:16) video presentation about Best Brands company when users ask about the company in Ukrainian, Russian, or English.
+
+Video file: MPEG-4, 23.5 MB, vertical format (suitable for mobile)
+
+## Requirements
+
+### 1. Trigger Detection
+Detect when user asks about Best Brands in multiple languages and variations. **Important:** Support code-switching between Ukrainian/Russian and English (e.g., "розкажи про best brands").
+
+**Implementation approach:**
+Use flexible pattern matching that combines:
+1. Question phrases in any language
+2. Company name variations: "best brands", "бест брендс", "bestbrands", "avtd"
+
+**Ukrainian question patterns:**
+- "розкажи про"
+- "що таке"
+- "хто такі"
+- "про компанію"
+- "про"
+
+**Russian question patterns:**
+- "расскажи о"
+- "что такое"
+- "кто такие"
+- "о компании"
+
+**English question patterns:**
+- "tell me about"
+- "who is"
+- "who are"
+- "about"
+
+**Company name variations (any language):**
+- "best brands"
+- "бест брендс"
+- "bestbrands"
+- "avtd"
+- "компанію" (when preceded by "про")
+- "компании" (when preceded by "о")
+
+**Example matches that should trigger:**
+- "розкажи про best brands" ✅ (Ukrainian verb + English name)
+- "розкажи про бест брендс" ✅ (Ukrainian verb + transliterated name)
+- "що таке best brands" ✅
+- "tell me about бест брендс" ✅ (English verb + transliterated name)
+- "про компанію" ✅
+- "about best brands" ✅
+- "хто ви" / "who are you" ✅ (when asked to Maya)
+
+**Should NOT trigger:**
+- "best practice" ❌
+- "brands we carry" ❌
+- Random mentions without question context ❌
+
+### 2. Video Delivery via Telegram Native
+Use Telegram's file_id method for optimal mobile experience:
+- First time: upload video file to Telegram, get file_id, store it
+- Subsequent times: reuse file_id for instant sending
+- Video should play inline in Telegram chat (native vertical playback)
+
+### 3. Text Fallback
+If video sending fails, Maya should respond with text-only company info:
+```
+🏢 Best Brands — найбільший дистриб'ютор алкогольних брендів в Україні
+
+📊 Ключові факти:
+- Покриваємо понад 40 000 торгових точок по всій країні
+- Працюємо з провідними українськими та міжнародними брендами
+- Спеціалізуємось на HoReCa сегменті
+
+🎯 Наші бренди включають:
+- GreenDay (горілка преміум-класу)
+- Dovbush (традиційні українські напої)
+- Funju (інноваційні коктейльні рішення)
+- Villa.ua (винна лінійка)
+
+💼 Ми надаємо повний спектр послуг для ресторанів, готелів та кафе — від постачання до маркетингової підтримки.
+
+📚 Джерела: avtd.com, офіційні сайти брендів компанії
+
+Які питання маєш про наші продукти чи послуги? 😊
+```
+
+### 4. Response Format
+When video is sent successfully, use minimal caption since the video already includes Maya's greeting and call-to-action:
+```python
+await bot.send_video(
+    chat_id=chat_id,
+    video=BEST_BRANDS_VIDEO_FILE_ID,
+    caption="📚 Джерела: avtd.com, офіційні сайти брендів компанії",
+    supports_streaming=True,
+    width=1080,
+    height=1920
+)
+```
+
+**Note:** Keep caption minimal - the video does the talking, we just add the required source citation.
+
+## Technical Implementation
+
+### File Structure
+Update or create these files:
+
+1. **config.py** - Add configuration
+```python
+# Best Brands video configuration
+BEST_BRANDS_VIDEO_FILE_ID = None  # Will be populated on first upload
+BEST_BRANDS_VIDEO_PATH = "assets/bestbrands-presentation.mp4"  # Local video file path
+```
+
+2. **telegram_handlers.py** (or wherever Maya's message handler is)
+- Add trigger detection function
+- Add video sending function
+- Add text fallback function
+- Integrate into main message handler
+
+3. **utils/video_uploader.py** (new file)
+- Function to upload video once and get file_id
+- Function to save file_id to database or config
+
+### Key Functions to Implement
+```python
+def detect_bestbrands_trigger(message_text: str) -> bool:
+    """
+    Detects if user is asking about Best Brands company.
+    Supports code-switching (e.g., "розкажи про best brands").
+    
+    Returns True if message contains:
+    - Any question phrase (UA/RU/EN) + company name variation
+    - OR "хто ви"/"who are you" (identity questions to Maya)
+    
+    Case-insensitive matching.
+    """
+    message_lower = message_text.lower().strip()
+    
+    # Question patterns
+    question_patterns = [
+        'розкажи про', 'що таке', 'хто такі', 'про компанію',
+        'расскажи о', 'что такое', 'кто такие', 'о компании',
+        'tell me about', 'who is', 'who are', 'about the company',
+        'хто ви', 'who are you'
+    ]
+    
+    # Company name variations
+    company_names = [
+        'best brands', 'бест брендс', 'bestbrands', 'avtd'
+    ]
+    
+    # Check if any question pattern exists
+    # AND (company name exists OR it's an identity question)
+    
+    pass  # Implementation
+
+async def send_bestbrands_video(bot, chat_id: int) -> bool:
+    """
+    Sends Best Brands presentation video via Telegram.
+    Returns True if successful, False if failed.
+    
+    First time: uploads video and stores file_id
+    Subsequent times: uses stored file_id for instant sending
+    """
+    pass
+
+async def send_bestbrands_text_fallback(bot, chat_id: int):
+    """
+    Sends text-only version if video fails.
+    """
+    pass
+
+async def handle_bestbrands_request(bot, message):
+    """
+    Main handler that tries video first, falls back to text.
+    """
+    pass
+```
+
+### Database Schema (if storing file_id in DB)
+If not using database, store in environment variable or config file.
+```sql
+-- Option 1: New table
+CREATE TABLE IF NOT EXISTS media_files (
+    id SERIAL PRIMARY KEY,
+    media_type VARCHAR(50) NOT NULL,
+    file_id VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Option 2: Or add to existing config table
+ALTER TABLE config ADD COLUMN bestbrands_video_file_id VARCHAR(255);
+```
+
+### Environment Variables
+Add to `.env`:
+```
+BEST_BRANDS_VIDEO_PATH=assets/bestbrands-presentation.mp4
+```
+
+## Implementation Steps
+
+1. **Create assets folder** if it doesn't exist
+2. **Add trigger detection** function with all language variations and code-switching support
+3. **Implement video upload** function (one-time operation)
+4. **Implement video sending** function using file_id
+5. **Add text fallback** function
+6. **Integrate into Maya's message handler**
+7. **Test with multiple trigger phrases** in different languages including code-switched versions
+8. **Handle edge cases** (file not found, Telegram API errors, etc.)
+
+## Testing Checklist
+
+- [ ] Ukrainian triggers work: "розкажи про бест брендс"
+- [ ] Russian triggers work: "расскажи о best brands"
+- [ ] English triggers work: "tell me about best brands"
+- [ ] Code-switching works: "розкажи про best brands", "що таке best brands"
+- [ ] Identity questions work: "хто ви", "who are you"
+- [ ] Video uploads successfully on first run
+- [ ] file_id is stored correctly
+- [ ] Video sends instantly on subsequent requests
+- [ ] Video plays inline on mobile Telegram
+- [ ] Text fallback works when video fails
+- [ ] Partial matches don't trigger: "best practice" ❌
+- [ ] Case-insensitive detection works
+- [ ] Works in both private chat and groups (if applicable)
+
+## Error Handling
+
+Handle these scenarios:
+- Video file not found at path
+- Telegram upload fails (network issues)
+- file_id storage fails
+- file_id becomes invalid (rare but possible)
+- User has restricted bot from sending videos
+
+## Notes
+
+- Video is 23.5 MB, well under Telegram's 50 MB limit for bot API
+- Use `supports_streaming=True` for progressive playback
+- Set proper width/height for vertical video (e.g., 1080x1920)
+- Caption should be minimal - just source citation
+- Don't spam - maybe add cooldown if user asks repeatedly
+- Code-switching (Ukrainian/Russian + English) is natural in Ukrainian business communication
+
+## Success Criteria
+
+✅ User types any trigger phrase in UA/RU/EN → Gets video inline
+✅ Code-switching phrases work naturally ("розкажи про best brands")
+✅ Video plays natively in Telegram without opening external browser
+✅ If video fails → User gets comprehensive text response
+✅ Video is sent instantly after first upload (using file_id)
+✅ Works seamlessly on mobile devices
+✅ Caption is minimal and clean (just source citation)
+
+## Additional Context
+
+- This is part of Maya AI bot for GradusMedia platform
+- Maya is a HoReCa industry marketing consultant
+- The bot should feel natural and helpful, not robotic
+- Video was created in HeyGen with vertical 9:16 format
+- Target audience is Ukrainian restaurant/bar/cafe owners
+- Video already contains Maya's greeting and CTA, so no need for redundant text
+- Ukrainian users frequently code-switch between Ukrainian/Russian and English marketing terms
+
+---
+
+Please implement this feature following best practices for the existing codebase. Make sure to:
+1. Match the existing code style
+2. Add proper error logging
+3. Include comments for complex logic
+4. Test thoroughly before marking as complete
+5. Support natural code-switching patterns in trigger detection

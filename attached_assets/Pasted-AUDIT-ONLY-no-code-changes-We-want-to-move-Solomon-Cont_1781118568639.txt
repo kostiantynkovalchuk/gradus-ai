@@ -1,0 +1,63 @@
+AUDIT ONLY — no code changes. We want to move Solomon Contracts analysis OUT of
+the web request (currently asyncio.create_task fire-and-forget inside the FastAPI
+process) and INTO a polling worker driven by the existing APScheduler, using the
+solcon_documents.analysis_status column as the job queue. Before designing it,
+confirm the following against the real files.
+
+SECTION 1 — WHERE DOES APSCHEDULER RUN ON RENDER?
+- Open the scheduler setup (services/scheduler.py per prior audits) and main.py
+  startup. Does APScheduler run IN THE SAME process as the FastAPI web server, or
+  in a separate worker/container?
+- Render: is this a single web service, or are there multiple containers/replicas?
+  The handover §5.5 mentions "DB row locking required for scheduler jobs" and
+  multi-container — confirm whether the scheduler currently guards against running
+  the same job on multiple replicas, and how (advisory lock? a DB flag? nothing?).
+- CRITICAL: if there are N replicas each running APScheduler, a naive "poll for
+  pending docs every 15s" job would run on ALL of them. Report whether existing
+  jobs already solve this (a leader-election / lock pattern we can copy) or whether
+  every scheduled job currently fires on every replica.
+
+SECTION 2 — WHAT DOES _run_analysis NEED FROM ITS CONTEXT?
+- Open _run_analysis and _analyze_one_document in router.py. List every input they
+  use: doc_id, engagement_id, avtd_role, raw_text — and crucially, do they touch
+  anything WEB-REQUEST-SPECIFIC that wouldn't exist in a scheduler context? (the
+  FastAPI Request object, request.state, an injected DB session/Depends, auth
+  context, an open aiohttp session tied to the request).
+- If they take a DB session via FastAPI Depends, report it — a scheduler job has no
+  request, so it must open its own connection (solcon_db / fresh psycopg2 per prior
+  audits). Confirm the analysis code already uses a self-managed connection or
+  whether it relies on a request-scoped one.
+- The "Unclosed client session / aiohttp.ClientSession" error at shutdown — whose
+  session is that? If the analysis path opens an aiohttp session, that's a leak that
+  must be closed explicitly in a worker context. Identify the owner.
+
+SECTION 3 — THE CLAIM QUERY AND STATUS LIFECYCLE
+- Confirm current analysis_status values and the CHECK constraint
+  ('pending','running','done','failed').
+- The analyze endpoint currently: claims doc (UPDATE ... status='running' WHERE
+  status IN ('pending','failed')) then spawns create_task. For the queue model we
+  want the endpoint to ONLY set status='pending' and return, and the WORKER to do
+  the claim. Report what would need to change in the endpoint and confirm nothing
+  else reads status='running' assuming the web process owns the work.
+- Is FOR UPDATE SKIP LOCKED usable here (Postgres/Neon)? Confirm Neon supports it
+  (it does — just confirm no ORM layer blocks raw SQL).
+
+SECTION 4 — STARTUP RECONCILIATION (still needed, fits here)
+- Confirm there is NO existing startup sweep resetting stale 'running' docs. In the
+  queue model, startup should reset status='running' → 'pending' (not 'failed') so
+  an interrupted job gets RE-RUN by the worker rather than abandoned. Report where
+  in main.py startup this would go (same place SOLOMON webhook re-registers).
+
+SECTION 5 — BLAST RADIUS
+- What else imports from router.py / scheduler.py? If we add an analysis job to the
+  scheduler and slim the endpoint, which other handlers/jobs touch those files and
+  must still import cleanly (Rule 5)?
+- Does any OTHER product (Maya, GradusMedia, SOLOMON) already use a "poll a table
+  for pending rows and process them" pattern we can mirror exactly? (channel_poster
+  startup recovery looked like it might — confirm.) If a proven pattern exists in
+  this codebase, we copy it rather than invent.
+
+Report all. The likely design after: (1) endpoint sets 'pending' + returns;
+(2) APScheduler job every ~15s claims one 'pending' doc with FOR UPDATE SKIP LOCKED,
+runs analysis, sets 'done'/'failed'; (3) startup resets 'running'→'pending';
+(4) multi-replica guard if §1 shows one is needed. Do not implement yet.

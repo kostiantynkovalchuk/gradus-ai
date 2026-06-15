@@ -1,0 +1,141 @@
+TASK: Fix duplicate title in The Spirits Business scraper and metadata in Delo.ua
+
+=== PRIORITY 1: THE SPIRITS BUSINESS DUPLICATE TITLE ===
+
+FILE: backend/services/scrapers/spirits_business_scraper.py
+
+PROBLEM: Title appearing twice at start of content
+Example:
+"Cotswolds Distillery представляє віскі Highgrove Evergreen
+Cotswolds Distillery представляє віскі Highgrove Evergreen
+Англійський виробник..."
+
+Add _clean_content method (similar to other scrapers):
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean The Spirits Business content"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove duplicate title at start
+    # Check if title appears twice
+    title_pattern = re.escape(title)
+    double_title_pattern = f'^{title_pattern}\\s*\\n\\s*{title_pattern}'
+    
+    if re.match(double_title_pattern, content, re.MULTILINE):
+        # Remove first occurrence
+        content = re.sub(f'^{title_pattern}\\s*\\n', '', content, count=1, flags=re.MULTILINE)
+    
+    # Get lines
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    
+    # Remove metadata lines (author, date, etc)
+    filtered = []
+    for line in lines:
+        # Skip very short lines that might be metadata
+        if len(line) < 20 and not line.endswith('.'):
+            continue
+        # Skip date patterns
+        if re.match(r'\d{1,2}\s+\w+,?\s+\d{4}', line):
+            continue
+        filtered.append(line)
+    
+    # Join text
+    text = ' '.join(filtered)
+    text = re.sub(r'  +', ' ', text)
+    
+    # Add paragraph breaks
+    text = re.sub(r'([.!?»"]\s+)([A-ZА-ЯІЇЄ])', r'\1\n\n\2', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+```
+
+Update scrape_articles method to use cleaning:
+```python
+title = self._extract_title(article)
+raw_content = self._extract_content(article)
+content = self._clean_content(raw_content, title)
+```
+
+=== PRIORITY 2: DELO.UA IMAGE CAPTION METADATA ===
+
+FILE: backend/services/scrapers/delo_ua_scraper.py
+
+PROBLEM: Image captions appearing in content
+Example: "Індекс самопочуття ритейлу зріс / Depositphotos"
+
+Pattern: Text + "/" + Photo credit
+
+Update _clean_content to filter these:
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean Delo.ua content with image caption filtering"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove "Новині компаній"
+    content = re.sub(r'Новині компаній', '', content)
+    
+    # EXPLICIT duplicate title removal
+    title_pattern = re.escape(title)
+    double_title_pattern = f'^{title_pattern}\\s*\\n\\s*{title_pattern}'
+    if re.match(double_title_pattern, content, re.MULTILINE):
+        content = re.sub(f'^{title_pattern}\\s*\\n', '', content, count=1, flags=re.MULTILINE)
+    
+    # Get lines
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    
+    # Filter lines
+    filtered = []
+    for line in lines:
+        # Skip metadata
+        if line in ['Категорія', 'Новини', 'Дата публікації']:
+            continue
+        
+        # Skip image captions (pattern: "Text / Depositphotos" or "Text / Getty Images")
+        if ' / ' in line and len(line) < 100:
+            # Check if it's photo credit
+            parts = line.split(' / ')
+            if len(parts) == 2 and parts[1].strip() in ['Depositphotos', 'Getty Images', 'Reuters', 'AFP', 'Unsplash']:
+                continue
+        
+        filtered.append(line)
+    
+    # Join text
+    text = ' '.join(filtered)
+    text = re.sub(r'  +', ' ', text)
+    
+    # Add paragraph breaks
+    text = re.sub(r'([.!?»"]\s+)([A-ZА-ЯІЇЄ])', r'\1\n\n\2', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+```
+
+=== TEST BOTH FIXES ===
+
+1. The Spirits Business:
+   - Scrape "Cotswolds Distillery" article
+   - Verify title appears ONCE
+   - Show first 200 chars
+
+2. Delo.ua:
+   - Scrape "Індекс самопочуття" article
+   - Verify NO "/ Depositphotos" caption
+   - Show first 200 chars
+
+=== UPDATE EXISTING ARTICLES ===
+
+Find and clean:
+- The Spirits Business articles in database (remove duplicate titles)
+- Delo.ua articles with image captions (remove captions)
+
+Show count of articles updated
+
+OUTPUT:
+Confirmation that both scrapers fixed and existing articles cleaned

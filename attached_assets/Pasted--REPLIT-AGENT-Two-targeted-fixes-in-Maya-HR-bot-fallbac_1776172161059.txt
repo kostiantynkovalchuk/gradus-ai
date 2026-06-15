@@ -1,0 +1,93 @@
+# REPLIT AGENT — Two targeted fixes in Maya HR bot fallback response
+
+---
+
+## CONFIRMED CONTEXT
+
+- File: `backend/routes/telegram_webhook.py`
+- The fallback message appears when no preset or RAG result is found
+- Current fallback text (search for this exact string):
+
+```
+На жаль, я не знайшов точної інформації по запиту
+```
+
+---
+
+## STEP 0 — AUDIT FIRST
+
+Find every place in the codebase where this fallback text is constructed.
+Search for:
+- `"не знайшов"`
+- `"Зверніться до HR"`
+- `"hr@vinkom.net"`
+- `"Зателефонуйте"`
+- `"Решетілов"` (any form)
+
+Report: how many locations, which files, which line numbers.
+There may be more than one — find ALL of them.
+
+---
+
+## FIX 1 — Remove "Або зателефонуйте Наталії Решетіловій" line
+
+In every fallback location found, remove this line entirely:
+```
+• Або зателефонуйте Наталії Решетіловій
+```
+
+The correct fallback after fix should be exactly:
+```
+🔍 На жаль, я не знайшла точної інформації по запиту "{query}" в базі знань TD AV.
+
+Що можна зробити:
+• Спробуйте переформулювати питання
+• Зверніться до HR-відділу: hr@vinkom.net
+```
+
+No phone line. No "Або зателефонуйте" line. Just two bullet points.
+
+---
+
+## FIX 2 — Gender syntax: "не знайшов" → "не знайшла"
+
+Maya is a female bot. Every instance of masculine verb form must be feminine.
+
+In every fallback location found, replace:
+- `"не знайшов"` → `"не знайшла"`
+
+Search the ENTIRE codebase for any other masculine verb forms used in
+Maya's responses. Common patterns to check:
+- `"знайшов"` → `"знайшла"`
+- `"не зміг"` → `"не змогла"`
+- `"не зрозумів"` → `"не зрозуміла"`
+- `"отримав"` → `"отримала"`
+- `"підготував"` → `"підготувала"`
+
+Report all instances found and fix all of them.
+
+---
+
+## VERIFICATION
+
+After changes, show me the complete final fallback message text as it
+will appear to the user. It must be exactly:
+
+```
+🔍 На жаль, я не знайшла точної інформації по запиту "..." в базі знань TD AV.
+
+Що можна зробити:
+• Спробуйте переформулювати питання
+• Зверніться до HR-відділу: hr@vinkom.net
+```
+
+No other lines. No phone number. No "Або зателефонуйте".
+
+---
+
+## CONSTRAINTS
+
+- Only change fallback message text and verb gender forms
+- Do not touch any other bot logic, routing, or DB
+- Do not change the preset system or RAG pipeline
+- If the fallback text exists in more than one file, fix ALL locations

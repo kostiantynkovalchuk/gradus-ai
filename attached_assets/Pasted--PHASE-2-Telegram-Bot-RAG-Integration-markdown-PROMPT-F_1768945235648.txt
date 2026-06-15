@@ -1,0 +1,606 @@
+🎯 PHASE 2: Telegram Bot RAG Integration
+markdown# PROMPT FOR REPLIT AGENT:
+
+## TASK: Integrate HR RAG System with Telegram Bot
+
+### Current State
+- Maya bot handles brand questions (product-facing)
+- HR RAG system is built and working (API functional)
+- Need to connect employees to HR knowledge via Telegram
+
+### Requirements
+
+1. **Update Bot Handlers for HR Queries**
+
+File: `app/bot/handlers.py`
+```python
+from app.services.hr_rag_service import HRRagService
+import httpx
+
+hr_rag = HRRagService()
+
+# Add after existing handlers
+
+@router.message(F.text & ~F.command() & F.from_user)
+async def hr_question_handler(message: Message, state: FSMContext):
+    """
+    Handle employee HR questions
+    Flow:
+    1. Check if preset answer available (fast)
+    2. If not, use RAG semantic search
+    3. Return answer with sources
+    """
+    
+    user_id = message.from_user.id
+    query = message.text.strip()
+    
+    # Show typing indicator
+    await message.bot.send_chat_action(
+        chat_id=message.chat.id,
+        action="typing"
+    )
+    
+    try:
+        # Call HR API
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.API_BASE_URL}/api/hr/answer",
+                json={
+                    "query": query,
+                    "user_id": user_id
+                },
+                timeout=15.0
+            )
+            
+            if response.status_code != 200:
+                await message.answer(
+                    "❌ Вибачте, виникла помилка. Спробуйте ще раз або зверніться до HR."
+                )
+                return
+            
+            data = response.json()
+        
+        # Send answer
+        answer_text = data['answer']
+        sources = data.get('sources', [])
+        is_preset = data.get('source') == 'preset'
+        
+        # Format answer
+        if is_preset:
+            # Preset answers are already formatted
+            await message.answer(
+                answer_text,
+                parse_mode="Markdown",
+                reply_markup=create_main_menu_keyboard()
+            )
+        else:
+            # RAG-generated answer - add context
+            full_response = f"{answer_text}\n\n"
+            
+            if sources:
+                full_response += "📚 **Джерела:**\n"
+                for idx, source in enumerate(sources[:3], 1):
+                    full_response += f"{idx}. {source['title']}\n"
+            
+            await message.answer(
+                full_response,
+                parse_mode="Markdown",
+                reply_markup=create_feedback_keyboard(sources)
+            )
+        
+        # Log query for analytics
+        await log_hr_query(user_id, query, is_preset, sources)
+        
+    except httpx.TimeoutException:
+        await message.answer(
+            "⏱️ Запит обробляється довго. Спробуйте переформулювати питання або зверніться до HR."
+        )
+    except Exception as e:
+        logger.error(f"HR query error: {e}")
+        await message.answer(
+            "❌ Не вдалося обробити запит. Зверніться до HR департаменту."
+        )
+
+async def log_hr_query(user_id: int, query: str, is_preset: bool, sources: list):
+    """Log query for analytics"""
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{settings.API_BASE_URL}/api/hr/log-query",
+                json={
+                    "user_id": user_id,
+                    "query": query,
+                    "preset_matched": is_preset,
+                    "content_ids": [s['content_id'] for s in sources] if sources else []
+                }
+            )
+    except:
+        pass  # Don't fail if logging fails
+```
+
+2. **Create Interactive Keyboards**
+
+File: `app/bot/keyboards.py`
+```python
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+
+def create_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Main HR menu with 6 primary categories"""
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="📖 Про компанію", 
+                callback_data="menu:about"
+            ),
+            InlineKeyboardButton(
+                text="🚀 Новачкам", 
+                callback_data="menu:onboarding"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="💼 Робочі питання", 
+                callback_data="menu:work"
+            ),
+            InlineKeyboardButton(
+                text="💰 Зарплата", 
+                callback_data="menu:salary"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔧 Тех. підтримка", 
+                callback_data="menu:tech"
+            ),
+            InlineKeyboardButton(
+                text="📞 Контакти", 
+                callback_data="menu:contacts"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="❓ Задати питання", 
+                switch_inline_query_current_chat=""
+            )
+        ]
+    ]
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def create_feedback_keyboard(sources: list = None) -> InlineKeyboardMarkup:
+    """Keyboard with feedback and navigation"""
+    buttons = [
+        [
+            InlineKeyboardButton(text="👍 Корисно", callback_data="feedback:helpful"),
+            InlineKeyboardButton(text="👎 Не допомогло", callback_data="feedback:not_helpful")
+        ]
+    ]
+    
+    # Add source buttons if available
+    if sources:
+        for idx, source in enumerate(sources[:2], 1):  # Max 2 sources as buttons
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📄 {source['title'][:30]}...",
+                    callback_data=f"source:{source['content_id']}"
+                )
+            ])
+    
+    buttons.append([
+        InlineKeyboardButton(text="🏠 Головне меню", callback_data="menu:main")
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def create_category_keyboard(category: str) -> InlineKeyboardMarkup:
+    """Create submenu for specific category"""
+    
+    # Define submenus
+    SUBMENUS = {
+        'onboarding': [
+            ('📋 Документи для працевлаштування', 'content:q1_documents'),
+            ('🔐 Корпоративний доступ', 'content:q2_account_creation'),
+            ('📱 Перші кроки', 'submenu:first_steps'),
+            ('🔙 Назад', 'menu:main')
+        ],
+        'salary': [
+            ('💵 Строки виплати', 'content:q13_salary_dates'),
+            ('❓ Питання про нарахування', 'content:q14_salary_questions'),
+            ('🔙 Назад', 'menu:main')
+        ],
+        'work': [
+            ('🏖️ Відпустки', 'submenu:vacation'),
+            ('🏥 Лікарняні', 'content:q10_sick_leave'),
+            ('🏠 Віддалена робота', 'content:q11_remote_work'),
+            ('✈️ Відрядження', 'content:q12_business_trip'),
+            ('🤝 Вирішення конфліктів', 'content:q20_conflict'),
+            ('📤 Звільнення', 'content:q26_resignation'),
+            ('🔙 Назад', 'menu:main')
+        ],
+        'tech': [
+            ('💻 Проблеми з ПК', 'content:q17_pc_issues'),
+            ('📱 КПК / Планшет', 'content:q15_mobile_device'),
+            ('📄 СЕД Бліц', 'submenu:sed_blitz'),
+            ('🌐 Віддалений робочий стіл', 'content:q18_remote_setup'),
+            ('🛠️ Канцтовари та меблі', 'submenu:supplies'),
+            ('🔙 Назад', 'menu:main')
+        ],
+        'about': [
+            ('🎬 Загальна інформація', 'content:section_1_general'),
+            ('💎 Цінності компанії', 'content:section_2_values'),
+            ('📜 Історія компанії', 'content:section_3_history'),
+            ('🏗️ Структура компанії', 'content:section_4_structure'),
+            ('💪 Наші переваги', 'content:section_4_advantages'),
+            ('🔙 Назад', 'menu:main')
+        ],
+        'contacts': [
+            ('📋 Список контактів', 'content:appendix_22'),
+            ('🔙 Назад', 'menu:main')
+        ]
+    }
+    
+    items = SUBMENUS.get(category, [])
+    buttons = [[InlineKeyboardButton(text=text, callback_data=data)] for text, data in items]
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+```
+
+3. **Add Callback Handlers for Menu Navigation**
+```python
+@router.callback_query(F.data.startswith("menu:"))
+async def menu_handler(callback: CallbackQuery):
+    """Handle menu navigation"""
+    await callback.answer()
+    
+    menu_id = callback.data.split(":")[1]
+    
+    if menu_id == "main":
+        await callback.message.edit_text(
+            "🏢 **Maya HR Assistant**\n\n"
+            "Оберіть розділ або напишіть своє питання:",
+            reply_markup=create_main_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+    
+    elif menu_id in ['about', 'onboarding', 'work', 'salary', 'tech', 'contacts']:
+        titles = {
+            'about': '📖 Про компанію',
+            'onboarding': '🚀 Інформація для новачків',
+            'work': '💼 Робочі питання',
+            'salary': '💰 Зарплата та відпустки',
+            'tech': '🔧 Технічна підтримка',
+            'contacts': '📞 Контакти спеціалістів'
+        }
+        
+        await callback.message.edit_text(
+            f"{titles[menu_id]}\n\nОберіть підрозділ:",
+            reply_markup=create_category_keyboard(menu_id),
+            parse_mode="Markdown"
+        )
+
+@router.callback_query(F.data.startswith("content:"))
+async def content_handler(callback: CallbackQuery):
+    """Show specific content"""
+    await callback.answer()
+    
+    content_id = callback.data.split(":")[1]
+    
+    # Fetch content from API
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings.API_BASE_URL}/api/hr/content/{content_id}"
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Format content
+                title = data.get('title', '')
+                content_type = data.get('content_type', 'text')
+                content = data.get('content', '')
+                
+                if content_type == 'video' and data.get('video_url'):
+                    # Send video
+                    await callback.message.answer_video(
+                        video=data['video_url'],
+                        caption=f"🎬 **{title}**",
+                        parse_mode="Markdown"
+                    )
+                    
+                    # Fallback text option
+                    await callback.message.answer(
+                        "Або прочитайте текстову версію:",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(
+                                text="📄 Текстова версія",
+                                callback_data=f"text:{content_id}"
+                            )
+                        ]])
+                    )
+                
+                elif content_type == 'table':
+                    # Format table for Telegram
+                    table_data = data.get('metadata', {}).get('table_data', {})
+                    formatted_table = format_table_for_telegram(table_data)
+                    
+                    await callback.message.edit_text(
+                        f"**{title}**\n\n{formatted_table}",
+                        parse_mode="Markdown",
+                        reply_markup=create_main_menu_keyboard()
+                    )
+                
+                else:
+                    # Regular text content
+                    # Split if too long (Telegram limit: 4096 chars)
+                    if len(content) > 3800:
+                        chunks = split_long_message(content, 3800)
+                        for idx, chunk in enumerate(chunks):
+                            if idx == 0:
+                                await callback.message.edit_text(
+                                    f"**{title}**\n\n{chunk}",
+                                    parse_mode="Markdown"
+                                )
+                            else:
+                                await callback.message.answer(
+                                    chunk,
+                                    parse_mode="Markdown"
+                                )
+                        
+                        # Add navigation at the end
+                        await callback.message.answer(
+                            "─────────",
+                            reply_markup=create_main_menu_keyboard()
+                        )
+                    else:
+                        await callback.message.edit_text(
+                            f"**{title}**\n\n{content}",
+                            parse_mode="Markdown",
+                            reply_markup=create_main_menu_keyboard()
+                        )
+            
+            else:
+                await callback.message.edit_text(
+                    "❌ Контент не знайдено. Спробуйте інший розділ.",
+                    reply_markup=create_main_menu_keyboard()
+                )
+    
+    except Exception as e:
+        logger.error(f"Content fetch error: {e}")
+        await callback.message.edit_text(
+            "❌ Помилка завантаження. Спробуйте пізніше.",
+            reply_markup=create_main_menu_keyboard()
+        )
+
+def format_table_for_telegram(table_data: dict) -> str:
+    """Format table data for Telegram display"""
+    if not table_data:
+        return "Таблиця недоступна"
+    
+    headers = table_data.get('headers', [])
+    rows = table_data.get('rows', [])
+    
+    # Use monospace font for alignment
+    output = "```\n"
+    
+    # Headers
+    header_line = " | ".join(h[:15] for h in headers)  # Truncate long headers
+    output += header_line + "\n"
+    output += "-" * len(header_line) + "\n"
+    
+    # Rows (limit to first 20 for readability)
+    for row in rows[:20]:
+        row_line = " | ".join(str(cell)[:15] for cell in row)
+        output += row_line + "\n"
+    
+    if len(rows) > 20:
+        output += f"\n...та ще {len(rows) - 20} рядків\n"
+    
+    output += "```"
+    
+    return output
+
+def split_long_message(text: str, max_length: int = 3800) -> list:
+    """Split long message into chunks"""
+    if len(text) <= max_length:
+        return [text]
+    
+    chunks = []
+    current_chunk = ""
+    
+    for paragraph in text.split('\n\n'):
+        if len(current_chunk) + len(paragraph) + 2 <= max_length:
+            current_chunk += paragraph + "\n\n"
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = paragraph + "\n\n"
+    
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
+
+@router.callback_query(F.data.startswith("feedback:"))
+async def feedback_handler(callback: CallbackQuery):
+    """Handle user feedback"""
+    await callback.answer("Дякуємо за відгук!")
+    
+    feedback_type = callback.data.split(":")[1]
+    
+    # Log feedback (implement as needed)
+    # Could update database, send to analytics, etc.
+    
+    if feedback_type == "not_helpful":
+        await callback.message.answer(
+            "Вибачте, що не змогла допомогти. "
+            "Ви можете:\n"
+            "• Переформулювати питання\n"
+            "• Звернутися до HR департаменту\n"
+            "• Подивитися контакти спеціалістів",
+            reply_markup=create_main_menu_keyboard()
+        )
+```
+
+4. **Add /start Handler for New Users**
+```python
+@router.message(Command("start"))
+async def start_handler(message: Message):
+    """Welcome new employee and show main menu"""
+    
+    user_name = message.from_user.first_name
+    
+    welcome_text = f"""
+👋 **Вітаю, {user_name}!**
+
+Я Maya — HR асистент ТД АВ. Допоможу вам з:
+
+- Питаннями про зарплату та відпустки
+- Технічною підтримкою
+- Інформацією для новачків
+- Контактами спеціалістів
+- Та багато іншим!
+
+Просто напишіть своє питання або оберіть розділ з меню 👇
+"""
+    
+    await message.answer(
+        welcome_text,
+        reply_markup=create_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("help"))
+async def help_handler(message: Message):
+    """Show help information"""
+    
+    help_text = """
+ℹ️ **Як користуватися Maya HR?**
+
+**1. Напишіть питання**
+Просто введіть своє питання українською мовою.
+Приклад: "коли виплачують зарплату?"
+
+**2. Використайте меню**
+Натисніть кнопки для навігації по розділам.
+
+**3. Корисні команди:**
+/start - Головне меню
+/help - Ця довідка
+/contacts - Контакти спеціалістів
+
+**Підтримка:** @hr_support
+"""
+    
+    await message.answer(
+        help_text,
+        reply_markup=create_main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("contacts"))
+async def contacts_handler(message: Message):
+    """Quick access to contacts"""
+    
+    await content_handler_direct(message, 'appendix_22')
+```
+
+5. **Add Settings to Config**
+
+File: `app/config.py`
+```python
+class Settings(BaseSettings):
+    # ... existing settings ...
+    
+    # HR Bot settings
+    HR_BOT_ENABLED: bool = True
+    HR_PRESET_THRESHOLD: int = 85  # Fuzzy matching threshold
+    HR_RAG_TOP_K: int = 5  # Number of results for semantic search
+    HR_MAX_MESSAGE_LENGTH: int = 3800  # Telegram limit buffer
+    
+    # API endpoints
+    API_BASE_URL: str = "http://localhost:8000"  # Change for production
+```
+
+### Deployment Steps
+```bash
+# 1. Update dependencies (if needed)
+pip install httpx  # For async HTTP requests
+
+# 2. Test locally
+python -m app.bot.main
+
+# 3. Test in Telegram
+# Send message to bot: "коли виплачують зарплату?"
+
+# 4. Deploy to Render
+git add .
+git commit -m "Add HR RAG integration to Telegram bot"
+git push origin main
+
+# Render will auto-deploy
+```
+
+### Testing Checklist
+
+**Test Preset Answers:**
+```
+User: "коли виплачують зарплату?"
+Expected: Instant response with salary dates (< 0.1s)
+
+User: "скільки днів відпустки?"
+Expected: Vacation info (18 days, etc.)
+```
+
+**Test RAG Search:**
+```
+User: "як вирішити конфлікт з колегою?"
+Expected: Conflict resolution steps with sources
+
+User: "проблема з віддаленкою"
+Expected: Remote desktop troubleshooting
+```
+
+**Test Menu Navigation:**
+```
+1. Send /start
+2. Click "💼 Робочі питання"
+3. Click "🏖️ Відпустки"
+4. Should show vacation content
+5. Click "🔙 Назад" - should go back to work menu
+```
+
+**Test Content Display:**
+```
+1. Request table (e.g., contacts)
+2. Should format properly in monospace
+3. Long content should split into multiple messages
+```
+
+### Acceptance Criteria
+- ✅ /start shows welcome + main menu
+- ✅ Text questions trigger RAG search
+- ✅ Preset answers respond in < 0.1s
+- ✅ Menu navigation works (6 categories)
+- ✅ Content display handles text, tables, videos
+- ✅ Long messages split properly
+- ✅ Feedback buttons functional
+- ✅ Error handling graceful
+- ✅ Logs queries for analytics
+
+### Files to Create/Modify
+- `app/bot/handlers.py` (major update)
+- `app/bot/keyboards.py` (new)
+- `app/config.py` (add settings)
+
+### Next Steps After This
+- Phase 3: Video content integration
+- Phase 4: Analytics dashboard
+- Phase 5: Admin UI for preset management
+
+### Notes
+- Keep responses conversational and helpful
+- Use emojis for visual appeal
+- Always provide a way back to main menu
+- Monitor response times (target: <2s for RAG)
+- Track which questions get asked most

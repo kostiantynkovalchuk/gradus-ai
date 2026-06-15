@@ -1,0 +1,62 @@
+Update Claude model references before June 15 retirement.
+
+=== STEP 1: Update config/models.py (central config) ===
+
+Line 19 — replace:
+  CLAUDE_MODEL_CONTENT = "claude-sonnet-4-20250514"
+with:
+  CLAUDE_MODEL_CONTENT = "claude-sonnet-4-6"
+
+Line 25 — verify ALEX_CHAT_MODEL:
+  ALEX_CHAT_MODEL = "claude-sonnet-4-6"
+  This is correct IF "claude-sonnet-4-6" is a valid model ID.
+  Test it: make one API call with this model and confirm 200 OK.
+
+=== STEP 2: Fix hardcoded strings that bypass config ===
+
+services/linkedin_digest_service.py line 36:
+  "claude-sonnet-4-20250514" → "claude-sonnet-4-6"
+  Better: import CLAUDE_MODEL_CONTENT from config and use that.
+
+routes/admin_routes.py line 465:
+  "claude-sonnet-4-20250514" → "claude-sonnet-4-6"
+  Better: import CLAUDE_MODEL_CONTENT from config.
+
+photo_report/vision.py line 397:
+  "claude-sonnet-4-20250514" → "claude-sonnet-4-6"
+  Better: import from config.
+
+services/video_digest_service.py line 44:
+  "claude-sonnet-4-5" → verify this is valid. 
+  If not, use "claude-sonnet-4-5-20250929" or CLAUDE_MODEL_WEBSITE.
+
+=== STEP 3: Fix stale gen 3 model ===
+
+services/hr_rag_service.py line 483:
+  "claude-3-haiku-20240307" → "claude-haiku-4-5-20251001"
+  This is an old gen 3 model that may stop working any day.
+  Replace with CLAUDE_MODEL_TELEGRAM from config.
+
+=== STEP 4: Eliminate future hardcoding ===
+
+For every file fixed above, replace the hardcoded string with 
+an import from config/models.py:
+
+  from config.models import CLAUDE_MODEL_CONTENT
+  # or
+  from config.models import CLAUDE_MODEL_TELEGRAM
+
+This way future model updates only need one change in config/models.py.
+
+=== AFTER CHANGES ===
+
+Verify no hardcoded model strings remain:
+  grep -rn "claude-sonnet-4-20250514" backend/
+  grep -rn "claude-3-haiku" backend/
+  
+Both should return 0 results.
+
+Then restart and test:
+1. Send a message to Maya HR → verify response works
+2. Send a photo to Alex Photo Report → verify analysis works
+3. Check LinkedIn digest logs → verify no model errors

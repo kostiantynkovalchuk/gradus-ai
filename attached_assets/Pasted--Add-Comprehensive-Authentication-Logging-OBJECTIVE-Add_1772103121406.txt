@@ -1,0 +1,403 @@
+# Add Comprehensive Authentication Logging
+
+## OBJECTIVE
+Add detailed logging to distinguish between:
+1. User not found in database (needs verification)
+2. Database connection errors (technical issue)
+3. User found but inactive (edge case)
+4. User found and active (success)
+
+This will help diagnose authentication issues like Vasile's case.
+
+## PROBLEM
+Current code doesn't distinguish between "user not in database" vs "database error":
+```python
+user = await get_user_by_telegram_id(telegram_id)
+if not user:
+    # Could mean: not found OR database crashed OR connection timeout
+    # We don't know which!
+```
+
+## SOLUTION
+
+### Step 1: Update User Lookup Function
+
+**File:** `backend/services/hr_auth.py` (or wherever `get_user_by_telegram_id` is defined)
+```python
+import logging
+from typing import Optional, Dict
+
+logger = logging.getLogger(__name__)
+
+async def get_user_by_telegram_id(
+    db,
+    telegram_id: int
+) -> Optional[Dict]:
+    """
+    Get user from database with detailed logging.
+    
+    Returns:
+        User dict if found and active
+        None if not found or inactive
+        
+    Logs:
+        - Database errors (connection, timeout, etc.)
+        - User not found
+        - User found but inactive
+        - User found and active
+    """
+    try:
+        logger.debug(f"🔍 Looking up user: telegram_id={telegram_id}")
+        
+        # Query database
+        result = await db.execute(
+            text("""
+                SELECT 
+                    telegram_id, full_name, phone, position, 
+                    department, is_active, verification_method,
+                    created_at, updated_at
+                FROM hr_users
+                WHERE telegram_id = :telegram_id
+            """),
+            {"telegram_id": telegram_id}
+        )
+        
+        row = result.fetchone()
+        
+        if not row:
+            # User genuinely not in database
+            logger.info(f"❌ User not found: telegram_id={telegram_id}")
+            return None
+        
+        user = dict(row._mapping)
+        
+        # Check if active
+        if not user.get('is_active', False):
+            logger.warning(
+                f"⚠️ User found but INACTIVE: telegram_id={telegram_id}, "
+                f"name={user.get('full_name', 'Unknown')}"
+            )
+            return None
+        
+        # Success - user found and active
+        logger.info(
+            f"✅ User authenticated: telegram_id={telegram_id}, "
+            f"name={user['full_name']}, "
+            f"position={user.get('position', 'N/A')}"
+        )
+        
+        return user
+        
+    except asyncio.TimeoutError:
+        logger.error(
+            f"⏱️ DATABASE TIMEOUT: Failed to lookup user {telegram_id}. "
+            f"Database is slow or unreachable."
+        )
+        return None
+        
+    except OperationalError as e:
+        logger.error(
+            f"💥 DATABASE CONNECTION ERROR: telegram_id={telegram_id}. "
+            f"Error: {str(e)[:200]}"
+        )
+        return None
+        
+    except Exception as e:
+        logger.error(
+            f"💥 UNEXPECTED ERROR in get_user_by_telegram_id: "
+            f"telegram_id={telegram_id}, "
+            f"error_type={type(e).__name__}, "
+            f"error={str(e)[:200]}",
+            exc_info=True
+        )
+        return None
+```
+
+### Step 2: Update Message Handler Logging
+
+**File:** `backend/routes/telegram_webhook.py`
+
+Find the message handler that checks authentication, and update it:
+```python
+@router.message(F.text & ~F.command())
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route user messages with detailed auth logging."""
+    
+    user = update.effective_user
+    telegram_id = user.id
+    message_text = update.message.text.strip()
+    
+    logger.info(
+        f"📨 Message received: telegram_id={telegram_id}, "
+        f"username={user.username or 'None'}, "
+        f"text='{message_text[:50]}...'"
+    )
+    
+    # Check authentication with detailed logging
+    try:
+        user_data = await get_user_by_telegram_id(db, telegram_id)
+        
+        if not user_data:
+            # User not authenticated
+            # (Could be: not found, inactive, or database error - check logs above)
+            
+            logger.info(
+                f"🚫 Unauthenticated user: telegram_id={telegram_id}. "
+                f"Triggering verification flow."
+            )
+            
+            # Detect if phone number
+            if is_phone_number(message_text):
+                # Phone number flow
+                logger.info(f"📱 Phone detected: {message_text}")
+                # ... existing phone confirmation logic ...
+            else:
+                # Prompt for verification
+                logger.info(f"💬 Prompting unauthenticated user for phone")
+                # ... existing prompt logic ...
+            
+            return
+        
+        # User authenticated - route to HR service
+        logger.info(
+            f"✅ Authenticated user message: telegram_id={telegram_id}, "
+            f"user={user_data['full_name']}, "
+            f"routing to HR service"
+        )
+        
+        # ... existing HR RAG service logic ...
+        
+    except Exception as e:
+        logger.error(
+            f"💥 CRITICAL ERROR in message handler: "
+            f"telegram_id={telegram_id}, "
+            f"error={str(e)[:200]}",
+            exc_info=True
+        )
+        
+        await update.message.reply_text(
+            "❌ Вибачте, виникла технічна помилка.\n\n"
+            "Спробуйте ще раз через хвилину або зверніться до HR-відділу."
+        )
+```
+
+### Step 3: Add Database Health Check to Scheduler
+
+**File:** `backend/services/scheduler.py`
+
+Add a simple database health check that runs periodically:
+```python
+from services.database import db
+from sqlalchemy import text
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def check_database_health():
+    """
+    Periodic database health check.
+    Helps catch connection issues before they affect users.
+    """
+    try:
+        # Simple query to test connection
+        result = await db.execute(text("SELECT 1"))
+        row = result.fetchone()
+        
+        if row and row[0] == 1:
+            logger.info("✅ Database health check: OK")
+            return True
+        else:
+            logger.error("❌ Database health check: Unexpected result")
+            return False
+            
+    except asyncio.TimeoutError:
+        logger.error("⏱️ Database health check: TIMEOUT - database is slow")
+        return False
+        
+    except OperationalError as e:
+        logger.error(f"💥 Database health check: CONNECTION ERROR - {str(e)[:200]}")
+        return False
+        
+    except Exception as e:
+        logger.error(
+            f"💥 Database health check: UNEXPECTED ERROR - "
+            f"{type(e).__name__}: {str(e)[:200]}"
+        )
+        return False
+
+# Add to scheduler (runs every 5 minutes)
+scheduler.add_job(
+    check_database_health,
+    'interval',
+    minutes=5,
+    id='database_health_check',
+    name='Database Health Check'
+)
+```
+
+### Step 4: Add Verification Attempt Logging
+
+**File:** `backend/services/hr_auth.py`
+
+In the phone verification flow, add detailed logging:
+```python
+async def handle_phone_verification(
+    telegram_id: int,
+    phone: str,
+    chat_id: int
+):
+    """
+    Verify phone with detailed logging.
+    """
+    
+    logger.info(
+        f"🔐 VERIFICATION ATTEMPT: telegram_id={telegram_id}, "
+        f"phone={phone[:4]}***{phone[-4:]}"
+    )
+    
+    try:
+        # Normalize phone
+        phone_normalized = normalize_phone(phone)
+        
+        logger.debug(f"📞 Phone normalized: {phone} → {phone_normalized}")
+        
+        # Check whitelist
+        whitelisted = await is_phone_whitelisted(db, phone_normalized)
+        
+        if whitelisted:
+            logger.info(
+                f"✅ WHITELIST HIT: phone={phone_normalized}, "
+                f"telegram_id={telegram_id}"
+            )
+            # ... whitelist logic ...
+            return
+        
+        # Call SED API
+        logger.info(f"🔍 Calling SED API: phone={phone_normalized}")
+        
+        employee = await verify_employee_in_sed(phone)
+        
+        if employee:
+            logger.info(
+                f"✅ SED API SUCCESS: phone={phone_normalized}, "
+                f"employee={employee.get('full_name', 'Unknown')}, "
+                f"position={employee.get('position', 'N/A')}"
+            )
+            
+            # Save to database
+            await save_verified_user(telegram_id, employee)
+            
+            logger.info(
+                f"💾 USER SAVED: telegram_id={telegram_id}, "
+                f"name={employee['full_name']}"
+            )
+            
+        else:
+            logger.warning(
+                f"❌ SED API NOT FOUND: phone={phone_normalized}, "
+                f"telegram_id={telegram_id}"
+            )
+            
+    except Exception as e:
+        logger.error(
+            f"💥 VERIFICATION ERROR: telegram_id={telegram_id}, "
+            f"phone={phone_normalized}, "
+            f"error={str(e)[:200]}",
+            exc_info=True
+        )
+        raise
+```
+
+## EXPECTED LOG OUTPUT
+
+### Scenario 1: Normal Authentication (Success)
+```
+🔍 Looking up user: telegram_id=892547382
+✅ User authenticated: telegram_id=892547382, name=Профир Василий Михайлович, position=Marketing Director
+📨 Message received: telegram_id=892547382, username=vasile_rotaru, text='Як працювати в бліц?...'
+✅ Authenticated user message: telegram_id=892547382, user=Профир Василий Михайлович, routing to HR service
+```
+
+### Scenario 2: User Not Found (Needs Verification)
+```
+🔍 Looking up user: telegram_id=999999999
+❌ User not found: telegram_id=999999999
+📨 Message received: telegram_id=999999999, username=new_user, text='+380501234567...'
+🚫 Unauthenticated user: telegram_id=999999999. Triggering verification flow.
+📱 Phone detected: +380501234567
+```
+
+### Scenario 3: Database Connection Error
+```
+🔍 Looking up user: telegram_id=892547382
+💥 DATABASE CONNECTION ERROR: telegram_id=892547382. Error: connection to server at "..." failed
+📨 Message received: telegram_id=892547382, username=vasile_rotaru, text='Як працювати в бліц?...'
+🚫 Unauthenticated user: telegram_id=892547382. Triggering verification flow.
+⚠️ NOTE: User may actually be verified - database connection issue!
+```
+
+### Scenario 4: User Inactive
+```
+🔍 Looking up user: telegram_id=892547382
+⚠️ User found but INACTIVE: telegram_id=892547382, name=Профир Василий Михайлович
+📨 Message received: telegram_id=892547382, username=vasile_rotaru, text='...'
+🚫 Unauthenticated user: telegram_id=892547382. Triggering verification flow.
+```
+
+### Scenario 5: Database Timeout
+```
+🔍 Looking up user: telegram_id=892547382
+⏱️ DATABASE TIMEOUT: Failed to lookup user 892547382. Database is slow or unreachable.
+❌ Database health check: TIMEOUT - database is slow
+```
+
+## TESTING
+
+After implementation, test each scenario:
+```bash
+# 1. Normal auth (existing user sends message)
+# Expected logs: "✅ User authenticated" → "✅ Authenticated user message"
+
+# 2. New user sends phone
+# Expected logs: "❌ User not found" → "🚫 Unauthenticated" → "📱 Phone detected"
+
+# 3. Simulate database issue (temporarily stop database)
+# Expected logs: "💥 DATABASE CONNECTION ERROR" → Health check fails
+
+# 4. Set user to inactive in DB
+UPDATE hr_users SET is_active = false WHERE telegram_id = 892547382;
+# Expected logs: "⚠️ User found but INACTIVE"
+```
+
+## SUCCESS CRITERIA
+
+After implementation:
+- ✅ Can distinguish "user not found" from "database error" in logs
+- ✅ Database health is monitored automatically
+- ✅ Every authentication attempt is logged with outcome
+- ✅ Errors include telegram_id, username, and error details
+- ✅ Can diagnose issues like Vasile's case from logs alone
+
+## MONITORING
+
+Watch logs for these patterns:
+
+**Red flags (need action):**
+```
+💥 DATABASE CONNECTION ERROR (appears frequently)
+⏱️ DATABASE TIMEOUT (appears frequently)
+❌ Database health check: TIMEOUT
+```
+
+**Normal operations:**
+```
+✅ User authenticated (many per day)
+❌ User not found (new employees)
+✅ Database health check: OK (every 5 min)
+```
+
+**Edge cases (investigate):**
+```
+⚠️ User found but INACTIVE (shouldn't happen often)
+🚫 Unauthenticated user: telegram_id=892547382 (Vasile being prompted again)
+```

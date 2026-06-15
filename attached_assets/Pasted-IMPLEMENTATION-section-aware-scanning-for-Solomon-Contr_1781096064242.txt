@@ -1,0 +1,61 @@
+IMPLEMENTATION — section-aware scanning for Solomon Contracts. Audit complete:
+generate_alternatives is already a separate per-finding call working off the
+merged list, so NO redline rebuild — just scan sections separately and merge.
+Follow repo rules: open and grep each file before editing; guardrail gets only
+each section's clauses; analyzed_at stamps once after all sections; report import
+reconciliation across every file touched.
+
+CONTEXT (measured on the Silpo contract):
+- Body ~70K chars / 127 numbered clauses — already covered.
+- Real appendix CONTENT lives under UPPERCASE "ДОДАТОК № N" headers:
+  №8 (20.7K, 99 numbered clauses), №3 (6K), №11 (4.6K), №13 (3K), №12 (3.1K, 0
+  numbered clauses).
+- The lowercase "Додаток №N" short blocks are the §12.8 table-of-contents list —
+  must be excluded, not scanned.
+
+STEP 1 — split raw_text into scannable sections (ingestion or analyzer, your call;
+report where):
+- Split raw_text on appendix content headers. Use a regex that matches the real
+  section headers and EXCLUDES the TOC stubs — practically: only treat a split
+  segment as a section if it is longer than a threshold (e.g. >1000 chars) OR
+  contains ≥1 numbered clause. Everything before the first real appendix header is
+  the "body" section.
+- Result for Silpo must be ~6 sections (body + №3, №8, №11, №12, №13), NOT ~20.
+  Report the section list (name + char count) before proceeding.
+
+STEP 2 — scan each section with the existing scan_document, per section:
+- In _analyze_one_document (router.py ~349), replace the single scan_document call
+  with a loop over sections. For each section pass (a) that section's text slice,
+  (b) ONLY that section's clauses — filter the parse_clauses output by scope
+  ("body" vs "appendix:N"). The §10.1 guardrail must validate against the
+  section's own clause set, never the whole document's.
+- Per-section guardrail degradation: if a section has 0 (or near-0) numbered
+  clauses relative to its length, the guardrail must FLAG findings
+  (clause_ref_unverified=true), NOT drop them. Додаток 12/9 have no numbered
+  clauses — their findings must survive. Reuse the existing flag-don't-drop path
+  if present; confirm it triggers per-section.
+
+STEP 3 — merge:
+- Concatenate findings from all section calls into one list.
+- Run _remove_subsumed_findings (analyzer.py ~599) ONCE on the merged list (it
+  currently runs inside a single scan call — move it, or call it again post-merge).
+- Pass the merged list to generate_alternatives unchanged.
+
+STEP 4 — completion:
+- Move the solcon_documents.analyzed_at stamp so it fires once, AFTER all section
+  scans + insert finish. Since sections run sequentially in the executor thread,
+  no async scaffolding changes — just sequencing inside _analyze_one_document.
+
+STEP 5 — reconcile and report:
+- _persist_rejected: confirm each section call writes its own rejects idempotently
+  (ON CONFLICT) — no duplicate rows on re-run.
+- eval.py run_eval calls scan_document directly — give it the same section-split
+  path or it won't mirror production.
+- Report every other reader of the findings list / clauses scope you touched, and
+  confirm they import cleanly.
+
+Do NOT change generate_alternatives, the citation filter, or the async trigger.
+Report the section list from Step 1 first, then proceed.
+
+NOTE (separate, do not fix here): engagement stays "under_review" forever — there
+is no engagement-level completion stamp on success. Flag for a later prompt.

@@ -1,0 +1,251 @@
+Create scraper for Just Drinks (lighter global alcohol news, English - needs translation):
+
+📋 TASK: Build Just Drinks scraper for Facebook content (lighter, more engaging)
+
+CREATE backend/services/scrapers/just_drinks_scraper.py:
+```python
+import requests
+from bs4 import BeautifulSoup
+import logging
+from typing import List
+from datetime import datetime
+from .base_scraper import BaseScraper, ArticlePayload
+
+logger = logging.getLogger(__name__)
+
+class JustDrinksScraper(BaseScraper):
+    """
+    Scraper for Just-Drinks.com
+    English language - needs translation to Ukrainian
+    Lighter, more accessible content than The Spirits Business
+    """
+    
+    def __init__(self):
+        self.base_url = "https://www.just-drinks.com"
+        self.news_url = "https://www.just-drinks.com/news/"
+        self.user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    
+    def get_source_name(self) -> str:
+        return "Just Drinks"
+    
+    def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
+        """
+        Scrape articles from Just Drinks
+        
+        Args:
+            limit: Number of articles to scrape
+            
+        Returns:
+            List of ArticlePayload objects
+        """
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(self.news_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = []
+            
+            # Find article cards - Just Drinks uses article tags
+            article_elements = soup.select('article, .article-card, .news-item, .post')[:limit]
+            
+            logger.info(f"Found {len(article_elements)} article elements on Just Drinks")
+            
+            for element in article_elements:
+                try:
+                    article = self._parse_article_card(element)
+                    
+                    if article:
+                        # Get full content
+                        full_content = self._fetch_article_content(article.url)
+                        
+                        if full_content:
+                            article.content = full_content
+                            articles.append(article)
+                            
+                            logger.info(f"✅ Scraped: {article.title[:50]}...")
+                        else:
+                            logger.warning(f"No content for: {article.url}")
+                            
+                except Exception as e:
+                    logger.error(f"Error parsing Just Drinks article: {e}")
+                    continue
+            
+            logger.info(f"✅ Scraped {len(articles)} articles from Just Drinks")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"❌ Just Drinks scraping failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+    
+    def _parse_article_card(self, element) -> ArticlePayload:
+        """Parse article card from listing page"""
+        
+        # Find title
+        title_elem = element.select_one('h2, h3, .title, .article-title, .headline')
+        if not title_elem:
+            return None
+        
+        title = title_elem.get_text(strip=True)
+        
+        # Find link
+        link_elem = element.select_one('a')
+        if not link_elem:
+            return None
+        
+        url = link_elem.get('href')
+        if not url.startswith('http'):
+            url = f"{self.base_url}{url}"
+        
+        # Find image (optional)
+        img_elem = element.select_one('img')
+        image_url = None
+        if img_elem:
+            image_url = img_elem.get('src') or img_elem.get('data-src')
+            if image_url and not image_url.startswith('http'):
+                image_url = f"{self.base_url}{image_url}"
+        
+        # Find date (optional)
+        date_elem = element.select_one('.date, time, .published, .post-date')
+        published_date = None
+        if date_elem:
+            published_date = date_elem.get_text(strip=True)
+            # Also check datetime attribute
+            if not published_date and date_elem.has_attr('datetime'):
+                published_date = date_elem['datetime']
+        
+        return ArticlePayload(
+            title=title,
+            content="",  # Will be filled by _fetch_article_content
+            url=url,
+            source=self.get_source_name(),
+            language='en',  # English
+            needs_translation=True,
+            author=None,
+            published_date=published_date,
+            image_url=image_url
+        )
+    
+    def _fetch_article_content(self, url: str) -> str:
+        """Fetch full article content from article page"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find article content - try multiple selectors
+            content_elem = soup.select_one('.article-body, .entry-content, .post-content, article .content')
+            
+            if not content_elem:
+                # Try finding main article tag
+                content_elem = soup.select_one('article')
+            
+            if not content_elem:
+                logger.warning(f"No content container found for: {url}")
+                return None
+            
+            # Remove unwanted elements
+            for unwanted in content_elem.select('script, style, .ads, .advertisement, .social-share, .related-articles, nav, footer'):
+                unwanted.decompose()
+            
+            # Extract text
+            content = content_elem.get_text(separator='\n', strip=True)
+            
+            # Clean up
+            content = self._clean_text(content)
+            
+            if len(content) < 100:
+                logger.warning(f"Content too short ({len(content)} chars) for: {url}")
+                return None
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error fetching Just Drinks content from {url}: {e}")
+            return None
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean scraped text"""
+        
+        # Remove extra whitespace
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        text = '\n\n'.join(lines)
+        
+        # Remove common unwanted patterns
+        text = text.replace('\xa0', ' ')  # Non-breaking spaces
+        text = text.replace('\u200b', '')  # Zero-width spaces
+        
+        # Remove very short lines (likely UI elements)
+        lines = text.split('\n\n')
+        lines = [line for line in lines if len(line) > 15]
+        
+        return '\n\n'.join(lines)
+```
+
+UPDATE backend/services/scrapers/scraper_manager.py:
+
+Add Just Drinks to the scraper registry:
+```python
+from .just_drinks_scraper import JustDrinksScraper
+
+class ScraperManager:
+    
+    def __init__(self):
+        self.scrapers = {
+            'the_spirits_business': SpiritsBusinessScraper(),
+            'delo_ua': DeloUaScraper(),
+            'minfin_ua': MinFinUaScraper(),
+            'just_drinks': JustDrinksScraper(),  # ← ADD THIS
+        }
+```
+
+UPDATE backend/services/multi_source_scraper.py:
+
+Add Just Drinks to Facebook sources:
+```python
+class MultiSourceScraper:
+    
+    def __init__(self):
+        self.sources = {
+            'linkedin': [
+                'the_spirits_business',
+                'delo_ua',
+                'minfin_ua'
+            ],
+            'facebook': [
+                'just_drinks',  # ← ADD THIS
+                'restorator_ua',
+                'the_drinks_report'
+            ]
+        }
+```
+
+Test the scraper:
+```bash
+cd backend
+python -c "
+from services.scrapers.just_drinks_scraper import JustDrinksScraper
+scraper = JustDrinksScraper()
+articles = scraper.scrape_articles(limit=2)
+print(f'✅ Scraped {len(articles)} Just Drinks articles')
+for a in articles:
+    print(f'- {a.title[:60]}...')
+    print(f'  Language: {a.language}, Translation needed: {a.needs_translation}')
+"
+```
+
+IMPORTANT NOTE:
+Just Drinks may have paywalled content or require registration for full articles. If you encounter:
+- 403 Forbidden errors → May need to adjust user agent
+- Truncated content → Some articles may be premium only
+- Empty content → Try different CSS selectors based on actual page structure
+
+Visit https://www.just-drinks.com/news/ to verify page structure before first run.
+
+Please implement Just Drinks scraper!

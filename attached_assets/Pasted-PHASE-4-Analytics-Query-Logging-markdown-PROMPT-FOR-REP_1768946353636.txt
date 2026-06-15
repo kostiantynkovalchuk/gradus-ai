@@ -1,0 +1,703 @@
+PHASE 4: Analytics & Query Logging
+markdown# PROMPT FOR REPLIT AGENT:
+
+## TASK: Implement Analytics and Query Logging for HR Bot
+
+### Current State
+- Bot answering questions but no tracking
+- Need to understand: what employees ask, hit rate, response quality
+- Goal: Optimize presets to reach 70%+ coverage
+
+### Requirements
+
+1. **Extend Database Schema for Logging**
+
+File: `migrations/004_hr_analytics.sql`
+```sql
+-- Query log table
+CREATE TABLE IF NOT EXISTS hr_query_log (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    user_name VARCHAR(200),
+    query TEXT NOT NULL,
+    query_normalized TEXT,  -- Lowercase, trimmed
+    preset_matched BOOLEAN DEFAULT FALSE,
+    preset_id INTEGER REFERENCES hr_preset_answers(id),
+    rag_used BOOLEAN DEFAULT FALSE,
+    content_ids TEXT[],
+    response_time_ms INTEGER,
+    satisfied BOOLEAN,  -- From feedback
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Feedback table
+CREATE TABLE IF NOT EXISTS hr_feedback (
+    id SERIAL PRIMARY KEY,
+    query_log_id INTEGER REFERENCES hr_query_log(id),
+    user_id BIGINT NOT NULL,
+    feedback_type VARCHAR(50),  -- 'helpful', 'not_helpful', 'unclear'
+    comment TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Daily stats aggregation
+CREATE TABLE IF NOT EXISTS hr_daily_stats (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL UNIQUE,
+    total_queries INTEGER DEFAULT 0,
+    preset_hits INTEGER DEFAULT 0,
+    rag_queries INTEGER DEFAULT 0,
+    unique_users INTEGER DEFAULT 0,
+    avg_response_time_ms INTEGER DEFAULT 0,
+    satisfaction_rate DECIMAL(5,2),  -- Percentage
+    top_categories JSONB,  -- {"salary": 45, "vacation": 23, ...}
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_query_log_user ON hr_query_log(user_id);
+CREATE INDEX idx_query_log_created ON hr_query_log(created_at);
+CREATE INDEX idx_query_log_preset ON hr_query_log(preset_matched);
+CREATE INDEX idx_query_normalized ON hr_query_log(query_normalized);
+CREATE INDEX idx_daily_stats_date ON hr_daily_stats(date);
+
+-- Function to aggregate daily stats (run nightly)
+CREATE OR REPLACE FUNCTION aggregate_hr_daily_stats(target_date DATE)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO hr_daily_stats (
+        date,
+        total_queries,
+        preset_hits,
+        rag_queries,
+        unique_users,
+        avg_response_time_ms,
+        satisfaction_rate
+    )
+    SELECT
+        target_date,
+        COUNT(*),
+        COUNT(*) FILTER (WHERE preset_matched = TRUE),
+        COUNT(*) FILTER (WHERE rag_used = TRUE),
+        COUNT(DISTINCT user_id),
+        AVG(response_time_ms)::INTEGER,
+        (COUNT(*) FILTER (WHERE satisfied = TRUE)::DECIMAL / 
+         NULLIF(COUNT(*) FILTER (WHERE satisfied IS NOT NULL), 0) * 100)::DECIMAL(5,2)
+    FROM hr_query_log
+    WHERE DATE(created_at) = target_date
+    ON CONFLICT (date) DO UPDATE SET
+        total_queries = EXCLUDED.total_queries,
+        preset_hits = EXCLUDED.preset_hits,
+        rag_queries = EXCLUDED.rag_queries,
+        unique_users = EXCLUDED.unique_users,
+        avg_response_time_ms = EXCLUDED.avg_response_time_ms,
+        satisfaction_rate = EXCLUDED.satisfaction_rate;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+2. **Update RAG Service with Logging**
+
+File: `app/services/hr_rag_service.py`
+```python
+import time
+from typing import Optional, Dict
+
+class HRRagService:
+    # ... existing code ...
+    
+    async def get_answer_with_logging(
+        self,
+        query: str,
+        user_id: int,
+        user_name: str = None
+    ) -> Dict:
+        """
+        Get answer and log the query
+        """
+        start_time = time.time()
+        
+        # Normalize query
+        query_normalized = query.lower().strip()
+        
+        # Try preset first
+        preset_answer = await self.check_preset_answer(query)
+        
+        if preset_answer:
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Log query
+            log_id = await self._log_query(
+                user_id=user_id,
+                user_name=user_name,
+                query=query,
+                query_normalized=query_normalized,
+                preset_matched=True,
+                preset_id=preset_answer.get('preset_id'),
+                content_ids=preset_answer.get('content_ids', []),
+                response_time_ms=response_time_ms
+            )
+            
+            return {
+                'answer': preset_answer['answer'],
+                'source': 'preset',
+                'log_id': log_id,
+                'response_time_ms': response_time_ms,
+                'sources': []
+            }
+        
+        # RAG search
+        search_results = await self.semantic_search(query, top_k=3)
+        
+        if not search_results:
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            log_id = await self._log_query(
+                user_id=user_id,
+                user_name=user_name,
+                query=query,
+                query_normalized=query_normalized,
+                preset_matched=False,
+                rag_used=False,
+                content_ids=[],
+                response_time_ms=response_time_ms
+            )
+            
+            return {
+                'answer': "Вибачте, не знайшла відповіді на ваше питання. "
+                         "Зверніться до HR департаменту або спробуйте переформулювати питання.",
+                'source': 'none',
+                'log_id': log_id,
+                'response_time_ms': response_time_ms,
+                'sources': []
+            }
+        
+        # Build context and generate answer
+        context = self._build_context(search_results)
+        answer = await self._generate_answer(query, context)
+        
+        response_time_ms = int((time.time() - start_time) * 1000)
+        
+        # Log query
+        content_ids = [r['content_id'] for r in search_results]
+        log_id = await self._log_query(
+            user_id=user_id,
+            user_name=user_name,
+            query=query,
+            query_normalized=query_normalized,
+            preset_matched=False,
+            rag_used=True,
+            content_ids=content_ids,
+            response_time_ms=response_time_ms
+        )
+        
+        return {
+            'answer': answer,
+            'source': 'rag',
+            'log_id': log_id,
+            'response_time_ms': response_time_ms,
+            'sources': search_results
+        }
+    
+    async def _log_query(
+        self,
+        user_id: int,
+        query: str,
+        query_normalized: str,
+        preset_matched: bool,
+        rag_used: bool,
+        content_ids: list,
+        response_time_ms: int,
+        user_name: str = None,
+        preset_id: int = None
+    ) -> int:
+        """Log query to database"""
+        
+        async with get_db() as db:
+            # Convert content_ids to PostgreSQL array
+            content_ids_array = '{' + ','.join(f'"{c}"' for c in content_ids) + '}'
+            
+            result = await db.execute(text("""
+                INSERT INTO hr_query_log (
+                    user_id,
+                    user_name,
+                    query,
+                    query_normalized,
+                    preset_matched,
+                    preset_id,
+                    rag_used,
+                    content_ids,
+                    response_time_ms
+                )
+                VALUES (
+                    :user_id,
+                    :user_name,
+                    :query,
+                    :query_normalized,
+                    :preset_matched,
+                    :preset_id,
+                    :rag_used,
+                    :content_ids,
+                    :response_time_ms
+                )
+                RETURNING id
+            """), {
+                'user_id': user_id,
+                'user_name': user_name,
+                'query': query,
+                'query_normalized': query_normalized,
+                'preset_matched': preset_matched,
+                'preset_id': preset_id,
+                'rag_used': rag_used,
+                'content_ids': content_ids_array,
+                'response_time_ms': response_time_ms
+            })
+            
+            log_id = result.scalar()
+            await db.commit()
+            
+            return log_id
+    
+    async def log_feedback(
+        self,
+        log_id: int,
+        user_id: int,
+        feedback_type: str,
+        comment: str = None
+    ):
+        """Log user feedback"""
+        
+        async with get_db() as db:
+            # Insert feedback
+            await db.execute(text("""
+                INSERT INTO hr_feedback (
+                    query_log_id,
+                    user_id,
+                    feedback_type,
+                    comment
+                )
+                VALUES (:log_id, :user_id, :feedback_type, :comment)
+            """), {
+                'log_id': log_id,
+                'user_id': user_id,
+                'feedback_type': feedback_type,
+                'comment': comment
+            })
+            
+            # Update query log
+            satisfied = feedback_type == 'helpful'
+            await db.execute(text("""
+                UPDATE hr_query_log
+                SET satisfied = :satisfied
+                WHERE id = :log_id
+            """), {
+                'log_id': log_id,
+                'satisfied': satisfied
+            })
+            
+            await db.commit()
+```
+
+3. **Update Bot Handlers with Logging**
+
+File: `app/bot/handlers.py`
+```python
+# Update hr_question_handler to use new logging method
+
+@router.message(F.text & ~F.command() & F.from_user)
+async def hr_question_handler(message: Message, state: FSMContext):
+    """Handle HR questions with logging"""
+    
+    user_id = message.from_user.id
+    user_name = message.from_user.full_name
+    query = message.text.strip()
+    
+    await message.bot.send_chat_action(
+        chat_id=message.chat.id,
+        action="typing"
+    )
+    
+    try:
+        # Get answer with automatic logging
+        result = await hr_rag.get_answer_with_logging(
+            query=query,
+            user_id=user_id,
+            user_name=user_name
+        )
+        
+        answer_text = result['answer']
+        sources = result.get('sources', [])
+        log_id = result.get('log_id')
+        response_time = result.get('response_time_ms', 0)
+        
+        # Store log_id in user state for feedback
+        await state.update_data(last_log_id=log_id)
+        
+        # Send answer
+        if result['source'] == 'preset':
+            await message.answer(
+                answer_text,
+                parse_mode="Markdown",
+                reply_markup=create_feedback_keyboard()
+            )
+        else:
+            full_response = f"{answer_text}\n\n"
+            
+            if sources:
+                full_response += "📚 **Джерела:**\n"
+                for idx, source in enumerate(sources[:3], 1):
+                    full_response += f"{idx}. {source['title']}\n"
+            
+            await message.answer(
+                full_response,
+                parse_mode="Markdown",
+                reply_markup=create_feedback_keyboard()
+            )
+        
+        # Log performance if slow
+        if response_time > 3000:
+            logger.warning(f"Slow query ({response_time}ms): {query[:50]}")
+    
+    except Exception as e:
+        logger.error(f"HR query error: {e}")
+        await message.answer(
+            "❌ Виникла помилка. Спробуйте пізніше або зверніться до HR."
+        )
+
+# Update feedback handler
+
+@router.callback_query(F.data.startswith("feedback:"))
+async def feedback_handler(callback: CallbackQuery, state: FSMContext):
+    """Handle feedback and log it"""
+    await callback.answer("Дякуємо за відгук!")
+    
+    feedback_type = callback.data.split(":")[1]
+    user_id = callback.from_user.id
+    
+    # Get last log_id from state
+    data = await state.get_data()
+    log_id = data.get('last_log_id')
+    
+    if log_id:
+        # Log feedback
+        await hr_rag.log_feedback(
+            log_id=log_id,
+            user_id=user_id,
+            feedback_type=feedback_type
+        )
+    
+    if feedback_type == "not_helpful":
+        await callback.message.answer(
+            "Що саме не допомогло? (опишіть своїми словами)\n"
+            "Або оберіть розділ з меню:",
+            reply_markup=create_main_menu_keyboard()
+        )
+        
+        # Set state to collect comment
+        await state.set_state("waiting_feedback_comment")
+    else:
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+# Add handler for feedback comments
+
+@router.message(StateFilter("waiting_feedback_comment"))
+async def feedback_comment_handler(message: Message, state: FSMContext):
+    """Collect feedback comment"""
+    
+    comment = message.text
+    user_id = message.from_user.id
+    
+    data = await state.get_data()
+    log_id = data.get('last_log_id')
+    
+    if log_id:
+        await hr_rag.log_feedback(
+            log_id=log_id,
+            user_id=user_id,
+            feedback_type='not_helpful_comment',
+            comment=comment
+        )
+    
+    await message.answer(
+        "✅ Дякуємо! Ваш відгук допоможе нам покращити Maya.",
+        reply_markup=create_main_menu_keyboard()
+    )
+    
+    await state.clear()
+```
+
+4. **Analytics API Endpoints**
+
+File: `app/api/hr_routes.py`
+```python
+from datetime import date, timedelta
+
+@router.get("/analytics/overview")
+async def get_analytics_overview(
+    days: int = 7
+):
+    """Get overview analytics for last N days"""
+    
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+    
+    async with get_db() as db:
+        # Overall stats
+        result = await db.execute(text("""
+            SELECT
+                COUNT(*) as total_queries,
+                COUNT(*) FILTER (WHERE preset_matched = TRUE) as preset_hits,
+                COUNT(*) FILTER (WHERE rag_used = TRUE) as rag_queries,
+                COUNT(DISTINCT user_id) as unique_users,
+                AVG(response_time_ms)::INTEGER as avg_response_time,
+                (COUNT(*) FILTER (WHERE satisfied = TRUE)::DECIMAL / 
+                 NULLIF(COUNT(*) FILTER (WHERE satisfied IS NOT NULL), 0) * 100)::DECIMAL(5,2) as satisfaction_rate
+            FROM hr_query_log
+            WHERE DATE(created_at) >= :start_date
+        """), {'start_date': start_date})
+        
+        stats = result.fetchone()
+        
+        # Top queries
+        top_queries_result = await db.execute(text("""
+            SELECT 
+                query_normalized,
+                COUNT(*) as count,
+                AVG(CASE WHEN satisfied = TRUE THEN 1.0 ELSE 0.0 END) as satisfaction
+            FROM hr_query_log
+            WHERE DATE(created_at) >= :start_date
+            GROUP BY query_normalized
+            ORDER BY count DESC
+            LIMIT 20
+        """), {'start_date': start_date})
+        
+        top_queries = top_queries_result.fetchall()
+        
+        # Queries without good answers (candidates for new presets)
+        failed_queries_result = await db.execute(text("""
+            SELECT 
+                query,
+                COUNT(*) as frequency
+            FROM hr_query_log
+            WHERE 
+                DATE(created_at) >= :start_date
+                AND (satisfied = FALSE OR satisfied IS NULL)
+                AND preset_matched = FALSE
+            GROUP BY query
+            ORDER BY frequency DESC
+            LIMIT 10
+        """), {'start_date': start_date})
+        
+        failed_queries = failed_queries_result.fetchall()
+    
+    total = stats[0]
+    preset_rate = (stats[1] / total * 100) if total > 0 else 0
+    
+    return {
+        'period': {
+            'start_date': str(start_date),
+            'end_date': str(end_date),
+            'days': days
+        },
+        'overview': {
+            'total_queries': total,
+            'preset_hits': stats[1],
+            'rag_queries': stats[2],
+            'unique_users': stats[3],
+            'avg_response_time_ms': stats[4],
+            'satisfaction_rate': float(stats[5]) if stats[5] else 0.0,
+            'preset_coverage_rate': round(preset_rate, 2)
+        },
+        'top_queries': [
+            {
+                'query': q[0],
+                'count': q[1],
+                'satisfaction': round(float(q[2]) * 100, 1) if q[2] else 0.0
+            }
+            for q in top_queries
+        ],
+        'failed_queries': [
+            {
+                'query': q[0],
+                'frequency': q[1]
+            }
+            for q in failed_queries
+        ]
+    }
+
+@router.get("/analytics/daily")
+async def get_daily_stats(
+    start_date: date = None,
+    end_date: date = None
+):
+    """Get daily statistics"""
+    
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=30)
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                date,
+                total_queries,
+                preset_hits,
+                rag_queries,
+                unique_users,
+                avg_response_time_ms,
+                satisfaction_rate
+            FROM hr_daily_stats
+            WHERE date BETWEEN :start_date AND :end_date
+            ORDER BY date DESC
+        """), {
+            'start_date': start_date,
+            'end_date': end_date
+        })
+        
+        daily_stats = result.fetchall()
+    
+    return {
+        'period': {
+            'start_date': str(start_date),
+            'end_date': str(end_date)
+        },
+        'daily_stats': [
+            {
+                'date': str(s[0]),
+                'total_queries': s[1],
+                'preset_hits': s[2],
+                'rag_queries': s[3],
+                'unique_users': s[4],
+                'avg_response_time_ms': s[5],
+                'satisfaction_rate': float(s[6]) if s[6] else 0.0
+            }
+            for s in daily_stats
+        ]
+    }
+
+@router.get("/analytics/preset-candidates")
+async def get_preset_candidates(limit: int = 20):
+    """
+    Find queries that should become presets
+    Criteria: frequently asked, not covered by presets
+    """
+    
+    async with get_db() as db:
+        result = await db.execute(text("""
+            SELECT 
+                query_normalized,
+                COUNT(*) as frequency,
+                AVG(response_time_ms)::INTEGER as avg_time,
+                COUNT(*) FILTER (WHERE satisfied = FALSE) as dissatisfied_count
+            FROM hr_query_log
+            WHERE 
+                preset_matched = FALSE
+                AND DATE(created_at) >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY query_normalized
+            HAVING COUNT(*) >= 3  -- Asked at least 3 times
+            ORDER BY frequency DESC, dissatisfied_count DESC
+            LIMIT :limit
+        """), {'limit': limit})
+        
+        candidates = result.fetchall()
+    
+    return {
+        'candidates': [
+            {
+                'query': c[0],
+                'frequency': c[1],
+                'avg_response_time_ms': c[2],
+                'dissatisfied_count': c[3],
+                'priority': 'high' if c[1] >= 10 else ('medium' if c[1] >= 5 else 'low')
+            }
+            for c in candidates
+        ]
+    }
+```
+
+5. **Daily Aggregation Script**
+
+File: `scripts/aggregate_daily_stats.py`
+```python
+"""
+Run this nightly via cron to aggregate daily stats
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+from datetime import date, timedelta
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+from app.database import get_db
+from sqlalchemy import text
+
+async def aggregate_yesterday():
+    """Aggregate stats for yesterday"""
+    
+    yesterday = date.today() - timedelta(days=1)
+    
+    async with get_db() as db:
+        await db.execute(
+            text("SELECT aggregate_hr_daily_stats(:date)"),
+            {'date': yesterday}
+        )
+        await db.commit()
+    
+    print(f"✅ Aggregated stats for {yesterday}")
+
+if __name__ == "__main__":
+    asyncio.run(aggregate_yesterday())
+```
+
+### Add to cron:
+```bash
+# Run daily at 1 AM
+0 1 * * * cd /path/to/maya && python scripts/aggregate_daily_stats.py
+```
+
+### Testing
+```bash
+# 1. Run migration
+psql $DATABASE_URL < migrations/004_hr_analytics.sql
+
+# 2. Ask some test questions in bot
+"коли виплачують зарплату?"
+"скільки днів відпустки?"
+"як налаштувати віддаленку?"
+
+# 3. Check logs
+curl http://localhost:8000/api/hr/analytics/overview?days=1
+
+# 4. Check preset coverage
+# Should show preset hit rate increasing as you add more presets
+
+# 5. Find candidates for new presets
+curl http://localhost:8000/api/hr/analytics/preset-candidates
+```
+
+### Acceptance Criteria
+- ✅ All queries logged to database
+- ✅ Response time tracked (<2s target)
+- ✅ Preset hit rate visible
+- ✅ User feedback collected
+- ✅ Daily stats aggregation working
+- ✅ Analytics API endpoints functional
+- ✅ Top queries identified
+- ✅ Preset candidates surfaced
+- ✅ Satisfaction rate calculated
+
+### Files to Create/Modify
+- `migrations/004_hr_analytics.sql` (new)
+- `app/services/hr_rag_service.py` (update)
+- `app/bot/handlers.py` (update)
+- `app/api/hr_routes.py` (add endpoints)
+- `scripts/aggregate_daily_stats.py` (new)
+
+### Next Steps
+- Use `/analytics/preset-candidates` to create new presets
+- Monitor satisfaction rate weekly
+- Optimize slow queries (>2s)
+- Aim for 70%+ preset coverage within 4 weeks

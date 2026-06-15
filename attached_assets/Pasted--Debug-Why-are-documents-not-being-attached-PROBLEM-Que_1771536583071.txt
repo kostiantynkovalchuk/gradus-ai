@@ -1,0 +1,163 @@
+# Debug: Why are documents not being attached?
+
+## PROBLEM
+Query "Як працювати в бліц?" gets preset answer but NO document links appended.
+No errors in logs, but also no "📄 Added N document links" message.
+
+## INVESTIGATION NEEDED
+
+### Step 1: Add detailed logging to document_service.py
+
+In `find_documents_by_topics` method, add logging:
+```python
+@staticmethod
+async def find_documents_by_topics(query: str, limit: int = 3) -> List[Dict]:
+    """Find documents by matching query keywords to document topics."""
+    import re
+    
+    # Extract keywords
+    query_lower = query.lower()
+    words = re.findall(r'\b\w{3,}\b', query_lower)
+    stopwords = {'який', 'як', 'що', 'коли', 'де', 'можна', 'треба', 'потрібно', 'чому'}
+    keywords = [w for w in words if w not in stopwords]
+    
+    logger.info(f"🔍 Document search: query='{query[:50]}', extracted keywords={keywords}")
+    
+    if not keywords:
+        logger.warning("❌ No keywords extracted from query")
+        return []
+    
+    # Database query
+    from services.database import db
+    
+    try:
+        result = await db.execute(
+            text("""
+                SELECT 
+                    id, title, document_type, document_number,
+                    url, category, description,
+                    (
+                        SELECT COUNT(*)
+                        FROM unnest(topics) topic
+                        WHERE topic = ANY(:keywords)
+                    ) as relevance
+                FROM hr_documents
+                WHERE topics && CAST(:keywords AS varchar[])
+                  AND is_active = TRUE
+                ORDER BY relevance DESC, document_number
+                LIMIT :limit
+            """),
+            {"keywords": keywords, "limit": limit}
+        )
+        
+        rows = result.fetchall()
+        docs = [dict(row._mapping) for row in rows]
+        
+        logger.info(f"📄 Found {len(docs)} documents matching keywords {keywords}")
+        
+        if docs:
+            for doc in docs:
+                logger.info(f"  • {doc['document_number']}: {doc['title']}")
+        else:
+            logger.warning(f"⚠️ No documents found for keywords: {keywords}")
+        
+        return docs
+        
+    except Exception as e:
+        logger.error(f"❌ Document search error: {e}", exc_info=True)
+        return []
+```
+
+### Step 2: Add logging to _attach_documents in hr_rag_service.py
+```python
+async def _attach_documents(self, query: str, answer_text: str) -> str:
+    """Attach relevant document links to answer."""
+    try:
+        logger.info(f"🔗 Attempting to attach documents for: '{query[:50]}'")
+        
+        documents = await document_service.find_documents(
+            query=query,
+            answer_text=answer_text,
+            category=None
+        )
+        
+        if documents:
+            doc_links = document_service.format_documents_markdown(documents)
+            logger.info(f"📄 Attaching {len(documents)} documents to answer")
+            return answer_text + doc_links
+        else:
+            logger.info(f"ℹ️ No documents found to attach")
+            return answer_text
+            
+    except Exception as e:
+        logger.error(f"❌ Document attachment error: {e}", exc_info=True)
+        return answer_text
+```
+
+### Step 3: Verify _attach_documents is called
+
+In `get_answer_with_context`, confirm the method is called for preset path:
+```python
+# Around line 354 where preset answer is returned:
+if preset_result:
+    answer_text = preset_result['answer']
+    
+    # CONFIRM THIS LINE EXISTS:
+    answer_text = await self._attach_documents(query, answer_text)
+    
+    return AnswerResponse(
+        text=answer_text,
+        # ...
+    )
+```
+
+### Step 4: Test with known document
+
+Verify that Додаток №33 exists and has correct topics:
+```sql
+SELECT id, title, document_number, topics, is_active 
+FROM hr_documents 
+WHERE document_number = '№33';
+```
+
+Should return:
+- topics should include: ['бліц', 'сед', 'система', 'доступ']
+
+### Step 5: Manual test
+```python
+# In Python console or test script:
+from services.document_service import document_service
+
+# Test 1: Extract keywords
+keywords = document_service.extract_document_numbers("шаблон №33")
+print(f"Extracted numbers: {keywords}")
+
+# Test 2: Find by topics
+docs = await document_service.find_documents_by_topics("Як працювати в бліц?")
+print(f"Found docs: {docs}")
+
+# Test 3: Full search
+docs = await document_service.find_documents(
+    query="Як працювати в бліц?",
+    answer_text="доступ до СЕД Бліц"
+)
+print(f"Final docs: {docs}")
+```
+
+## EXPECTED OUTPUT
+
+After adding logging, the next query should show:
+```
+🔍 Document search: query='Як працювати в бліц?', extracted keywords=['працювати', 'бліц']
+📄 Found 1 documents matching keywords ['працювати', 'бліц']
+  • №33: Додаток №33 - Інструкція з роботи в СЕД Бліц / УРС
+🔗 Attempting to attach documents for: 'Як працювати в бліц?'
+📄 Attaching 1 documents to answer
+```
+
+## SUCCESS CRITERIA
+
+- ✅ Logs show keyword extraction
+- ✅ Logs show database query results
+- ✅ Logs show documents being attached
+- ✅ User receives answer with 📚 **Документи:** section

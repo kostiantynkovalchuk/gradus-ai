@@ -1,0 +1,329 @@
+Create enhanced carousel scraper to extract product SKUs from JavaScript carousels (like ukrainka.ua).
+
+OBJECTIVE:
+Extract product details (name, size, ABV, price) from JavaScript carousels on brand sites.
+
+Example: https://ukrainka.ua/#more has carousel with UKRAINKA vodka products.
+Need: Maya should answer "tell me about UKRAINKA product line" with specific SKUs.
+
+STEP 1: CREATE NEW FILE backend/services/carousel_scraper.py
+```python
+from playwright.async_api import async_playwright
+import asyncio
+import re
+
+async def scrape_product_carousel(url: str, brand_name: str = None) -> dict:
+    """
+    Scrape product details from JavaScript carousels.
+    Returns: {products: [{name, size, abv, price, description}], raw_text, carousel_detected}
+    """
+    print(f"🔍 Starting carousel scraper for {url}")
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        
+        try:
+            # Navigate with longer timeout for heavy JS sites
+            await page.goto(url, wait_until="networkidle", timeout=45000)
+            print("✅ Page loaded, waiting for dynamic content...")
+            
+            # Wait extra time for carousels to initialize
+            await page.wait_for_timeout(4000)
+            
+            # Detect carousel
+            carousel_selectors = [
+                '.carousel', '.slider', '.swiper', '.slick-slider',
+                '[class*="carousel"]', '[class*="slider"]', '[class*="swiper"]',
+                '[data-carousel]', '[data-slider]', '[id*="carousel"]'
+            ]
+            
+            carousel_found = False
+            for selector in carousel_selectors:
+                elements = await page.query_selector_all(selector)
+                if elements:
+                    carousel_found = True
+                    print(f"✅ Found carousel with selector: {selector}")
+                    break
+            
+            # Try to trigger carousel navigation to load all items
+            if carousel_found:
+                print("🔄 Attempting to navigate carousel...")
+                
+                # Common next button selectors
+                next_selectors = [
+                    'button[class*="next"]', 'button[class*="arrow-right"]',
+                    '.swiper-button-next', '.slick-next', '[data-role="next"]',
+                    'a[class*="next"]', '.carousel-control-next'
+                ]
+                
+                for selector in next_selectors:
+                    buttons = await page.query_selector_all(selector)
+                    if buttons:
+                        print(f"✅ Found navigation buttons: {selector}")
+                        # Click through carousel multiple times
+                        for i in range(15):  # Click 15 times to load items
+                            try:
+                                await buttons[0].click()
+                                await page.wait_for_timeout(300)
+                            except Exception as e:
+                                print(f"⚠️ Click {i+1} failed: {e}")
+                                break
+                        break
+            
+            # Wait for any additional content to load
+            await page.wait_for_timeout(2000)
+            
+            # Extract product information with multiple strategies
+            products = []
+            
+            # Strategy 1: Look for product cards/items
+            product_selectors = [
+                '.product', '.product-card', '.product-item',
+                '[class*="product"]', '[class*="item"]', '[class*="card"]',
+                '.swiper-slide', '.slick-slide', '.carousel-item'
+            ]
+            
+            all_cards = []
+            for selector in product_selectors:
+                cards = await page.query_selector_all(selector)
+                if cards:
+                    print(f"✅ Found {len(cards)} elements with selector: {selector}")
+                    all_cards.extend(cards)
+            
+            # Remove duplicates
+            unique_cards = list(set(all_cards))[:30]  # Limit to 30 products
+            print(f"📦 Processing {len(unique_cards)} unique product cards...")
+            
+            for idx, card in enumerate(unique_cards):
+                try:
+                    product_info = await card.evaluate('''(element) => {
+                        const getText = (selectors) => {
+                            if (typeof selectors === 'string') selectors = [selectors];
+                            for (let selector of selectors) {
+                                const el = element.querySelector(selector);
+                                if (el && el.innerText) return el.innerText.trim();
+                            }
+                            return '';
+                        };
+                        
+                        // Try multiple selectors for each field
+                        const name = getText([
+                            'h1', 'h2', 'h3', 'h4', 'h5',
+                            '.name', '.title', '.product-name', '.product-title',
+                            '[class*="name"]', '[class*="title"]'
+                        ]);
+                        
+                        const size = getText([
+                            '.size', '.volume', '.capacity',
+                            '[class*="size"]', '[class*="volume"]', '[class*="capacity"]',
+                            'span:has-text("л")', 'span:has-text("ml")', 'span:has-text("L")'
+                        ]);
+                        
+                        const abv = getText([
+                            '.abv', '.alcohol', '.strength',
+                            '[class*="abv"]', '[class*="alcohol"]',
+                            'span:has-text("%")', 'span:has-text("vol")'
+                        ]);
+                        
+                        const price = getText([
+                            '.price', '[class*="price"]', '[data-price]'
+                        ]);
+                        
+                        const description = getText([
+                            '.description', '.desc', 'p',
+                            '[class*="description"]', '[class*="desc"]'
+                        ]);
+                        
+                        // Get all text as fallback
+                        const allText = element.innerText || '';
+                        
+                        return {
+                            name: name,
+                            size: size,
+                            abv: abv,
+                            price: price,
+                            description: description,
+                            allText: allText.substring(0, 200)
+                        };
+                    }''')
+                    
+                    # Only add if we got meaningful info
+                    if (product_info.get('name') or 
+                        product_info.get('size') or 
+                        len(product_info.get('allText', '')) > 20):
+                        
+                        # Clean up the data
+                        cleaned = {
+                            'name': product_info.get('name', ''),
+                            'size': product_info.get('size', ''),
+                            'abv': product_info.get('abv', ''),
+                            'price': product_info.get('price', ''),
+                            'description': product_info.get('description', ''),
+                            'allText': product_info.get('allText', '')
+                        }
+                        products.append(cleaned)
+                        print(f"  ✅ Product {idx+1}: {cleaned['name'][:50] or 'Unnamed'}")
+                
+                except Exception as e:
+                    print(f"  ⚠️ Failed to extract from card {idx+1}: {e}")
+                    continue
+            
+            # Get all text content for fallback
+            raw_text = await page.evaluate('''() => {
+                const scripts = document.querySelectorAll('script, style, noscript');
+                scripts.forEach(s => s.remove());
+                return document.body.innerText || document.body.textContent;
+            }''')
+            
+            await browser.close()
+            
+            print(f"✅ Carousel scraping complete: {len(products)} products, {len(raw_text)} chars text")
+            
+            return {
+                'products': products,
+                'raw_text': raw_text,
+                'carousel_detected': carousel_found,
+                'product_count': len(products)
+            }
+            
+        except Exception as e:
+            await browser.close()
+            print(f"❌ Carousel scraping error: {e}")
+            return {
+                'products': [], 
+                'raw_text': '', 
+                'error': str(e),
+                'carousel_detected': False
+            }
+
+
+def create_product_enrichment(products: list, brand_name: str, company_name: str, url: str) -> str:
+    """Create rich text description from product details."""
+    if not products:
+        return ""
+    
+    # Build product line description
+    lines = [f"\n{brand_name} Product Line and Range:\n"]
+    lines.append(f"{brand_name} offers the following products:\n")
+    
+    for idx, product in enumerate(products, 1):
+        name = product.get('name', f'{brand_name} Product {idx}')
+        size = product.get('size', '')
+        abv = product.get('abv', '')
+        price = product.get('price', '')
+        desc = product.get('description', '')
+        all_text = product.get('allText', '')
+        
+        # Build product entry
+        parts = [f"{idx}. {name}"]
+        if size: parts.append(f"Volume: {size}")
+        if abv: parts.append(f"Alcohol: {abv}")
+        if price: parts.append(f"Price: {price}")
+        if desc: parts.append(f"Description: {desc}")
+        elif all_text and len(all_text) > 20:
+            parts.append(f"Details: {all_text[:150]}")
+        
+        lines.append(" | ".join(parts))
+    
+    enriched = f"""
+{brand_name} is a {'brand distributed by ' + company_name if company_name != brand_name else 'premium brand'}.
+
+Product Portfolio:
+{chr(10).join(lines)}
+
+Total products in {brand_name} range: {len(products)}
+
+All {brand_name} products are available for distribution.
+Official website: {url}
+    """.strip()
+    
+    return enriched
+```
+
+STEP 2: UPDATE backend/services/rag_utils.py
+
+In the ingest_website function, add carousel detection after document loading:
+```python
+async def ingest_website(url: str, company_name: str, index, embedder=None) -> dict:
+    try:
+        print(f"Starting ingestion of {url}...")
+        
+        # ... existing WebBaseLoader/Playwright code ...
+        
+        # NEW: After getting documents, try enhanced carousel scraping
+        product_chunks = 0
+        
+        # Detect if this might have product carousels
+        has_carousel_keywords = any(word in url.lower() for word in [
+            'product', 'produkciya', 'brands', '#more', 'portfolio'
+        ]) or any(word in documents[0].page_content.lower()[:1000] for word in [
+            'carousel', 'swiper', 'slider', 'product', 'volume', 'abv'
+        ])
+        
+        if has_carousel_keywords:
+            print("🎠 Detected potential carousel content, using enhanced scraper...")
+            from services.carousel_scraper import scrape_product_carousel, create_product_enrichment
+            
+            carousel_data = await scrape_product_carousel(url, company_name)
+            
+            if carousel_data.get('products'):
+                print(f"✅ Extracted {len(carousel_data['products'])} products from carousel")
+                
+                # Create enriched document with product details
+                product_text = create_product_enrichment(
+                    carousel_data['products'], 
+                    company_name,
+                    company_name,
+                    url
+                )
+                
+                if product_text:
+                    from langchain.schema import Document
+                    documents.append(Document(
+                        page_content=product_text,
+                        metadata={
+                            "source": url,
+                            "type": "product_catalog",
+                            "product_count": len(carousel_data['products'])
+                        }
+                    ))
+                    product_chunks = 1
+                    print(f"✅ Added product catalog enrichment")
+        
+        # ... existing enrichment and chunking code ...
+        
+        # Update return to include product_chunks
+        return {
+            "status": "success",
+            "message": f"Успішно завантажено {total_chunks} фрагментів з {company_name}" + 
+                      (f" ({brand_chunks} брендів, {product_chunks} каталогів продуктів)" if brand_chunks or product_chunks else ""),
+            "company": company_name,
+            "chunks_count": total_chunks,
+            "brand_chunks": brand_chunks,
+            "product_chunks": product_chunks,
+            "url": url,
+            "method": method
+        }
+```
+
+BENEFITS:
+1. Extracts product SKUs from carousels (name, size, ABV, price)
+2. Handles JavaScript-heavy sites
+3. Creates searchable product catalog chunks
+4. Works with ukrainka.ua and similar carousel sites
+5. Maya can answer detailed product line questions
+
+TEST AFTER IMPLEMENTATION:
+
+1. Test ukrainka.ua:
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Вивчи https://ukrainka.ua/#more"}'
+
+Should show: "X фрагментів (Y брендів, 1 каталогів продуктів)"
+
+2. Test Maya's knowledge:
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Maya, tell me about UKRAINKA product line"}'
+
+Should list specific products with sizes and details.
+
+Deploy after successful tests.

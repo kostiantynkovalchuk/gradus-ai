@@ -1,0 +1,354 @@
+# REPLIT AGENT: FIX APPENDICES CALLBACK_DATA MAPPING
+
+## 🐛 CRITICAL BUG - WRONG DOCUMENTS OPENING
+
+**Evidence from screenshots:**
+
+| Button Clicked | Document That Opens | Should Open |
+|----------------|---------------------|-------------|
+| 💻 Бізнес-процес закупівлі техніки | Додаток_12.1_Норми_витрат ❌ | Додаток_21.1_Процес_закупівлі_техніки ✅ |
+| 📞 Контакти центрального офісу | Додаток_12_Ранги_посад ❌ | Додаток_22_Контакти_ЦО ✅ |
+| 💰 Норми витрат на відрядження | Додаток_21.1_Процес_закупівлі_техніки ❌ | Додаток_12.1_Норми_витрат ✅ |
+| 📊 Таблиця рангів посад | Додаток_22_Контакти_ЦО ❌ | Додаток_12_Ранги_посад ✅ |
+
+**Root Cause:** The `callback_data` IDs in button creation don't match the IDs in `CONTENT_MAP`.
+
+---
+
+## 🔍 DEBUGGING STEPS
+
+### Step 1: Find where buttons are created
+
+Search for where attachment buttons are generated. Should be in:
+- `telegram_webhook.py` 
+- `hr_keyboards.py`
+- Or in the function `fetch_and_send_hr_content()`
+
+Look for code like:
+```python
+keyboard.append([{
+    "text": "📊 Таблиця рангів посад",
+    "callback_data": "content:???"  # ← This ID is wrong!
+}])
+```
+
+### Step 2: Add logging to see actual callback_data
+
+In `telegram_webhook.py`, find the webhook handler and add:
+
+```python
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    
+    if "callback_query" in data:
+        callback_data = data["callback_query"]["data"]
+        
+        # ADD THIS LOGGING:
+        logger.info(f"🔍 RAW CALLBACK DATA RECEIVED: {callback_data}")
+        
+        if callback_data.startswith("content:"):
+            content_id = callback_data.replace("content:", "")
+            logger.info(f"🔍 CONTENT ID EXTRACTED: {content_id}")
+            logger.info(f"🔍 CHECKING CONTENT_MAP FOR: {content_id}")
+            
+            # Check if exists
+            if content_id in CONTENT_MAP:
+                content = CONTENT_MAP[content_id]
+                logger.info(f"✅ FOUND IN CONTENT_MAP: {content.get('title', 'NO TITLE')}")
+            else:
+                logger.error(f"❌ NOT FOUND IN CONTENT_MAP: {content_id}")
+```
+
+---
+
+## ✅ CORRECT MAPPING (REFERENCE)
+
+### CONTENT_MAP should have these EXACT IDs:
+
+```python
+CONTENT_MAP = {
+    # ... other content ...
+    
+    # APPENDICES - Google Docs Links
+    "appendix_12_ranks": {
+        "type": "link",
+        "title": "📊 Таблиця рангів посад для відряджень",
+        "description": "Повний список посад компанії з рангами",
+        "url": "https://docs.google.com/document/d/1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m/edit",
+    },
+    
+    "appendix_12_1_norms": {
+        "type": "link",
+        "title": "💰 Норми витрат на відрядження",
+        "description": "Детальні норми витрат для України та Європи",
+        "url": "https://docs.google.com/document/d/1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz/edit",
+    },
+    
+    "appendix_21_furniture": {
+        "type": "link",
+        "title": "🪑 Бізнес-процес закупівлі меблів",
+        "description": "Покрокова інструкція замовлення меблів",
+        "url": "https://docs.google.com/document/d/1X8N5yR__-kydhqjKYZ_HFlLAI0oLrECZ/edit",
+    },
+    
+    "appendix_21_1_equipment": {
+        "type": "link",
+        "title": "💻 Бізнес-процес закупівлі техніки",
+        "description": "Покрокова інструкція замовлення техніки",
+        "url": "https://docs.google.com/document/d/13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu/edit",
+    },
+    
+    "appendix_22_contacts": {
+        "type": "link",
+        "title": "📞 Контакти центрального офісу",
+        "description": "Повний список контактів ЦО",
+        "url": "https://docs.google.com/document/d/1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_/edit",
+    },
+}
+```
+
+### Questions (q12, q21) with attachments:
+
+```python
+"q12": {
+    "type": "text",
+    "title": "🚗 Відрядження",
+    "content": """...""",
+    "attachments": ["appendix_12_ranks", "appendix_12_1_norms"]  # ← Must match EXACTLY!
+},
+
+"q21": {
+    "type": "text",
+    "title": "🪑 Основні фонди",
+    "content": """...""",
+    "attachments": ["appendix_21_furniture", "appendix_21_1_equipment"]  # ← Must match EXACTLY!
+},
+```
+
+---
+
+## 🔧 FIX THE BUTTON GENERATION
+
+### Find the function that creates attachment buttons
+
+Should look something like this:
+
+```python
+async def fetch_and_send_hr_content(chat_id: int, content_id: str):
+    """Fetch and send HR content with attachments"""
+    
+    content = CONTENT_MAP.get(content_id)
+    if not content:
+        await send_telegram_message(chat_id, "❌ Контент не знайдено")
+        return
+    
+    # Send main content
+    # ... code to send content ...
+    
+    # Send attachment buttons
+    attachments = content.get("attachments", [])
+    if attachments:
+        keyboard = []
+        
+        for attachment_id in attachments:
+            attachment = CONTENT_MAP.get(attachment_id)  # ← Get attachment from CONTENT_MAP
+            
+            if attachment:
+                title = attachment.get("title", "Додаток")
+                
+                # CRITICAL: callback_data must use the SAME attachment_id
+                keyboard.append([{
+                    "text": title,
+                    "callback_data": f"content:{attachment_id}"  # ← THIS MUST MATCH CONTENT_MAP KEY!
+                }])
+        
+        if keyboard:
+            await send_telegram_message(
+                chat_id,
+                "📎 <b>Додаткові матеріали:</b>",
+                reply_markup={"inline_keyboard": keyboard}
+            )
+```
+
+**CRITICAL CHECK:** The `callback_data` value must be `"content:{attachment_id}"` where `attachment_id` is the EXACT key from `CONTENT_MAP`.
+
+---
+
+## 🔍 COMMON MISTAKES TO CHECK
+
+### Mistake 1: Hardcoded wrong IDs
+
+```python
+# ❌ WRONG - hardcoded IDs
+keyboard = [
+    [{"text": "📊 Ранги", "callback_data": "content:appendix_22_contacts"}],  # Wrong ID!
+    [{"text": "💰 Норми", "callback_data": "content:appendix_21_furniture"}]   # Wrong ID!
+]
+
+# ✅ CORRECT - dynamically built from attachments list
+for attachment_id in attachments:
+    attachment = CONTENT_MAP.get(attachment_id)
+    if attachment:
+        keyboard.append([{
+            "text": attachment["title"],
+            "callback_data": f"content:{attachment_id}"  # Uses correct ID from loop
+        }])
+```
+
+### Mistake 2: Wrong order in attachments list
+
+```python
+# ❌ WRONG ORDER
+"q12": {
+    "attachments": ["appendix_12_1_norms", "appendix_12_ranks"]  # Reversed!
+}
+
+# ✅ CORRECT ORDER
+"q12": {
+    "attachments": ["appendix_12_ranks", "appendix_12_1_norms"]  # Logical order
+}
+```
+
+### Mistake 3: Typos in attachment IDs
+
+```python
+# ❌ WRONG - typo
+"attachments": ["appendix_12_rank"]  # Missing 's'
+
+# ✅ CORRECT
+"attachments": ["appendix_12_ranks"]
+```
+
+---
+
+## 🧪 TESTING AFTER FIX
+
+### Test Matrix:
+
+| User Action | Expected Content ID | Expected Google Doc |
+|-------------|---------------------|---------------------|
+| Click "📊 Таблиця рангів" from Відрядження | `appendix_12_ranks` | file_id: `1IJnIqDP5iGVXrjStxTELCtHDgISTzr2m` |
+| Click "💰 Норми витрат" from Відрядження | `appendix_12_1_norms` | file_id: `1e6_bQ9X36lFMWFojhV9A10BNB6Tcburz` |
+| Click "🪑 Процес меблів" from Основні фонди | `appendix_21_furniture` | file_id: `1X8N5yR__-kydhqjKYZ_HFlLAI0oLrECZ` |
+| Click "💻 Процес техніки" from Основні фонди | `appendix_21_1_equipment` | file_id: `13vkM4p9XZWgFQ7AvkBziiT_-B90l8FEu` |
+| Click "📞 Контакти" button | `appendix_22_contacts` | file_id: `1MLBli5A-cN5bMNCeZGM_wtKAMpjkBB0_` |
+
+### Verification Method:
+
+After clicking each button, check Render logs for:
+```
+🔍 RAW CALLBACK DATA RECEIVED: content:appendix_12_ranks
+🔍 CONTENT ID EXTRACTED: appendix_12_ranks
+🔍 CHECKING CONTENT_MAP FOR: appendix_12_ranks
+✅ FOUND IN CONTENT_MAP: 📊 Таблиця рангів посад для відряджень
+```
+
+Then verify the Google Docs link sent to user matches the expected file_id.
+
+---
+
+## 📋 COMPLETE FIX CHECKLIST
+
+### 1. Verify CONTENT_MAP has correct IDs and URLs ✅
+```python
+# Check backend/services/maya_hr_content.py
+# Ensure all 5 appendix IDs exist with correct URLs
+```
+
+### 2. Verify attachments arrays in q12 and q21 ✅
+```python
+"q12": {
+    "attachments": ["appendix_12_ranks", "appendix_12_1_norms"]
+}
+"q21": {
+    "attachments": ["appendix_21_furniture", "appendix_21_1_equipment"]
+}
+```
+
+### 3. Fix button generation logic ✅
+```python
+# In telegram_webhook.py or wherever buttons are created
+# Use: callback_data=f"content:{attachment_id}"
+# Where attachment_id comes from the attachments loop
+```
+
+### 4. Add debug logging ✅
+```python
+# Log callback_data received
+# Log content_id extracted
+# Log if found in CONTENT_MAP
+```
+
+### 5. Deploy and test all 5 appendices ✅
+```
+- appendix_12_ranks → Opens ranks table
+- appendix_12_1_norms → Opens expense norms
+- appendix_21_furniture → Opens furniture process
+- appendix_21_1_equipment → Opens equipment process
+- appendix_22_contacts → Opens contacts table
+```
+
+---
+
+## 🚨 CRITICAL: Print Current State
+
+**Add this temporary diagnostic code to see current mapping:**
+
+```python
+# Add to telegram_webhook.py after imports
+import json
+
+@app.on_event("startup")
+async def log_appendix_mapping():
+    """Log current appendix mapping for debugging"""
+    logger.info("=" * 60)
+    logger.info("APPENDIX MAPPING DIAGNOSTIC")
+    logger.info("=" * 60)
+    
+    appendix_ids = [
+        "appendix_12_ranks",
+        "appendix_12_1_norms", 
+        "appendix_21_furniture",
+        "appendix_21_1_equipment",
+        "appendix_22_contacts"
+    ]
+    
+    for app_id in appendix_ids:
+        if app_id in CONTENT_MAP:
+            content = CONTENT_MAP[app_id]
+            logger.info(f"✅ {app_id}")
+            logger.info(f"   Title: {content.get('title', 'MISSING')}")
+            logger.info(f"   URL: {content.get('url', 'MISSING')[:60]}...")
+        else:
+            logger.error(f"❌ {app_id} - NOT FOUND IN CONTENT_MAP")
+    
+    # Check attachments
+    logger.info("\nATTACHMENTS CHECK:")
+    for content_id in ["q12", "q21"]:
+        if content_id in CONTENT_MAP:
+            attachments = CONTENT_MAP[content_id].get("attachments", [])
+            logger.info(f"{content_id}: {attachments}")
+    
+    logger.info("=" * 60)
+```
+
+This will print the current state when the app starts. Check Render logs to see if there are any mismatches.
+
+---
+
+## 🎯 EXPECTED OUTCOME
+
+After fix, clicking any appendix button should:
+
+1. Log shows correct callback_data received
+2. Log shows correct content_id extracted  
+3. Log shows content found in CONTENT_MAP
+4. Correct Google Docs link sent to user
+5. User opens correct document
+
+**No more wrong documents opening!** ✅
+
+---
+
+**DEPLOY IMMEDIATELY after making these fixes. Then test all 5 appendices one by one.**

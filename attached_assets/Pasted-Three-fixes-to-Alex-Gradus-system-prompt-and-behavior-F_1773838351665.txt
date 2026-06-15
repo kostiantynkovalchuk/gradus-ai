@@ -1,0 +1,105 @@
+Three fixes to Alex Gradus system prompt and behavior.
+
+═══════════════════════════════════════
+FIX 1: INTRO ONLY ON FIRST MESSAGE
+═══════════════════════════════════════
+
+"Привіт! Я Алекс Градус, HoReCa-консультант Gradus Media. 
+Допомагаю барам та ресторанам оптимізувати прибутковість 
+через правильний вибір постачальників та продуктів."
+
+This intro must appear ONLY on the first message 
+of a session (when conversation history is empty).
+For all subsequent messages — start directly with 
+the answer, no intro.
+
+Find where the system prompt or intro is injected 
+and add this condition:
+- if len(conversation_history) == 0: include intro
+- else: skip intro entirely
+
+═══════════════════════════════════════
+FIX 2: LANGUAGE — 90% UKRAINIAN
+═══════════════════════════════════════
+
+Add to Alex's system prompt language rules:
+
+"Відповідай виключно українською мовою. 
+Уникай англійських слів там, де є українські відповідники:
+- 'pour cost' → 'собівартість напою' або 'відсоток витрат'
+- 'upsell/upselling' → 'підвищення чеку' або 
+  'продаж дорожчих позицій'
+- 'inventory' → 'облік залишків' або 'складський облік'
+- 'premium' → 'преміум' (acceptable as loan word)
+- 'signature' → 'авторський'
+- 'loss leaders' → 'збиткові позиції'
+- 'tier' → 'рівень' або 'категорія'
+- 'tracking' → 'відстеження'
+- 'winning combinations' → 'найефективніші комбінації'
+- 'best performer' → 'кращий працівник'
+- 'ROI' → 'окупність'
+- 'ABC-аналіз' → acceptable, common business term
+
+Технічні терміни без українського аналогу 
+можна залишати англійською (наприклад: Excel, 
+Instagram, POS)."
+
+═══════════════════════════════════════
+FIX 3: REPLACE CLOSING CTA
+═══════════════════════════════════════
+
+Find and replace the closing call-to-action 
+in Alex's system prompt.
+
+REMOVE this pattern:
+"Зв'яжіться з Торговій Дім АВ для отримання 
+комерційної пропозиції..."
+
+REPLACE with this exact closing CTA that Alex 
+must use at the end of every substantive answer:
+
+"🤝 Хочете, щоб наш HoReCa-менеджер зв'язався 
+з вами особисто та підібрав оптимальний 
+асортимент для вашого закладу?
+
+Просто залиште свій номер телефону — 
+і я передам ваші контакти нашій команді."
+
+When user provides their phone number in chat,
+the backend must:
+1. Send an email to admin@gradusmedia.org with:
+   Subject: "Новий лід від Alex — HoReCa контакт"
+   Body:
+   "Клієнт зацікавлений у співпраці з AVTD.
+   
+   Телефон: [phone number from chat]
+   Email: [user email if known]
+   Контекст розмови: [last 2-3 messages summary]
+   Дата: [current datetime]"
+
+2. Reply to user in chat:
+   "Дякую! Ваш номер передано нашому 
+   HoReCa-менеджеру. Очікуйте дзвінка 
+   протягом 1 робочого дня. 
+   Якщо є ще питання — я тут!"
+
+For sending email use the existing email 
+infrastructure in the project, or smtplib 
+with Gmail SMTP if no email service exists yet.
+
+Check what email sending capability exists 
+in the codebase before implementing.
+
+═══════════════════════════════════════
+VERIFICATION
+═══════════════════════════════════════
+
+Test after implementation:
+1. First message → intro appears ✓
+2. Second message → no intro ✓
+3. Any answer → no English jargon ✓
+4. End of answer → new CTA appears ✓
+5. User sends phone number → 
+   email arrives at admin@gradusmedia.org ✓
+
+Push when done.

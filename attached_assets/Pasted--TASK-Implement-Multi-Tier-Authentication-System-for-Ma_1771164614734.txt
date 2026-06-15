@@ -1,0 +1,916 @@
+# TASK: Implement Multi-Tier Authentication System for Maya HR Bot
+
+## CONTEXT
+Maya HR Bot currently has basic functionality but no authentication. We need to implement a secure multi-tier access system that:
+- Verifies AVTD employees via SED API (phone-based)
+- Provides whitelist bypass for developers/contractors/HR admins
+- Notifies HR admins when unrecognized users try to register
+- Supports different access levels with appropriate permissions
+
+## TECHNICAL STACK
+- Backend: FastAPI (Python) - already deployed on Render.com
+- Database: PostgreSQL on Neon (asyncpg for queries)
+- Telegram: python-telegram-bot library
+- SED API: https://api-sed.tdav.net.ua with API key in env vars
+
+## STEP 1: DATABASE SCHEMA UPDATES
+
+Create new migration file: `alembic/versions/002_add_authentication.py`
+```python
+"""Add authentication system
+
+Revision ID: 002
+Revises: 001
+Create Date: 2026-01-25
+"""
+from alembic import op
+import sqlalchemy as sa
+
+def upgrade():
+    # Add new columns to hr_users
+    op.add_column('hr_users', sa.Column('access_level', sa.String(20), server_default='employee'))
+    op.add_column('hr_users', sa.Column('verification_method', sa.String(50), server_default='sed_api'))
+    op.add_column('hr_users', sa.Column('manually_added_by', sa.Integer(), nullable=True))
+    op.add_column('hr_users', sa.Column('notes', sa.Text(), nullable=True))
+    
+    # Create hr_whitelist table
+    op.create_table(
+        'hr_whitelist',
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('phone', sa.String(20), unique=True, nullable=False),
+        sa.Column('telegram_id', sa.BigInteger(), unique=True, nullable=True),
+        sa.Column('full_name', sa.String(255), nullable=False),
+        sa.Column('access_level', sa.String(20), server_default='contractor'),
+        sa.Column('reason', sa.Text(), nullable=True),
+        sa.Column('added_by', sa.String(255), nullable=True),
+        sa.Column('added_at', sa.DateTime(), server_default=sa.func.now()),
+        sa.Column('is_active', sa.Boolean(), server_default='true')
+    )
+    
+    # Create indexes
+    op.create_index('idx_whitelist_phone', 'hr_whitelist', ['phone'])
+    op.create_index('idx_whitelist_telegram', 'hr_whitelist', ['telegram_id'])
+    op.create_index('idx_users_access_level', 'hr_users', ['access_level'])
+    
+    # Insert initial admins
+    op.execute("""
+        INSERT INTO hr_whitelist (phone, full_name, access_level, reason, added_by)
+        VALUES 
+        ('+34692480784', 'Konstantin Kovalchuk', 'developer', 
+         'System architect and developer - external consultant', 'system_init'),
+        ('+380679843397', 'Natalia Reshetilova', 'admin_hr', 
+         'HR Department - user management and approvals', 'system_init')
+    """)
+
+def downgrade():
+    op.drop_table('hr_whitelist')
+    op.drop_column('hr_users', 'access_level')
+    op.drop_column('hr_users', 'verification_method')
+    op.drop_column('hr_users', 'manually_added_by')
+    op.drop_column('hr_users', 'notes')
+```
+
+## STEP 2: SED API SERVICE
+
+Create new file: `hr_sed_service.py`
+```python
+"""SED API Integration Service"""
+import httpx
+import os
+from typing import Dict, Optional
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
+
+class SEDService:
+    """Service for interacting with AVTD's SED API"""
+    
+    def __init__(self):
+        self.api_url = os.getenv("SED_API_URL", "https://api-sed.tdav.net.ua")
+        self.api_key = os.getenv("SED_API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("SED_API_KEY environment variable not set")
+        
+        self.headers = {
+            "X-API-Key": self.api_key,
+            "Content-Type": "application/json"
+        }
+    
+    async def verify_employee(self, phone: str) -> Dict:
+        """
+        Verify if phone number belongs to AVTD employee via SED API
+        
+        Returns:
+        {
+            "verified": bool,
+            "employee": dict or None,
+            "error": str or None
+        }
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{self.api_url}/api/employees",
+                    headers=self.headers,
+                    json={"phone": phone}
+                )
+                
+                data = response.json()
+                logger.info(f"SED API response for {phone}: {data.get('status')}")
+                
+                if data.get("status") == "success" and data.get("data"):
+                    employee_data = data["data"]
+                    return {
+                        "verified": True,
+                        "employee": {
+                            "employee_id": employee_data.get("employee_id"),
+                            "phone": employee_data.get("phone"),
+                            "full_name": employee_data.get("full_name"),
+                            "first_name": employee_data.get("first_name"),
+                            "last_name": employee_data.get("last_name"),
+                            "department": employee_data.get("department"),
+                            "position": employee_data.get("position"),
+                            "start_date": employee_data.get("start_date"),
+                            "email": employee_data.get("email")
+                        },
+                        "error": None
+                    }
+                else:
+                    logger.warning(f"Employee not found in SED: {phone}")
+                    return {
+                        "verified": False,
+                        "employee": None,
+                        "error": "not_found"
+                    }
+                    
+        except httpx.TimeoutException:
+            logger.error(f"SED API timeout for {phone}")
+            return {
+                "verified": False,
+                "employee": None,
+                "error": "timeout"
+            }
+        except Exception as e:
+            logger.error(f"SED API error for {phone}: {str(e)}")
+            return {
+                "verified": False,
+                "employee": None,
+                "error": f"api_error: {str(e)}"
+            }
+    
+    async def should_sync_user(self, last_sed_sync: Optional[datetime]) -> bool:
+        """Check if user needs SED data refresh (7 day threshold)"""
+        if not last_sed_sync:
+            return True
+        
+        sync_threshold = datetime.now() - timedelta(days=7)
+        return last_sed_sync < sync_threshold
+
+sed_service = SEDService()
+```
+
+## STEP 3: AUTHENTICATION HANDLERS
+
+Update `hr_handlers.py` (or create new file `hr_auth_handlers.py`):
+```python
+"""Authentication and User Management Handlers"""
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ContextTypes
+from hr_sed_service import sed_service
+from database import db
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command - begin authentication"""
+    telegram_id = update.effective_user.id
+    
+    # Check if already registered
+    user = await db.fetchrow(
+        "SELECT * FROM hr_users WHERE telegram_id = $1 AND is_active = TRUE",
+        telegram_id
+    )
+    
+    if user:
+        # Check if needs sync (7+ days)
+        if await sed_service.should_sync_user(user.get("last_sed_sync")):
+            await sync_user_with_sed(telegram_id, user["phone"])
+            # Refresh user data
+            user = await db.fetchrow(
+                "SELECT * FROM hr_users WHERE telegram_id = $1",
+                telegram_id
+            )
+        
+        # Welcome back with appropriate menu
+        keyboard = get_menu_for_access_level(user["access_level"])
+        
+        greeting = f"Привіт, {user['first_name']}! 👋\n\n"
+        
+        if user["access_level"] == "developer":
+            greeting += "🔓 Developer Mode Active\n\nЧим можу допомогти?"
+        elif user["access_level"] == "admin_hr":
+            greeting += "⚙️ HR Admin Panel Available\n\nГотовий до роботи!"
+        else:
+            greeting += "Радий знову тебе бачити! Чим можу допомогти?"
+        
+        await update.message.reply_text(greeting, reply_markup=keyboard)
+    else:
+        # New user - request phone
+        await update.message.reply_text(
+            "👋 Привіт! Я Maya, HR-асистент Торгового Дому АВ.\n\n"
+            "Для доступу до бота підтвердь, що ти співробітник компанії.\n\n"
+            "📱 Введи свій номер телефону в форматі:\n"
+            "+380XXXXXXXXX або +34XXXXXXXXX\n\n"
+            "Наприклад: +380671234567"
+        )
+        context.user_data["awaiting_phone"] = True
+
+
+async def phone_verification_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle phone number input and verification"""
+    if not context.user_data.get("awaiting_phone"):
+        return
+    
+    phone = update.message.text.strip()
+    telegram_id = update.effective_user.id
+    
+    # Validate phone format (Ukraine or Spain)
+    if not re.match(r'^\+380\d{9}$', phone) and not re.match(r'^\+34\d{9}$', phone):
+        await update.message.reply_text(
+            "❌ Невірний формат номера.\n\n"
+            "Використовуй формат:\n"
+            "• +380XXXXXXXXX (Україна)\n"
+            "• +34XXXXXXXXX (Іспанія)\n\n"
+            "Наприклад: +380671234567"
+        )
+        return
+    
+    # STEP 1: Check whitelist FIRST (admins, developers, contractors)
+    whitelist_entry = await db.fetchrow("""
+        SELECT * FROM hr_whitelist 
+        WHERE phone = $1 AND is_active = TRUE
+    """, phone)
+    
+    if whitelist_entry:
+        logger.info(f"Whitelist match for {phone}: {whitelist_entry['access_level']}")
+        await create_whitelisted_user(telegram_id, phone, whitelist_entry, update, context)
+        return
+    
+    # STEP 2: Check SED API for regular employees
+    checking_msg = await update.message.reply_text(
+        "🔍 Перевіряю номер в базі співробітників..."
+    )
+    
+    result = await sed_service.verify_employee(phone)
+    await checking_msg.delete()
+    
+    if result["verified"]:
+        logger.info(f"SED verification success for {phone}")
+        await create_sed_verified_user(telegram_id, phone, result, update, context)
+    else:
+        logger.warning(f"Verification failed for {phone}: {result.get('error')}")
+        await handle_verification_failure(telegram_id, phone, result, update)
+
+
+async def create_whitelisted_user(telegram_id, phone, whitelist_entry, update, context):
+    """Create user from whitelist entry"""
+    
+    await db.execute("""
+        INSERT INTO hr_users 
+        (telegram_id, phone, full_name, first_name, access_level, 
+         verification_method, last_sed_sync, sed_sync_status, is_active)
+        VALUES ($1, $2, $3, $4, $5, 'whitelist', NOW(), 'whitelist', TRUE)
+        ON CONFLICT (telegram_id) DO UPDATE
+        SET phone = $2, full_name = $3, access_level = $5, is_active = TRUE
+    """,
+        telegram_id,
+        phone,
+        whitelist_entry["full_name"],
+        whitelist_entry["full_name"].split()[0],
+        whitelist_entry["access_level"]
+    )
+    
+    # Log verification
+    await db.execute("""
+        INSERT INTO verification_log 
+        (telegram_id, phone, verification_type, status)
+        VALUES ($1, $2, 'whitelist', 'success')
+    """, telegram_id, phone)
+    
+    # Send appropriate welcome message
+    keyboard = get_menu_for_access_level(whitelist_entry["access_level"])
+    
+    if whitelist_entry["access_level"] == "developer":
+        message = (
+            f"🔓 **Developer Access Granted**\n\n"
+            f"Привіт, {whitelist_entry['full_name']}! 👨‍💻\n\n"
+            f"✅ Повний доступ до всіх функцій\n"
+            f"✅ Адмін-панель: /admin\n"
+            f"✅ Логи системи: /logs\n"
+            f"✅ Статистика: /stats\n"
+            f"✅ Додати користувача: /adduser\n\n"
+            f"Готовий до роботи!"
+        )
+    elif whitelist_entry["access_level"] == "admin_hr":
+        message = (
+            f"⚙️ **HR Admin Access**\n\n"
+            f"Привіт, {whitelist_entry['full_name']}! 👋\n\n"
+            f"✅ Доступ до адмін-панелі: /admin\n"
+            f"✅ Додавання користувачів: /adduser\n"
+            f"✅ Перегляд статистики: /stats\n"
+            f"✅ Журнал верифікацій: /logs\n\n"
+            f"Готова допомогти!"
+        )
+    else:
+        message = (
+            f"✅ Підтверджено!\n\n"
+            f"Привіт, {whitelist_entry['full_name']}! 👋\n\n"
+            f"Готова допомогти з питаннями про TD AV!"
+        )
+    
+    await update.message.reply_text(message, reply_markup=keyboard, parse_mode="Markdown")
+    context.user_data["awaiting_phone"] = False
+
+
+async def create_sed_verified_user(telegram_id, phone, result, update, context):
+    """Create user from SED API verification"""
+    employee = result["employee"]
+    
+    await db.execute("""
+        INSERT INTO hr_users 
+        (telegram_id, phone, employee_id, full_name, first_name, last_name,
+         department, position, start_date, access_level, verification_method,
+         last_sed_sync, sed_sync_status, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'employee', 'sed_api', NOW(), 'active', TRUE)
+        ON CONFLICT (telegram_id) DO UPDATE
+        SET phone = $2, employee_id = $3, full_name = $4, is_active = TRUE
+    """,
+        telegram_id, phone, employee["employee_id"],
+        employee["full_name"], employee["first_name"], employee["last_name"],
+        employee["department"], employee["position"], employee["start_date"]
+    )
+    
+    await db.execute("""
+        INSERT INTO verification_log 
+        (telegram_id, phone, employee_id, verification_type, status)
+        VALUES ($1, $2, $3, 'sed_direct', 'success')
+    """, telegram_id, phone, employee["employee_id"])
+    
+    await update.message.reply_text(
+        f"✅ Підтверджено!\n\n"
+        f"Привіт, {employee['first_name']}! 👋\n\n"
+        f"Я бачу, що ти {employee['position']} у відділі {employee['department']}.\n\n"
+        f"Готова допомогти з будь-якими питаннями про роботу в TD AV!",
+        reply_markup=get_menu_for_access_level("employee")
+    )
+    
+    context.user_data["awaiting_phone"] = False
+
+
+async def handle_verification_failure(telegram_id, phone, result, update):
+    """Handle failed verification and notify HR admins"""
+    error = result.get("error", "unknown")
+    
+    # Log failed attempt
+    await db.execute("""
+        INSERT INTO verification_log 
+        (telegram_id, phone, verification_type, status)
+        VALUES ($1, $2, 'sed_direct', $3)
+    """, telegram_id, phone, error)
+    
+    # Send message to user
+    if error == "not_found":
+        user_message = (
+            "❌ Вибач, я не знайшла тебе в базі співробітників.\n\n"
+            "Можливо, твій номер ще не внесений у систему.\n\n"
+            "📧 Напиши в HR-відділ: hr@vinkom.net"
+        )
+    elif error == "timeout":
+        user_message = (
+            "⚠️ Не вдалося зв'язатися з сервером.\n\n"
+            "Спробуй ще раз через хвилину."
+        )
+    else:
+        user_message = (
+            "⚠️ Виникла технічна помилка.\n\n"
+            "Спробуй ще раз або зверніся в HR-відділ: hr@vinkom.net"
+        )
+    
+    await update.message.reply_text(user_message)
+    
+    # NOTIFY HR ADMINS about failed registration
+    await notify_hr_admins_about_failed_registration(telegram_id, phone, update)
+
+
+async def notify_hr_admins_about_failed_registration(telegram_id, phone, update):
+    """Send notification to all HR admins about failed registration attempt"""
+    
+    # Get all active HR admins
+    hr_admins = await db.fetch("""
+        SELECT u.telegram_id, u.first_name
+        FROM hr_users u
+        WHERE u.access_level IN ('admin_hr', 'developer')
+        AND u.is_active = TRUE
+        AND u.telegram_id != $1
+    """, telegram_id)
+    
+    if not hr_admins:
+        logger.warning("No HR admins found to notify about failed registration")
+        return
+    
+    # Get user info from Telegram
+    user = update.effective_user
+    username = f"@{user.username}" if user.username else "немає username"
+    
+    notification = (
+        f"🚨 **Спроба реєстрації (невдала)**\n\n"
+        f"📱 Телефон: `{phone}`\n"
+        f"👤 Telegram: {user.first_name} {user.last_name or ''}\n"
+        f"🆔 Username: {username}\n"
+        f"🔢 Telegram ID: `{telegram_id}`\n\n"
+        f"❌ Номер не знайдено в СЕД Бліц\n\n"
+        f"**Дії:**\n"
+        f"• Якщо це новий співробітник → додай в СЕД\n"
+        f"• Якщо це підрядник → використай /adduser\n\n"
+        f"Приклад:\n"
+        f"`/adduser {phone} Ім'я Прізвище contractor Опис причини`"
+    )
+    
+    # Send to all HR admins
+    from telegram_bot import bot
+    for admin in hr_admins:
+        try:
+            await bot.send_message(
+                chat_id=admin["telegram_id"],
+                text=notification,
+                parse_mode="Markdown"
+            )
+            logger.info(f"Notified HR admin {admin['first_name']} about failed registration")
+        except Exception as e:
+            logger.error(f"Failed to notify admin {admin['telegram_id']}: {e}")
+
+
+async def sync_user_with_sed(telegram_id, phone):
+    """Sync user data from SED API"""
+    result = await sed_service.verify_employee(phone)
+    
+    if result["verified"]:
+        employee = result["employee"]
+        await db.execute("""
+            UPDATE hr_users 
+            SET 
+                employee_id = $1,
+                full_name = $2,
+                first_name = $3,
+                last_name = $4,
+                department = $5,
+                position = $6,
+                start_date = $7,
+                last_sed_sync = NOW(),
+                sed_sync_status = 'active'
+            WHERE telegram_id = $8
+        """, 
+            employee["employee_id"], employee["full_name"],
+            employee["first_name"], employee["last_name"],
+            employee["department"], employee["position"],
+            employee["start_date"], telegram_id
+        )
+        logger.info(f"Synced user {telegram_id} with SED")
+    else:
+        await db.execute("""
+            UPDATE hr_users 
+            SET sed_sync_status = 'not_found', last_sed_sync = NOW()
+            WHERE telegram_id = $1
+        """, telegram_id)
+        logger.warning(f"User {telegram_id} not found in SED during sync")
+
+
+def get_menu_for_access_level(access_level: str):
+    """Return appropriate keyboard based on user access level"""
+    
+    if access_level == "developer":
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Техпідтримка", "📞 Контакти"],
+            ["💬 Задати питання"],
+            ["👨‍💻 Admin", "📊 Stats", "🔍 Logs"],
+            ["➕ Add User", "🔄 Sync"]
+        ]
+    elif access_level == "admin_hr":
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Техпідтримка", "📞 Контакти"],
+            ["💬 Задати питання"],
+            ["⚙️ Admin Panel", "➕ Add User"]
+        ]
+    else:  # employee or contractor
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Техпідтримка", "📞 Контакти"],
+            ["💬 Задати питання"]
+        ]
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+```
+
+## STEP 4: ADMIN COMMANDS
+
+Create new file: `hr_admin_commands.py`
+```python
+"""Admin Commands for User Management"""
+from telegram import Update
+from telegram.ext import ContextTypes
+from database import db
+from hr_sed_service import sed_service
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def get_user_access_level(telegram_id: int) -> str:
+    """Get user's access level"""
+    user = await db.fetchrow(
+        "SELECT access_level FROM hr_users WHERE telegram_id = $1 AND is_active = TRUE",
+        telegram_id
+    )
+    return user["access_level"] if user else None
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Access admin panel - developers and HR admins only"""
+    
+    telegram_id = update.effective_user.id
+    access_level = await get_user_access_level(telegram_id)
+    
+    if not access_level or access_level not in ["developer", "admin_hr", "admin_it"]:
+        await update.message.reply_text("❌ У тебе немає доступу до адмін-панелі")
+        return
+    
+    stats = await db.fetchrow("""
+        SELECT 
+            COUNT(*) as total_users,
+            COUNT(*) FILTER (WHERE is_active = TRUE) as active_users,
+            COUNT(*) FILTER (WHERE access_level = 'developer') as developers,
+            COUNT(*) FILTER (WHERE access_level LIKE 'admin%') as admins,
+            COUNT(*) FILTER (WHERE verification_method = 'sed_api') as sed_verified,
+            COUNT(*) FILTER (WHERE verification_method = 'whitelist') as whitelisted
+        FROM hr_users
+    """)
+    
+    recent_activity = await db.fetchrow("""
+        SELECT 
+            COUNT(*) as today_verifications,
+            COUNT(*) FILTER (WHERE status = 'success') as successful,
+            COUNT(*) FILTER (WHERE status != 'success') as failed
+        FROM verification_log
+        WHERE created_at > CURRENT_DATE
+    """)
+    
+    message = (
+        f"📊 **Maya HR Admin Panel**\n\n"
+        f"**Користувачі:**\n"
+        f"👥 Всього: {stats['total_users']}\n"
+        f"✅ Активних: {stats['active_users']}\n"
+        f"👨‍💻 Розробників: {stats['developers']}\n"
+        f"⚙️ Адміністраторів: {stats['admins']}\n"
+        f"🔗 Верифіковано СЕД: {stats['sed_verified']}\n"
+        f"📝 Додано вручну: {stats['whitelisted']}\n\n"
+        f"**Активність сьогодні:**\n"
+        f"📈 Спроб входу: {recent_activity['today_verifications']}\n"
+        f"✅ Успішних: {recent_activity['successful']}\n"
+        f"❌ Невдалих: {recent_activity['failed']}\n\n"
+        f"**Команди:**\n"
+        f"/adduser - Додати користувача вручну\n"
+        f"/listusers - Список користувачів\n"
+        f"/logs - Журнал верифікацій\n"
+        f"/stats - Детальна статистика\n"
+        f"/syncuser [phone] - Синхронізувати з СЕД"
+    )
+    
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
+async def adduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manually add user to whitelist - HR admins and developers only"""
+    
+    telegram_id = update.effective_user.id
+    access_level = await get_user_access_level(telegram_id)
+    
+    if not access_level or access_level not in ["developer", "admin_hr"]:
+        await update.message.reply_text("❌ У тебе немає прав додавати користувачів")
+        return
+    
+    # Get admin info
+    admin = await db.fetchrow(
+        "SELECT full_name FROM hr_users WHERE telegram_id = $1",
+        telegram_id
+    )
+    
+    if not context.args or len(context.args) < 4:
+        await update.message.reply_text(
+            "➕ **Додати користувача вручну**\n\n"
+            "**Формат:**\n"
+            "`/adduser +380XXXXXXXXX Ім'я Прізвище рівень_доступу Причина`\n\n"
+            "**Рівні доступу:**\n"
+            "• `contractor` - Підрядник (базовий доступ)\n"
+            "• `admin_hr` - HR адміністратор\n"
+            "• `admin_it` - IT адміністратор\n"
+            "• `developer` - Розробник (повний доступ)\n\n"
+            "**Приклади:**\n"
+            "`/adduser +380671234567 Олег Петренко contractor Зовнішній консультант з маркетингу`\n\n"
+            "`/adduser +34692480784 John Smith developer Система розробник`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Parse arguments
+    phone = context.args[0]
+    first_name = context.args[1]
+    last_name = context.args[2]
+    full_name = f"{first_name} {last_name}"
+    access_level_new = context.args[3]
+    reason = " ".join(context.args[4:]) if len(context.args) > 4 else "Додано вручну"
+    
+    # Validate phone
+    if not re.match(r'^\+380\d{9}$', phone) and not re.match(r'^\+34\d{9}$', phone):
+        await update.message.reply_text("❌ Невірний формат телефону. Використовуй +380XXXXXXXXX або +34XXXXXXXXX")
+        return
+    
+    # Validate access level
+    valid_levels = ["contractor", "admin_hr", "admin_it", "developer"]
+    if access_level_new not in valid_levels:
+        await update.message.reply_text(f"❌ Невірний рівень доступу. Доступні: {', '.join(valid_levels)}")
+        return
+    
+    # Add to whitelist
+    try:
+        await db.execute("""
+            INSERT INTO hr_whitelist 
+            (phone, full_name, access_level, reason, added_by)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (phone) DO UPDATE
+            SET full_name = $2, access_level = $3, reason = $4, 
+                is_active = TRUE, added_at = NOW(), added_by = $5
+        """, phone, full_name, access_level_new, reason, admin["full_name"])
+        
+        await update.message.reply_text(
+            f"✅ **Користувача додано!**\n\n"
+            f"📱 Телефон: `{phone}`\n"
+            f"👤 Ім'я: {full_name}\n"
+            f"🔑 Рівень доступу: `{access_level_new}`\n"
+            f"📝 Причина: {reason}\n"
+            f"➕ Додав: {admin['full_name']}\n\n"
+            f"Тепер цей користувач може увійти через /start",
+            parse_mode="Markdown"
+        )
+        
+        logger.info(f"Admin {admin['full_name']} added {full_name} ({phone}) to whitelist")
+        
+    except Exception as e:
+        logger.error(f"Error adding user to whitelist: {e}")
+        await update.message.reply_text(f"❌ Помилка при додаванні користувача: {str(e)}")
+
+
+async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View verification logs - admins only"""
+    
+    telegram_id = update.effective_user.id
+    access_level = await get_user_access_level(telegram_id)
+    
+    if not access_level or access_level not in ["developer", "admin_hr", "admin_it"]:
+        await update.message.reply_text("❌ Немає доступу")
+        return
+    
+    # Get last 15 verification attempts
+    logs = await db.fetch("""
+        SELECT 
+            vl.phone,
+            vl.verification_type,
+            vl.status,
+            vl.created_at,
+            u.full_name
+        FROM verification_log vl
+        LEFT JOIN hr_users u ON vl.telegram_id = u.telegram_id
+        ORDER BY vl.created_at DESC
+        LIMIT 15
+    """)
+    
+    if not logs:
+        await update.message.reply_text("📋 Журнал верифікацій порожній")
+        return
+    
+    log_text = "📋 **Останні 15 спроб верифікації:**\n\n"
+    
+    for log in logs:
+        status_emoji = "✅" if log["status"] == "success" else "❌"
+        name = log["full_name"] or "Невідомий"
+        time = log["created_at"].strftime("%d.%m %H:%M")
+        
+        log_text += (
+            f"{status_emoji} `{time}` | `{log['phone']}`\n"
+            f"   {name} | {log['verification_type']} | {log['status']}\n\n"
+        )
+    
+    await update.message.reply_text(log_text, parse_mode="Markdown")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Detailed statistics - admins only"""
+    
+    telegram_id = update.effective_user.id
+    access_level = await get_user_access_level(telegram_id)
+    
+    if not access_level or access_level not in ["developer", "admin_hr", "admin_it"]:
+        await update.message.reply_text("❌ Немає доступу")
+        return
+    
+    # User stats by department
+    dept_stats = await db.fetch("""
+        SELECT 
+            department,
+            COUNT(*) as count
+        FROM hr_users
+        WHERE is_active = TRUE AND department IS NOT NULL
+        GROUP BY department
+        ORDER BY count DESC
+        LIMIT 10
+    """)
+    
+    # Verification stats
+    verif_stats = await db.fetchrow("""
+        SELECT 
+            COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as last_24h,
+            COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as last_7d,
+            COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '30 days') as last_30d
+        FROM verification_log
+    """)
+    
+    message = "📊 **Детальна статистика Maya HR**\n\n"
+    
+    message += "**Верифікації:**\n"
+    message += f"📅 За 24 години: {verif_stats['last_24h']}\n"
+    message += f"📅 За 7 днів: {verif_stats['last_7d']}\n"
+    message += f"📅 За 30 днів: {verif_stats['last_30d']}\n\n"
+    
+    if dept_stats:
+        message += "**Топ відділів (активні користувачі):**\n"
+        for idx, dept in enumerate(dept_stats, 1):
+            message += f"{idx}. {dept['department']}: {dept['count']}\n"
+    
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
+async def listusers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all users - developers only"""
+    
+    telegram_id = update.effective_user.id
+    access_level = await get_user_access_level(telegram_id)
+    
+    if access_level != "developer":
+        await update.message.reply_text("❌ Тільки для розробників")
+        return
+    
+    users = await db.fetch("""
+        SELECT full_name, phone, access_level, verification_method, is_active
+        FROM hr_users
+        ORDER BY access_level, full_name
+        LIMIT 50
+    """)
+    
+    message = f"👥 **Користувачі ({len(users)}):**\n\n"
+    
+    current_level = None
+    for user in users:
+        if user["access_level"] != current_level:
+            current_level = user["access_level"]
+            message += f"\n**{current_level.upper()}:**\n"
+        
+        status = "✅" if user["is_active"] else "❌"
+        message += f"{status} {user['full_name']} | `{user['phone']}`\n"
+    
+    await update.message.reply_text(message, parse_mode="Markdown")
+```
+
+## STEP 5: UPDATE TELEGRAM BOT REGISTRATION
+
+Update `telegram_bot.py` (or `main.py` where bot is initialized):
+```python
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from hr_auth_handlers import (
+    start_handler, 
+    phone_verification_handler
+)
+from hr_admin_commands import (
+    admin_command,
+    adduser_command,
+    logs_command,
+    stats_command,
+    listusers_command
+)
+
+# ... existing imports ...
+
+# Build application
+app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+
+# Authentication handlers
+app.add_handler(CommandHandler("start", start_handler))
+
+# Admin commands
+app.add_handler(CommandHandler("admin", admin_command))
+app.add_handler(CommandHandler("adduser", adduser_command))
+app.add_handler(CommandHandler("logs", logs_command))
+app.add_handler(CommandHandler("stats", stats_command))
+app.add_handler(CommandHandler("listusers", listusers_command))
+
+# Phone verification (text message handler with awaiting_phone flag)
+app.add_handler(MessageHandler(
+    filters.TEXT & ~filters.COMMAND, 
+    phone_verification_handler
+))
+
+# ... rest of handlers ...
+```
+
+## STEP 6: ENVIRONMENT VARIABLES
+
+Add to `.env` and Render.com environment variables:
+```bash
+SED_API_URL=https://api-sed.tdav.net.ua
+SED_API_KEY=f10e2b75-2c4c-4e26-be72-98d1a6aafa4c
+```
+
+## STEP 7: UPDATE REQUIREMENTS
+
+Add to `requirements.txt` if not already present:
+```
+httpx>=0.24.0
+python-telegram-bot>=20.0
+asyncpg>=0.28.0
+alembic>=1.12.0
+```
+
+## TESTING CHECKLIST
+
+After deployment, test in this order:
+
+1. **Developer Access (Konstantin)**
+   - Send /start to bot
+   - Enter +34692480784
+   - Should get instant developer access
+   - Test /admin command
+   - Test /adduser command
+
+2. **HR Admin Access (Natalia)**
+   - Send /start
+   - Enter +380679843397
+   - Should get admin_hr access
+   - Test /admin and /adduser
+
+3. **Regular Employee**
+   - Use any AVTD employee phone from SED
+   - Should verify through SED API
+   - Should get employee access
+
+4. **Failed Registration + HR Notification**
+   - Use fake phone number
+   - Should fail verification
+   - Konstantin and Natalia should receive notification
+
+5. **Manual User Addition**
+   - Konstantin uses /adduser to add contractor
+   - Contractor tries /start with their phone
+   - Should get instant access
+
+## DEPLOYMENT STEPS
+
+1. Run database migration: `alembic upgrade head`
+2. Deploy code to Render.com
+3. Verify environment variables are set
+4. Test with Konstantin's phone first
+5. Then test with Natalia's phone
+6. Monitor logs for any errors
+
+## SUCCESS CRITERIA
+
+✅ Konstantin gets developer access with +34692480784
+✅ Natalia gets admin_hr access with +380679843397
+✅ Regular employees verify through SED API
+✅ Failed registrations notify HR admins
+✅ /admin, /adduser, /logs commands work for admins
+✅ Different menu keyboards based on access level
+✅ All verification attempts logged to database
+
+IMPLEMENT ALL OF THE ABOVE. Pay special attention to:
+- Phone validation for both Ukrainian (+380) and Spanish (+34) numbers
+- HR notification system on failed registrations
+- Proper access level checks before allowing admin commands
+- Logging all verification attempts
+- Creating appropriate menu keyboards per access level

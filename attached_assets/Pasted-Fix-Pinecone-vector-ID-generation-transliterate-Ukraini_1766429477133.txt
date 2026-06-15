@@ -1,0 +1,76 @@
+Fix Pinecone vector ID generation - transliterate Ukrainian/Cyrillic characters to ASCII.
+
+CRITICAL BUG:
+Pinecone rejects vector IDs with non-ASCII characters. Product section names like "Продукція", "Асортимент", "НАШІ ВИНА" cause ingestion failures. Need to sanitize/transliterate section names to ASCII.
+
+FIX in backend/scripts/batch_ingest_websites.py:
+
+Add transliteration function after imports (around line 18):
+```python
+import re
+from unidecode import unidecode
+
+def sanitize_vector_id(text: str) -> str:
+    """
+    Convert text to ASCII-safe string for Pinecone vector IDs.
+    Handles Ukrainian/Cyrillic characters.
+    """
+    # Use unidecode to transliterate Unicode to ASCII
+    ascii_text = unidecode(text)
+    
+    # Replace spaces with underscores
+    ascii_text = ascii_text.replace(' ', '_')
+    
+    # Remove any remaining non-ASCII/non-alphanumeric except underscore and hyphen
+    ascii_text = re.sub(r'[^a-zA-Z0-9_-]', '', ascii_text)
+    
+    # Limit length to avoid issues
+    if len(ascii_text) > 50:
+        ascii_text = ascii_text[:50]
+    
+    return ascii_text
+```
+
+UPDATE ingest_scraped_content_to_pinecone function (around line 70):
+
+Find where vector_id is created for PRODUCT sections and update:
+```python
+# OLD (around line 80):
+vector_id = f"{metadata['brand']}_PRODUCT_{prod_section['name']}_{i}_{int(timestamp)}"
+
+# NEW:
+safe_section_name = sanitize_vector_id(prod_section['name'])
+safe_brand = sanitize_vector_id(metadata['brand'])
+vector_id = f"{safe_brand}_PRODUCT_{safe_section_name}_{i}_{int(timestamp)}"
+```
+
+Also update GENERAL vector IDs (around line 110):
+```python
+# OLD:
+vector_id = f"{metadata['brand']}_GENERAL_{i}_{int(timestamp)}"
+
+# NEW:
+safe_brand = sanitize_vector_id(metadata['brand'])
+vector_id = f"{safe_brand}_GENERAL_{i}_{int(timestamp)}"
+```
+
+INSTALL DEPENDENCY:
+
+Add to requirements if needed (should already be there):
+unidecode
+
+If not installed, run in Replit Shell:
+```bash
+pip install unidecode --break-system-packages
+```
+
+WHAT THIS FIXES:
+- "Продукція" → "Produktsiia" ✅
+- "Асортимент" → "Asortyment" ✅
+- "НАШІ ВИНА" → "NASHI_VYNA" ✅
+- "Classic collection" → "Classic_collection" ✅
+- "KRISTI VALLEY" → "KRISTI_VALLEY" ✅
+
+All vector IDs will be ASCII-safe and Pinecone-compatible!
+
+After fix, re-run ingestion and all 11/11 brands should ingest successfully with product sections!

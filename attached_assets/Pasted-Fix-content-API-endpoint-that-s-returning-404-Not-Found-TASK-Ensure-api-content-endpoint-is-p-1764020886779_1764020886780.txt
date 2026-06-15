@@ -1,0 +1,78 @@
+Fix content API endpoint that's returning 404 Not Found:
+
+📋 TASK: Ensure /api/content endpoint is properly registered
+
+CHECK backend/main.py:
+
+Make sure content routes are included:
+```python
+from routes import content_routes
+
+app.include_router(content_routes.router)
+```
+
+VERIFY backend/routes/content_routes.py exists and has:
+```python
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+from database import get_db
+from models import ContentQueue
+
+router = APIRouter(prefix="/api/content", tags=["content"])
+
+@router.get("")
+async def get_content(
+    status: str = Query(None),
+    platform: str = Query(None),
+    limit: int = Query(10),
+    db: Session = Depends(get_db)
+):
+    """Get content with optional filters"""
+    
+    query = db.query(ContentQueue)
+    
+    if status:
+        query = query.filter(ContentQueue.status == status)
+    
+    if platform:
+        query = query.filter(ContentQueue.target_platform == platform)
+    
+    articles = query.order_by(ContentQueue.created_at.desc()).limit(limit).all()
+    
+    return [
+        {
+            "id": article.id,
+            "title": article.extra_metadata.get("title") if article.extra_metadata else None,
+            "status": article.status,
+            "platform": article.target_platform,
+            "language": article.language,
+            "needs_translation": article.needs_translation,
+            "created_at": article.created_at.isoformat(),
+            "source": article.extra_metadata.get("source") if article.extra_metadata else None,
+        }
+        for article in articles
+    ]
+
+@router.get("/stats")
+async def get_stats(db: Session = Depends(get_db)):
+    """Get content statistics"""
+    
+    from sqlalchemy import func
+    
+    stats = db.query(
+        ContentQueue.status,
+        func.count(ContentQueue.id)
+    ).group_by(ContentQueue.status).all()
+    
+    return {status: count for status, count in stats}
+```
+
+RESTART backend after changes.
+
+TEST:
+```bash
+curl "http://localhost:8000/api/content?limit=5"
+# Should return array of articles
+```
+
+Please fix the content API endpoint!

@@ -1,0 +1,122 @@
+TASK: Fix Delo.ua duplicate title AND diagnose Facebook image posting failure
+
+=== PRIORITY 1: FIX FACEBOOK IMAGE POSTING ===
+
+CRITICAL: Articles are posting to Facebook WITHOUT images
+
+Investigate and fix:
+
+1. CHECK IMAGE GENERATION:
+   Query ContentQueue for recent articles
+   Verify they have:
+   - image_url (DALL-E URL)
+   - local_image_path (saved file path)
+   Show sample article with both fields
+
+2. VERIFY LOCAL IMAGES EXIST:
+   Check if files actually saved:
+   - List files in: attached_assets/generated_images/
+   - Show most recent 5-10 image files
+   - Verify filenames match local_image_path in database
+
+3. CHECK FACEBOOK POSTER:
+   File: backend/services/facebook_poster.py
+   
+   Verify post_to_facebook method:
+   - Does it read local_image_path from article?
+   - Does it use absolute path for file?
+   - Does it check if file exists before posting?
+   - Does it handle image upload correctly?
+   
+   Show relevant code sections
+
+4. TEST IMAGE POSTING:
+   Find one approved article with local_image_path
+   Attempt to post to Facebook
+   Show detailed logs:
+   - Image path used
+   - File exists check result
+   - Facebook API response
+   - Any errors
+
+5. FIX IMAGE POSTING:
+   Common issues to check:
+   
+   a) Path issue - use absolute path:
+```python
+   import os
+   image_path = article.local_image_path
+   if not image_path.startswith('/'):
+       image_path = os.path.join('/home/runner/workspace', image_path)
+   
+   if not os.path.exists(image_path):
+       logger.error(f"Image not found: {image_path}")
+       return None
+```
+   
+   b) Image upload to Facebook:
+```python
+   # Open image file
+   with open(image_path, 'rb') as image_file:
+       files = {'source': image_file}
+       # Post with image
+       response = requests.post(
+           f"https://graph.facebook.com/v18.0/{page_id}/photos",
+           data={'message': message, 'access_token': token},
+           files=files
+       )
+```
+   
+   c) Check if using correct Facebook API endpoint:
+   - /photos endpoint for image posts
+   - /feed endpoint won't upload images
+
+=== PRIORITY 2: FIX DELO.UA DUPLICATE TITLE ===
+
+File: backend/services/scrapers/delo_ua_scraper.py
+
+Issue: Title still appearing twice in content despite cleaning
+
+Update _clean_content to be more aggressive:
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean with better duplicate title removal"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove metadata
+    content = re.sub(r'Новини компаній', '', content)
+    
+    # Get lines
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    
+    # Remove ALL occurrences of exact title
+    # (not just first, remove all duplicates)
+    filtered = [line for line in lines if line != title]
+    
+    # Add title back ONCE at the start
+    filtered = [title] + filtered
+    
+    # Join everything
+    text = ' '.join(filtered)
+    text = re.sub(r'  +', ' ', text)
+    
+    # Add paragraph breaks
+    text = re.sub(r'([.!?"]\s+)([A-ZА-ЯІЇЄ])', r'\1\n\n\2', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+```
+
+Test with "Розумні покупки" article and verify only ONE title
+
+=== OUTPUT REQUIRED ===
+
+Show:
+1. Why images aren't posting to Facebook (diagnosis)
+2. Fixed Facebook poster code (if needed)
+3. Test result of posting article WITH image
+4. Fixed Delo.ua duplicate title
+5. Verification that both issues resolved

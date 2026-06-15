@@ -1,0 +1,495 @@
+SPRINT: Robota.ua REST API Integration — Replace GraphQL with official employer API
+
+We have official Robota.ua API documentation and confirmed working endpoints.
+This sprint replaces the broken GraphQL approach with the REST API that works 
+with our existing paid employer account.
+
+Current state:
+- hunt_robotaua_scraper.py exists but uses GraphQL (dracula.robota.ua) which returns 0 results
+- robotaua_auth.py exists but just reads ROBOTAUA_JWT from env (expires Apr 12)
+- ROBOTAUA_EMAIL and ROBOTAUA_PASSWORD are already in env vars
+
+API Documentation:
+- Auth: https://auth-api.robota.ua (POST /Login)
+- Employer API: https://employer-api.robota.ua (Swagger: /swagger/index.html)
+- CV Database: POST /cvdb/resumes
+- Resume detail: GET /resume/{id}
+- Open contacts: POST /resume/open/{id}
+- Vacancies list: POST /vacancy/list
+- Applications: POST /apply/list
+- Application detail: POST /apply/view/{id}
+- Application file: GET /apply/getfile/{id}
+- City list: GET /values/citylist
+- Rubric list: GET /values/rubrics
+
+=== TASK 1: Rewrite robotaua_auth.py ===
+
+File: backend/services/robotaua_auth.py
+
+Replace the current JWT-from-env approach with automatic login:
+
+import os, time, logging, httpx
+
+logger = logging.getLogger(__name__)
+
+_token_cache = {"token": None, "expires_at": 0}
+_AUTH_URL = "https://auth-api.robota.ua"
+_TOKEN_TTL = 23 * 3600  # refresh every 23 hours
+
+async def login_robotaua() -> str | None:
+    """Get valid Bearer token. Auto-login if expired."""
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["expires_at"]:
+        return _token_cache["token"]
+    
+    email = os.getenv("ROBOTAUA_EMAIL")
+    password = os.getenv("ROBOTAUA_PASSWORD")
+    
+    if not email or not password:
+        # Fallback to manual JWT
+        jwt = os.getenv("ROBOTAUA_JWT")
+        if jwt:
+            logger.warning("ROBOTAUA_EMAIL/PASSWORD not set, using ROBOTAUA_JWT fallback")
+            return jwt
+        logger.error("No Robota.ua credentials available")
+        return None
+    
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(f"{_AUTH_URL}/Login", json={
+                "username": email,
+                "password": password,
+                "remember": True
+            })
+            if resp.status_code == 200:
+                token = resp.text.strip().strip('"')
+                _token_cache["token"] = token
+                _token_cache["expires_at"] = now + _TOKEN_TTL
+                logger.info("Robota.ua login successful, token cached for 23h")
+                return token
+            else:
+                logger.error(f"Robota.ua login failed: {resp.status_code} {resp.text[:200]}")
+                # Fallback to env JWT
+                jwt = os.getenv("ROBOTAUA_JWT")
+                if jwt:
+                    return jwt
+                return None
+    except Exception as e:
+        logger.error(f"Robota.ua login error: {e}")
+        jwt = os.getenv("ROBOTAUA_JWT")
+        return jwt
+
+def invalidate_token():
+    """Call this on 401 response to force re-login on next call."""
+    _token_cache["token"] = None
+    _token_cache["expires_at"] = 0
+
+
+=== TASK 2: Build city/rubric cache ===
+
+Add to robotaua_auth.py or create a new file backend/services/robotaua_reference.py:
+
+_EMPLOYER_API = "https://employer-api.robota.ua"
+_city_cache = {}   # name_lower -> id
+_rubric_cache = {}  # name_lower -> id
+
+async def get_city_id(city_name: str) -> int | None:
+    """Resolve Ukrainian city name to Robota.ua city ID."""
+    if not _city_cache:
+        await _load_city_cache()
+    
+    name = city_name.strip().lower()
+    if name in _city_cache:
+        return _city_cache[name]
+    
+    # Try partial match
+    for cached_name, city_id in _city_cache.items():
+        if name in cached_name or cached_name in name:
+            return city_id
+    return None
+
+async def _load_city_cache():
+    token = await login_robotaua()
+    if not token:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_EMPLOYER_API}/values/citylist",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            if resp.status_code == 200:
+                cities = resp.json()
+                for city in cities:
+                    name = city.get("name", "").strip().lower()
+                    city_id = city.get("id")
+                    if name and city_id:
+                        _city_cache[name] = city_id
+                        # Add common aliases
+                        _add_city_aliases(name, city_id)
+                logger.info(f"Loaded {len(_city_cache)} city mappings from Robota.ua")
+    except Exception as e:
+        logger.error(f"Failed to load city cache: {e}")
+
+def _add_city_aliases(name: str, city_id: int):
+    """Add Ukrainian/Russian/transliterated aliases for common cities."""
+    aliases = {
+        "київ": ["киев", "kyiv", "kiev"],
+        "дніпро": ["днепр", "днiпро", "dnipro", "дніпропетровськ"],
+        "харків": ["харьков", "kharkiv"],
+        "одеса": ["одесса", "odesa", "odessa"],
+        "львів": ["львов", "lviv"],
+        "запоріжжя": ["запорожье", "zaporizhzhia"],
+        "вінниця": ["винница", "vinnytsia"],
+        "хмельницький": ["хмельницкий", "khmelnytskyi"],
+        "полтава": ["poltava"],
+        "чернігів": ["чернигов", "chernihiv"],
+        "миколаїв": ["николаев", "mykolaiv"],
+        "херсон": ["kherson"],
+        "житомир": ["zhytomyr"],
+        "рівне": ["ровно", "rivne"],
+        "тернопіль": ["тернополь", "ternopil"],
+        "кропивницький": ["кировоград", "kropyvnytskyi"],
+        "суми": ["sumy"],
+        "луцьк": ["луцк", "lutsk"],
+        "чернівці": ["черновцы", "chernivtsi"],
+        "ужгород": ["uzhhorod"],
+        "івано-франківськ": ["ивано-франковск", "ivano-frankivsk"],
+    }
+    for base, alias_list in aliases.items():
+        if base in name:
+            for alias in alias_list:
+                _city_cache[alias] = city_id
+
+
+=== TASK 3: Rewrite hunt_robotaua_scraper.py — REST API CV Search ===
+
+File: backend/services/hunt_robotaua_scraper.py
+
+COMPLETELY REWRITE this file. Delete all GraphQL code. New implementation uses REST API.
+
+Before writing code, you MUST explore the actual /cvdb/resumes endpoint to understand
+its request/response format. Do this:
+
+Step 1: Run this exploration script to discover the API schema:
+
+import httpx, asyncio, os, json
+
+async def explore():
+    token = await login_robotaua()  # from robotaua_auth
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    base = "https://employer-api.robota.ua"
+    
+    # 1. Try POST /cvdb/resumes with minimal body
+    print("=== POST /cvdb/resumes (empty) ===")
+    r = await client.post(f"{base}/cvdb/resumes", headers=headers, json={})
+    print(r.status_code, r.text[:1000])
+    
+    # 2. Try with search params
+    print("=== POST /cvdb/resumes (with query) ===")
+    r = await client.post(f"{base}/cvdb/resumes", headers=headers, json={
+        "keyWords": "торговий представник",
+        "cityId": 1,  # Kyiv
+        "page": 0
+    })
+    print(r.status_code, r.text[:2000])
+    
+    # 3. Try to get one resume
+    # If step 2 returned results, use the first resume ID
+    # GET /resume/{id}
+    
+    # 4. Get city list
+    print("=== GET /values/citylist ===")
+    r = await client.get(f"{base}/values/citylist", headers=headers)
+    print(r.status_code, r.text[:1000])
+
+Run this script FIRST. Then based on actual response format, write the scraper.
+
+Step 2: Write the scraper based on actual API responses:
+
+async def search_robotaua(vacancy: dict, depth_days: int = 60) -> list[dict]:
+    """Search Robota.ua CV database via REST API."""
+    token = await login_robotaua()
+    if not token:
+        return []
+    
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    base = "https://employer-api.robota.ua"
+    
+    try:
+        # Resolve city
+        city_id = await get_city_id(vacancy.get("city", ""))
+        
+        # Build search request based on what you discovered in Step 1
+        search_body = {
+            "keyWords": vacancy.get("position", ""),
+            # Add other fields based on actual API schema
+        }
+        if city_id:
+            search_body["cityId"] = city_id
+        
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(f"{base}/cvdb/resumes", headers=headers, json=search_body)
+            
+            if resp.status_code == 401:
+                invalidate_token()
+                return []
+            if resp.status_code != 200:
+                logger.error(f"CV search failed: {resp.status_code}")
+                return []
+            
+            results = resp.json()
+            # Parse results based on actual response format
+            
+            candidates = []
+            for item in results[:20]:  # Max 20
+                resume_id = item.get("id")  # Adjust field name based on actual response
+                
+                # Get full resume
+                detail_resp = await client.get(
+                    f"{base}/resume/{resume_id}",
+                    headers=headers
+                )
+                if detail_resp.status_code != 200:
+                    continue
+                
+                resume = detail_resp.json()
+                
+                # Build candidate dict matching scorer format
+                candidate = {
+                    "source": "robota.ua",
+                    "profile_url": f"https://robota.ua/candidates/{resume_id}",
+                    "full_name": resume.get("name", ""),
+                    "current_role": resume.get("speciality", ""),
+                    "age": resume.get("age"),
+                    "city": resume.get("cityName", ""),
+                    "salary_expectation": resume.get("salary"),
+                    "salary_expectation_uah": resume.get("salary"),
+                    "salary_expectation_usd": None,  # convert if needed
+                    "contact": "Деталі на Robota.ua",  # Don't open contact until scored
+                    "email": "",
+                    "experience_years": None,  # Parse from experience
+                    "skills": "",
+                    "education": "",
+                    "raw_text": "",  # Build from all available fields, max 3000 chars
+                    "message_date": None,
+                    "last_active": None,
+                }
+                
+                # Build raw_text for scorer
+                raw_parts = [
+                    f"Посада: {candidate['current_role']}",
+                    f"Місто: {candidate['city']}",
+                    f"Вік: {candidate.get('age', 'н/д')}",
+                ]
+                # Add experience, skills, education from resume details
+                # ... parse from actual response structure
+                candidate["raw_text"] = "\n".join(raw_parts)[:3000]
+                
+                candidates.append(candidate)
+                
+                await asyncio.sleep(1)  # Rate limit
+            
+            return candidates
+    except Exception as e:
+        logger.error(f"Robota.ua CV search error: {e}")
+        return []
+
+IMPORTANT: The exact field names in the request body and response will depend on 
+what the Swagger endpoint actually returns. Explore FIRST, then code.
+Field names like "keyWords", "cityId", "page" are guesses — verify against 
+the actual API response in Step 1.
+
+
+=== TASK 4: NEW — hunt_robotaua_applies.py — Applications Scraper ===
+
+File: backend/services/hunt_robotaua_applies.py
+
+This is a NEW candidate source — candidates who applied to AVTD's vacancies on Robota.ua.
+These are the highest quality candidates because they came to us.
+
+async def search_robotaua_applies(vacancy: dict) -> list[dict]:
+    """Fetch candidates who applied to matching AVTD vacancies on Robota.ua."""
+    token = await login_robotaua()
+    if not token:
+        return []
+    
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    base = "https://employer-api.robota.ua"
+    
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Step 1: Get AVTD's published vacancies
+            vac_resp = await client.post(f"{base}/vacancy/list", headers=headers, json={
+                "vacancyStateId": "4",  # Published only
+                "page": 0
+            })
+            if vac_resp.status_code != 200:
+                return []
+            
+            avtd_vacancies = vac_resp.json()
+            # This returns a list or object with vacancy items
+            # Explore actual response format first!
+            
+            # Step 2: Find vacancies matching our Maya Hunt search
+            position = vacancy.get("position", "").lower()
+            city = vacancy.get("city", "").lower()
+            matching_vacancy_ids = []
+            
+            for vac in avtd_vacancies:  # Adjust based on actual response structure
+                vac_name = (vac.get("name") or "").lower()
+                vac_city = (vac.get("cityName") or "").lower()
+                if position and any(word in vac_name for word in position.split()):
+                    matching_vacancy_ids.append(vac.get("id"))
+            
+            if not matching_vacancy_ids:
+                logger.info(f"No matching AVTD vacancies on Robota.ua for '{position}'")
+                return []
+            
+            # Step 3: Get applications for each matching vacancy
+            candidates = []
+            for vac_id in matching_vacancy_ids[:5]:  # Max 5 vacancies
+                apply_resp = await client.post(f"{base}/apply/list", headers=headers, json={
+                    "vacancyId": vac_id,
+                    "folderId": 0,  # All statuses
+                    "page": 0,
+                    "candidateTypes": [
+                        "ApplicationWithResume",
+                        "ApplicationWithFile"
+                    ]
+                })
+                if apply_resp.status_code != 200:
+                    continue
+                
+                applications = apply_resp.json()
+                # Parse applications based on actual response format
+                # From screenshots we know the response includes:
+                # - email, phone, Viber contacts
+                # - resumeFile.summary
+                # - resumeType: Notepad/AttachedFile
+                # - isOpenResumeContactInfo
+                
+                for app in applications:  # Adjust based on actual structure
+                    app_id = app.get("id")
+                    
+                    # Get full application detail
+                    detail_resp = await client.post(
+                        f"{base}/apply/view/{app_id}",
+                        headers=headers,
+                        params={"resumeType": app.get("resumeType", "Notepad")}
+                    )
+                    if detail_resp.status_code != 200:
+                        continue
+                    
+                    detail = detail_resp.json()
+                    
+                    # Build contact from available data
+                    contact = ""
+                    if detail.get("email"):
+                        contact = detail["email"]
+                    # Check for phone in contacts/socials
+                    
+                    # Build candidate dict
+                    candidate = {
+                        "source": "robota.ua-applies",
+                        "profile_url": f"https://robota.ua/candidates/{app_id}",
+                        "full_name": detail.get("name", ""),
+                        "current_role": detail.get("speciality", ""),
+                        "age": detail.get("age"),
+                        "city": detail.get("cityName", ""),
+                        "salary_expectation": detail.get("salary"),
+                        "salary_expectation_uah": detail.get("salary"),
+                        "salary_expectation_usd": None,
+                        "contact": contact or "Деталі на Robota.ua",
+                        "email": detail.get("email", ""),
+                        "experience_years": None,
+                        "skills": "",
+                        "education": "",
+                        "raw_text": "",  # Build from all fields
+                        "message_date": None,
+                        "last_active": None,
+                    }
+                    
+                    # Build raw_text from resume summary + details
+                    summary = ""
+                    if detail.get("resumeFile", {}).get("summary"):
+                        summary = detail["resumeFile"]["summary"]
+                    raw_parts = [summary] if summary else []
+                    # Add other fields...
+                    candidate["raw_text"] = "\n".join(raw_parts)[:3000]
+                    
+                    candidates.append(candidate)
+                    
+                    await asyncio.sleep(0.5)  # Rate limit
+                
+            logger.info(f"Found {len(candidates)} applicants from Robota.ua")
+            return candidates
+    except Exception as e:
+        logger.error(f"Robota.ua applies error: {e}")
+        return []
+
+
+=== TASK 5: Update hunt_service.py — 4 sources ===
+
+In _scrape_round() function, add the new sources:
+
+Add imports:
+    from services.hunt_robotaua_scraper import search_robotaua
+    from services.hunt_robotaua_applies import search_robotaua_applies
+
+Change the asyncio.gather call from 3 sources to 4:
+
+    tg_results, workua_results, robotaua_results, applies_results = await asyncio.gather(
+        scrape_telegram_channels(keywords, channels, depth_days=depth_days),
+        search_workua(parsed, depth_days=depth_days),
+        search_robotaua(parsed, depth_days=depth_days),
+        search_robotaua_applies(parsed),
+    )
+    all_candidates = tg_results + workua_results + robotaua_results + applies_results
+
+NOTE: search_robotaua_applies does NOT take depth_days — applications are always
+fetched regardless of round (they're pre-filtered by AVTD's active vacancies).
+It should only run in Round 1 to avoid duplicates. Add a condition:
+
+    if round_num == 1:
+        applies_task = search_robotaua_applies(parsed)
+    else:
+        applies_task = asyncio.coroutine(lambda: [])()  # empty coroutine
+
+Actually simpler — just return [] from search_robotaua_applies if it's already been called
+this hunt. Use a simple flag or pass round_num as parameter.
+
+Also update the status message to include "Robota.ua":
+    "🔍 Шукаю кандидатів (Work.ua + Telegram + Robota.ua)..."
+
+
+=== TASK 6: Update robotaua_salary.py to use new auth ===
+
+In backend/services/robotaua_salary.py, replace any direct JWT reading with:
+    from services.robotaua_auth import login_robotaua
+    token = await login_robotaua()
+
+This ensures salary analytics also benefits from auto-login.
+
+
+=== TASK 7: Verify everything ===
+
+After implementing all tasks:
+
+1. Run the exploration script from Task 3 Step 1 to confirm API access
+2. Test login_robotaua() — should return a valid token
+3. Test search_robotaua() with a sample vacancy: {"position": "торговий представник", "city": "Київ"}
+4. Test search_robotaua_applies() — should return any applications from AVTD vacancies
+5. Verify robotaua_salary.py still works with new auth
+6. Restart backend and confirm no import errors
+
+IMPORTANT RULES:
+- Explore each API endpoint BEFORE writing scraper code — use the actual response format
+- The Swagger at employer-api.robota.ua/swagger/index.html has exact schemas
+- Never crash the pipeline — every function returns [] on error
+- Rate limit: 1 second between resume detail calls, 0.5 second between apply calls
+- Max 20 candidates from CV search, max 30 from applications
+- Log everything: search counts, auth events, errors
+- Do NOT modify scorer, card formatter, or Telegram handlers
+- Do NOT modify hunt_config.py (the three-round logic stays the same)
+- Keep existing dedup logic in hunt_service.py — it handles any number of sources

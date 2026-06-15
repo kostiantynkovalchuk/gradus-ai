@@ -1,0 +1,44 @@
+INFO:apscheduler.executors.default:Running job "Translate pending articles (3x/day) (trigger: cron[hour='6,14,20', minute='0'], next run at: 2025-12-02 14:00:00 UTC)" (scheduled at 2025-12-02 14:00:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Starting translation task...
+INFO:services.scheduler:[SCHEDULER] No articles need translation
+INFO:apscheduler.executors.default:Job "Translate pending articles (3x/day) (trigger: cron[hour='6,14,20', minute='0'], next run at: 2025-12-02 20:00:00 UTC)" executed successfully
+INFO:apscheduler.executors.default:Running job "Generate images & send Telegram notifications (3x/day) (trigger: cron[hour='6,14,20', minute='15'], next run at: 2025-12-02 20:15:00 UTC)" (scheduled at 2025-12-02 14:15:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Starting image generation task...
+INFO:services.scheduler:[SCHEDULER] No articles need images
+INFO:apscheduler.executors.default:Job "Generate images & send Telegram notifications (3x/day) (trigger: cron[hour='6,14,20', minute='15'], next run at: 2025-12-02 20:15:00 UTC)" executed successfully
+INFO:apscheduler.executors.default:Running job "Post to Facebook (trigger: cron[hour='18', minute='0'], next run at: 2025-12-03 18:00:00 UTC)" (scheduled at 2025-12-02 18:00:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Facebook scheduled posting...
+INFO:services.scheduler:[SCHEDULER] Posting article 1 to Facebook: «Я хочу залишатися серед людей» - історія найстарі...
+WARNING:services.facebook_poster:⚠️  Local image path not found: /app/backend/attached_assets/generated_images/dalle_edd690490227.png
+WARNING:services.facebook_poster:⚠️  No local image, trying URL (may expire)
+INFO:services.facebook_poster:Posting to Facebook with image URL: https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjj...
+INFO:services.facebook_poster:Facebook API response: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'ACa-Fvu3MtuvV0aZ-g81FOv'}}
+ERROR:services.facebook_poster:Facebook API error: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'ACa-Fvu3MtuvV0aZ-g81FOv'}}
+ERROR:services.facebook_poster:Facebook error code 324: Missing or invalid image file
+ERROR:services.facebook_poster:Image file missing or invalid - URL may have expired!
+ERROR:services.scheduler:❌ [SCHEDULER] Facebook posting failed for article 1
+INFO:apscheduler.executors.default:Job "Post to Facebook (trigger: cron[hour='18', minute='0'], next run at: 2025-12-03 18:00:00 UTC)" executed successfully
+INFO:apscheduler.executors.default:Running job "Post to Facebook (trigger: cron[hour='18', minute='0'], next run at: 2025-12-03 18:00:00 UTC)" (scheduled at 2025-12-02 18:00:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Facebook scheduled posting...
+INFO:services.scheduler:[SCHEDULER] Posting article 1 to Facebook: «Я хочу залишатися серед людей» - історія найстарі...
+WARNING:services.facebook_poster:⚠️  Local image path not found: /app/backend/attached_assets/generated_images/dalle_edd690490227.png
+WARNING:services.facebook_poster:⚠️  No local image, trying URL (may expire)
+INFO:services.facebook_poster:Posting to Facebook with image URL: https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjj...
+INFO:services.facebook_poster:Facebook API response: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'ACa-Fvu3MtuvV0aZ-g81FOv'}}
+ERROR:services.facebook_poster:Facebook API error: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'ACa-Fvu3MtuvV0aZ-g81FOv'}}
+ERROR:services.facebook_poster:Facebook error code 324: Missing or invalid image file
+ERROR:services.facebook_poster:Image file missing or invalid - URL may have expired!
+ERROR:services.scheduler:❌ [SCHEDULER] Facebook posting failed for article 1
+INFO:apscheduler.executors.default:Job "Post to Facebook (trigger: cron[hour='18', minute='0'], next run at: 2025-12-03 18:00:00 UTC)" executed successfully
+INFO:apscheduler.executors.default:Running job "Post to Facebook (trigger: cron[hour='18', minute='0'], next run at: 2025-12-03 18:00:00 UTC)" (scheduled at 2025-12-02 18:00:00+00:00)
+INFO:services.scheduler:🤖 [SCHEDULER] Facebook scheduled posting...
+INFO:services.scheduler:[SCHEDULER] Posting article 1 to Facebook: «Я хочу залишатися серед людей» - історія найстарі...
+WARNING:services.facebook_poster:⚠️  Local image path not found: /app/backend/attached_assets/generated_images/dalle_edd690490227.png
+WARNING:services.facebook_poster:⚠️  No local image, trying URL (may expire)
+INFO:services.facebook_poster:Posting to Facebook with image URL: https://oaidalleapiprodscus.blob.core.windows.net/private/org-i5RmPnO39doI4rjmCNCAnxnv/user-pEDIWUjj...
+INFO:services.facebook_poster:Facebook API response: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'ACa-Fvu3MtuvV0aZ-g81FOv'}}
+ERROR:services.facebook_poster:Facebook API error: {'error': {'message': 'Missing or invalid image file', 'type': 'OAuthException', 'code': 324, 'error_subcode': 2069019, 'is_transient': True, 'error_user_title': 'Image required', 'error_user_msg': 'Make sure that your Page post includes an image that can be used in an ad.', 'fbtrace_id': 'ACa-Fvu3MtuvV0aZ-g81FOv'}}
+ERROR:services.facebook_poster:Facebook error code 324: Missing or invalid image file
+ERROR:services.facebook_poster:Image file missing or invalid - URL may have expired!
+ERROR:services.scheduler:❌ [SCHEDULER] Facebook posting failed for article 1
+INFO:apscheduler.executors.default:Job "Post to Facebook (trigger: cron[hour='18', minute='0'], next run at: 2025-12-03 18:00:00 UTC)" executed successfully

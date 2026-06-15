@@ -1,0 +1,67 @@
+REPLIT AGENT TASK: Debug Facebook Duplicate Posting Issue
+Problem Description
+Our automated Facebook posting system is creating duplicate posts at the exact same timestamp. Facebook Activity Log shows posts are being published twice simultaneously:
+
+Dec 4: Two identical Netflix posts at 19:00
+Dec 3: Two identical Anna Pocci posts at 19:00
+Dec 2: Two identical Treasury Wine posts at 22:29
+Dec 1: Two identical Fozzy Group posts at 19:00
+
+This is causing Facebook to flag us as spam (Reach = 1 on all posts).
+Analysis Required
+1. Find ALL scheduler configurations:
+
+Search for APScheduler, cron jobs, or any scheduled task configurations
+Look for: BackgroundScheduler, schedule, crontab, or similar
+Check both main application code AND any deployment configurations (Render.com settings)
+
+2. Locate Facebook posting functions:
+
+Find the function(s) that post to Facebook API
+Trace all calls to this function throughout the codebase
+Check if it's being called multiple times in a single execution
+
+3. Check database approval workflow:
+
+Examine how articles get marked as approved
+Look for any code that might create duplicate "approved" entries
+Search for queries that select articles with posted_facebook = false
+Check if the same article_id could be processed twice
+
+4. Review Telegram approval bot:
+
+Check if the Telegram approval callback might trigger multiple posts
+Look for any loops or async operations that could cause double execution
+
+5. Inspect the posting logic:
+
+Find where posted_facebook flag is set to true
+Check if there's proper locking/transaction handling to prevent race conditions
+Look for any retry logic that might be causing duplicates
+
+Files to Examine
+Please search the entire codebase for:
+
+Scheduler initialization code
+Facebook posting functions
+Database update queries for posted_facebook column
+Telegram bot approval handlers
+Any async/await patterns around posting logic
+
+Expected Output
+Provide:
+
+Root cause analysis - Why is it posting twice?
+Specific code locations - Show me the file paths and line numbers
+Proposed fix - Exact code changes needed
+Prevention strategy - How to ensure this doesn't happen again (idempotency keys, transaction locks, etc.)
+
+Additional Context
+
+Platform: Render.com hosting
+Database: PostgreSQL
+Framework: FastAPI
+Posting time: Daily at 18:00-19:00 (but showing different times like 22:29)
+The posts ARE being created (not a display bug) - Facebook shows both in Activity Log
+
+Start by showing me the scheduler configuration and Facebook posting function, then trace the execution flow.

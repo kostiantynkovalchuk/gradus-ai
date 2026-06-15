@@ -1,0 +1,249 @@
+BUILD: Alex Gradus intelligent learning system + GradusMedia admin dashboard
+All changes in backend Replit only. Dashboard served from FastAPI, same pattern as /hr.
+
+=== PART 1: MIGRATE ALEX PRESETS FROM JSON TO DATABASE ===
+
+Current state: Alex presets live in backend/data/preset_answers.json (flat file).
+Target: Move to PostgreSQL table for dynamic management.
+
+1.1 CREATE TABLE:
+
+  CREATE TABLE IF NOT EXISTS alex_preset_answers (
+    id SERIAL PRIMARY KEY,
+    question_pattern VARCHAR(500) NOT NULL,
+    answer_text TEXT NOT NULL,
+    category VARCHAR(50) DEFAULT 'general',
+    priority INTEGER DEFAULT 5,
+    usage_count INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_alex_preset_category 
+    ON alex_preset_answers(category);
+  CREATE INDEX IF NOT EXISTS idx_alex_preset_active 
+    ON alex_preset_answers(is_active);
+
+1.2 MIGRATE all existing presets from preset_answers.json into this table.
+
+1.3 UPDATE preset matching logic to read from DB instead of JSON file.
+    Keep same 3-tier matching: exact → fuzzy (85%) → Claude API.
+    Update usage_count and last_used_at on every hit.
+
+=== PART 2: QUERY LEARNING SYSTEM ===
+
+The maya_query_log table already logs every Alex question. Build on top of it.
+
+2.1 CREATE PRESET CANDIDATES TABLE:
+
+  CREATE TABLE IF NOT EXISTS alex_preset_candidates (
+    id SERIAL PRIMARY KEY,
+    question_text TEXT NOT NULL,
+    frequency INTEGER DEFAULT 1,
+    avg_response_time_ms INTEGER,
+    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(20) DEFAULT 'candidate',
+    -- status values: 'candidate' | 'promoted' | 'dismissed'
+    promoted_preset_id INTEGER REFERENCES alex_preset_answers(id),
+    sample_claude_answer TEXT
+    -- populated when admin clicks "Generate Answer"
+  );
+
+2.2 CREATE BACKGROUND AGGREGATION TASK in scheduler.py:
+    Run daily at 03:00 UTC.
+    Query maya_query_log for questions from last 7 days.
+    Group similar questions using fuzzy matching (80% threshold).
+    For each group with frequency >= 3 AND no existing preset match:
+      - Insert or update alex_preset_candidates
+      - Increment frequency counter
+      - Update last_seen_at
+
+2.3 CREATE ENDPOINTS:
+    GET  /api/admin/alex/preset-candidates
+         Returns candidates ordered by frequency DESC.
+         Fields: id, question_text, frequency, avg_response_time_ms, 
+                 status, first_seen_at, last_seen_at
+
+    POST /api/admin/alex/preset-candidates/{id}/generate-answer
+         Calls Claude API to pre-write a suggested answer for this question.
+         Uses Alex Gradus persona and AVTD brand context.
+         Saves result to sample_claude_answer field.
+         Returns the generated answer for admin review.
+
+    POST /api/admin/alex/preset-candidates/{id}/promote
+         Body: { answer_text: string, category: string, priority: int }
+         Inserts into alex_preset_answers.
+         Updates candidate status to 'promoted'.
+         Sets promoted_preset_id.
+
+    POST /api/admin/alex/preset-candidates/{id}/dismiss
+         Updates candidate status to 'dismissed'.
+
+=== PART 3: HORECA TRENDS AUTO-UPDATE FROM SCRAPED ARTICLES ===
+
+Alex currently answers trend questions from static presets.
+content_queue has 97+ trends articles with full translated text.
+Inject fresh article context into trend-related questions dynamically.
+
+3.1 DETECT TREND QUESTIONS:
+    In the chat endpoint (POST /api/maya/chat), before calling Claude API,
+    check if the question matches trend keywords:
+    ['тренд', 'trend', 'популярн', 'зараз', 'сезон', 'мода',
+     'що зараз', 'актуальн', 'цього року', '2026', 'новин']
+
+3.2 IF TREND QUESTION DETECTED - INJECT FRESH ARTICLES:
+    Query content_queue:
+      SELECT translated_title, translated_text 
+      FROM content_queue 
+      WHERE category = 'trends' 
+        AND status IN ('approved', 'published')
+      ORDER BY created_at DESC 
+      LIMIT 5;
+
+    Build context string and inject into Claude system prompt:
+      "СВІЖІ ТРЕНДИ З БАЗИ GRADUS MEDIA (актуальні статті):\n"
+      For each article: translated_title + first 400 chars of translated_text
+
+3.3 UPDATE the "Які коктейлі тренд цього сезону?" preset answer:
+    Remove static trend content.
+    Replace with: "Аналізую останні матеріали Gradus Media для вас..."
+    Let RAG handle the actual content dynamically.
+
+=== PART 4: ADMIN DASHBOARD AT /admin ===
+
+Study the existing /hr admin dashboard implementation carefully.
+Follow the exact same pattern: FastAPI endpoint serving self-contained HTML.
+
+GET /admin → serves the full dashboard HTML page
+
+Password protection: GradusAdmin_2026
+Wrong password → show login form (same style as /hr).
+Correct password → show dashboard (session cookie, same as /hr).
+
+Dashboard: single HTML page, dark theme matching /hr style.
+4 tabs: Analytics | Preset Candidates | Users | Subscriptions
+
+Use Chart.js for charts:
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js">
+
+--- TAB 1: ANALYTICS ---
+Summary cards (top row):
+  - Total registered users
+  - Active paid subscriptions
+  - Total questions asked (all time)
+  - Preset hit rate %
+  - Avg response time (ms)
+  - Questions today
+
+Bar chart: Top 10 most asked questions
+  Data from maya_query_log, grouped by query_text similarity,
+  ordered by frequency DESC.
+
+Line chart: Questions per day (last 30 days)
+  Data from maya_query_log grouped by DATE(created_at).
+
+Backend endpoint:
+GET /api/admin/analytics/overview
+Returns:
+{
+  total_users: int,
+  active_subscriptions: int,
+  total_questions: int,
+  questions_today: int,
+  questions_this_week: int,
+  questions_this_month: int,
+  preset_hit_rate_pct: float,
+  avg_response_time_ms: float,
+  top_questions: [{text, count}],  -- top 10
+  questions_per_day: [{date, count}]  -- last 30 days
+}
+
+--- TAB 2: PRESET CANDIDATES ---
+Table columns:
+  Question text | Frequency | First seen | Last seen | Avg response time | Status
+
+Status badge colors:
+  candidate = orange | promoted = green | dismissed = gray
+
+Action buttons per row:
+  [Generate Answer] → calls generate-answer endpoint, shows result in modal
+  [Promote] → opens inline form with generated answer pre-filled + 
+               category dropdown + priority input → on confirm calls promote
+  [Dismiss] → calls dismiss endpoint, row grays out
+
+Also show current active presets table below candidates:
+  Pattern | Category | Usage count | Last used | Priority | Active toggle
+
+--- TAB 3: USERS DATABASE ---
+Summary cards: Total users | Free tier | Standard | Premium
+
+Table columns:
+  Name | Email | Registered | Tier (badge) | 
+  Subscription expires | Questions today | Total questions | Last active
+
+Filters: tier dropdown | date range picker
+Export button: downloads table as CSV
+
+Backend endpoint:
+GET /api/admin/users?tier=&page=1&limit=50
+Returns paginated list with all fields above.
+Note: maya_users table stores this data (platform-wide, not avatar-specific).
+
+--- TAB 4: SUBSCRIPTIONS ---
+Summary cards:
+  MRR (monthly recurring revenue in USD) |
+  Active annual subscriptions |
+  Failed payments this month |
+  Churned this month (expired, not renewed)
+
+Table columns:
+  Email | Plan badge | Billing cycle | Amount | 
+  Payment status badge | Started | Expires | LiqPay order ID
+
+Payment status badge colors:
+  success = green | pending = yellow | failed = red | refunded = gray
+
+Backend endpoint:
+GET /api/admin/subscriptions?status=&page=1&limit=50
+Note: maya_subscriptions table stores this data.
+
+=== PART 5: ADMIN ROUTES FILE ===
+
+Create: backend/routes/admin_routes.py
+
+Protect ALL /api/admin/* endpoints with header check:
+  Header: X-Admin-Key: GradusAdmin_2026
+  Return 403 if missing or wrong.
+
+Register admin_routes in main.py alongside existing routes.
+
+Full endpoint list:
+  GET  /admin                                          ← dashboard HTML
+  GET  /api/admin/analytics/overview
+  GET  /api/admin/users
+  GET  /api/admin/subscriptions
+  GET  /api/admin/alex/presets
+  POST /api/admin/alex/presets
+  PUT  /api/admin/alex/presets/{id}
+  GET  /api/admin/alex/preset-candidates
+  POST /api/admin/alex/preset-candidates/{id}/generate-answer
+  POST /api/admin/alex/preset-candidates/{id}/promote
+  POST /api/admin/alex/preset-candidates/{id}/dismiss
+
+=== VERIFICATION ===
+
+After implementation confirm:
+1. SELECT COUNT(*) FROM alex_preset_answers; → should show 6 migrated presets
+2. SELECT COUNT(*) FROM alex_preset_candidates; → table exists (empty is fine)
+3. Scheduler shows new daily task registered at 03:00 UTC
+4. POST /api/maya/chat with message "які тренди зараз в барах?" 
+   → response should reference recent article titles from content_queue
+5. GET https://gradus-ai.onrender.com/admin → login form appears
+6. Login with GradusAdmin_2026 → all 4 tabs load with real data
+7. Analytics tab shows correct user count matching maya_users table
+8. Subscriptions tab shows data from maya_subscriptions table
+
+Report final status for each of the 8 verification points.

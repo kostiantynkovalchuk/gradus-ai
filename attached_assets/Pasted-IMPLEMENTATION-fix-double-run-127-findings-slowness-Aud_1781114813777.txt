@@ -1,0 +1,62 @@
+IMPLEMENTATION — fix double-run (127 findings) + slowness. Audit complete and
+conclusive: the 127 is TWO stacked runs (127 rows → 88 distinct ref+category,
+with exact-dupe pairs 7.2/penalty 292+355 and 10/other 328+393). Cause: no
+re-entrancy guard + sequential generate_alternatives (~3.75min) exceeding the
+client's 3-min timeout, so the user reloads and spawns a second run while the
+first is still in flight (analyzed_at stamped only at the end). Three changes.
+Follow repo rules: open the real files first; idempotent side-effects via atomic
+DB transition (Rule 4); migrations append-only + Replit assigns the number
+(Rule 6); CHECK constraint on the new enum column (Rule 7); report import
+reconciliation after (Rule 5); never crash a user-facing flow silently (Rule 3).
+
+PART A — Re-entrancy guard (the real fix; do this first and make it robust)
+1. New migration (next number): add solcon_documents.analysis_status TEXT NOT
+   NULL DEFAULT 'pending' with CHECK (analysis_status IN
+   ('pending','running','done','failed')). Backfill: analyzed_at IS NOT NULL ->
+   'done', else 'pending'.
+2. In the analyze endpoint (router.py ~305), before spawning the task, ATOMICALLY
+   claim each document:
+     UPDATE solcon_documents SET analysis_status='running'
+     WHERE id=:doc AND analysis_status IN ('pending','failed') RETURNING id
+   Only spawn asyncio.create_task for docs that returned a row. If no row was
+   claimed, that doc is already running/done — do NOT spawn; return a clear
+   "analysis already in progress" signal. This is the guard: a second click
+   cannot win the claim, so no second run.
+3. Inside _run_analysis, immediately after winning the claim, make re-runs
+   idempotent: DELETE FROM solcon_findings WHERE document_id=:doc before the scan
+   (so a re-analysis replaces rather than stacks). This delete runs only for the
+   winning run.
+4. On success: SET analysis_status='done', analyzed_at=NOW() (keep the existing
+   analyzed_at write). On ANY exception in _run_analysis: SET
+   analysis_status='failed' so the doc can be retried — do not leave it stuck on
+   'running'. Wrap so the failure is logged, not silent.
+
+PART B — Parallelize generate_alternatives (analyzer.py)
+5. Replace the sequential `for finding in findings:` loop with bounded-concurrency
+   execution: concurrent.futures.ThreadPoolExecutor(max_workers=5) (it already
+   runs inside run_in_executor, threads are fine). Keep the existing per-finding
+   logic identical — the non-high-severity skip (grounding_status='not_applicable'),
+   Pinecone retrieve, Sonnet call, parse/validate. Only the dispatch changes. No
+   shared mutable state across findings; each writes its own dict. Preserve output
+   order or re-sort by (severity, confidence) after, your call.
+
+PART C — Global cap (router.py, between dedup and generate_alternatives, ~line 388)
+6. After _dedup_cross_section_findings and BEFORE generate_alternatives, cap the
+   merged list to the top 45 by: severity (critical>high>medium>low), then
+   confidence desc, then clause_ref_unverified=False before True. This is a SAFETY
+   CEILING, not a target — log how many were dropped (count only). Do NOT touch the
+   "20-30" scan prompt or the dedup key.
+
+PART D — Clean the stale data
+7. One-time: engagement 16's document currently has 127 findings. Reset its doc to
+   analysis_status='pending', delete its existing solcon_findings rows, so a fresh
+   re-run produces a single clean set. (Or rely on Part A.3 delete-on-claim — but
+   confirm the 127 are gone after the re-run.)
+
+After deploy: report which other handlers import from router.py/analyzer.py and
+confirm clean import (Rule 5). Then re-run silpo.docx ONCE and report: (a)
+analysis_status transitions pending->running->done, (b) a second click during the
+run is rejected (no second task spawned — show the log line), (c) total findings
+after the single run (expect ~45 after cap), (d) wall-clock for
+generate_alternatives (expect well under 180s), (e) no exact-dupe ref+category
+pairs remain.

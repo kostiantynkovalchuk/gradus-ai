@@ -1,0 +1,77 @@
+Two admin panel fixes in Maya HR bot. Both are pre-existing bugs 
+(unrelated to today's broadcast/menu commits).
+
+=== FIX 1: admin_cmd:logs returns 400 Bad Request silently ===
+
+Production log evidence:
+  🔘 Callback query: admin_cmd:logs
+  HTTP Request: POST .../sendMessage "HTTP/1.1 400 Bad Request"
+  ✓ Admin button callback processed   ← lies about success
+
+User-facing impact: HR clicks 🔍 Logs, gets nothing visible.
+
+WORKFLOW CONTEXT (important for designing the fix):
+HR uses this to identify people whose authentication failed and 
+proactively contact them. They want to copy-paste names+phones from 
+the Telegram output and message those users directly. So the data 
+that matters is FAILED attempts with enough detail to act on.
+
+Investigate:
+1. Find the handler for cmd == 'logs' in 
+   backend/routes/telegram_webhook.py (after line 1286).
+2. Identify the root cause of the 400 — most likely:
+   (a) Message > 4096 chars (Telegram limit), or
+   (b) Markdown parse_mode with unescaped special chars in phone 
+       numbers / names.
+3. Look at what the handler currently selects — probably all 
+   verification attempts. Note how many rows are in the underlying 
+   table.
+
+Fix:
+- Default behavior: show only FAILED verification attempts, last 
+  50 entries, newest first. Successful attempts are not actionable 
+  for HR and just add noise.
+- Format each entry on its own line: 
+  "❌ {timestamp} | {name or 'unknown'} | {phone} | {reason}"
+  where reason is whatever the failure category is ('not_in_sed', 
+  'not_whitelisted', 'phone_mismatch', etc).
+- If the result is still too long, chunk into messages of max 
+  ~3500 chars each, same pattern as the listusers fix below.
+- Send with parse_mode=None (plain text) — phone numbers and names 
+  often contain characters that break Markdown.
+- Empty-state message if no failures: "✅ Невдалих спроб не 
+  зафіксовано. Всі верифікації успішні."
+- Header on first chunk: "🔍 Невдалі верифікації (останні N):"
+- Replace the dishonest try/except that logs success regardless. 
+  If the sendMessage status is not 200, log the response body AND 
+  send the user a short fallback message ("⚠️ Помилка завантаження 
+  журналу").
+
+=== FIX 2: admin_cmd:listusers caps at 50 of 234 users ===
+
+Find handler for cmd == 'listusers' (same dispatch area). Remove 
+the 50-user cap (likely SQL LIMIT 50 or [:50] slice in Python).
+
+- Keep existing grouping by access_level (DEVELOPER / HR_ADMIN / 
+  EMPLOYEE).
+- Build full formatted list, chunk into messages of max ~3500 chars.
+- Send sequentially with await asyncio.sleep(0.05) between.
+- Header per chunk: "👥 Користувачі (page 1/N):"
+- Last message ends: "Всього: 234 користувачів"
+- parse_mode=None (same reason as logs).
+- No pagination buttons.
+
+=== Out of scope ===
+
+- Do not touch broadcast code, recall, or get_inline_menu_for_access_level.
+- Do not change admin_cmd dispatch routing.
+- Do not add migrations.
+- These two fixes are unrelated bugs — both about Telegram message 
+  formatting limits. Ship as one small commit.
+
+When done, paste:
+- The diff
+- One screenshot or text dump of the new /logs output (with a 
+  fabricated failed entry if the real log has zero failures)
+- One screenshot of /listusers showing all 234 users across multiple 
+  messages

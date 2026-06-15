@@ -1,0 +1,82 @@
+==> Your service is live 🎉
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://gradus-ai.onrender.com
+==> 
+==> ///////////////////////////////////////////////////////////
+INFO:main:Frontend dist found at: /app/frontend/dist
+INFO:     10.22.243.130:54528 - "GET / HTTP/1.1" 200 OK
+INFO:     10.16.114.67:34228 - "GET /api/articles HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 295
+INFO:     10.19.191.197:41136 - "GET /api/images/serve/295 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 290
+INFO:     10.22.248.196:53828 - "GET /api/images/serve/290 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:main:Shutting down scheduler...
+INFO:apscheduler.scheduler:Scheduler has been shut down
+INFO:services.scheduler:Scheduler stopped
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1]
+INFO:     10.16.86.68:55794 - "GET /api/articles?category=news HTTP/1.1" 200 OK
+INFO:     10.20.178.2:50476 - "GET /api/articles?category=reviews HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 17
+INFO:     10.21.98.196:43504 - "GET /api/images/serve/17 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 125
+INFO:     10.17.197.194:40534 - "GET /api/images/serve/125 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 24
+INFO:     10.21.18.66:49354 - "GET /api/images/serve/24 HTTP/1.1" 200 OK
+INFO:     10.21.184.2:40964 - "GET /api/articles?category=trends HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 150
+INFO:     10.17.197.194:40534 - "GET /api/images/serve/150 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 199
+INFO:     10.20.68.5:37574 - "GET /api/images/serve/199 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 177
+INFO:     10.16.86.68:55794 - "GET /api/images/serve/177 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 78
+INFO:     10.20.40.3:52744 - "GET /api/images/serve/78 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 193
+INFO:     10.23.197.68:41162 - "GET /api/images/serve/193 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 171
+INFO:     10.17.80.68:37230 - "GET /api/images/serve/171 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 172
+INFO:     10.16.196.195:56410 - "GET /api/images/serve/172 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 163
+INFO:     10.18.178.65:54910 - "GET /api/images/serve/163 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 200
+INFO:     10.23.147.68:46904 - "GET /api/images/serve/200 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 167
+INFO:     10.16.195.69:47682 - "GET /api/images/serve/167 HTTP/1.1" 200 OK
+INFO:     10.18.178.65:54918 - "GET /api/images/serve/170 HTTP/1.1" 200 OK
+INFO:main:Serving image from database for article 170
+INFO:main:Serving image from database for article 84
+INFO:     10.19.92.1:32888 - "GET /api/images/serve/84 HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_doc:tdav_312_dist_prepay
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+ERROR:routes.telegram_webhook:Legal document file not found: /app/backend/static/legal_contracts/td_av/312_Типовий_Дистрибюція_ТД_АВ_-_передоплата_2026.doc
+INFO:     10.20.178.2:47310 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ Message sent to chat 441389791
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:legal_tdav
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.22.112.66:35854 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_menu:legal_tdav_supply
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/editMessageText "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.19.245.193:46024 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: hr_doc:tdav_412_supply_prepay
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/answerCallbackQuery "HTTP/1.1 200 OK"
+ERROR:routes.telegram_webhook:Legal document file not found: /app/backend/static/legal_contracts/td_av/412_Типовий_Поставки_ТД_АВ_-_передоплата_2026.doc
+INFO:httpx:HTTP Request: POST https://api.telegram.org/bot8177639478:AAEza_kpXBAqLgxArBRjnKfC-sZaXOErFiE/sendMessage "HTTP/1.1 200 OK"
+INFO:routes.telegram_webhook:✓ Message sent to chat 441389791
+INFO:routes.telegram_webhook:✓ HR callback processed
+INFO:     10.22.243.130:35962 - "POST /api/telegram/webhook HTTP/1.1" 200 OK

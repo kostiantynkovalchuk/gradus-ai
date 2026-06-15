@@ -1,0 +1,150 @@
+
+🔧 PROMPT ДЛЯ REPLIT AGENT:
+Critical bug found! Facebook posting fails with "list index out of range" error.
+
+🐛 ERROR:
+ERROR:services.facebook_poster:Failed to post to Facebook: list index out of range
+
+This is caused by incorrect post_id parsing when Facebook API returns a different format.
+
+📋 FIX:
+
+UPDATE backend/services/facebook_poster.py:
+
+Fix post_with_image() method with better error handling and logging:
+```python
+def post_with_image(self, article_data: Dict) -> Optional[Dict]:
+    """
+    Post to Facebook Page with image
+    """
+    if not self.page_access_token or not self.page_id:
+        logger.error("Facebook credentials not configured")
+        return None
+    
+    # Format post text
+    message = self.format_post_text(article_data)
+    image_url = article_data.get('image_url')
+    
+    if not image_url:
+        logger.warning("No image URL provided, posting text only")
+        return self.post_text_only(message)
+    
+    # Post with photo
+    url = f"{self.base_url}/{self.page_id}/photos"
+    
+    payload = {
+        'message': message,
+        'url': image_url,
+        'access_token': self.page_access_token
+    }
+    
+    try:
+        logger.info(f"Posting to Facebook with image: {image_url[:100]}...")
+        response = requests.post(url, data=payload, timeout=30)
+        result = response.json()
+        
+        logger.info(f"Facebook API response: {result}")
+        
+        if 'id' in result:
+            post_id = result['id']
+            
+            # Better post_id parsing with error handling
+            try:
+                if '_' in post_id:
+                    # Format: page_id_post_id
+                    post_number = post_id.split('_')[1]
+                else:
+                    # If no underscore, use full ID
+                    post_number = post_id
+                
+                post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_number}"
+            except Exception as parse_error:
+                logger.error(f"Error parsing post_id '{post_id}': {parse_error}")
+                # Fallback URL
+                post_url = f"https://www.facebook.com/{self.page_id}"
+            
+            logger.info(f"Posted to Facebook successfully: {post_id}")
+            
+            return {
+                'post_id': post_id,
+                'post_url': post_url,
+                'posted_at': datetime.now().isoformat()
+            }
+        else:
+            logger.error(f"Facebook API error: {result}")
+            
+            # Check for specific errors
+            if 'error' in result:
+                error = result['error']
+                logger.error(f"Facebook error code {error.get('code')}: {error.get('message')}")
+                
+                # Token expired?
+                if error.get('code') == 190:
+                    logger.error("Facebook access token is invalid or expired!")
+            
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to post to Facebook: {e}")
+        logger.exception("Full traceback:")
+        return None
+
+
+def post_text_only(self, message: str) -> Optional[Dict]:
+    """
+    Post text-only to Facebook Page (fallback if no image)
+    """
+    url = f"{self.base_url}/{self.page_id}/feed"
+    
+    payload = {
+        'message': message,
+        'access_token': self.page_access_token
+    }
+    
+    try:
+        logger.info(f"Posting text-only to Facebook...")
+        response = requests.post(url, data=payload, timeout=30)
+        result = response.json()
+        
+        logger.info(f"Facebook API response: {result}")
+        
+        if 'id' in result:
+            post_id = result['id']
+            
+            # Better parsing
+            try:
+                if '_' in post_id:
+                    post_number = post_id.split('_')[1]
+                else:
+                    post_number = post_id
+                
+                post_url = f"https://www.facebook.com/{self.page_id}/posts/{post_number}"
+            except Exception as parse_error:
+                logger.error(f"Error parsing post_id '{post_id}': {parse_error}")
+                post_url = f"https://www.facebook.com/{self.page_id}"
+            
+            logger.info(f"Posted text to Facebook successfully: {post_id}")
+            
+            return {
+                'post_id': post_id,
+                'post_url': post_url,
+                'posted_at': datetime.now().isoformat()
+            }
+        else:
+            logger.error(f"Facebook API error: {result}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to post to Facebook: {e}")
+        logger.exception("Full traceback:")
+        return None
+```
+
+This adds:
+1. Better logging to see actual API responses
+2. Safe post_id parsing with fallback
+3. Specific error detection (token expiry, etc)
+4. Full exception tracebacks for debugging
+
+Please fix the Facebook posting bug!
+

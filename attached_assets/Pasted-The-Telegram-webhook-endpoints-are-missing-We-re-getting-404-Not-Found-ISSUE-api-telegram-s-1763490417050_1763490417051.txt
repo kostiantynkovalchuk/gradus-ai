@@ -1,0 +1,97 @@
+The Telegram webhook endpoints are missing! We're getting 404 Not Found.
+
+🐛 ISSUE:
+`/api/telegram/set-webhook` endpoint returns 404 - it was never added to main.py
+
+📋 FIX NEEDED:
+
+ADD these three endpoints to backend/main.py:
+```python
+import os
+from services.telegram_webhook import TelegramWebhookHandler
+
+# ... existing code ...
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(update: dict, db: Session = Depends(get_db)):
+    """
+    Telegram webhook endpoint for callback queries
+    Handles approve/reject button clicks from Telegram
+    """
+    logger.info(f"Received Telegram update: {update}")
+    
+    if 'callback_query' in update:
+        webhook_handler = TelegramWebhookHandler()
+        result = webhook_handler.handle_callback_query(update['callback_query'], db)
+        return result
+    
+    return {"ok": True}
+
+
+@app.get("/api/telegram/set-webhook")
+async def set_telegram_webhook():
+    """
+    Set Telegram webhook URL
+    Call this once to configure the webhook
+    """
+    import requests
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    app_url = os.getenv('APP_URL')
+    
+    if not bot_token:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not configured")
+    
+    if not app_url:
+        raise HTTPException(status_code=500, detail="APP_URL not configured in Secrets")
+    
+    webhook_url = f"{app_url}/api/telegram/webhook"
+    
+    url = f"https://api.telegram.org/bot{bot_token}/setWebhook"
+    payload = {"url": webhook_url}
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        result = response.json()
+        
+        if result.get('ok'):
+            return {
+                "status": "success",
+                "message": "Webhook set successfully",
+                "webhook_url": webhook_url
+            }
+        else:
+            return {
+                "status": "error",
+                "message": result.get('description', 'Unknown error'),
+                "details": result
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/telegram/webhook-info")
+async def get_webhook_info():
+    """Get current webhook information"""
+    import requests
+    
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    
+    if not bot_token:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not configured")
+    
+    url = f"https://api.telegram.org/bot{bot_token}/getWebhookInfo"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+⚠️ IMPORTANT:
+- Add these endpoints AFTER the existing endpoints
+- Make sure TelegramWebhookHandler import is at the top
+- These endpoints are for setting up and testing Telegram webhooks
+
+Please add the three Telegram webhook endpoints to main.py!

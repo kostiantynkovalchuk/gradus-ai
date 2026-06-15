@@ -1,0 +1,109 @@
+# REPLIT PROMPT: Add Jean Jack Lineup Reference Image
+
+## Context
+
+Alex Photo Report has 23 reference images. Jean Jack (Жан-Жак) is an AVTD cognac brand with 6 SKUs. Adding a single lineup reference image will improve recognition.
+
+## Steps
+
+### 1. I will upload 6 Jean Jack photos to `backend/photo_report/references/temp/`
+
+```
+JJ_3zv_500ml_classic.png/jpg   — Classic 3★
+JJ_4zv_500ml_france.png/jpg    — Франс/France 4★  
+JJ_5zv_500ml_reserve.png/jpg   — Резерв/Reserve 5★
+JJ_500ml_amaretto.png/jpg      — Amaretto (flavored)
+JJ_500ml_honey.png/jpg         — Honey (flavored)
+JJ_500ml_orange.png/jpg        — Orange (flavored)
+```
+
+### 2. Run this script to combine into one lineup image
+
+```python
+from PIL import Image
+import os
+import glob
+
+temp_dir = 'backend/photo_report/references/temp'
+refs_dir = 'backend/photo_report/references'
+
+# Find all JJ images in temp (any extension)
+files = sorted(glob.glob(os.path.join(temp_dir, 'JJ_*')))
+if not files:
+    files = sorted(glob.glob(os.path.join(temp_dir, 'jj_*')))
+    
+print(f"Found {len(files)} Jean Jack images:")
+for f in files:
+    print(f"  {os.path.basename(f)}")
+
+# Load all images
+imgs = [Image.open(f) for f in files]
+
+# Resize all to same height (1200px)
+target_h = 1200
+resized = []
+for img in imgs:
+    ratio = target_h / img.height
+    new_w = int(img.width * ratio)
+    resized.append(img.resize((new_w, target_h), Image.LANCZOS))
+
+# Add spacing between bottles
+spacing = 20
+total_w = sum(img.width for img in resized) + spacing * (len(resized) - 1)
+
+# Create lineup on white background
+lineup = Image.new('RGB', (total_w, target_h), (255, 255, 255))
+x = 0
+for i, img in enumerate(resized):
+    lineup.paste(img, (x, 0))
+    x += img.width + spacing
+
+# Save as optimized JPEG
+out_path = os.path.join(refs_dir, 'jeanjack_lineup.jpg')
+
+# Resize if too wide (max 2400px to save tokens)
+if lineup.width > 2400:
+    ratio = 2400 / lineup.width
+    lineup = lineup.resize((2400, int(lineup.height * ratio)), Image.LANCZOS)
+
+lineup.save(out_path, format="JPEG", quality=85)
+print(f"\nSaved lineup: {out_path} ({lineup.size[0]}x{lineup.size[1]})")
+
+# Clean up temp files
+for f in files:
+    os.remove(f)
+    print(f"Removed temp: {os.path.basename(f)}")
+
+# Remove temp dir if empty
+if not os.listdir(temp_dir):
+    os.rmdir(temp_dir)
+    print("Removed temp directory")
+```
+
+### 3. Add label to `references.py`
+
+Add this entry to `REFERENCE_LABELS` dict:
+
+```python
+"jeanjack_lineup": "JEAN JACK (Жан-Жак) FULL LINEUP — 6 SKUs of AVTD cognac/brandy. All share the same bottle shape with 'ЖАН-ЖАК' / 'JEAN JACK' text. Variants: Classic (3★), Франс/France (4★), Резерв/Reserve (5★) — differ by RIBBON COLOR and STAR COUNT. Plus 3 flavored variants: Amaretto, Honey, Orange — same bottle shape but with flavor-specific label colors. ALL are AVTD brands. Usually stands next to ADJARI and DOVBUSH in the cognac section. Count ALL variants as Jean Jack facings.",
+```
+
+### 4. Verify
+
+Restart backend and check log:
+```
+Loaded 24 reference images (14 product, 10 shelf)
+```
+
+Run benchmark:
+```bash
+cd backend
+python -m photo_report.benchmark.run_benchmark --dir photo_report/benchmark --count 3
+```
+
+## Expected Result
+
+One file `jeanjack_lineup.jpg` in references/ — all 6 SKUs visible in a single image. Claude sees the full brand family in one glance and can match any variant on shelves.
+
+Total references after: 24 (6 vodka + 8 cognac + 10 shelf)
+Cost: +$0.01 per report (1 additional image)

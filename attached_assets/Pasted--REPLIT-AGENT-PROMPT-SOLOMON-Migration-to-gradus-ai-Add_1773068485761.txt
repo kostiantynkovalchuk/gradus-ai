@@ -1,0 +1,663 @@
+# REPLIT AGENT PROMPT — SOLOMON Migration to gradus-ai
+
+Add SOLOMON — Ukrainian Supreme Court search bot — to the existing gradus-ai Python/FastAPI backend.
+
+---
+
+## CONTEXT
+
+- Existing backend: Python/FastAPI on Render.com (`gradus-ai`)
+- Database: Neon PostgreSQL (`ep-red-dream-ak1x3nde.c-3.us-west-2.aws.neon.tech`)
+- Migration system: `backend/db_migrations.py` — tracks applied migrations in `schema_migrations` table
+- Last applied migration: `016_hunt_sources_channel_type`
+- Next migration number: **017**
+- Telegram bot pattern: follow `backend/maya_bot.py` exactly for bot setup
+- New env var already added to Render: `SOLOMON_BOT_TOKEN=8589213476:AAFyx1MZ0Io7rFNHOBjufnkXGKxI6K7LWBs`
+
+---
+
+## TASK OVERVIEW
+
+Create 4 new files + update 2 existing files:
+
+1. `backend/solomon_search.py` — court search + Claude parsing + summarization
+2. `backend/solomon_bot.py` — Telegram bot with phone auth
+3. `backend/solomon_router.py` — FastAPI `/law` endpoints
+4. Update `backend/db_migrations.py` — add migration 017
+5. Update `backend/main.py` — include router + start bot
+
+---
+
+## FILE 1: backend/solomon_search.py
+
+```python
+import re
+import json
+import logging
+import requests
+from bs4 import BeautifulSoup
+from anthropic import Anthropic
+import os
+
+logger = logging.getLogger(__name__)
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+PARSE_SYSTEM_PROMPT = """Ти помічник юриста України.
+Перетвори запит на JSON параметри пошуку.
+Поверни ТІЛЬКИ JSON без markdown або пояснень.
+
+ОБОВ'ЯЗКОВІ ПРАВИЛА:
+
+1. justice_type (тип справи):
+   - ДПС, ППР, податок, перевірка, НДС, митниця → "адміністративні"
+   - Банкрутство, корпоративні спори, АМКУ → "господарські"
+   - Трудові, сімейні, спадщина → "цивільні"
+   - Кримінальне переслідування → "кримінальні"
+   - Незрозуміло → "адміністративні"
+
+2. search_text:
+   - Прості ключові слова через пробіл, максимум 5 слів
+   - НЕ використовуй оператори & або |
+   - Приклад: "податкове повідомлення нереальність маркетинг"
+
+3. date_range:
+   - "2024-2025" або "2 роки" → "2"
+   - "останній рік" або "2025" → "1"
+   - "3 роки" → "3"
+   - не вказано → "2"
+
+4. judgment_type:
+   - За замовчуванням → "постанови"
+   - Тільки якщо явно вказано "рішення" як тип документу → "рішення"
+   - "рішення АМКУ/ДПС/суду" (предмет оскарження) → "постанови"
+
+Формат відповіді:
+{
+  "search_text": "ключові слова",
+  "justice_type": "адміністративні|господарські|цивільні|кримінальні",
+  "judgment_type": "постанови|рішення|всі",
+  "date_range": "1|2|3|0",
+  "limit": 5
+}"""
+
+# Site parameter mappings (verified against court.opendatabot.ua)
+JUSTICE_CODES = {
+    "цивільні": "1",
+    "кримінальні": "2",
+    "господарські": "3",
+    "адміністративні": "4",
+    "всі": "0",
+}
+
+JUDGMENT_CODES = {
+    "постанови": "2",
+    "рішення": "4",
+    "всі": "0",
+}
+
+
+def parse_query(user_text: str) -> dict:
+    """Use Claude Haiku to parse natural language into search parameters."""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=PARSE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_text}]
+    )
+    raw = response.content[0].text.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    return json.loads(raw)
+
+
+def search_decisions(params: dict) -> list:
+    """Search court.opendatabot.ua and return list of judgments."""
+    justice_code = JUSTICE_CODES.get(params.get("justice_type", "всі"), "0")
+    judgment_code = JUDGMENT_CODES.get(params.get("judgment_type", "постанови"), "2")
+    date_range = params.get("date_range", "2")
+    limit = int(params.get("limit", 5))
+
+    query_params = {
+        "text": params.get("search_text", ""),
+        "stage": "cassation",
+    }
+    if justice_code != "0":
+        query_params["justice_code"] = justice_code
+    if judgment_code != "0":
+        query_params["judgment_code"] = judgment_code
+    if date_range != "0":
+        query_params["adjudication_date_year"] = date_range
+
+    logger.info(f"Solomon search params: {query_params}")
+
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+    resp = requests.get(
+        "https://court.opendatabot.ua/search",
+        params=query_params,
+        headers=headers,
+        timeout=15
+    )
+
+    html = resp.text
+    marker = "window.__INITIAL_STATE__='"
+    start = html.find(marker)
+    if start == -1:
+        logger.warning("Solomon: __INITIAL_STATE__ not found in response")
+        return []
+
+    json_start = start + len(marker)
+    end = html.find("';</script>", json_start)
+    if end == -1:
+        end = html.find("'</script>", json_start)
+    if end == -1:
+        return []
+
+    raw_json = html[json_start:end]
+    raw_json = raw_json.replace('\\"', '"').replace("\\'", "'")
+
+    try:
+        data = json.loads(raw_json)
+        judgments = data.get("pageData", {}).get("judgments", [])
+        logger.info(f"Solomon: found {len(judgments)} judgments")
+        return judgments[:limit]
+    except json.JSONDecodeError as e:
+        logger.error(f"Solomon JSON parse error: {e}")
+        return []
+
+
+def cap_summary(text: str, limit: int = 250) -> str:
+    """Truncate summary at last complete sentence within limit."""
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    last_period = max(
+        truncated.rfind(". "),
+        truncated.rfind(".\n"),
+        truncated.rfind(".")
+    )
+    if last_period > 100:
+        return truncated[:last_period + 1]
+    return truncated[:247] + "..."
+
+
+def summarize_decision(link: str) -> str:
+    """Fetch court decision page and generate one-sentence summary."""
+    try:
+        resp = requests.get(
+            link,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Remove script/style/noscript tags
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+
+        full_text = soup.get_text(separator=" ", strip=True)
+
+        # Remove site footer
+        for marker in ["Додайте Опендатабот", "Опендатабот — сервіс"]:
+            idx = full_text.find(marker)
+            if idx > 0:
+                full_text = full_text[:idx]
+
+        # Guard against JS artifacts
+        js_markers = ["localStorage", "matchMedia", "addEventListener"]
+        if any(m in full_text[:500] for m in js_markers):
+            return "Текст рішення недоступний."
+
+        # Smart extraction: header + ending (ruling is always at the end)
+        if len(full_text) > 8000:
+            text = full_text[:1000] + " ...[середина]... " + full_text[-4000:]
+        else:
+            text = full_text
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            system="""Ти помічник юриста. Напиши резюме рішення ОДНИМ реченням
+(максимум 200 символів): що вирішив суд і чому.
+Без вступів, тільки факти.""",
+            messages=[{"role": "user", "content": text[:5000]}]
+        )
+        summary = response.content[0].text.strip()
+        return cap_summary(summary, 250)
+
+    except Exception as e:
+        logger.error(f"Solomon summarize error: {e}")
+        return "Текст рішення недоступний."
+```
+
+---
+
+## FILE 2: backend/solomon_bot.py
+
+```python
+import os
+import json
+import asyncio
+import logging
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import (
+    Message, Contact,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
+from aiogram.filters import CommandStart, Command
+from database import get_db_connection
+from solomon_search import parse_query, search_decisions, summarize_decision
+
+logger = logging.getLogger(__name__)
+
+SOLOMON_BOT_TOKEN = os.getenv("SOLOMON_BOT_TOKEN")
+bot = Bot(token=SOLOMON_BOT_TOKEN)
+dp = Dispatcher()
+
+
+# ── Database helpers ──────────────────────────────────────────────────────────
+
+def normalize_phone(phone: str) -> str:
+    import re
+    digits = re.sub(r'\D', '', str(phone))
+    if digits.startswith('380'):
+        return '+' + digits
+    if digits.startswith('0'):
+        return '+38' + digits
+    return '+' + digits
+
+
+def is_authorized(phone: str) -> bool:
+    normalized = normalize_phone(phone)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM solomon_whitelist WHERE phone=%s AND is_active=true",
+        (normalized,)
+    )
+    result = cur.fetchone()
+    cur.close()
+    conn.close()
+    return result is not None
+
+
+def get_session(telegram_user_id: int) -> dict | None:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT phone, username FROM solomon_sessions WHERE telegram_user_id=%s",
+        (telegram_user_id,)
+    )
+    result = cur.fetchone()
+    cur.close()
+    conn.close()
+    return {"phone": result[0], "username": result[1]} if result else None
+
+
+def save_session(telegram_user_id: int, phone: str, username: str):
+    normalized = normalize_phone(phone)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO solomon_sessions (telegram_user_id, phone, username)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (telegram_user_id) DO UPDATE
+        SET phone=%s, username=%s, last_active=NOW()
+    """, (telegram_user_id, normalized, username, normalized, username))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def log_search(telegram_user_id: int, phone: str,
+               query: str, params: dict, count: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO solomon_search_log
+        (telegram_user_id, phone, query_text, search_params, results_count)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (telegram_user_id, phone, query, json.dumps(params), count))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+# ── Telegram handlers ─────────────────────────────────────────────────────────
+
+@dp.message(CommandStart())
+async def start(message: Message):
+    session = get_session(message.from_user.id)
+    if session:
+        await message.answer(
+            "👋 З поверненням!\n\n"
+            "Напишіть запит — знайду практику Верховного Суду.\n"
+            "/help — приклади запитів",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(
+            text="📱 Поділитись номером",
+            request_contact=True
+        )]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer(
+        "👋 Вітаю в *СОЛОМОН*\n"
+        "Асистент пошуку практики Верховного Суду України\n\n"
+        "🔐 Підтвердіть номер телефону для доступу:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+
+@dp.message(F.contact)
+async def handle_contact(message: Message):
+    contact: Contact = message.contact
+
+    # Security: only accept user's own contact
+    if contact.user_id != message.from_user.id:
+        await message.answer(
+            "❌ Будь ласка, поділіться власним номером телефону.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    if is_authorized(contact.phone_number):
+        username = message.from_user.username or message.from_user.full_name
+        save_session(message.from_user.id, contact.phone_number, username)
+        await message.answer(
+            "✅ *Доступ підтверджено!*\n\n"
+            "Напишіть запит, наприклад:\n"
+            "_«скасування ППР нереальність операцій 2024-2025»_\n\n"
+            "/help — приклади запитів\n"
+            "/history — ваші останні пошуки",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await message.answer(
+            "❌ Ваш номер не в списку авторизованих користувачів.\n\n"
+            "Зверніться до адміністратора для отримання доступу.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+
+@dp.message(Command("help"))
+async def help_cmd(message: Message):
+    await message.answer(
+        "📖 *Приклади запитів:*\n\n"
+        "• _скасування ППР нереальність операцій 2024-2025_\n"
+        "• _оскарження рішення АМКУ антиконкурентні дії_\n"
+        "• _стягнення збитків ДТП таксі_\n"
+        "• _визнання недійсним договору купівлі нерухомості_\n"
+        "• _документальна перевірка маркетингові послуги_\n\n"
+        "💡 Чим детальніший запит — тим точніші результати.",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(Command("history"))
+async def history_cmd(message: Message):
+    session = get_session(message.from_user.id)
+    if not session:
+        await message.answer("🔐 Спочатку авторизуйтесь через /start")
+        return
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT query_text, results_count, created_at
+        FROM solomon_search_log
+        WHERE telegram_user_id=%s
+        ORDER BY created_at DESC LIMIT 5
+    """, (message.from_user.id,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        await message.answer("📋 Історія пошуків порожня.")
+        return
+
+    text = "🕐 *Останні пошуки:*\n\n"
+    for i, row in enumerate(rows, 1):
+        date = row[2].strftime("%d.%m %H:%M")
+        text += f"{i}. _{row[0][:60]}_\n   📊 {row[1]} рішень | {date}\n\n"
+    await message.answer(text, parse_mode="Markdown")
+
+
+@dp.message()
+async def handle_search(message: Message):
+    session = get_session(message.from_user.id)
+    if not session:
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(
+                text="📱 Поділитись номером",
+                request_contact=True
+            )]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        await message.answer(
+            "🔐 Підтвердіть номер телефону для доступу:",
+            reply_markup=keyboard
+        )
+        return
+
+    processing_msg = await message.answer("⏳ Шукаю та аналізую рішення...")
+    await bot.send_chat_action(message.chat.id, "typing")
+
+    try:
+        params = parse_query(message.text)
+        judgments = search_decisions(params)
+
+        if not judgments:
+            await processing_msg.edit_text(
+                "🔍 За вашим запитом нічого не знайдено.\n\n"
+                "Спробуйте змінити формулювання або розширити "
+                "часовий діапазон.\n/help — приклади запитів"
+            )
+            return
+
+        numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+        header = (
+            f"📋 Знайдено *{len(judgments)}* рішень\n"
+            "🏛 Верховний Суд | Касація\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+        )
+
+        blocks = []
+        for i, j in enumerate(judgments):
+            date = j.get("adjudication_date", "")[:10]
+            cause = j.get("cause_number", "")
+            judge = j.get("judge", "")
+            link = j.get("link", "")
+            summary = summarize_decision(link) if link else "Недоступно."
+
+            block = (
+                f"{numbers[i]} *Справа № {cause}* — {date}\n"
+                f"👨‍⚖️ {judge}\n\n"
+                f"💡 {summary}\n\n"
+                f"🔗 [Читати повністю]({link})\n\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+            )
+            blocks.append(block)
+
+        footer = f"🔍 _{message.text[:80]}_"
+
+        # Split into Telegram-safe chunks (max 3800 chars)
+        chunks = []
+        current = header
+        for block in blocks:
+            if len(current) + len(block) > 3800:
+                chunks.append(current)
+                current = "📋 *Продовження...*\n━━━━━━━━━━━━━━━━━━\n" + block
+            else:
+                current += block
+        current += footer
+        chunks.append(current)
+
+        await processing_msg.edit_text(
+            chunks[0],
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        for chunk in chunks[1:]:
+            await message.answer(
+                chunk,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+
+        log_search(
+            message.from_user.id,
+            session["phone"],
+            message.text,
+            params,
+            len(judgments)
+        )
+
+    except Exception as e:
+        logger.error(f"Solomon search error: {e}")
+        await processing_msg.edit_text(
+            "⚠️ Виникла помилка при обробці запиту. Спробуйте ще раз."
+        )
+
+
+async def run_solomon_bot():
+    logger.info("Solomon bot starting...")
+    await dp.start_polling(bot)
+```
+
+---
+
+## FILE 3: backend/solomon_router.py
+
+```python
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from solomon_search import parse_query, search_decisions, summarize_decision
+import logging
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/law", tags=["solomon"])
+
+
+class SearchRequest(BaseModel):
+    query: str
+    summarize: bool = False
+
+
+@router.get("/health")
+async def health():
+    return {"status": "ok", "service": "solomon"}
+
+
+@router.post("/search")
+async def search(request: SearchRequest):
+    try:
+        params = parse_query(request.query)
+        judgments = search_decisions(params)
+
+        if request.summarize:
+            for j in judgments:
+                j["summary"] = summarize_decision(j.get("link", ""))
+
+        return {
+            "count": len(judgments),
+            "params": params,
+            "results": judgments
+        }
+    except Exception as e:
+        logger.error(f"Solomon API error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+---
+
+## FILE 4: Update backend/db_migrations.py
+
+Add migration_017 to the migrations dict/list.
+Follow the exact same pattern as existing migrations.
+Migration name: `"017_solomon_tables"`
+
+SQL to execute:
+
+```sql
+CREATE TABLE IF NOT EXISTS solomon_whitelist (
+    id SERIAL PRIMARY KEY,
+    phone VARCHAR(20) UNIQUE NOT NULL,
+    name VARCHAR(100),
+    added_by VARCHAR(100) DEFAULT 'admin',
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS solomon_sessions (
+    id SERIAL PRIMARY KEY,
+    telegram_user_id BIGINT UNIQUE NOT NULL,
+    phone VARCHAR(20),
+    username VARCHAR(100),
+    authorized_at TIMESTAMP DEFAULT NOW(),
+    last_active TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS solomon_search_log (
+    id SERIAL PRIMARY KEY,
+    telegram_user_id BIGINT,
+    phone VARCHAR(20),
+    query_text TEXT,
+    search_params JSONB,
+    results_count INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO solomon_whitelist (phone, name, added_by)
+VALUES ('+34692480784', 'Konstantin', 'admin')
+ON CONFLICT (phone) DO NOTHING;
+```
+
+---
+
+## FILE 5: Update backend/main.py
+
+Add these two changes:
+
+### A) Include solomon router (with existing routers):
+```python
+from solomon_router import router as solomon_router
+app.include_router(solomon_router)
+```
+
+### B) Start solomon bot on startup (alongside existing bots):
+```python
+from solomon_bot import run_solomon_bot
+
+# Inside startup event or lifespan:
+asyncio.create_task(run_solomon_bot())
+```
+
+---
+
+## DEPENDENCIES
+
+Check requirements.txt — add if missing:
+```
+aiogram==3.7.0
+beautifulsoup4
+```
+
+---
+
+## SUCCESS CRITERIA
+
+1. Render deploys without errors
+2. Migration 017 appears in schema_migrations table
+3. `GET https://gradus-ai.onrender.com/law/health` → `{"status":"ok"}`
+4. `POST https://gradus-ai.onrender.com/law/search` with body `{"query":"скасування ППР нереальність операцій"}` returns results with count > 0
+5. Telegram @solomon_court_ua_bot responds to /start
+6. Phone +34692480784 passes whitelist and gets authorized
+7. Search query in Telegram returns 5 results with summaries
+8. Maya HR bot still works (no regression)

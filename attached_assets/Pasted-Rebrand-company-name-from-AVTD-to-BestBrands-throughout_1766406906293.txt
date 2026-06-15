@@ -1,0 +1,72 @@
+Rebrand company name from AVTD to BestBrands throughout the entire system.
+
+CONTEXT:
+The company is rebranding from "AVTD" to "BestBrands". This is Ukraine's largest alcohol distributor with 40,000+ retail points. Update all references while maintaining the company's role and capabilities.
+
+CHANGES NEEDED:
+
+1. UPDATE backend/services/avatar_personalities.py
+
+In BASE_GRADUS_IDENTITY, find and replace:
+- OLD: "AVTD (also known as BestBrands)"
+- NEW: "BestBrands"
+
+- OLD: "AVTD is Ukraine's largest alcohol distributor"
+- NEW: "BestBrands is Ukraine's largest alcohol distributor"
+
+In MAYA_GRADUS_PERSONALITY:
+- Replace all "AVTD" mentions with "BestBrands"
+- Update example responses that mention AVTD
+
+In ALEX_GRADUS_PERSONALITY:
+- Replace all "AVTD" mentions with "BestBrands"
+- Update cocktail examples if AVTD is mentioned
+
+2. UPDATE backend/services/brand_enrichment.py (if exists)
+
+Find any hardcoded AVTD references:
+- Company name in enrichment text
+- Brand portfolio descriptions
+- Replace with "BestBrands"
+
+3. SEARCH FOR AVTD MENTIONS
+
+Search entire codebase for "AVTD" (case-insensitive):
+```bash
+grep -r -i "avtd" backend/ frontend/
+```
+
+Update any occurrences in:
+- Comments
+- Documentation strings
+- Example queries
+- Test data
+- Log messages
+
+4. UPDATE MEMORY/CONTEXT FILES (if any exist)
+
+Check these directories:
+- backend/data/
+- backend/context/
+- Any JSON/text files with company context
+
+5. COMMIT CHANGES
+```bash
+git add -A
+git commit -m "Rebrand from AVTD to BestBrands across entire system"
+git push origin main
+```
+
+TESTING AFTER DEPLOYMENT:
+After Render deploys, test Maya's responses:
+- "Які бренди горілки є в BestBrands?"
+- "Tell me about BestBrands"
+- "What brands does AVTD have?" (should correct to BestBrands)
+
+IMPORTANT NOTES:
+- Keep all brand names unchanged (GREENDAY, HELSINKI, etc.)
+- Keep Wikipedia vodka knowledge unchanged
+- Only change company name AVTD → BestBrands
+- Maintain all capabilities and knowledge
+
+The rebrand should be seamless - Maya just now works for BestBrands instead of AVTD!

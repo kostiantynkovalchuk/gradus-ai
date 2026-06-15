@@ -1,0 +1,138 @@
+# Replit Agent: Fix DATABASE_URL Split-Brain Across All Files
+
+## Background
+
+We discovered a critical split-brain bug: Replit's auto-provisioned PostgreSQL (`DATABASE_URL` pointing to Replit's internal `helium` host) contains different data than our production Neon database. This caused article IDs to diverge — the same article has different IDs in each database. When the Telegram approval system processed callbacks, it looked up the wrong article.
+
+**Root cause:** Multiple files use `os.getenv("DATABASE_URL")` to connect directly via psycopg2, bypassing SQLAlchemy. If `DATABASE_URL` ever points to the wrong database (Replit's internal DB vs Neon production), these features break silently.
+
+**Fix principle:** All database connections must prefer `NEON_DATABASE_URL` (explicit production DB) and fall back to `DATABASE_URL` only if `NEON_DATABASE_URL` is not set. This way:
+- On **Render** (production): `NEON_DATABASE_URL` is not set → uses `DATABASE_URL` (which points to Neon) ✅
+- On **Replit** (development): `NEON_DATABASE_URL` IS set → uses it directly, ignoring Replit's auto-provisioned DB ✅
+
+## Files to Update
+
+### 1. `backend/services/hunt_poster.py` (line ~53)
+
+**CRITICAL — this posts vacancies to Telegram channels.**
+
+Find:
+```python
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+```
+
+Replace with:
+```python
+conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL"))
+```
+
+### 2. `backend/services/hunt_service.py` (line ~183)
+
+**CRITICAL — this handles Maya Hunt vacancy scraping, scoring, and matching.**
+
+Find:
+```python
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+```
+
+Replace with:
+```python
+conn = psycopg2.connect(os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL"))
+```
+
+**IMPORTANT:** There may be MULTIPLE psycopg2.connect() calls in this file. Search the ENTIRE file and update ALL occurrences:
+```bash
+grep -n "psycopg2.connect" backend/services/hunt_service.py
+```
+Fix every single one.
+
+### 3. `backend/models/__init__.py` (line ~6)
+
+This is the main SQLAlchemy engine config used by most of the app.
+
+Find:
+```python
+DATABASE_URL = os.getenv("DATABASE_URL")
+```
+
+Replace with:
+```python
+DATABASE_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
+```
+
+### 4. All scripts in `backend/scripts/` directory
+
+Search and update ALL files:
+```bash
+grep -rn 'os.getenv.*DATABASE_URL\|os.environ.*DATABASE_URL' backend/scripts/
+```
+
+For each match, replace the pattern:
+- `os.getenv("DATABASE_URL")` → `os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")`
+- `os.environ.get("DATABASE_URL")` → `os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")`
+- `os.environ["DATABASE_URL"]` → `os.environ.get("NEON_DATABASE_URL") or os.environ["DATABASE_URL"]`
+
+Known files to check:
+- `backend/scripts/fix_status_constraint.py` (lines 9-10)
+- `backend/scripts/categorize_articles.py` (line 11)
+- `backend/scripts/fix_mrm_article.py` (line 157)
+- `backend/scripts/refetch_images.py` (line 13)
+
+### 5. `backend/tools/delete_article.py` (line ~16)
+
+Find:
+```python
+DATABASE_URL = os.getenv('DATABASE_URL')
+```
+
+Replace with:
+```python
+DATABASE_URL = os.getenv('NEON_DATABASE_URL') or os.getenv('DATABASE_URL')
+```
+
+### 6. `backend/init_db.py` (line ~73)
+
+Find:
+```python
+database_url = os.getenv('DATABASE_URL')
+```
+
+Replace with:
+```python
+database_url = os.getenv('NEON_DATABASE_URL') or os.getenv('DATABASE_URL')
+```
+
+### 7. Any other files
+
+Run a comprehensive search and fix ANY remaining occurrences:
+```bash
+grep -rn "os.getenv.*['\"]DATABASE_URL['\"]" backend/ --include="*.py" | grep -v ".pyc"
+grep -rn "os.environ.*['\"]DATABASE_URL['\"]" backend/ --include="*.py" | grep -v ".pyc"
+```
+
+## Verification
+
+After all changes, run this verification script:
+
+```bash
+echo "=== Checking for unfixed DATABASE_URL references ==="
+echo ""
+echo "Direct getenv (should be 0 results):"
+grep -rn "os.getenv(\"DATABASE_URL\")\|os.getenv('DATABASE_URL')" backend/ --include="*.py" | grep -v ".pyc" | grep -v "NEON_DATABASE_URL"
+echo ""
+echo "Direct environ (should be 0 results):"  
+grep -rn "os.environ.get(\"DATABASE_URL\")\|os.environ\[\"DATABASE_URL\"\]\|os.environ.get('DATABASE_URL')\|os.environ\['DATABASE_URL'\]" backend/ --include="*.py" | grep -v ".pyc" | grep -v "NEON_DATABASE_URL"
+echo ""
+echo "All NEON_DATABASE_URL references (should match file count above):"
+grep -rn "NEON_DATABASE_URL" backend/ --include="*.py" | grep -v ".pyc"
+```
+
+**Success criteria:** Zero lines of `os.getenv("DATABASE_URL")` without a preceding `os.getenv("NEON_DATABASE_URL") or` anywhere in the backend.
+
+## DO NOT CHANGE
+
+- Do NOT modify any Render environment variables
+- Do NOT modify the `DISABLE_SCHEDULER` logic (already added to scheduler.py)
+- Do NOT change the `NEON_DATABASE_URL` secret value
+- Do NOT create any new database tables or run migrations
+- Do NOT modify any Telegram bot tokens or webhook URLs

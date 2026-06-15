@@ -1,0 +1,741 @@
+# Solomon Contracts — Law Director v2 Full Implementation
+
+**Scope:** Workstreams B, C, D combined. Workstream A (protocol DOCX) already shipped in migration 050 — no changes there.
+**Branch:** `feat/law-director-v2-full`. Phased PRs as described below; do not combine phases into one PR.
+**Authority:** The 20-source list from the law director's ТЗ is canonical. No approval gates. No notifications to legal team. Implement and ship.
+
+---
+
+## Context the agent must internalize before writing any code
+
+**Pinecone:**
+- Index: `gradus-media` (shared across multiple products — Maya HR, GradusMedia content, Solomon contracts)
+- Namespace for this work: `solomon-contracts-corpus` — **all Pinecone operations MUST be explicit on namespace.** Touch nothing else. Add `assert namespace == "solomon-contracts-corpus"` to every function that mutates the index. A wrong namespace would corrupt Maya HR's `hr_docs` or GradusMedia's `company_knowledge`.
+- Current state: 1,042 vectors, 15 source documents
+- Metadata key for canonical URL is `official_url` (NOT `source_url`)
+- Embedding model: OpenAI `text-embedding-3-small`, 1536-dim
+
+**Postgres:**
+- Migrations live in `backend/db_migrations.py`, tracked in `schema_migrations`
+- SQLAlchemy ORM; raw psycopg2 acceptable for one-shot scripts
+- Migration 050 just shipped (`avtd_role` on `solcon_engagements`)
+- **Next available migration number: 051**
+- 4 existing engagements (Торба, Сільпо, СБ, Lvivholod) are TESTING DATA, not production. Re-running analysis on them after corpus cleanup is internal QA only — no preservation requirements, no "historical record" obligation.
+
+**Citation data shape (already confirmed via DB query):**
+- `solcon_findings.legal_citations` is `JSONB NOT NULL DEFAULT '[]'::jsonb`
+- Each element: `{"article_ref": str, "official_url": str, "source_title": str}`
+- Example: `[{"article_ref": "Ст. 658-1 ЦК України — ...", "official_url": "https://zakon.rada.gov.ua/laws/show/435-15/print1", "source_title": "Цивільний кодекс України"}]`
+
+**Existing `grounding_status` CHECK constraint values (preserve all):**
+`grounded`, `ungrounded`, `not_applicable`, `awaiting_incoterms_primary_source`
+
+**`LAW_SOURCES` constant in `router.py`** declares what laws are supposed to be in the corpus. After this work, that constant becomes dead code — the registry replaces it. Refactor: every place that reads `LAW_SOURCES` instead reads from `solomon_kb_sources`. Remove the constant in the final PR of this work.
+
+---
+
+## The authoritative source list (from law director's ТЗ)
+
+19 active sources + 1 deferred. Use exactly these URLs (`#Text` fragment stripped at seed time — canonical form has no fragment, no `/print1`).
+
+| # | Law code | Name | URL | Status in corpus |
+|---|---|---|---|---|
+| 1 | 435-15 | Цивільний кодекс України | `https://zakon.rada.gov.ua/laws/show/435-15` | present ✓ |
+| 2 | 2755-17 | Податковий кодекс України | `https://zakon.rada.gov.ua/laws/show/2755-17` | **missing** |
+| 3 | 3817-20 | Закон про державне регулювання виробництва і обігу спирту, алкогольних напоїв, тютюнових виробів (2024 редакція) | `https://zakon.rada.gov.ua/laws/show/3817-20` | **missing** (corpus has superseded 481/95-вр, delete) |
+| 4 | 995_003 | Конвенція ООН про договори міжнародної купівлі-продажу товарів (CISG) | `https://zakon.rada.gov.ua/laws/show/995_003` | **missing** |
+| 5 | — | ІНКОТЕРМС 2020 | (separate file, pending from Andrey) | DEFERRED — register row created with `status='awaiting_source'`, no ingestion |
+| 6 | z0128-98 | Наказ Мінтрансу про правила перевезень вантажів автомобільним транспортом | `https://zakon.rada.gov.ua/laws/show/z0128-98` | **missing** |
+| 7 | 996-14 | Закон про бухгалтерський облік та фінансову звітність | `https://zakon.rada.gov.ua/laws/show/996-14` | present ✓ |
+| 8 | z0168-95 | Положення №88 про документальне забезпечення записів у бухобліку | `https://zakon.rada.gov.ua/laws/show/z0168-95` | **missing** |
+| 9 | 2800-20 | Закон про географічні зазначення спиртних напоїв | `https://zakon.rada.gov.ua/laws/show/2800-20` | **missing** |
+| 10 | 3689-12 | Закон про охорону прав на знаки для товарів і послуг | `https://zakon.rada.gov.ua/laws/show/3689-12` | **missing** |
+| 11 | 3688-12 | Закон про охорону прав на промислові зразки | `https://zakon.rada.gov.ua/laws/show/3688-12` | **missing** |
+| 12 | 2811-20 | Закон про авторське право і суміжні права (2022 редакція) | `https://zakon.rada.gov.ua/laws/show/2811-20` | **missing** (corpus has superseded 3792-12, delete) |
+| 13 | 270/96-вр | Закон про рекламу | `https://zakon.rada.gov.ua/laws/show/270/96-вр` | present ✓ |
+| 14 | 1023-12 | Закон про захист прав споживачів | `https://zakon.rada.gov.ua/laws/show/1023-12` | present ✓ |
+| 15 | 2297-17 | Закон про захист персональних даних | `https://zakon.rada.gov.ua/laws/show/2297-17` | **missing** |
+| 16 | 2639-19 | Закон про інформацію для споживачів щодо харчових продуктів | `https://zakon.rada.gov.ua/laws/show/2639-19` | present ✓ |
+| 17 | z0601-21 | Наказ №679 про маркування харчових продуктів | `https://zakon.rada.gov.ua/laws/show/z0601-21` | **missing** |
+| 18 | 3928-20 | Закон про виноград, вино та продукти виноградарства | `https://zakon.rada.gov.ua/laws/show/3928-20` | **missing** |
+| 19 | 851-15 | Закон про електронні документи та електронний документообіг | `https://zakon.rada.gov.ua/laws/show/851-15` | present ✓ |
+| 20 | 2155-19 | Закон про електронну ідентифікацію та електронні довірчі послуги | `https://zakon.rada.gov.ua/laws/show/2155-19` | **missing** |
+
+**To delete from corpus** (not on approved list):
+- ГК (436-15) — 74 chunks confirmed
+- Закон «Про захист економічної конкуренції» (2210-14)
+- Закон «Про захист від недобросовісної конкуренції» (236/96-вр)
+- Закон «Про основні принципи та вимоги до безпечності та якості харчових продуктів» (771/97-вр)
+- Закон 481/95-вр (superseded by approved 3817-20 — delete old, ingest new)
+- Закон 3792-12 (superseded by approved 2811-20 — delete old, ingest new)
+- Plus 3 unidentified `source_id`s (1, 3, 8, 15 — whichever haven't been mapped during this work) → verify identity in Phase 2 and route to either keep, delete, or note as already-mapped.
+
+---
+
+## Phase 1 — Registry foundation
+
+**PR title:** `feat(solcon): kb_sources registry (migration 051)`
+
+### Migration 051: `solomon_kb_sources`
+
+```sql
+CREATE TABLE solomon_kb_sources (
+  id                          SERIAL PRIMARY KEY,
+  law_code                    VARCHAR(32)  NOT NULL UNIQUE,
+  law_name                    VARCHAR(512) NOT NULL,
+  canonical_url               VARCHAR(512) NOT NULL,
+  current_edition_date        DATE,
+  current_edition_basis       VARCHAR(32),
+  next_edition_basis          VARCHAR(32),
+  next_edition_date_estimated DATE,
+  last_verified_at            TIMESTAMPTZ,
+  status                      VARCHAR(24) NOT NULL DEFAULT 'active',
+  approved_by                 VARCHAR(128) NOT NULL DEFAULT 'Law Director',
+  approved_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  notes                       TEXT,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT chk_canonical_url_no_print1
+    CHECK (canonical_url NOT LIKE '%/print1%'),
+  CONSTRAINT chk_canonical_url_no_edition_suffix
+    CHECK (canonical_url !~ '/ed[0-9]{8}'),
+  CONSTRAINT chk_canonical_url_no_fragment
+    CHECK (canonical_url NOT LIKE '%#%'),
+  CONSTRAINT chk_status
+    CHECK (status IN ('active', 'awaiting_source', 'deprecated'))
+);
+
+CREATE INDEX idx_solomon_kb_sources_law_code ON solomon_kb_sources(law_code);
+CREATE INDEX idx_solomon_kb_sources_status ON solomon_kb_sources(status);
+```
+
+### Seed data
+
+Insert 20 rows in the same migration (or a follow-up data migration — your call). 19 with `status='active'`, INCOTERMS row with `status='awaiting_source'` and `law_code='incoterms_2020'`. Names and URLs from the table above. `current_edition_date` left NULL — populated by Phase 4's `ingest_law()` when each source is fetched.
+
+### Refactor `LAW_SOURCES`
+
+Replace every read of the `LAW_SOURCES` constant in `router.py` with a query against `solomon_kb_sources` where `status = 'active'`. Add a small cached helper:
+
+```python
+from functools import lru_cache
+from datetime import datetime, timedelta
+
+_cache_until = None
+_cached_sources = None
+
+def get_active_kb_sources(force=False):
+    global _cache_until, _cached_sources
+    if not force and _cache_until and datetime.now() < _cache_until:
+        return _cached_sources
+    _cached_sources = db.session.query(SolomonKbSource).filter_by(status='active').all()
+    _cache_until = datetime.now() + timedelta(minutes=5)
+    return _cached_sources
+```
+
+Remove the `LAW_SOURCES` constant entirely once all references are gone.
+
+### Acceptance — Phase 1
+- [ ] Migration 051 applies cleanly
+- [ ] 20 rows in `solomon_kb_sources`, 19 active + 1 awaiting_source
+- [ ] `SELECT canonical_url FROM solomon_kb_sources WHERE canonical_url LIKE '%/print1%' OR canonical_url LIKE '%#%'` returns 0 rows
+- [ ] `router.py` has zero references to the old `LAW_SOURCES` constant
+- [ ] Backend boots clean, existing endpoints serve normally
+
+---
+
+## Phase 2 — Verify unknown Pinecone source_ids
+
+**PR title:** `chore(solcon): identify unknown Pinecone sources`
+
+No DB migrations. Purely investigation + an audit document committed to `backend/audits/`.
+
+### What to do
+
+There are 15 source documents in the `solomon-contracts-corpus` namespace. 12 have been confirmed during prior audit (corresponding to `source_id` values 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14 + ЦК somewhere among 1/3/8/15). The remaining 3-4 source_ids are unidentified.
+
+Run for each candidate `source_id` in {1, 3, 8, 15} (skip any already identified):
+
+```python
+result = index.query(
+    namespace="solomon-contracts-corpus",
+    vector=[0.0] * 1536,
+    top_k=3,
+    include_metadata=True,
+    filter={"source_id": {"$eq": <id>}}
+)
+```
+
+For each, record:
+- `source_id`
+- `official_url` from metadata
+- `source_title` from metadata
+- chunk count (do a second query with `top_k=10000` to get full count)
+- Cross-reference against approved list
+
+### Output
+
+Write `backend/audits/pinecone_unknown_sources_resolved.md` with one section per resolved source. Each section: source_id, official_url, source_title, chunk count, classification (`approved` / `to_delete` / `to_replace_with_new_version`).
+
+### Likely outcome
+
+Based on contextual signals from the status doc ("articles whitelisted on the three big codes"), `source_id=1` is almost certainly ЦК (435-15, already known as approved). `source_id=3` is plausibly ПК (2755-17). The remaining unknowns may be additional unauthorized sources to delete, or they may be approved sources that map to ТЗ entries already counted as "missing" — in which case the "missing" count drops.
+
+### Acceptance — Phase 2
+- [ ] All 15 source_ids in `solomon-contracts-corpus` namespace mapped to either an approved entry in `solomon_kb_sources` OR a deletion target
+- [ ] Audit doc committed
+- [ ] Phase 3's deletion list updated based on findings (if additional unauthorized sources surface, add to that list)
+
+---
+
+## Phase 3 — Corpus cleanup (delete unauthorized chunks)
+
+**PR title:** `chore(solcon): purge unauthorized chunks from corpus`
+
+### Pre-flight: dry-run script
+
+`backend/scripts/purge_unauthorized_chunks_dryrun.py`:
+
+```python
+NAMESPACE = "solomon-contracts-corpus"
+assert NAMESPACE == "solomon-contracts-corpus", "Wrong namespace — would corrupt other products"
+
+UNAUTHORIZED_URLS = [
+    # Not on approved list
+    "https://zakon.rada.gov.ua/laws/show/436-15/print1",        # ГК
+    "https://zakon.rada.gov.ua/laws/show/2210-14/print1",        # Захист екон. конкуренції
+    "https://zakon.rada.gov.ua/laws/show/236/96-вр/print1",      # Недоброс. конкуренція
+    "https://zakon.rada.gov.ua/laws/show/771/97-вр/print1",      # Безпечність харч. продуктів
+    # Superseded — old versions of approved laws
+    "https://zakon.rada.gov.ua/laws/show/481/95-вр/print1",      # Old спирт (replaced by 3817-20)
+    "https://zakon.rada.gov.ua/laws/show/3792-12/print1",        # Old авт. право (replaced by 2811-20)
+    # Plus any additional URLs surfaced in Phase 2
+]
+
+# URL-encoded percent variants may also exist in metadata (see corpus_11_0 for example).
+# Build encoded variants and add to the list.
+
+for url in UNAUTHORIZED_URLS:
+    result = index.query(
+        namespace=NAMESPACE,
+        vector=[0.0] * 1536,
+        top_k=10000,
+        include_metadata=True,
+        filter={"official_url": {"$eq": url}}
+    )
+    print(f"{url}: {len(result.matches)} chunks would be deleted")
+```
+
+Konstantin reviews the count output. Expected: ГК = 74, others TBD by Phase 2 outcome.
+
+### Execution script
+
+`backend/scripts/purge_unauthorized_chunks.py` — same logic but calls `index.delete(ids=[m.id for m in result.matches], namespace=NAMESPACE)` instead of just printing. Runs once.
+
+### Sanity post-checks
+
+```python
+# Confirm no chunks remain with unauthorized URLs
+for url in UNAUTHORIZED_URLS:
+    result = index.query(namespace=NAMESPACE, vector=[0.0]*1536, top_k=10, include_metadata=True, filter={"official_url": {"$eq": url}})
+    assert len(result.matches) == 0, f"Cleanup incomplete for {url}"
+
+# Confirm hr_docs and company_knowledge are untouched
+for ns in ("hr_docs", "company_knowledge"):
+    stats_before = ...  # capture before purge
+    stats_after = ...   # capture after
+    assert stats_before == stats_after, f"WRONG NAMESPACE TOUCHED: {ns}"
+```
+
+Capture `hr_docs` and `company_knowledge` chunk counts **before** the purge runs (via `index.describe_index_stats()`). Compare after. Must be identical.
+
+### Acceptance — Phase 3
+- [ ] Dry-run script run, counts reviewed
+- [ ] Live deletion executed
+- [ ] Zero chunks remain in `solomon-contracts-corpus` with any of the unauthorized URLs
+- [ ] `hr_docs` and `company_knowledge` chunk counts unchanged
+- [ ] Total `solomon-contracts-corpus` chunk count ≈ 1042 − 74 − (other counts from Phase 2)
+
+---
+
+## Phase 4 — Ingest missing approved sources
+
+**PR title:** `feat(solcon): ingest missing approved sources`
+
+This is the bulk of the work — 13 new laws to chunk + embed + upsert.
+
+### The `ingest_law()` function
+
+`backend/solomon/contracts/kb_ingest.py`:
+
+```python
+import re
+import requests
+from bs4 import BeautifulSoup
+from datetime import date
+
+NAMESPACE = "solomon-contracts-corpus"
+assert NAMESPACE == "solomon-contracts-corpus"
+
+def ingest_law(law_code: str) -> dict:
+    """
+    Fetch a law from zakon.rada.gov.ua, parse current edition, chunk by article,
+    embed, upsert to Pinecone with full metadata.
+
+    Returns: {chunks_added, edition_date, edition_basis, next_edition_basis}
+    """
+    source = db.session.query(SolomonKbSource).filter_by(law_code=law_code).first()
+    if not source:
+        raise ValueError(f"Law {law_code} not in approved registry")
+    if source.status != 'active':
+        raise ValueError(f"Law {law_code} has status {source.status}, not active")
+
+    # 1. Fetch canonical URL, follow "не поточна редакція" redirect if present
+    html, final_url = _fetch_current_edition(source.canonical_url, max_hops=3)
+
+    # 2. Parse header
+    edition_date, edition_basis, next_basis, next_date = _parse_edition_header(html)
+
+    # 3. Chunk by article (Стаття N. ...)
+    chunks = _chunk_by_article(html, source_id=source.id, source_title=source.law_name, official_url=source.canonical_url + "/print1")
+
+    # 4. Embed via OpenAI
+    embeddings = embed_chunks([c["chunk_text"] for c in chunks])
+
+    # 5. Delete any existing chunks for this source (for re-ingest scenarios)
+    _delete_existing_chunks(source.canonical_url)
+
+    # 6. Upsert with metadata
+    vectors = [
+        {
+            "id": f"corpus_{source.id}_{i}",
+            "values": emb,
+            "metadata": {
+                **chunks[i],
+                "kb_source_id": source.id,
+                "current_edition_date": edition_date.isoformat() if edition_date else None,
+            }
+        }
+        for i, emb in enumerate(embeddings)
+    ]
+    index.upsert(vectors=vectors, namespace=NAMESPACE)
+
+    # 7. Update registry
+    source.current_edition_date = edition_date
+    source.current_edition_basis = edition_basis
+    source.next_edition_basis = next_basis
+    source.next_edition_date_estimated = next_date
+    source.last_verified_at = datetime.now()
+    db.session.commit()
+
+    return {"chunks_added": len(vectors), "edition_date": edition_date, "edition_basis": edition_basis}
+
+
+def _fetch_current_edition(canonical_url: str, max_hops: int) -> tuple[str, str]:
+    """Fetch URL, detect 'не поточна редакція' warning, follow to current. Returns (html, final_url)."""
+    url = canonical_url
+    for _ in range(max_hops):
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        warning = soup.find(string=re.compile(r"Це не поточна редакція документу"))
+        if not warning:
+            return resp.text, url
+        # Find "Перейти до поточної" link
+        link = soup.find("a", string=re.compile(r"Перейти до поточної"))
+        if not link or not link.get("href"):
+            return resp.text, url  # accept what we have
+        url = _absolutize(link["href"])
+    return resp.text, url
+
+
+def _parse_edition_header(html: str) -> tuple[date, str, str, date]:
+    """
+    Parse strings like:
+      Документ 435-IV, наступна редакція — Редакція від 25.05.2026, підстава - 4824-IX
+      Остання подія — Редакція, відбудеться пізніше, підстава - 3153-IX
+    Returns (current_date, current_basis, next_basis, next_date_or_None)
+    """
+    m_current = re.search(r"Редакція від (\d{2}\.\d{2}\.\d{4}), підстава - (\S+)", html)
+    m_next = re.search(r"Остання подія.*?підстава - (\S+)", html, re.DOTALL)
+    cur_date = _parse_date_dmy(m_current.group(1)) if m_current else None
+    cur_basis = m_current.group(2) if m_current else None
+    next_basis = m_next.group(1) if m_next else None
+    return cur_date, cur_basis, next_basis, None
+
+
+def _chunk_by_article(html: str, source_id: int, source_title: str, official_url: str) -> list[dict]:
+    """
+    Extract articles from zakon.rada HTML. Each article becomes one chunk:
+      {"article_ref": "Ст. 658-1", "chunk_text": "Стаття 658-1. ...", "source_id": ..., "source_title": ..., "official_url": ..., "source_type": "ukr_law"}
+    Strip footnote markup, version annotations, etc. — but preserve the article number and full text.
+    """
+    # Implementation: parse the print1 HTML or the canonical HTML; split on "Стаття N." headers.
+    # Handle introductory chunks (Розділ I, Глава 1) as separate items with article_ref="chunk_N".
+    ...
+```
+
+### Driver script
+
+`backend/scripts/ingest_all_approved.py`:
+
+```python
+TO_INGEST = [
+    "2755-17",   # ПК
+    "3817-20",   # New спирт
+    "995_003",   # CISG
+    "z0128-98",  # Перевезення
+    "z0168-95",  # Положення 88
+    "2800-20",   # Геогр. зазначення
+    "3689-12",   # Знаки
+    "3688-12",   # Промислові зразки
+    "2811-20",   # New авт. право
+    "2297-17",   # Персональні дані
+    "z0601-21",  # Маркування
+    "3928-20",   # Виноград
+    "2155-19",   # Електронна ідент.
+]
+
+for code in TO_INGEST:
+    print(f"Ingesting {code}...")
+    try:
+        result = ingest_law(code)
+        print(f"  ✓ {result['chunks_added']} chunks, edition {result['edition_date']}")
+    except Exception as e:
+        print(f"  ✗ FAILED: {e}")
+```
+
+Run once. If any law fails, fix the parser for that case and re-run just that one.
+
+### Chunking decision
+
+Status doc mentions "articles whitelisted on the three big codes" — selective article ingestion. For Phase 4: **ingest all articles** of the 13 new laws. Pinecone Starter plan has headroom; semantic retrieval surfaces relevant articles naturally. Optimize later if noise dominates.
+
+For ПК (a very long code, ~300+ articles), this may add 1500-3000 chunks alone. Acceptable.
+
+### Acceptance — Phase 4
+- [ ] All 13 laws ingested without errors
+- [ ] Each registry row has `current_edition_date` and `last_verified_at` populated
+- [ ] Sample query: search for "податок на додану вартість" returns ПК chunks
+- [ ] Sample query: search for "ризик випадкового знищення" returns ЦК chunks (existing) and CISG chunks (new)
+- [ ] Namespace total chunk count ≈ 1042 − (deleted) + (newly ingested)
+
+---
+
+## Phase 5 — Structured citation filter
+
+**PR title:** `feat(solcon): post-analysis citation filter`
+
+Can ship in parallel with Phase 4 — depends only on Phase 1's registry.
+
+### Migration 052
+
+```sql
+-- Extend grounding_status (preserve existing values, add one)
+ALTER TABLE solcon_findings DROP CONSTRAINT solcon_findings_grounding_status_check;
+ALTER TABLE solcon_findings ADD CONSTRAINT solcon_findings_grounding_status_check
+  CHECK (grounding_status IN (
+    'grounded',
+    'ungrounded',
+    'not_applicable',
+    'awaiting_incoterms_primary_source',
+    'out_of_approved_kb'
+  ));
+
+-- Track filter failures separately from grounding state
+ALTER TABLE solcon_findings ADD COLUMN citation_filter_failed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Filter audit log
+CREATE TABLE solcon_citation_filter_log (
+  id                SERIAL PRIMARY KEY,
+  finding_id        BIGINT REFERENCES solcon_findings(id) ON DELETE CASCADE,
+  original_citations JSONB NOT NULL,
+  filtered_citations JSONB NOT NULL,
+  dropped_citations JSONB NOT NULL,  -- array of {article_ref, official_url, reason}
+  filter_version    VARCHAR(16) NOT NULL DEFAULT 'v1',
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_solcon_cflog_finding ON solcon_citation_filter_log(finding_id);
+```
+
+### Filter function
+
+`backend/solomon/contracts/citation_filter.py`:
+
+```python
+def normalize_url(url: str) -> str:
+    """Strip /print1 suffix, /edYYYYMMDD suffix, and #fragment."""
+    url = re.sub(r"/print1.*$", "", url)
+    url = re.sub(r"/ed\d{8}.*$", "", url)
+    url = url.split("#")[0]
+    return url.rstrip("/")
+
+
+def filter_citations(citations: list[dict]) -> tuple[list[dict], list[dict]]:
+    """
+    Returns (kept, dropped). Each dropped item: {article_ref, official_url, reason}.
+    """
+    approved_urls = {
+        normalize_url(s.canonical_url)
+        for s in get_active_kb_sources()
+    }
+    kept, dropped = [], []
+    for cit in citations:
+        if normalize_url(cit.get("official_url", "")) in approved_urls:
+            kept.append(cit)
+        else:
+            dropped.append({
+                **cit,
+                "reason": f"Source not in approved KB registry"
+            })
+    return kept, dropped
+```
+
+### Integration into analyzer
+
+In the function that persists `solcon_findings` (after the analyzer model returns), call `filter_citations()` before insert:
+
+```python
+try:
+    kept, dropped = filter_citations(raw_citations)
+    if dropped:
+        # Log
+        db.session.add(SolconCitationFilterLog(
+            finding_id=...,  # filled after insert
+            original_citations=raw_citations,
+            filtered_citations=kept,
+            dropped_citations=dropped,
+        ))
+    finding.legal_citations = kept
+    if not kept and raw_citations:
+        finding.grounding_status = 'out_of_approved_kb'
+        # The analyzer originally produced citations but none were approved — surface this honestly.
+        # `proposed_alternative` text stays as-is; the UI's existing "Альтернатива не обґрунтована" fallback renders.
+except Exception as e:
+    logger.exception("Citation filter failed")
+    finding.citation_filter_failed = True
+    finding.legal_citations = raw_citations  # preserve original to not lose data
+```
+
+### UI surface
+
+Finding cards already render `grounding_status='not_applicable'` and presumably `ungrounded` distinctly. Extend the UI conditional:
+- `out_of_approved_kb` → render the existing fallback "⚠ Альтернатива не обґрунтована — правова база не знайдена" (visible in the Lvivholod screenshot)
+- `citation_filter_failed=true` → small ⚠ icon, tooltip "Фільтр посилань не відпрацював — повторити аналіз" with a manual retry action
+
+### Acceptance — Phase 5
+- [ ] Migration 052 applied; grounding_status enum has 5 allowed values
+- [ ] New analysis run on any test contract: zero citations with `official_url` pointing to deleted sources (436-15, 2210-14, 236/96-вр, 771/97-вр, 481/95-вр, 3792-12)
+- [ ] `solcon_citation_filter_log` has rows for findings where dropped > 0
+- [ ] Forcing filter to raise (mock the registry query) leaves `legal_citations` populated with originals and sets `citation_filter_failed=true`
+- [ ] UI renders the fallback for findings with empty `legal_citations` and `grounding_status='out_of_approved_kb'`
+
+---
+
+## Phase 6 — Edition actualization (daily cron)
+
+**PR title:** `feat(solcon): daily edition actualization`
+
+Depends on Phase 4 (`ingest_law()` must exist for re-ingestion to work).
+
+### Migration 053
+
+```sql
+CREATE TABLE solomon_kb_source_history (
+  id                   SERIAL PRIMARY KEY,
+  kb_source_id         INTEGER NOT NULL REFERENCES solomon_kb_sources(id) ON DELETE CASCADE,
+  edition_date_from    DATE,
+  edition_basis_from   VARCHAR(32),
+  edition_date_to      DATE,
+  edition_basis_to     VARCHAR(32),
+  reingest_started_at  TIMESTAMPTZ,
+  reingest_completed_at TIMESTAMPTZ,
+  chunks_added         INTEGER,
+  chunks_removed       INTEGER,
+  status               VARCHAR(16) NOT NULL,
+  error_message        TEXT,
+  created_at           TIMESTAMPTZ DEFAULT NOW(),
+
+  CONSTRAINT chk_history_status
+    CHECK (status IN ('pending', 'in_progress', 'completed', 'failed', 'no_change'))
+);
+
+CREATE INDEX idx_kb_source_history_source ON solomon_kb_source_history(kb_source_id, created_at DESC);
+```
+
+### Cron job
+
+`backend/jobs/kb_edition_check.py`:
+
+```python
+def run_daily_edition_check():
+    sources = db.session.query(SolomonKbSource).filter_by(status='active').all()
+    for source in sources:
+        try:
+            check_one_source(source)
+        except Exception as e:
+            logger.exception(f"Edition check failed for {source.law_code}")
+            _notify_dev_channel(f"Edition check failed for {source.law_code}: {e}")
+
+
+def check_one_source(source: SolomonKbSource):
+    history = SolomonKbSourceHistory(
+        kb_source_id=source.id,
+        edition_date_from=source.current_edition_date,
+        edition_basis_from=source.current_edition_basis,
+        status='in_progress',
+        reingest_started_at=datetime.now(),
+    )
+    db.session.add(history)
+    db.session.commit()
+
+    try:
+        # Fetch and parse header WITHOUT triggering full reingest
+        html, _ = _fetch_current_edition(source.canonical_url, max_hops=3)
+        new_date, new_basis, next_basis, _ = _parse_edition_header(html)
+
+        if new_date == source.current_edition_date and new_basis == source.current_edition_basis:
+            history.status = 'no_change'
+            source.last_verified_at = datetime.now()
+            db.session.commit()
+            return
+
+        # Edition flipped — full reingest
+        result = ingest_law(source.law_code)  # this also updates source row
+        history.edition_date_to = result['edition_date']
+        history.edition_basis_to = result['edition_basis']
+        history.chunks_added = result['chunks_added']
+        history.status = 'completed'
+        history.reingest_completed_at = datetime.now()
+        db.session.commit()
+
+    except Exception as e:
+        history.status = 'failed'
+        history.error_message = str(e)
+        history.reingest_completed_at = datetime.now()
+        db.session.commit()
+        raise
+```
+
+### Scheduling
+
+Add to existing Render scheduler config (follow the pattern of the LinkedIn weekly digest job — same file). Frequency: daily at 03:00 Kyiv time. Render free tier supports this.
+
+### Notifications
+
+- **No notifications to the legal team's «AI + Юристы» Telegram group.** The director approved the SOURCE, not a snapshot. Auto-reingest is silent.
+- **Dev-channel notifications only on failure** — parser errors, HTTP failures, zakon.rada outages. Channel: whatever Konstantin uses for ops alerts (probably the same Telegram channel used for backend errors). Don't invent a new channel.
+
+### Acceptance — Phase 6
+- [ ] Migration 053 applied
+- [ ] Cron job registered with scheduler
+- [ ] Manual run of `run_daily_edition_check()` completes for all 19 active sources
+- [ ] For sources where edition hasn't changed: history row with `status='no_change'`, `last_verified_at` bumped on the registry row
+- [ ] Mocking an edition flip on one source: history row with `status='completed'`, chunks_added populated, new edition date on registry
+- [ ] Forcing parser failure: history row with `status='failed'`, error_message populated, dev channel receives notification
+
+---
+
+## Phase 7 — UI rendering: edition + last_verified_at on citations
+
+**PR title:** `feat(solcon): show edition date and verification timestamp on citations`
+
+Can ship in parallel with Phases 4–6 once Phase 4 has populated `current_edition_date` for at least the existing approved sources.
+
+### Where to render
+
+1. **Finding cards in `/law` UI** — each citation gets:
+   ```
+   Ст. 658-1 ЦК України (ред. від 25.05.2026 · перевірено 18.05.2026)
+   ```
+2. **Legal opinion (правовий висновок) DOCX** — same format inline next to each citation.
+3. **Протокол розбіжностей DOCX** — NO. The whole point of Workstream A was stripping legal basis. Don't reintroduce.
+
+### Data lookup
+
+At render time, join `legal_citations[].official_url` (normalized via `normalize_url()`) against `solomon_kb_sources.canonical_url` to fetch `current_edition_date` and `last_verified_at`. Cache the source lookup per render (small dict, 19 entries).
+
+### Freshness coloring
+
+- `last_verified_at` within 7 days → normal text color
+- 7–30 days → amber (`#B45309`)
+- > 30 days → red (`#B91C1C`) + small ⚠
+- NULL (shouldn't happen post-Phase 4) → grey, "не перевірялось"
+
+If a citation's `official_url` doesn't resolve to a registry row at all (shouldn't happen post-Phase 5, but defensive), render edition info as "—" and don't crash.
+
+### Acceptance — Phase 7
+- [ ] Open Lvivholod engagement in `/law` after Phases 1-5 ship; each citation card shows "ред. від DATE · перевірено DATE"
+- [ ] Trigger a manual `run_daily_edition_check()` then refresh — `last_verified_at` updates visibly
+- [ ] Mock `last_verified_at` to 10 days ago for one source — citations referencing it render in amber
+- [ ] Generate legal opinion DOCX — edition + verified dates appear next to each citation
+- [ ] Generate protocol DOCX — no edition info present (regression check on Workstream A)
+
+---
+
+## Out of scope (do not touch)
+
+- **INCOTERMS 2020 text ingestion** — Andrey is preparing the source. When delivered, separate work: update the registry row from `awaiting_source` to `active`, run `ingest_law("incoterms_2020")` (which will need a custom path since it's not a zakon.rada URL). Not part of this PR sequence.
+- **Re-running analysis on the 4 testing engagements** — internal QA only. After Phase 5 ships, optionally re-run them to verify the filter works on real findings, but don't preserve historical analysis or surface anything to stakeholders.
+- **Article whitelisting per source** — ingest everything, optimize later if signal/noise becomes an issue.
+- **Court search (SOLOMON v1)** — entirely separate product. Don't touch.
+- **Maya HR or GradusMedia namespaces** — `hr_docs` and `company_knowledge` are untouchable. Every Pinecone op asserts `namespace == "solomon-contracts-corpus"`.
+- **Analyzer prompt changes** — citation filtering is post-hoc, not pre-prompt. Don't modify scan/alternative/legal-opinion prompts.
+
+---
+
+## Sequencing and PR plan
+
+Recommended order — each is its own PR:
+
+1. **Phase 1** (registry) — ships first, unblocks everything
+2. **Phase 2** (verify unknowns) — investigation, no code; informs Phase 3 deletion list
+3. **Phase 3** (cleanup) — destructive, namespace-safe
+4. **Phase 4** (ingest missing) — the big one, 13 laws + ingest_law() infrastructure
+5. **Phase 5** (citation filter) — can ship after Phase 1 even if Phase 4 isn't done; gets ГК citations out of any new analysis immediately
+6. **Phase 6** (edition cron) — after Phase 4
+7. **Phase 7** (UI) — after Phase 4
+
+Total estimated time: 7–10 working days, dominated by Phase 4 chunking/parsing logic for varied zakon.rada page structures and Phase 6 testing the edition-flip path.
+
+---
+
+## Migration summary
+
+| # | Purpose | Phase |
+|---|---|---|
+| 049 | (taken, avpost_editions, unrelated) | — |
+| 050 | avtd_role (shipped) | A — done |
+| 051 | solomon_kb_sources | 1 |
+| 052 | grounding_status enum + citation_filter_failed + solcon_citation_filter_log | 5 |
+| 053 | solomon_kb_source_history | 6 |
+
+---
+
+## What "done" looks like
+
+Run this query on the Lvivholod engagement after all phases ship:
+
+```sql
+SELECT
+  COUNT(*) FILTER (WHERE legal_citations::text ILIKE '%436-15%') AS gk_citations,
+  COUNT(*) FILTER (WHERE legal_citations::text ILIKE '%2210-14%') AS competition_econ_citations,
+  COUNT(*) FILTER (WHERE legal_citations::text ILIKE '%236/96%') AS competition_unfair_citations,
+  COUNT(*) FILTER (WHERE legal_citations::text ILIKE '%771/97%') AS food_safety_citations,
+  COUNT(*) FILTER (WHERE legal_citations::text ILIKE '%481/95%') AS old_alcohol_citations,
+  COUNT(*) FILTER (WHERE legal_citations::text ILIKE '%3792-12%') AS old_copyright_citations,
+  COUNT(*) FILTER (WHERE grounding_status = 'out_of_approved_kb') AS no_basis_findings,
+  COUNT(*) AS total_findings
+FROM solcon_findings
+WHERE engagement_id = (SELECT id FROM solcon_engagements WHERE counterparty_name = 'Lvivholod');
+```
+
+Re-analyze the Lvivholod testing contract. Expected post-state:
+- All 6 "unauthorized URL" counts: **0**
+- `no_basis_findings` count: ~5 (matches the gk_only finding count from the pre-cleanup audit)
+- Sample finding renders: `Ст. 658-1 ЦК України (ред. від {actual_date} · перевірено {within last 7 days})`
+- Protocol DOCX generates: 4 columns, no Правова основа, role-aware headers
+
+When this query produces the expected output and the renders look right, the law director's v2 feedback is fully addressed.

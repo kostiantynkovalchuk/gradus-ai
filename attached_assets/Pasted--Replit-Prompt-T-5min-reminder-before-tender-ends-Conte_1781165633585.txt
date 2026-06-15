@@ -1,0 +1,192 @@
+# Replit Prompt — T-5min reminder before tender ends
+
+## Context
+
+All three notification types are working in production (tender_start, tender_end, winner). The next feature is a reminder notification sent ~5 minutes before a tender ends, giving subscribers a last chance to place or adjust their bid.
+
+Сергей has already created a `user_settings` table in the tenderlot MariaDB with a `notify_t5min TINYINT(1) NOT NULL DEFAULT 1` column. The `telegram_bot` user has SELECT access. Default is 1 (enabled) for all users.
+
+## What the feature does
+
+For every active tender that is **between 6.5 and 0 minutes from ending**, the bot sends a reminder to all subscribers in that tender's category who:
+- Are registered bot users (in local `bot_user` table)
+- Are in the whitelist (soft-launch filter)
+- Have `user_settings.notify_t5min = 1` (not opted out)
+- Have NOT already received this reminder for this tender (idempotency)
+
+The message says the tender is about to close, shows key info, and links to it.
+
+## Why 6.5 minutes, not 5
+
+The bot polls every 30 seconds. A tender ending at 11:00 needs its reminder sent by ~10:55. If we check `end_date - NOW() <= 5 minutes`, the first poll that catches it might be at 10:54:45 — after the window opens but with only 15 seconds of margin. Checking at 6.5 minutes gives the polling cycle a full extra minute of buffer. The message text still says "5 хвилин" — the user doesn't need to know the internal timing.
+
+## Implementation
+
+### 1. New notification type
+
+Add `TENDER_T5MIN = "tender_t5min"` to `NotificationType` enum in `models/bot_state.py`. (This may already be reserved — check first. If `TENDER_END_REMINDER` exists, use that instead and rename if needed.)
+
+### 2. New repo method: `fetch_tenders_near_end`
+
+In `tenderlot_repo.py`, add:
+
+```python
+async def fetch_tenders_near_end(
+    self, minutes_before: float = 6.5, limit: int = 50
+) -> Sequence[TenderlotTender]:
+    """
+    Return active tenders ending within `minutes_before` minutes from now.
+    These are candidates for T-5min reminder.
+    """
+    now = func.now()
+    result = await self._session.execute(
+        select(TenderlotTender)
+        .where(
+            TenderlotTender.end_date <= now + timedelta(minutes=0),  # not yet ended
+            TenderlotTender.end_date >= now,  # still active
+            TenderlotTender.end_date <= now + timedelta(minutes=minutes_before),  # within window
+            TenderlotTender.archived_at.is_(None),
+            TenderlotTender.status_id == TENDER_STATUS_ACTIVE,
+        )
+        .order_by(TenderlotTender.end_date.asc())  # soonest-ending first
+        .limit(limit)
+    )
+    return result.scalars().all()
+```
+
+Wait — the logic above is wrong. We want tenders where `end_date` is in the future but within 6.5 minutes. Correct filter:
+
+```python
+.where(
+    TenderlotTender.end_date > now,                                    # hasn't ended yet
+    TenderlotTender.end_date <= now + timedelta(minutes=minutes_before), # ends within 6.5 min
+    TenderlotTender.archived_at.is_(None),
+    TenderlotTender.status_id == TENDER_STATUS_ACTIVE,
+)
+```
+
+### 3. New repo method: `get_user_t5min_setting`
+
+In `tenderlot_repo.py`, add a method to check if a user has t5min enabled:
+
+```python
+async def get_users_with_t5min_enabled(self, user_ids: list[int]) -> set[int]:
+    """Return subset of user_ids that have notify_t5min = 1 in user_settings."""
+    if not user_ids:
+        return set()
+    result = await self._session.execute(
+        select(UserSettings.user_id)
+        .where(
+            UserSettings.user_id.in_(user_ids),
+            UserSettings.notify_t5min == 1,
+        )
+    )
+    return {row[0] for row in result.fetchall()}
+```
+
+You'll need to add a `UserSettings` SQLAlchemy model mapped to the `user_settings` table. Fields: `user_id` (PK), `notify_email`, `notify_telegram`, `notify_t5min`.
+
+**Edge case:** If a user has NO row in `user_settings`, treat them as having default (all enabled). The method above would miss them — handle by checking which user_ids are NOT in user_settings and including them in the result set.
+
+### 4. New SQLite tracking table
+
+Same pattern as `started_tender_processed` and `ended_tender_processed`:
+
+```sql
+CREATE TABLE IF NOT EXISTS t5min_reminder_processed (
+    tender_id INTEGER PRIMARY KEY,
+    processed_at TEXT NOT NULL
+);
+```
+
+Add to `db.py` migration block. Add `is_t5min_processed` and `mark_t5min_processed` to `bot_state_repo.py`.
+
+Also use `notification_log` with type `tender_t5min` for per-recipient idempotency (same pattern as tender_end).
+
+### 5. New notifier method: `send_tender_t5min`
+
+In `notifier.py`, add:
+
+```python
+async def send_tender_t5min(self, bot_user: BotUser, tender: TenderlotTender) -> int | None:
+    """Send T-5min reminder."""
+```
+
+### 6. New message template
+
+In `templates/messages.py`, add a template like:
+
+```
+⏰ Тендер завершується через 5 хвилин:
+{tender_name}
+
+Категорія: {category}
+Компанія: {company}
+№ {tender_id}
+Завершення: {end_date}
+
+[Відкрити тендер]
+```
+
+### 7. Polling worker integration
+
+In `_poll_once`, add a new phase AFTER tender_start dispatch and BEFORE tender_end dispatch:
+
+```python
+# Phase: T-5min reminders
+near_end_tenders = await tlot_repo.fetch_tenders_near_end()
+for tender in near_end_tenders:
+    if await state_repo.is_t5min_processed(tender.id):
+        continue
+    # Get subscribers for this tender's category
+    target_user_ids = await tlot_repo.get_target_user_ids_for_tender(tender)
+    # Filter to those with t5min enabled
+    t5min_enabled = await tlot_repo.get_users_with_t5min_enabled(target_user_ids)
+    # Filter to registered bot users, apply whitelist, check notification_log
+    # ... same dispatch pattern as tender_start ...
+    # After all sends done:
+    await state_repo.mark_t5min_processed(tender.id)
+```
+
+Add `t5min_sent` counter to cycle summary log.
+
+### 8. Important: this goes to ALL subscribers, not just bidders
+
+Unlike tender_end (which goes only to bidders), the T-5min reminder goes to all category subscribers. The point is "last chance to bid" — people who haven't bid yet are the primary audience.
+
+## Files to modify
+
+- `models/bot_state.py` — add `T5minReminderProcessed` model, add/verify `TENDER_T5MIN` notification type, add `UserSettings` model
+- `db.py` — add `t5min_reminder_processed` table migration
+- `bot_state_repo.py` — add `is_t5min_processed`, `mark_t5min_processed`
+- `tenderlot_repo.py` — add `fetch_tenders_near_end`, `get_users_with_t5min_enabled`
+- `notifier.py` — add `send_tender_t5min`
+- `templates/messages.py` — add T-5min template
+- `polling_worker.py` — add T-5min dispatch phase, add `t5min_sent` to cycle summary
+- `tests/test_polling_worker.py` — new tests
+
+## Tests to add
+
+1. **test_fetch_tenders_near_end_window** — tender ending in 4 min → included, tender ending in 8 min → excluded, tender already ended → excluded
+2. **test_t5min_skipped_if_processed** — tender in `t5min_reminder_processed` → skipped
+3. **test_t5min_respects_user_setting** — user with `notify_t5min = 0` → not sent, user with `= 1` → sent
+4. **test_t5min_user_without_settings_row_gets_default** — no row in `user_settings` → treated as enabled
+5. **test_t5min_idempotency_via_notification_log** — duplicate blocked per recipient
+6. **test_t5min_template_content** — message contains tender name, category, end time, link
+
+## What NOT to change
+
+- Do NOT modify tender_start, tender_end, or winner flows
+- Do NOT write to `user_settings` — read only
+- Do NOT change polling interval (stays 30s)
+- Do NOT send t5min to bidders only — send to all category subscribers
+
+## Success criteria
+
+After deploy:
+1. Tender ending in <6.5 minutes triggers reminder to all subscribed bot users with `notify_t5min = 1`
+2. Users with `notify_t5min = 0` don't receive it
+3. Reminder sent exactly once per tender per user (notification_log + processed table)
+4. Cycle summary shows `t5min_sent: N` counter
+5. Message shows "5 хвилин" regardless of actual timing
+6. All existing tests pass + 6 new tests

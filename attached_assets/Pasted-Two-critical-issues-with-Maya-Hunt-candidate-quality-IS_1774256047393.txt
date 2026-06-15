@@ -1,0 +1,62 @@
+Two critical issues with Maya Hunt candidate quality:
+
+ISSUE 1: Telegram scraper returns job VACANCIES instead of candidate CVs
+
+Hunt #29 showed TG=56 candidates, but many are actually employer vacancy posts,
+NOT candidate resumes. Example: card #2 is a Wear Me store hiring ad, not a person's CV.
+The scorer even flagged it: "Це оголошення про вакансію, а не резюме кандидата"
+
+The is_cv_post() filter in hunt_tg_scraper.py is not working properly.
+
+Fix hunt_tg_scraper.py:
+
+1. Find the is_cv_post() function (or equivalent CV vs vacancy filter).
+   Show me its current logic.
+
+2. Improve the filter. A MESSAGE IS A VACANCY (not a CV) if it contains patterns like:
+   - "шукаємо", "запрошуємо", "потрібен", "потрібна", "потрібні"
+   - "вакансія", "відкрита позиція", "ми пропонуємо", "ми шукаємо"
+   - "графік роботи", "умови роботи", "ми пропонуємо", "обов'язки"
+   - "компанія", "магазин", "мережа", "бренд"
+   - Company names, store names
+   - Fixed salary offers ("зп від", "ставка", "оклад")
+   - "Надіслати резюме", "Писати в дірект", "Звертайтесь"
+   
+   A MESSAGE IS A CV (candidate looking for work) if it contains:
+   - "шукаю роботу", "шукаю роботу", "розглядаю пропозиції"
+   - "маю досвід", "мій досвід", "працював", "працювала" 
+   - "резюме", "CV"
+   - Personal pronouns + work verbs: "я працюю", "я шукаю", "я маю"
+   - Age + city pattern: "25 років, Дніпро"
+   
+   Logic: 
+   - Count vacancy_signals and cv_signals in the message text
+   - If vacancy_signals > cv_signals → SKIP (it's a vacancy, not a CV)
+   - If cv_signals > 0 → KEEP (it's a CV)
+   - If both are 0 → SKIP (unclear, probably spam)
+
+3. Also add the filter RESULT to logging:
+   logger.info(f"TG filter: {kept} CVs kept, {skipped_vacancy} vacancies skipped, {skipped_other} other skipped out of {total} messages")
+
+ISSUE 2: Scorer should reject vacancy posts that slip through
+
+Even if the TG filter misses some vacancies, the scorer should catch them.
+
+Fix hunt_scorer.py:
+
+1. Find the scoring prompt sent to Claude.
+2. Add this instruction to the prompt:
+
+   "IMPORTANT: If the text is a job vacancy/posting by an employer (not a candidate's 
+   resume/CV), score it 0/100 and set full_name to 'ВАКАНСІЯ (не кандидат)'. 
+   Signs of a vacancy: company hiring, job description with requirements, 
+   'шукаємо'/'запрошуємо'/'потрібен' language, store/company name mentioned."
+
+3. In hunt_service.py, after scoring, filter out any candidates with score=0:
+   scored = [c for c in scored if c["score"] > 0]
+
+This gives us two layers of protection:
+- Layer 1: TG scraper filters out vacancies before scoring (saves API cost)
+- Layer 2: Scorer rejects any vacancy that slips through (catches edge cases)
+
+Show me the current is_cv_post() logic and the scorer prompt before making changes.

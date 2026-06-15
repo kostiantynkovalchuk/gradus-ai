@@ -1,0 +1,82 @@
+You reached the start of the range
+Nov 30, 2025, 2:30 PM
+ 
+[Region: us-west1]
+==============
+Using Nixpacks
+==============
+
+context: vj72-4Q7w
+╔══════════════════════════════ Nixpacks v1.38.0 ══════════════════════════════╗
+║ setup      │ python3, postgresql_16.dev, gcc                                 ║
+║──────────────────────────────────────────────────────────────────────────────║
+║ install    │ python -m venv --copies /opt/venv && . /opt/venv/bin/activate   ║
+║            │ && pip install uv==$NIXPACKS_UV_VERSION && uv sync --no-dev     ║
+║            │ --frozen                                                        ║
+║──────────────────────────────────────────────────────────────────────────────║
+║ build      │ cd frontend && npm install && npm run build && cd ../backend && ║
+║            │ pip install -r requirements.txt                                 ║
+║──────────────────────────────────────────────────────────────────────────────║
+║ start      │ ./start.sh                                                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+internal
+load build definition from Dockerfile
+0ms
+
+internal
+load metadata for ghcr.io/railwayapp/nixpacks:ubuntu-1745885067
+706ms
+
+internal
+load .dockerignore
+0ms
+
+stage-0
+FROM ghcr.io/railwayapp/nixpacks:ubuntu-1745885067@sha256:d45c89d80e13d7ad0fd555b5130f22a866d9dd10e861f589932303ef2314c7de
+13ms
+
+internal
+load build context
+0ms
+
+stage-0
+WORKDIR /app/
+217ms
+
+stage-0
+COPY .nixpacks/nixpkgs-bc8f8d1be58e8c8383e683a06e1e1e57893fff87.nix .nixpacks/nixpkgs-bc8f8d1be58e8c8383e683a06e1e1e57893fff87.nix
+12ms
+
+stage-0
+RUN nix-env -if .nixpacks/nixpkgs-bc8f8d1be58e8c8383e683a06e1e1e57893fff87.nix && nix-collect-garbage -d
+41s
+22 store paths deleted, 242.42 MiB freed
+
+stage-0
+COPY . /app/.
+309ms
+
+stage-0
+RUN python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install uv==0.4.30 && uv sync --no-dev --frozen
+5s
+uvicorn==0.38.0
+
+stage-0
+COPY . /app/.
+190ms
+
+stage-0
+RUN  cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt
+94ms
+/bin/bash: line 1: npm: command not found
+Dockerfile:24
+-------------------
+22 |     # build phase
+23 |     COPY . /app/.
+24 | >>> RUN  cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt
+25 |
+26 |
+-------------------
+ERROR: failed to build: failed to solve: process "/bin/bash -ol pipefail -c cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt" did not complete successfully: exit code: 127
+Error: Docker build failed

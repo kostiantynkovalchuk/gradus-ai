@@ -1,0 +1,198 @@
+## 🐛 **CRITICAL BUG: IMAGE PATH ISSUE**
+
+The system is saving images but Facebook poster can't find them!
+
+**I need to create a fix prompt for Replit Agent.**
+
+---
+
+## 📋 **FIX PROMPT FOR REPLIT AGENT:**
+
+Send this to Replit Agent:
+```
+Fix Facebook poster to use locally saved images instead of expired DALL-E URLs:
+
+📋 TASK: Fix image path resolution in Facebook poster
+
+PROBLEM IDENTIFIED:
+1. Images ARE being saved locally: "attached_assets/generated_images/dalle_*.png"
+2. But Facebook poster shows: "WARNING: No local image found, trying URL"
+3. Then fails with Error 324 because DALL-E URL expired (>2 hours old)
+
+ROOT CAUSE:
+The image_path in database may not match actual file location, or Facebook poster isn't looking in the right place.
+
+UPDATE backend/services/facebook_poster.py:
+
+FIND the post_to_facebook method and UPDATE image handling:
+```python
+def post_to_facebook(self, article_id: int, db: Session) -> Optional[Dict]:
+    """Post article to Facebook with local image"""
+    
+    try:
+        # Get article
+        article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+        
+        if not article:
+            logger.error(f"Article {article_id} not found")
+            return None
+        
+        # Prepare post content
+        metadata = article.extra_metadata or {}
+        title = metadata.get('title', 'Новини алкогольної індустрії')
+        source = metadata.get('source', 'Gradus Media')
+        
+        # Use translated text if available, otherwise original
+        text = article.translated_text or article.original_text
+        
+        # Format post
+        message = f"{title}\n\n{text[:500]}...\n\n📰 Джерело: {source}"
+        
+        # Handle image - CRITICAL FIX
+        image_path = None
+        
+        # Try to get local image path from metadata FIRST
+        if metadata.get('local_image_path'):
+            local_path = metadata['local_image_path']
+            full_path = os.path.join(os.getcwd(), local_path)
+            
+            if os.path.exists(full_path):
+                image_path = full_path
+                logger.info(f"Using local image from metadata: {local_path}")
+            else:
+                logger.warning(f"Local image in metadata not found: {full_path}")
+        
+        # Fallback: Check if image_url is a local path
+        if not image_path and article.image_url:
+            if article.image_url.startswith('attached_assets/'):
+                full_path = os.path.join(os.getcwd(), article.image_url)
+                
+                if os.path.exists(full_path):
+                    image_path = full_path
+                    logger.info(f"Using local image from image_url: {article.image_url}")
+                else:
+                    logger.warning(f"Local image from image_url not found: {full_path}")
+        
+        # Final fallback: Search for saved image by article ID
+        if not image_path:
+            # Look in generated_images directory
+            images_dir = os.path.join(os.getcwd(), 'attached_assets', 'generated_images')
+            
+            if os.path.exists(images_dir):
+                # Find any image file for this article
+                for filename in os.listdir(images_dir):
+                    if filename.endswith('.png') or filename.endswith('.jpg'):
+                        potential_path = os.path.join(images_dir, filename)
+                        
+                        # Check file modification time - use recent images
+                        file_time = os.path.getmtime(potential_path)
+                        if time.time() - file_time < 86400:  # Less than 24 hours old
+                            image_path = potential_path
+                            logger.info(f"Found recent local image: {filename}")
+                            break
+        
+        if not image_path:
+            logger.error(f"No local image found for article {article_id}")
+            logger.error(f"Tried: metadata, image_url, and directory search")
+            logger.error(f"Article image_url: {article.image_url}")
+            logger.error(f"Article metadata: {metadata}")
+            return None
+        
+        # Post with local image
+        logger.info(f"Posting to Facebook with local image: {image_path}")
+        
+        url = f"https://graph.facebook.com/v21.0/{self.page_id}/photos"
+        
+        with open(image_path, 'rb') as image_file:
+            files = {'source': image_file}
+            data = {
+                'message': message,
+                'access_token': self.access_token
+            }
+            
+            response = requests.post(url, data=data, files=files, timeout=30)
+        
+        # Rest of the method unchanged...
+        response_data = response.json()
+        
+        if 'error' in response_data:
+            logger.error(f"Facebook API error: {response_data['error']}")
+            return None
+        
+        post_id = response_data.get('post_id') or response_data.get('id')
+        
+        if post_id:
+            # Mark as posted
+            article.status = 'posted'
+            article.posted_at = datetime.now()
+            
+            # Store post info
+            article.extra_metadata['facebook_post_id'] = post_id
+            article.extra_metadata['facebook_post_url'] = f"https://facebook.com/{post_id}"
+            article.extra_metadata['posted_at'] = datetime.now().isoformat()
+            
+            db.commit()
+            
+            logger.info(f"✅ Posted to Facebook: {post_id}")
+            return {
+                'success': True,
+                'post_id': post_id,
+                'post_url': article.extra_metadata['facebook_post_url']
+            }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Facebook posting error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+```
+
+UPDATE backend/services/image_generator.py to ensure local path is saved:
+
+FIND where images are saved and ENSURE metadata includes local path:
+```python
+# After saving image locally
+local_image_path = f"attached_assets/generated_images/dalle_{short_hash}.png"
+
+# Save to disk
+os.makedirs(os.path.dirname(local_image_path), exist_ok=True)
+with open(local_image_path, 'wb') as f:
+    f.write(response.content)
+
+# Update article with local path
+article.image_url = local_image_path  # Use local path, not DALL-E URL
+
+# ALSO update metadata
+if not article.extra_metadata:
+    article.extra_metadata = {}
+
+article.extra_metadata['local_image_path'] = local_image_path
+article.extra_metadata['dalle_url'] = image_url  # Keep original for reference
+article.extra_metadata['image_generated_at'] = datetime.now().isoformat()
+```
+
+VERIFY:
+1. Images save to: attached_assets/generated_images/dalle_*.png
+2. image_url field stores LOCAL path, not DALL-E URL
+3. metadata includes local_image_path
+4. Facebook poster uses local file, never DALL-E URL
+
+TEST:
+```bash
+# Generate new images
+curl -X POST http://localhost:8000/api/scheduler/trigger/generate_images
+
+# Check article has local path
+curl http://localhost:8000/api/content?limit=1
+
+# Approve article via Telegram
+
+# Try posting
+curl -X POST http://localhost:8000/api/scheduler/trigger/post_facebook
+
+# Should succeed with local image!
+```
+
+Please fix the image path handling so Facebook uses locally saved images!

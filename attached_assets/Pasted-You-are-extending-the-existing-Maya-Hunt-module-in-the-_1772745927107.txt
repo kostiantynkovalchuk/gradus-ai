@@ -1,0 +1,307 @@
+You are extending the existing Maya Hunt module in the Gradus AI / Maya HR project.
+Do NOT break any existing functionality. Add three new capabilities:
+1. Interactive UX after vacancy is posted (button menu)
+2. Vacancy auto-posting to Telegram channels via Telethon
+3. Salary analytics dashboard tab in existing /hr admin
+
+═══════════════════════════════════════
+PART 1 — INTERACTIVE UX AFTER VACANCY
+═══════════════════════════════════════
+
+## Current behavior (keep working):
+When HR posts text in supergroup → Maya saves vacancy → runs hunt immediately
+
+## New behavior:
+When HR posts text in supergroup → Maya saves vacancy → sends action menu
+
+### Action menu message format:
+"✅ Вакансію збережено: {position}, {city}
+
+Що робимо далі?"
+
+Inline keyboard (2x2 grid):
+Row 1: [🔍 Шукати кандидатів] [📢 Розмістити вакансію]
+Row 2: [🔍+📢 Обидва варіанти] [⏸ Зберегти на потім]
+
+callback_data:
+hunt_action_search_{vacancy_id}
+hunt_action_post_{vacancy_id}
+hunt_action_both_{vacancy_id}
+hunt_action_skip_{vacancy_id}
+
+### Callback handler for hunt_action_*:
+Add to existing callback_query handler in telegram_webhook.py:
+
+if callback_data.startswith("hunt_action_"):
+    await handle_hunt_action(callback_query, db)
+
+async def handle_hunt_action(callback_query, db):
+    - Parse: action (search/post/both/skip), vacancy_id
+    - Answer callback immediately (remove loading spinner)
+    - Edit the menu message to show chosen action:
+      "🔍 Шукаю кандидатів..." or "📢 Розміщую вакансію..." etc.
+    
+    if action == "search":
+        asyncio.create_task(run_hunt(vacancy_id, ...))
+    
+    if action == "post":
+        asyncio.create_task(run_vacancy_posting(vacancy_id, ...))
+    
+    if action == "both":
+        asyncio.create_task(run_hunt(vacancy_id, ...))
+        asyncio.create_task(run_vacancy_posting(vacancy_id, ...))
+    
+    if action == "skip":
+        edit message to: "⏸ Збережено. Вакансія #{vacancy_id} чекає на обробку."
+
+## Update hunt_service.py:
+Remove the automatic run_hunt() call from _handle_hunt_vacancy.
+Now it only saves the vacancy and sends the action menu.
+
+═══════════════════════════════════════
+PART 2 — VACANCY AUTO-POSTING SERVICE
+═══════════════════════════════════════
+
+### New file: backend/services/hunt_poster.py
+
+async def run_vacancy_posting(vacancy_id: int, chat_id: int, 
+                               thread_id: int, db):
+    """
+    Post formatted vacancy to all active TG channels via Telethon.
+    Uses HR_TELETHON_SESSION env var (Natalia's session).
+    Falls back to TELETHON_SESSION if HR session not set.
+    """
+    
+    # 1. Load vacancy from DB
+    # 2. Format public vacancy post:
+    
+    POST_FORMAT = """
+🔔 Вакансія | Торговий Дім АВ
+
+💼 {position}
+📍 {city}
+
+📋 Вимоги:
+{requirements_formatted}
+
+💰 {salary_text}
+
+📩 Відгукнутись: {contact}
+#вакансія #{position_tag} #{city_tag}
+"""
+    
+    contact = os.getenv("HR_CONTACT", "@avtd_hr")
+    position_tag = position.replace(" ", "_").lower()
+    city_tag = city.lower() if city else "україна"
+    requirements_formatted = "\n".join([f"— {r}" for r in requirements])
+    salary_text = f"До {salary_max}$/міс" if salary_max else "За домовленістю"
+    
+    # 3. Load active channels from hunt_sources
+    # 4. Connect Telethon:
+    
+    session_string = os.getenv("HR_TELETHON_SESSION") or os.getenv("TELETHON_SESSION")
+    api_id = int(os.getenv("TELETHON_API_ID", "0"))
+    api_hash = os.getenv("TELETHON_API_HASH", "")
+    
+    if not all([session_string, api_id, api_hash]):
+        logger.warning("Telethon credentials not configured for posting")
+        await send_tg_message(chat_id, thread_id, 
+            "⚠️ Credentials not configured. Set HR_TELETHON_SESSION in env vars.")
+        return
+    
+    # 5. Post to each channel:
+    posted = []
+    failed = []
+    
+    async with TelegramClient(StringSession(session_string), api_id, api_hash) as client:
+        for channel in channels:
+            try:
+                await client.send_message(channel, formatted_post)
+                posted.append(channel)
+                await asyncio.sleep(3)  # Rate limit - 3 seconds between posts
+            except Exception as e:
+                logger.error(f"Failed to post to {channel}: {e}")
+                failed.append(channel)
+    
+    # 6. Update vacancy status to 'posted'
+    # 7. Save posting results to new hunt_postings table
+    
+    # 8. Send report to TG thread:
+    report = f"📢 Вакансію розміщено!\n\n"
+    report += f"✅ Успішно: {len(posted)} каналів\n"
+    if failed:
+        report += f"❌ Помилка: {len(failed)} каналів\n"
+    report += f"\nКанали: {', '.join(['@'+c for c in posted])}"
+    
+    await send_tg_message(chat_id, thread_id, report)
+
+### New DB table (add to migration):
+
+CREATE TABLE IF NOT EXISTS hunt_postings (
+    id SERIAL PRIMARY KEY,
+    vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+    channel VARCHAR(100),
+    status VARCHAR(20),  -- 'posted', 'failed'
+    error_message TEXT,
+    posted_at TIMESTAMP DEFAULT NOW()
+);
+
+### New env vars (placeholders, add to Render later):
+HR_TELETHON_SESSION=   # Natalia's session string
+HR_CONTACT=@avtd_hr    # Contact handle shown in posted vacancies
+
+═══════════════════════════════════════
+PART 3 — SALARY ANALYTICS DATA MODEL
+═══════════════════════════════════════
+
+### New DB table:
+
+CREATE TABLE IF NOT EXISTS hunt_salary_data (
+    id SERIAL PRIMARY KEY,
+    vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+    source VARCHAR(50),          -- 'work.ua', 'robota.ua', 'telegram'
+    data_type VARCHAR(20),       -- 'candidate' or 'employer'
+    position VARCHAR(200),
+    city VARCHAR(100),
+    salary_min INTEGER,
+    salary_max INTEGER,
+    salary_median INTEGER,
+    currency VARCHAR(10) DEFAULT 'UAH',
+    skills TEXT,                 -- comma separated
+    source_url TEXT,             -- link to original posting
+    collected_at TIMESTAMP DEFAULT NOW()
+);
+
+### Update hunt_scorer.py:
+After scoring each candidate, also extract and save salary data:
+
+async def extract_salary_data(candidate: dict, vacancy: dict, 
+                               vacancy_id: int, db) -> None:
+    """Extract salary info and save to hunt_salary_data"""
+    if candidate.get("salary_expectation"):
+        save to hunt_salary_data with:
+        - data_type = 'candidate'
+        - city from candidate
+        - position from vacancy
+        - salary_median = candidate salary_expectation
+        - source = candidate source
+        - source_url = candidate profile_url
+
+### Update hunt_workua_scraper.py (for future):
+When Work.ua is implemented, also collect employer salary data:
+- data_type = 'employer'
+- salary_min, salary_max from job posting
+- source_url = work.ua job URL
+
+═══════════════════════════════════════
+PART 4 — ANALYTICS DASHBOARD TAB
+═══════════════════════════════════════
+
+### New API endpoint: GET /api/hr/hunt/analytics
+
+Return JSON:
+
+{
+  "salary_by_city": [
+    {
+      "city": "Київ",
+      "position": "Торговий представник",
+      "candidate_median": 800,
+      "employer_median": 650,
+      "gap": 150,
+      "sample_size": 12,
+      "sources": ["work.ua", "telegram"]
+    }
+  ],
+  "top_skills": [
+    {"skill": "FMCG", "count": 45, "avg_salary": 750},
+    {"skill": "Права B", "count": 38, "avg_salary": 720}
+  ],
+  "salary_trends": [
+    {"month": "2026-01", "candidate_median": 750, "employer_median": 620},
+    {"month": "2026-02", "candidate_median": 780, "employer_median": 640},
+    {"month": "2026-03", "candidate_median": 800, "employer_median": 650}
+  ],
+  "hunt_stats": {
+    "total_vacancies": 11,
+    "total_candidates_found": 45,
+    "total_posted": 8,
+    "decisions": {"approved": 5, "rejected": 12, "saved": 3, "pending": 25}
+  },
+  "recent_postings": [
+    {
+      "vacancy": "Торговий представник",
+      "city": "Дніпро", 
+      "channels_posted": 12,
+      "date": "2026-03-05"
+    }
+  ]
+}
+
+### Frontend: Add "Maya Hunt" tab to existing /hr admin dashboard
+
+The existing dashboard has tabs. Add a new tab "🔍 Maya Hunt" with these sections:
+
+SECTION 1 — Hunt Stats Row (4 cards):
+- Вакансій оброблено: {total_vacancies}
+- Кандидатів знайдено: {total_candidates_found}  
+- Розміщено в каналах: {total_posted}
+- Прийнято HR: {approved}
+
+SECTION 2 — Salary Analytics (main chart):
+Grouped bar chart using Chart.js:
+- X axis: cities (Київ, Дніпро, Харків, Одеса etc.)
+- Y axis: salary in USD
+- Two bars per city: 
+  🔵 Кандидати (what they expect)
+  🟠 Роботодавці (what employers offer)
+- Tooltip shows: median, sample size, sources list with clickable links
+- Title: "Медіанна зарплата: очікування кандидатів vs пропозиції роботодавців"
+
+SECTION 3 — Top Skills (horizontal bar chart):
+- Top 10 skills by frequency
+- Bar color intensity = average salary for that skill
+- Title: "Найзатребуваніші навички"
+
+SECTION 4 — Recent Activity Table:
+Columns: Вакансія | Місто | Статус | Каналів | Кандидатів | Дата
+Last 10 vacancies with status badges:
+- searching (blue)
+- completed (green)  
+- posted (orange)
+- no_results (gray)
+
+SECTION 5 — Source References Panel:
+List of data sources used in analytics with:
+- Source name
+- Last scraped date
+- Number of data points
+- Direct link to source
+
+### Chart.js implementation:
+Use Chart.js (already available in the project via CDN).
+Colors: use the existing Maya HR color scheme.
+All charts must be responsive (mobile-friendly).
+Empty state: show placeholder message when no data yet:
+"📊 Дані з'являться після першого пошуку кандидатів"
+
+═══════════════════════════════════════
+MIGRATION
+═══════════════════════════════════════
+
+Create migration 013 with:
+- hunt_postings table
+- hunt_salary_data table
+- Add 'posted' to hunt_vacancies status options
+
+═══════════════════════════════════════
+CRITICAL RULES
+═══════════════════════════════════════
+- Keep ALL existing functionality intact
+- All TG messages in Ukrainian
+- Graceful degradation: if Telethon not configured → show clear message
+- If no salary data yet → show empty state charts, not errors
+- Rate limit Telethon posting: 3 second delay between channels
+- Never post to channels automatically without explicit HR button click
+- All new DB operations use existing SQLAlchemy SessionLocal pattern
+- Frontend changes only in the existing admin dashboard HTML/JS files

@@ -1,0 +1,15 @@
+Found three structural issues in the Торба bundle that explain the analyzer crash. Sharing both files and the diagnosis so the fix is targeted, not speculative.
+Document 1 — the main contract (Договір_поставки_TOR_BA_ТОР_ТЕРНОПІЛЬ ВИНАЛЬ.docx). This is the source of the json.loads error. Three layered problems:
+
+Bold-formatting fragmentation across clause numbers. Clause 9.10 renders as **9.1****0****.** because Word stored it as 3 separate runs. This affects clauses 1.5, 3.5, 3.6, 4.3, 4.9, 6.5, 8.3, 9.5, 9.6, 9.7, 9.8, 9.9, 9.10, 9.11, 9.12 — basically all the second-section-onwards numbering. The clause-ref parser was tested on Levays' clean п. X.Y format and likely doesn't handle the asterisk-fragmented variants. When Claude is fed text like **9.****6****.** and asked for clause_ref, it might output "9.6" (correct), "9.****6" (broken), or "9" (broken).
+The "json.loads on list" error is downstream of a different bug. I think safe_parse_json() is being called with input that's already been parsed by the SDK. When Claude returns clean JSON without markdown fences (which happens on some response shapes), response.content[0].text may already be a parsed list rather than a string. The safe_parse_json() repair function was added assuming the input is always a string. Add if isinstance(x, (list, dict)): return x at the top of safe_parse_json() as a guard.
+Add full traceback logging. The current logger shows only the error message, not the line. Hard to diagnose without it. Use logger.exception() instead of logger.error() so we get the stack trace.
+
+Document 2 — the protocol (протокол_ТОР Тернопіль_Віналь_15_04_2025_002_.docx). This is a 4-column table (Пункт договору / Редакція Постачальника / Редакція Покупця / Погоджена редакція) — exactly the protocol_draft format. The classifier correctly tagged it. But: the analyzer's scan_document() should NOT be scanning protocol_draft documents for risks. Their structure is fundamentally different from a contract; scanning them for risk clauses produces noise at best, crashes at worst. Add a guard at the start of scan_document(): if document.document_type in ('protocol_draft', 'protocol_returned', 'protocol_agreed', 'risks_note', 'legal_opinion'): return []. Only main_contract, additional_agreement, and commercial_code should go through the risk-scanning analyzer.
+Two visibility fixes (separate from the analyzer fixes):
+
+The analyze endpoint returns 200 even when analysis crashes. It should return 500 with the error message in the body. The frontend should surface the error rather than silently showing "0 ризиків."
+The engagement KPI cards (Ризиків / Критичних / Високих) currently show "0/0/0" before analysis succeeds, which is confusingly identical to "analysis ran and found nothing." Show "—" or "не запущено" until at least one document has analyzed_at IS NOT NULL.
+
+Once these land, re-trigger analysis on engagement 1 (don't re-create it). Also worth re-running the Levays eval to confirm none of these changes regressed the working case.
+Both Торба files attached for testing.

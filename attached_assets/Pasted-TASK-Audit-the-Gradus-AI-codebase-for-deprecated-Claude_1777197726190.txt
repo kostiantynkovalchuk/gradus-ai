@@ -1,0 +1,136 @@
+TASK: Audit the Gradus AI codebase for deprecated Claude model references 
+and the 1M context beta header. Migrate everything to current models.
+
+CONTEXT:
+Anthropic is retiring the 1M context beta (context-1m-2025-08-07) on 
+April 30, 2026 for claude-sonnet-4 and claude-sonnet-4-5. We need to 
+ensure the codebase uses claude-sonnet-4-6 everywhere and the beta 
+header is removed.
+
+Our current target models (from handover doc):
+- Client-facing: claude-sonnet-4-6
+- Background/scoring/parsing: claude-haiku-4-5-20251001
+
+==================================================
+STEP 1 — AUDIT (read-only, produce a report first)
+==================================================
+
+Search the entire repo (backend/, frontend/, scripts/, configs, 
+.env.example, README, docs) for these patterns. Use ripgrep, 
+case-insensitive, including hidden files but excluding node_modules, 
+.venv, .git, dist, build:
+
+A. Deprecated model strings:
+   - claude-sonnet-4 (without -6)
+   - claude-sonnet-4-5
+   - claude-sonnet-4-20250514
+   - claude-sonnet-4-5-20250929
+   - claude-3-5-sonnet
+   - claude-3-opus
+   - claude-3-haiku (we use haiku-4-5 now)
+   - claude-2
+
+B. Deprecated beta headers:
+   - context-1m-2025-08-07
+   - anthropic-beta.*context-1m
+   - any other anthropic-beta header values — list them all
+
+C. Model references in non-obvious places:
+   - Environment variables (.env, .env.example, render.yaml, 
+     replit.nix, Dockerfile)
+   - Config files (*.json, *.yaml, *.toml)
+   - Documentation (*.md)
+   - Database seed data / migrations
+   - Frontend (some apps send model strings from FE)
+
+Produce a markdown report: AUDIT_REPORT.md with:
+   - File path
+   - Line number  
+   - Current value
+   - Proposed replacement
+   - Risk level (LOW/MED/HIGH) — HIGH if it touches client-facing 
+     Alex Gradus chat or Photo Report Vision
+
+DO NOT modify any files yet. Wait for my approval after reviewing 
+the report.
+
+==================================================
+STEP 2 — MIGRATION (after I approve the report)
+==================================================
+
+Replacement rules:
+   - claude-sonnet-4              → claude-sonnet-4-6
+   - claude-sonnet-4-5            → claude-sonnet-4-6
+   - claude-sonnet-4-20250514     → claude-sonnet-4-6
+   - claude-sonnet-4-5-20250929   → claude-sonnet-4-6
+   - Leave claude-haiku-4-5-20251001 alone (current)
+   - Leave claude-opus-4-6 alone if found (current)
+
+Header removal:
+   - Delete any "anthropic-beta": "context-1m-2025-08-07" header
+   - If a request builder conditionally adds it, remove the 
+     conditional and the header
+   - Do NOT remove other anthropic-beta headers without flagging 
+     them in the PR description
+
+Centralization (this is the important part):
+   Create backend/services/ai_models.py with:
+
+```python
+   """
+   Single source of truth for Claude model identifiers.
+   Update here when migrating models — do not hardcode model 
+   strings elsewhere in the codebase.
+   """
+   
+   # Client-facing — quality matters
+   SONNET = "claude-sonnet-4-6"
+   
+   # Background tasks — cost-optimized  
+   HAIKU = "claude-haiku-4-5-20251001"
+   
+   # Vision (currently same as SONNET, separated for future flexibility)
+   VISION = SONNET
+   
+   # Reserved for high-intelligence workloads if needed
+   OPUS = "claude-opus-4-6"
+```
+
+   Then refactor every Anthropic API call site to import from 
+   this module instead of hardcoding strings:
+   
+   from backend.services.ai_models import SONNET, HAIKU
+   
+   client.messages.create(model=SONNET, ...)
+
+==================================================
+STEP 3 — VERIFICATION
+==================================================
+
+After migration:
+1. Run: rg -i "claude-sonnet-4[^-]|claude-sonnet-4-5|context-1m" 
+   — should return zero results outside ai_models.py and 
+   AUDIT_REPORT.md
+2. Run the existing test suite if present
+3. Smoke test these endpoints locally if possible:
+   - POST /api/chat (Alex Gradus)
+   - Maya HR webhook with a test query
+   - Photo Report image upload (skip if no test image)
+4. Check that backend/services/ai_models.py is the ONLY file 
+   containing the literal string "claude-sonnet-4-6"
+
+==================================================
+STEP 4 — COMMIT
+==================================================
+
+git add -A
+git commit -m "chore: migrate to claude-sonnet-4-6, remove 1M context beta header
+
+- Replace claude-sonnet-4 / claude-sonnet-4-5 with claude-sonnet-4-6
+- Remove deprecated context-1m-2025-08-07 beta header (retired 2026-04-30)
+- Centralize model identifiers in backend/services/ai_models.py
+- All API call sites now import from ai_models module
+
+Refs: Anthropic 1M context beta retirement notice"
+
+Do NOT push — let me review the diff first.

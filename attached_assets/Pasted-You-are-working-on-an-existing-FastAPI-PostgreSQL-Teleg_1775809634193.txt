@@ -1,0 +1,535 @@
+You are working on an existing FastAPI + PostgreSQL + Telegram bot project
+called Gradus AI / AVTD HR system hosted on Render.com.
+Python 3.11, FastAPI, SQLAlchemy, psycopg2, httpx, APScheduler, Neon PostgreSQL.
+
+════════════════════════════════════════
+CONTEXT — EXISTING INFRASTRUCTURE
+════════════════════════════════════════
+
+Existing bot: TELEGRAM_MAYA_BOT_TOKEN
+Existing webhook: backend/routes/telegram_webhook.py
+Existing hr_users table:
+  - telegram_id, full_name, is_active, access_level
+  - access_level IN ('hr_admin', 'developer') = authorized broadcasters
+Konstantin (developer) telegram_id: 441389791
+All active recipients: hr_users WHERE telegram_id IS NOT NULL AND is_active = true
+
+════════════════════════════════════════
+FEATURE: MAYA BROADCAST RELAY
+════════════════════════════════════════
+
+HR Admin (Natalia) or Developer (Konstantin) posts any content
+to a dedicated private Telegram group called "Maya HR Broadcast".
+Maya bot is a member of this group.
+Maya intercepts the message, shows a confirmation card,
+and on approval broadcasts to all 200+ employees.
+
+Supports: text, photo, video, document, audio, sticker, poll.
+No shell access required. No technical knowledge needed.
+
+════════════════════════════════════════
+DELIVERABLE 1 — ENVIRONMENT VARIABLE
+════════════════════════════════════════
+
+Add to Render.com environment:
+  MAYA_BROADCAST_GROUP_ID = <telegram group id>
+
+To get the group ID:
+1. Create a private Telegram group "Maya HR Broadcast"
+2. Add Maya HR bot to the group
+3. Post any message in the group
+4. Call: https://api.telegram.org/bot{TOKEN}/getUpdates
+5. Find chat.id in the result — it will be negative (e.g. -1001234567890)
+6. Set MAYA_BROADCAST_GROUP_ID to that value
+
+════════════════════════════════════════
+DELIVERABLE 2 — DATABASE MIGRATION
+════════════════════════════════════════
+
+Create file: backend/migrations/031_broadcast_log.sql
+
+CREATE TABLE IF NOT EXISTS hr_broadcast_log (
+    id                SERIAL PRIMARY KEY,
+    initiated_by      BIGINT NOT NULL,      -- telegram_id of sender
+    initiated_name    VARCHAR(255),
+    content_type      VARCHAR(32) NOT NULL, -- text/photo/video/document/poll
+    content_preview   TEXT,                 -- first 100 chars or caption
+    file_id           TEXT,                 -- telegram file_id if media
+    recipient_count   INTEGER DEFAULT 0,
+    sent_count        INTEGER DEFAULT 0,
+    failed_count      INTEGER DEFAULT 0,
+    status            VARCHAR(16) DEFAULT 'pending',
+    -- pending / confirmed / cancelled / completed
+    confirmation_msg_id  BIGINT,            -- msg_id of confirmation card
+    created_at        TIMESTAMP DEFAULT NOW(),
+    completed_at      TIMESTAMP
+);
+
+INSERT INTO schema_migrations (migration_id)
+VALUES ('031') ON CONFLICT DO NOTHING;
+
+════════════════════════════════════════
+DELIVERABLE 3 — BROADCAST SERVICE
+════════════════════════════════════════
+
+Create file: backend/services/broadcast_service.py
+
+Uses psycopg2 for all DB operations (background task pattern).
+Uses httpx.AsyncClient for all Telegram API calls.
+TOKEN = os.environ['TELEGRAM_MAYA_BOT_TOKEN']
+GROUP_ID = int(os.environ.get('MAYA_BROADCAST_GROUP_ID', 0))
+
+─────────────────────────────────────
+FUNCTION 1: is_broadcast_group(chat_id)
+─────────────────────────────────────
+def is_broadcast_group(chat_id: int) -> bool:
+    return chat_id == GROUP_ID
+
+─────────────────────────────────────
+FUNCTION 2: is_authorized_broadcaster(telegram_id)
+─────────────────────────────────────
+async def is_authorized_broadcaster(telegram_id: int) -> bool:
+    Query hr_users:
+        WHERE telegram_id = :tid
+        AND access_level IN ('hr_admin', 'developer')
+        AND is_active = true
+    Return True if found, False otherwise.
+
+─────────────────────────────────────
+FUNCTION 3: create_broadcast_log(...)
+─────────────────────────────────────
+async def create_broadcast_log(
+    initiated_by: int,
+    initiated_name: str,
+    content_type: str,
+    content_preview: str,
+    file_id: str = None
+) -> int:
+    INSERT INTO hr_broadcast_log
+        (initiated_by, initiated_name, content_type,
+         content_preview, file_id, status)
+    VALUES (...)
+    RETURNING id
+
+    Return the new broadcast id.
+
+─────────────────────────────────────
+FUNCTION 4: send_confirmation_card(...)
+─────────────────────────────────────
+async def send_confirmation_card(
+    broadcast_id: int,
+    content_type: str,
+    content_preview: str,
+    sender_name: str
+) -> int:
+    
+    Build confirmation message:
+        "📤 *Готово до розсилки*
+        
+        👤 Ініціатор: {sender_name}
+        📋 Тип: {content_type_label}
+        📝 Зміст: {content_preview[:100]}
+        👥 Отримувачів: {recipient_count}
+        
+        Розіслати всім співробітникам?"
+    
+    content_type_label mapping:
+        text     → "📝 Текст"
+        photo    → "🖼 Фото"
+        video    → "🎥 Відео"
+        document → "📎 Документ"
+        audio    → "🎵 Аудіо"
+        sticker  → "😊 Стікер"
+        poll     → "📊 Опитування"
+    
+    Send to GROUP_ID with inline keyboard:
+        [✅ Розіслати  |  ❌ Скасувати]
+        callback_data:
+            "broadcast_confirm_{broadcast_id}"
+            "broadcast_cancel_{broadcast_id}"
+    
+    Store confirmation message_id in hr_broadcast_log.
+    Return message_id.
+
+─────────────────────────────────────
+FUNCTION 5: execute_broadcast(broadcast_id, message)
+─────────────────────────────────────
+async def execute_broadcast(broadcast_id: int, original_message: dict):
+    """
+    Sends content to all active hr_users.
+    original_message is the raw Telegram message dict from the group.
+    Uses forward_message for all content types — preserves formatting,
+    media, polls exactly as sent by HR admin.
+    """
+    
+    1. Fetch all recipients:
+       SELECT telegram_id FROM hr_users
+       WHERE telegram_id IS NOT NULL
+       AND is_active = true
+    
+    2. UPDATE hr_broadcast_log SET
+       status = 'sending',
+       recipient_count = len(recipients)
+       WHERE id = broadcast_id
+    
+    3. Determine send method based on content type:
+    
+       FOR TEXT:
+         sendMessage with same text + parse_mode
+       
+       FOR PHOTO:
+         sendPhoto with file_id from original message
+         include caption if present
+       
+       FOR VIDEO:
+         sendVideo with file_id
+         include caption if present
+       
+       FOR DOCUMENT:
+         sendDocument with file_id
+         include caption if present
+       
+       FOR AUDIO:
+         sendAudio with file_id
+       
+       FOR STICKER:
+         sendSticker with file_id
+       
+       FOR POLL:
+         sendPoll with question + options from original
+         is_anonymous = True
+    
+    4. Send loop:
+       sent = failed = 0
+       for tg_id in recipients:
+           try:
+               send content → if ok: sent++ else: failed++
+           except:
+               failed++
+           await asyncio.sleep(0.05)
+    
+    5. UPDATE hr_broadcast_log SET
+       status = 'completed',
+       sent_count = sent,
+       failed_count = failed,
+       completed_at = NOW()
+       WHERE id = broadcast_id
+    
+    6. Return {"sent": sent, "failed": failed}
+
+─────────────────────────────────────
+FUNCTION 6: cancel_broadcast(broadcast_id)
+─────────────────────────────────────
+async def cancel_broadcast(broadcast_id: int):
+    UPDATE hr_broadcast_log
+    SET status = 'cancelled'
+    WHERE id = broadcast_id
+
+════════════════════════════════════════
+DELIVERABLE 4 — WEBHOOK HANDLER
+════════════════════════════════════════
+
+File to modify: backend/routes/telegram_webhook.py
+
+ADD 1: Import at top:
+    from services.broadcast_service import (
+        is_broadcast_group,
+        is_authorized_broadcaster,
+        create_broadcast_log,
+        send_confirmation_card,
+        execute_broadcast,
+        cancel_broadcast
+    )
+    BROADCAST_GROUP_ID = int(os.environ.get('MAYA_BROADCAST_GROUP_ID', 0))
+
+─────────────────────────────────────
+ADD 2: Message handler — broadcast group intercept
+─────────────────────────────────────
+In the main message handler, ADD THIS BLOCK at the very top
+before any other processing (before command handling,
+before auth check, before everything):
+
+    chat_id = message.get('chat', {}).get('id', 0)
+    
+    # ── BROADCAST GROUP INTERCEPT ─────────────────────────────────
+    if is_broadcast_group(chat_id):
+        sender_id = message.get('from', {}).get('id', 0)
+        
+        # Only authorized users trigger broadcast
+        if not await is_authorized_broadcaster(sender_id):
+            # Silently ignore messages from non-authorized users
+            return
+        
+        sender_name = message.get('from', {}).get(
+            'first_name', 'HR Admin'
+        )
+        
+        # Detect content type and extract metadata
+        content_type = 'text'
+        content_preview = ''
+        file_id = None
+        poll_data = None
+        
+        if message.get('text'):
+            content_type = 'text'
+            content_preview = message['text'][:100]
+        
+        elif message.get('photo'):
+            content_type = 'photo'
+            file_id = message['photo'][-1]['file_id']
+            content_preview = message.get('caption', '')[:100]
+        
+        elif message.get('video'):
+            content_type = 'video'
+            file_id = message['video']['file_id']
+            content_preview = message.get('caption', '')[:100]
+        
+        elif message.get('document'):
+            content_type = 'document'
+            file_id = message['document']['file_id']
+            content_preview = message.get('caption', 
+                message['document'].get('file_name', ''))[:100]
+        
+        elif message.get('audio'):
+            content_type = 'audio'
+            file_id = message['audio']['file_id']
+            content_preview = message.get('caption', '')[:100]
+        
+        elif message.get('sticker'):
+            content_type = 'sticker'
+            file_id = message['sticker']['file_id']
+            content_preview = message['sticker'].get('emoji', '')
+        
+        elif message.get('poll'):
+            content_type = 'poll'
+            poll_data = message['poll']
+            content_preview = poll_data['question'][:100]
+        
+        else:
+            # Unsupported type — notify in group
+            await send_telegram_message(
+                chat_id,
+                "⚠️ Цей тип контенту не підтримується для розсилки."
+            )
+            return
+        
+        # Store message in memory for later use by execute_broadcast
+        # Use broadcast_id as key
+        broadcast_id = await create_broadcast_log(
+            initiated_by=sender_id,
+            initiated_name=sender_name,
+            content_type=content_type,
+            content_preview=content_preview,
+            file_id=file_id
+        )
+        
+        # Store original message dict for execute_broadcast
+        PENDING_BROADCASTS[broadcast_id] = message
+        
+        # Send confirmation card to group
+        await send_confirmation_card(
+            broadcast_id=broadcast_id,
+            content_type=content_type,
+            content_preview=content_preview,
+            sender_name=sender_name
+        )
+        return
+    # ── END BROADCAST GROUP INTERCEPT ────────────────────────────
+
+ADD 3: In-memory store (add near top of file with other globals):
+    PENDING_BROADCASTS: dict[int, dict] = {}
+    # Maps broadcast_id → original Telegram message dict
+    # Cleared after broadcast executes or is cancelled
+
+─────────────────────────────────────
+ADD 4: Callback handler — confirm/cancel
+─────────────────────────────────────
+In the existing callback_query handler block, add:
+
+    elif callback_data.startswith("broadcast_confirm_"):
+        broadcast_id = int(callback_data.split("_")[-1])
+        confirmer_id = callback_query.get('from', {}).get('id', 0)
+        
+        # Only authorized users can confirm
+        if not await is_authorized_broadcaster(confirmer_id):
+            await answer_callback(callback_id, "❌ Недостатньо прав")
+            return
+        
+        original_message = PENDING_BROADCASTS.get(broadcast_id)
+        if not original_message:
+            await answer_callback(
+                callback_id,
+                "⚠️ Розсилка не знайдена або вже виконана"
+            )
+            return
+        
+        # Edit confirmation card to show "sending..."
+        await edit_telegram_message(
+            chat_id, message_id,
+            "⏳ *Розсилка виконується...*\n\nБудь ласка, зачекайте."
+        )
+        
+        # Execute broadcast
+        result = await execute_broadcast(broadcast_id, original_message)
+        
+        # Remove from pending
+        PENDING_BROADCASTS.pop(broadcast_id, None)
+        
+        # Edit card to show results
+        await edit_telegram_message(
+            chat_id, message_id,
+            f"✅ *Розсилку завершено*\n\n"
+            f"📤 Надіслано: {result['sent']}\n"
+            f"❌ Заблоковано: {result['failed']}\n"
+            f"👥 Всього: {result['sent'] + result['failed']}"
+        )
+
+    elif callback_data.startswith("broadcast_cancel_"):
+        broadcast_id = int(callback_data.split("_")[-1])
+        
+        await cancel_broadcast(broadcast_id)
+        PENDING_BROADCASTS.pop(broadcast_id, None)
+        
+        await edit_telegram_message(
+            chat_id, message_id,
+            "❌ *Розсилку скасовано*"
+        )
+        await answer_callback(callback_id, "Розсилку скасовано")
+
+════════════════════════════════════════
+DELIVERABLE 5 — BROADCAST HISTORY
+IN HR DASHBOARD
+════════════════════════════════════════
+
+File to modify: backend/routes/hr_admin.py
+
+Add endpoint:
+GET /api/hr/broadcasts
+
+    SELECT id, initiated_name, content_type, content_preview,
+           recipient_count, sent_count, failed_count,
+           status, created_at, completed_at
+    FROM hr_broadcast_log
+    ORDER BY created_at DESC
+    LIMIT 20
+
+Return as JSON array.
+
+Add to HR dashboard template — simple table
+below the survey card on the Pulse tab:
+
+    <div class="card" id="broadcast-history">
+      <div class="card-header">📤 Історія розсилок</div>
+      <table id="broadcast-table">
+        <thead>
+          <tr>
+            <th>Час</th>
+            <th>Тип</th>
+            <th>Зміст</th>
+            <th>Надіслано</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody id="broadcast-tbody"></tbody>
+      </table>
+    </div>
+
+    <script>
+    async function loadBroadcasts() {
+      const res  = await fetch('/api/hr/broadcasts');
+      const data = await res.json();
+      const tbody = document.getElementById('broadcast-tbody');
+      tbody.innerHTML = data.map(b => {
+        const time = new Date(b.created_at)
+            .toLocaleString('uk-UA', {timeZone: 'Europe/Kiev'});
+        const status = {
+          'completed': '✅',
+          'cancelled': '❌',
+          'pending':   '⏳',
+          'sending':   '📤'
+        }[b.status] || b.status;
+        return '<tr>'
+          + '<td>' + time + '</td>'
+          + '<td>' + b.content_type + '</td>'
+          + '<td>' + (b.content_preview || '—').substring(0, 40) + '</td>'
+          + '<td>' + (b.sent_count || 0) + ' / '
+                   + (b.recipient_count || 0) + '</td>'
+          + '<td>' + status + '</td>'
+          + '</tr>';
+      }).join('');
+    }
+    loadBroadcasts();
+    setInterval(loadBroadcasts, 30000);
+    </script>
+
+════════════════════════════════════════
+IMPLEMENTATION NOTES
+════════════════════════════════════════
+
+PENDING_BROADCASTS memory store:
+  Simple dict — safe for single-process Render deployment.
+  If Render restarts mid-broadcast, pending confirmations
+  are lost. Acceptable — HR just resends the message.
+  Do NOT use Redis or external store — overkill for this use case.
+
+POLL broadcasting:
+  Telegram does not allow forwarding polls.
+  Must use sendPoll with extracted question + options.
+  Extract from message['poll']:
+    question = poll['question']
+    options  = [o['text'] for o in poll['options']]
+    is_anonymous = poll.get('is_anonymous', True)
+
+PHOTO/VIDEO/DOCUMENT:
+  Use file_id directly — Telegram caches files on their servers.
+  No re-upload needed. file_id from one chat works in any chat
+  when sent by the same bot.
+
+CAPTION handling:
+  When sending photo/video/document with caption,
+  preserve caption_entities for bold/italic formatting
+  if present in original message.
+
+AUTHORIZED CHECK in callback:
+  Both confirm AND cancel require is_authorized_broadcaster check.
+  Prevents other group members from tapping buttons
+  if accidentally added to group.
+
+MIGRATION:
+  Run before deploy:
+  psql $DATABASE_URL -f backend/migrations/031_broadcast_log.sql
+
+GROUP SETUP (do before deployment):
+  1. Create private Telegram group
+  2. Add Maya HR bot
+  3. Add Natalia + Konstantin
+  4. Post any message
+  5. Temporarily disable webhook, call getUpdates, get chat.id
+  6. Set MAYA_BROADCAST_GROUP_ID in Render env
+  7. Re-enable webhook
+
+════════════════════════════════════════
+ACCEPTANCE CRITERIA
+════════════════════════════════════════
+
+✅ Natalia posts text in broadcast group
+   → Maya shows confirmation card with preview + recipient count
+   → Natalia taps ✅ → message sent to all employees
+   → Card updates: "Надіслано: 205 | Заблоковано: 8"
+
+✅ Natalia posts photo in broadcast group
+   → Maya shows confirmation with "🖼 Фото" + caption preview
+   → On confirm → photo sent to all employees via file_id
+   → No re-upload, instant delivery
+
+✅ Natalia posts native Telegram poll
+   → Maya extracts question + options
+   → On confirm → sendPoll to all employees
+   → Employees vote natively in Telegram
+
+✅ Non-authorized user posts in group → silently ignored
+✅ Natalia taps ❌ → broadcast cancelled, card updated
+✅ HR dashboard shows broadcast history with status
+✅ Migration 031 is idempotent
+✅ PENDING_BROADCASTS cleared after confirm or cancel
+✅ Captions preserved for photo/video/document

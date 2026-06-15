@@ -1,0 +1,143 @@
+══════════════════════════════════════════════
+PART 7 — SALARY NORMALIZATION ENGINE
+══════════════════════════════════════════════
+
+## New file: backend/services/salary_normalizer.py
+
+Ukrainian job market posts salaries in mixed formats:
+- "25 000 грн", "25000 грн", "25к грн"
+- "$600", "600$", "600 USD", "600 доларів"
+- "від 500 до 800$", "500-800 USD"
+- "від 20000 грн", "20к-25к"
+- "за домовленістю", "конкурентна", "обговорюється"
+- Sometimes UAH, sometimes USD, sometimes both
+
+## Constants:
+USD_TO_UAH_RATE = float(os.getenv("USD_TO_UAH_RATE", "41.0"))
+# Stored in env var so it can be updated without redeploy
+
+## Functions to implement:
+
+def extract_salary(text: str) -> dict:
+    """
+    Parse any salary mention from text.
+    
+    Returns:
+    {
+        "salary_min_uah": int or None,
+        "salary_max_uah": int or None,
+        "salary_min_usd": int or None,
+        "salary_max_usd": int or None,
+        "salary_median_uah": int or None,
+        "salary_median_usd": int or None,
+        "original_text": str,
+        "currency_detected": "UAH" | "USD" | "unknown",
+        "confidence": "high" | "medium" | "low"
+    }
+    
+    Logic:
+    1. Search for USD patterns first:
+       - \$[\d\s,]+  → e.g. $600, $1,200
+       - [\d\s,]+\$  → e.g. 600$
+       - [\d\s,]+ (USD|usd|доларів|дол)
+       
+    2. Search for UAH patterns:
+       - [\d\s,]+ (грн|UAH|гривень|тис\.?\s*грн|к\s*грн)
+       - Handle "к" suffix: "25к" = 25000
+       
+    3. Handle ranges:
+       - "від X до Y" → min=X, max=Y, median=(X+Y)/2
+       - "X-Y" → min=X, max=Y
+       - Single value → min=max=median=value
+       
+    4. Convert to both currencies:
+       if USD detected:
+           usd_value = parsed
+           uah_value = usd_value * USD_TO_UAH_RATE
+       if UAH detected:
+           uah_value = parsed
+           usd_value = uah_value / USD_TO_UAH_RATE
+           
+    5. Confidence scoring:
+       high   = explicit currency symbol found
+       medium = number found but currency inferred from context
+       low    = vague text like "конкурентна зарплата"
+    """
+
+def normalize_to_usd(amount: float, currency: str) -> float:
+    """Convert any amount to USD"""
+    if currency == "USD":
+        return amount
+    if currency == "UAH":
+        return amount / USD_TO_UAH_RATE
+    return amount
+
+def normalize_to_uah(amount: float, currency: str) -> float:
+    """Convert any amount to UAH"""
+    if currency == "UAH":
+        return amount
+    if currency == "USD":
+        return amount * USD_TO_UAH_RATE
+    return amount
+
+def format_salary_display(usd: int, uah: int) -> str:
+    """Format for display in candidate cards and dashboard"""
+    if usd and uah:
+        return f"${usd:,} / {uah:,} грн"
+    if usd:
+        return f"${usd:,} (~{int(usd * USD_TO_UAH_RATE):,} грн)"
+    if uah:
+        return f"{uah:,} грн (~${int(uah / USD_TO_UAH_RATE):,})"
+    return "За домовленістю"
+
+## Integration points:
+
+1. hunt_scorer.py — when Claude extracts salary_expectation,
+   pass it through extract_salary() to normalize
+   Store both UAH and USD values in hunt_candidates
+
+2. hunt_workua_scraper.py — Work.ua posts in UAH,
+   always convert to USD equivalent
+
+3. hunt_salary_data table — store BOTH:
+   salary_min_uah, salary_max_uah, salary_median_uah
+   salary_min_usd, salary_max_usd, salary_median_usd
+   currency_detected VARCHAR(10)
+   usd_rate_at_collection FLOAT  ← store rate used at time of collection
+
+4. Dashboard charts — show toggle:
+   [грн] [USD] switch button on salary charts
+   All chart values update instantly on toggle
+   Default: USD (for management/investor view)
+   UAH available for HR operational view
+
+## Update hunt_salary_data table in migration 013:
+Add columns:
+salary_min_uah INTEGER,
+salary_max_uah INTEGER, 
+salary_median_uah INTEGER,
+salary_min_usd INTEGER,
+salary_max_usd INTEGER,
+salary_median_usd INTEGER,
+currency_detected VARCHAR(10),
+usd_rate_at_collection FLOAT
+
+(keep original salary_min/max/median for backward compat)
+
+## Update Claude scoring prompt in hunt_scorer.py:
+Add to the JSON response schema:
+"salary_expectation_raw": "original text like '25000 грн' or '$600'",
+"salary_expectation_usd": integer or null,
+"salary_expectation_uah": integer or null,
+"currency_detected": "UAH" or "USD" or "unknown"
+
+Instruct Claude:
+"Extract salary as-is from the text. 
+If in UAH, set salary_expectation_uah.
+If in USD, set salary_expectation_usd. 
+Convert the other using rate 41 UAH = 1 USD.
+Always populate both fields."
+
+## Add USD_TO_UAH_RATE to Render env vars:
+USD_TO_UAH_RATE=41.0
+# Update manually when rate changes significantly

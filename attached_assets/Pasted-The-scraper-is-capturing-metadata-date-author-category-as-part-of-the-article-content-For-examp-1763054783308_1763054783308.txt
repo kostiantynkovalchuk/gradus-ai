@@ -1,0 +1,111 @@
+The scraper is capturing metadata (date, author, category) as part of the article content. For example: "13 November 2025IWSR cuts 2025 alcohol forecast..."
+
+We need to clean the scraped content BEFORE translation.
+
+Please update the scraper:
+
+1. UPDATE backend/services/news_scraper.py:
+
+Add a method to extract and clean article content:
+```python
+def extract_article_content(self, url: str) -> Dict[str, str]:
+    """
+    Extract clean article content from URL using Trafilatura
+    Removes metadata like date, author, category
+    
+    Returns dict with 'title' and 'content'
+    """
+    try:
+        import trafilatura
+        
+        # Download page
+        downloaded = trafilatura.fetch_url(url)
+        
+        if not downloaded:
+            return {"title": "", "content": ""}
+        
+        # Extract with metadata
+        result = trafilatura.extract(
+            downloaded,
+            include_comments=False,
+            include_tables=False,
+            output_format='json',
+            with_metadata=True
+        )
+        
+        if result:
+            import json
+            data = json.loads(result)
+            
+            # Get clean content (without date/author/category)
+            title = data.get('title', '')
+            content = data.get('text', '')  # This is the clean article text
+            
+            return {
+                "title": title,
+                "content": content
+            }
+        
+        return {"title": "", "content": ""}
+        
+    except Exception as e:
+        logger.error(f"Failed to extract content from {url}: {e}")
+        return {"title": "", "content": ""}
+```
+
+2. UPDATE scrape_spirits_business() to use clean content:
+```python
+def scrape_spirits_business(self, limit: int = 5) -> List[Dict]:
+    """Scrape with clean content extraction"""
+    articles = []
+    
+    try:
+        response = requests.get(self.sources['spirits_business'], ...)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        article_elements = soup.find_all('article', limit=limit)
+        
+        for article in article_elements:
+            # ... extract title, url, image_url as before ...
+            
+            if title and url:
+                # Extract CLEAN content from article page
+                clean_data = self.extract_article_content(url)
+                
+                articles.append({
+                    'title': clean_data.get('title') or title,
+                    'url': url,
+                    'summary': clean_data.get('content', '')[:1000],  # First 1000 chars
+                    'content': clean_data.get('content', ''),  # Full clean text
+                    'image_url': image_url,
+                    'source': 'The Spirits Business',
+                    'published_date': datetime.now().isoformat(),
+                    'scraped_at': datetime.now().isoformat()
+                })
+        
+        return articles
+        
+    except Exception as e:
+        logger.error(f"Scraping error: {e}")
+        return []
+```
+
+3. UPDATE database saving to use clean content:
+
+In the endpoint that saves scraped articles:
+```python
+# Save to database
+new_article = ContentQueue(
+    original_text=article.get('content', ''),  # Clean content, not summary
+    source_url=article.get('url'),
+    status='draft',
+    extra_metadata={
+        'title': article.get('title'),
+        'source': article.get('source'),
+        'image_url': article.get('image_url'),
+        'published_date': article.get('published_date'),
+        'scraped_at': article.get('scraped_at')
+    }
+)
+```
+
+Please implement these changes to get clean article content without metadata!

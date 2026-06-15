@@ -1,0 +1,98 @@
+Great! Telegram bot is working. I've tested it and messages are delivered successfully.
+
+My credentials:
+- TELEGRAM_BOT_TOKEN: 8554868004:AAFL8i-8kQel6eweFVj-IX3jT-TQ1It_Zto
+- TELEGRAM_CHAT_ID: 441389791
+
+Now please implement ONLY the notification service:
+
+1. CREATE backend/services/notification_service.py:
+
+Add a simple notification service that sends Telegram messages when content needs approval.
+```python
+import os
+import requests
+from typing import Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
+class NotificationService:
+    def __init__(self):
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+    
+    def send_approval_notification(self, content_data: Dict[str, Any]) -> bool:
+        """Send notification when content needs approval"""
+        
+        message = f"""
+🆕 <b>Новий контент для перевірки</b>
+
+📰 <b>Джерело:</b> {content_data.get('source', 'Unknown')}
+📝 <b>Заголовок:</b> {content_data.get('title', 'No title')}
+
+🇺🇦 <b>Переклад (перші 150 символів):</b>
+{content_data.get('translated_text', '')[:150]}...
+
+🔗 <b>ID:</b> {content_data.get('id')}
+⏰ <b>Час:</b> {content_data.get('created_at', '')}
+        """
+        
+        url = f"{self.base_url}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info(f"Notification sent for content {content_data.get('id')}")
+                return True
+            else:
+                logger.error(f"Telegram API error: {result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to send notification: {e}")
+            return False
+    
+    def send_test_notification(self) -> Dict[str, Any]:
+        """Send test notification"""
+        url = f"{self.base_url}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": "🧪 Тестове повідомлення від Gradus AI\n\n✅ Сервіс працює коректно!",
+            "parse_mode": "HTML"
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            return response.json()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+```
+
+2. ADD TEST ENDPOINT in backend/main.py:
+```python
+from services.notification_service import NotificationService
+
+@app.post("/api/test/telegram")
+async def test_telegram():
+    """Test Telegram notification"""
+    notification_service = NotificationService()
+    result = notification_service.send_test_notification()
+    return result
+```
+
+That's it for now. Just implement these two things:
+- notification_service.py with send_approval_notification() and send_test_notification()
+- /api/test/telegram endpoint
+
+We'll integrate it into the content pipeline in the next step.
+
+Please implement and let me know when ready!

@@ -1,0 +1,72 @@
+Prepare Best Brands video feature for production deployment
+
+## Pre-Deployment Checklist
+
+1. **Verify all fixes are complete:**
+   - [ ] "Who are you" triggers removed
+   - [ ] Telegram-only implementation confirmed
+   - [ ] All tests pass
+   - [ ] Video file in correct location: `backend/assets/bestbrands-presentation.mp4`
+
+2. **Update push command to exclude video from Git (too large):**
+````bash
+# Add video to .gitignore first
+echo "backend/assets/bestbrands-presentation.mp4" >> .gitignore
+
+# Push code without video
+git add backend/services/bestbrands_video.py \
+        backend/routes/telegram_webhook.py \
+        backend/models/content.py \
+        backend/scripts/test_bestbrands_video.py \
+        .gitignore \
+        replit.md && \
+git commit -m "Add Best Brands video feature for Maya Telegram bot
+
+- Trigger detection for company questions (UA/RU/EN + code-switching)
+- Video sending with Telegram file_id caching for instant delivery
+- Text fallback when video unavailable
+- Telegram-only feature (website unaffected)
+- Fixed: Identity questions ('who are you') use Maya's RAG response
+
+Note: Video file (22MB) deployed separately to Render" && \
+git push origin main
+````
+
+3. **Document Render deployment steps:**
+
+Create `DEPLOYMENT.md` with these instructions:
+````markdown
+# Best Brands Video Feature - Render Deployment
+
+## Step 1: Deploy Code
+```bash
+git pull origin main
+python init_db.py  # Creates media_files table
+```
+
+## Step 2: Upload Video to Render
+Since video file is too large for Git:
+1. Go to Render dashboard → Shell
+2. Upload `bestbrands-presentation.mp4` via Render's file upload
+3. Place in: `/opt/render/project/src/backend/assets/bestbrands-presentation.mp4`
+
+OR use curl to download from temporary storage:
+```bash
+cd /opt/render/project/src/backend/assets/
+curl -o bestbrands-presentation.mp4 "YOUR_TEMPORARY_DOWNLOAD_LINK"
+```
+
+## Step 3: Verify
+```bash
+# Check video exists
+ls -lh backend/assets/bestbrands-presentation.mp4
+
+# Test feature
+python backend/scripts/test_bestbrands_video.py
+```
+
+## Step 4: Restart Services
+Restart the FastAPI backend through Render dashboard.
+````
+
+Show me the updated .gitignore and DEPLOYMENT.md files.

@@ -1,0 +1,83 @@
+Run migration 016 and update hunt_sources.
+
+1. Create migration 016 in backend/db_migrations.py following 
+   the exact same pattern as existing migrations in that file.
+   
+   Migration SQL:
+
+ALTER TABLE hunt_sources 
+ADD COLUMN IF NOT EXISTS channel_type VARCHAR(20) DEFAULT 'scan';
+
+UPDATE hunt_sources SET channel_type = 'scan' 
+WHERE channel_type IS NULL;
+
+ALTER TABLE hunt_sources 
+ADD CONSTRAINT IF NOT EXISTS hunt_sources_tg_channel_unique 
+UNIQUE (tg_channel);
+
+INSERT INTO hunt_sources (name, tg_channel, is_active, channel_type)
+VALUES
+('KYIV JOBS', 'kiev_rabota2', TRUE, 'scan'),
+('Робота Київ 3', 'rabota_kieve_ua', TRUE, 'scan'),
+('Робота Дніпро', 'rabota_dnipro_vacancy', TRUE, 'scan'),
+('Робота Харків', 'kharkiv_robota1', TRUE, 'scan'),
+('Робота Одеса', 'odesa_odessa_rabota', TRUE, 'scan'),
+('Робота Львів', 'robota_rabota_lviv', TRUE, 'scan'),
+('Jobs for Ukrainians', 'jobforukrainians', TRUE, 'scan')
+ON CONFLICT (tg_channel) DO NOTHING;
+
+2. Update SQLAlchemy model HuntSource in 
+   backend/models/hunt_models.py:
+   Add column:
+   channel_type = Column(String(20), default='scan')
+
+3. Update backend/services/hunt_tg_scraper.py:
+   When loading channels to scan, filter by channel_type = 'scan'.
+   Use raw psycopg2 pattern (consistent with rest of codebase):
+   
+   import psycopg2
+   import os
+   
+   try:
+       conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+       cur = conn.cursor()
+       cur.execute(
+           "SELECT tg_channel FROM hunt_sources "
+           "WHERE is_active = TRUE AND channel_type = 'scan'"
+       )
+       rows = cur.fetchall()
+       channels = [row[0] for row in rows]
+       conn.close()
+   except Exception as e:
+       logger.warning(f"DB channel load failed: {e}, using defaults")
+       channels = []
+   
+   if not channels:
+       channels = [
+           "kiev_rabota2", "rabota_kieve_ua",
+           "rabota_dnipro_vacancy", "kharkiv_robota1",
+           "odesa_odessa_rabota", "robota_rabota_lviv",
+           "jobforukrainians"
+       ]
+
+4. Update backend/services/hunt_poster.py:
+   When loading channels for posting, filter by channel_type = 'post'
+   Use same psycopg2 pattern:
+   
+   cur.execute(
+       "SELECT tg_channel FROM hunt_sources "
+       "WHERE is_active = TRUE AND channel_type = 'post'"
+   )
+   
+   If query returns empty list — do NOT fall back to defaults.
+   Instead send message to TG thread:
+   "📢 Немає активних каналів для розміщення.
+   Додайте канали з type='post' до таблиці hunt_sources."
+
+5. Verify migration runs on next Render deploy by checking
+   that backend/db_migrations.py migration list includes 
+   migration 016 and it follows the exact same registration
+   pattern as migrations 013, 014, 015.
+
+Do not break any existing functionality.
+Do not modify any other files.

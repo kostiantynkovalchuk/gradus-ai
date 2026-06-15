@@ -1,0 +1,338 @@
+# Investigate Pinecone "company_knowledge" Namespace
+
+## OBJECTIVE
+Investigate the "company_knowledge" namespace (48 records) in Pinecone to determine:
+1. What content is stored there
+2. Which bot uses it (Maya HR or Alex Gradus)
+3. If there's any overlap with "hr_docs" namespace
+4. Whether it should be cleaned up or left as-is
+
+## HYPOTHESIS
+The "company_knowledge" namespace likely contains Alex Gradus's product knowledge (brands, pricing, sales info), separate from Maya's HR knowledge.
+
+---
+
+## TASK 1: Query company_knowledge Namespace
+
+Sample the content to see what's stored:
+```python
+import os
+from pinecone import Pinecone
+import json
+
+# Initialize Pinecone
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index("gradus-media")
+
+print("🔍 Investigating company_knowledge namespace...\n")
+
+# Get index stats
+stats = index.describe_index_stats()
+print("📊 Index Stats:")
+for ns_name, ns_stats in stats.get('namespaces', {}).items():
+    print(f"  {ns_name}: {ns_stats.get('vector_count', 0)} vectors")
+
+print("\n" + "="*60 + "\n")
+
+# Query with dummy vector to get samples
+print("📦 Sampling company_knowledge content:\n")
+
+dummy_vector = [0.1] * 1536  # Dummy query vector
+
+results = index.query(
+    vector=dummy_vector,
+    top_k=10,  # Get 10 samples
+    namespace="company_knowledge",
+    include_metadata=True
+)
+
+company_samples = []
+for i, match in enumerate(results.matches, 1):
+    sample = {
+        'id': match.id,
+        'score': match.score,
+        'metadata': match.metadata
+    }
+    company_samples.append(sample)
+    
+    print(f"{i}. ID: {match.id}")
+    print(f"   Metadata: {json.dumps(match.metadata, ensure_ascii=False, indent=2)}")
+    print()
+
+print("="*60 + "\n")
+```
+
+---
+
+## TASK 2: Query hr_docs Namespace for Comparison
+
+Sample Maya's namespace:
+```python
+print("📦 Sampling hr_docs content (Maya's namespace):\n")
+
+results_hr = index.query(
+    vector=dummy_vector,
+    top_k=10,
+    namespace="hr_docs",
+    include_metadata=True
+)
+
+hr_samples = []
+for i, match in enumerate(results_hr.matches, 1):
+    sample = {
+        'id': match.id,
+        'score': match.score,
+        'metadata': match.metadata
+    }
+    hr_samples.append(sample)
+    
+    print(f"{i}. ID: {match.id}")
+    print(f"   Metadata: {json.dumps(match.metadata, ensure_ascii=False, indent=2)}")
+    print()
+
+print("="*60 + "\n")
+```
+
+---
+
+## TASK 3: Check Code References
+
+Search codebase for namespace references:
+```python
+import subprocess
+
+print("🔍 Searching codebase for namespace references:\n")
+
+# Search for "company_knowledge" in all Python files
+print("1. References to 'company_knowledge':")
+result = subprocess.run(
+    ['grep', '-rn', 'company_knowledge', 'backend/', '--include=*.py'],
+    capture_output=True,
+    text=True
+)
+if result.stdout:
+    print(result.stdout)
+else:
+    print("   ❌ No references found in backend/")
+
+print("\n" + "-"*60 + "\n")
+
+# Search for "hr_docs" in all Python files
+print("2. References to 'hr_docs':")
+result = subprocess.run(
+    ['grep', '-rn', 'hr_docs', 'backend/', '--include=*.py'],
+    capture_output=True,
+    text=True
+)
+if result.stdout:
+    print(result.stdout)
+else:
+    print("   ❌ No references found in backend/")
+
+print("\n" + "-"*60 + "\n")
+
+# Search for namespace parameter usage
+print("3. All namespace references:")
+result = subprocess.run(
+    ['grep', '-rn', 'namespace=', 'backend/', '--include=*.py'],
+    capture_output=True,
+    text=True
+)
+if result.stdout:
+    print(result.stdout)
+else:
+    print("   ❌ No namespace parameters found")
+
+print("\n" + "="*60 + "\n")
+```
+
+---
+
+## TASK 4: Content Analysis
+
+Analyze the differences:
+```python
+print("📊 Content Analysis:\n")
+
+# Extract topics from metadata
+def extract_topics(samples):
+    topics = set()
+    for sample in samples:
+        metadata = sample.get('metadata', {})
+        # Look for common metadata fields
+        if 'title' in metadata:
+            topics.add(metadata['title'][:50])
+        if 'category' in metadata:
+            topics.add(f"Category: {metadata['category']}")
+        if 'source' in metadata:
+            topics.add(f"Source: {metadata['source']}")
+    return topics
+
+company_topics = extract_topics(company_samples)
+hr_topics = extract_topics(hr_samples)
+
+print("company_knowledge topics:")
+for topic in sorted(company_topics)[:15]:
+    print(f"  • {topic}")
+
+print("\nhr_docs topics:")
+for topic in sorted(hr_topics)[:15]:
+    print(f"  • {topic}")
+
+print("\n" + "="*60 + "\n")
+
+# Check for overlaps
+overlap = company_topics & hr_topics
+if overlap:
+    print(f"⚠️ OVERLAP DETECTED ({len(overlap)} topics):")
+    for topic in overlap:
+        print(f"  • {topic}")
+else:
+    print("✅ No topic overlap - namespaces are distinct")
+
+print("\n" + "="*60 + "\n")
+```
+
+---
+
+## TASK 5: Generate Investigation Report
+
+Create comprehensive report:
+```python
+report = {
+    "investigation_date": datetime.now().isoformat(),
+    "index_name": "gradus-media",
+    "namespaces": {
+        "company_knowledge": {
+            "vector_count": stats['namespaces'].get('company_knowledge', {}).get('vector_count', 0),
+            "sample_ids": [s['id'] for s in company_samples[:5]],
+            "topics": list(company_topics)[:10],
+            "used_by": "UNKNOWN - check code references above"
+        },
+        "hr_docs": {
+            "vector_count": stats['namespaces'].get('hr_docs', {}).get('vector_count', 0),
+            "sample_ids": [s['id'] for s in hr_samples[:5]],
+            "topics": list(hr_topics)[:10],
+            "used_by": "Maya HR Bot"
+        },
+        "__default__": {
+            "vector_count": stats['namespaces'].get('__default__', {}).get('vector_count', 0),
+            "note": "Test/unknown data"
+        }
+    },
+    "overlap_detected": len(overlap) > 0,
+    "overlapping_topics": list(overlap) if overlap else [],
+    "recommendation": "PENDING - analyze code references"
+}
+
+# Determine likely owner based on content
+if any('product' in str(topic).lower() or 'brand' in str(topic).lower() 
+       for topic in company_topics):
+    report['namespaces']['company_knowledge']['likely_owner'] = "Alex Gradus (Products)"
+    report['recommendation'] = "Keep separate - Alex uses company_knowledge, Maya uses hr_docs"
+elif any('hr' in str(topic).lower() or 'vacation' in str(topic).lower() 
+         for topic in company_topics):
+    report['namespaces']['company_knowledge']['likely_owner'] = "Maya HR (duplicate?)"
+    report['recommendation'] = "Investigate duplication - possibly merge or clean up"
+else:
+    report['namespaces']['company_knowledge']['likely_owner'] = "Unknown"
+    report['recommendation'] = "Review samples above to determine ownership"
+
+# Save report
+with open('/home/claude/pinecone_namespace_investigation.json', 'w', encoding='utf-8') as f:
+    json.dump(report, f, indent=2, ensure_ascii=False)
+
+print("📄 INVESTIGATION REPORT\n")
+print(json.dumps(report, indent=2, ensure_ascii=False))
+print(f"\n✅ Full report saved to /home/claude/pinecone_namespace_investigation.json")
+```
+
+---
+
+## EXPECTED OUTPUT
+```
+🔍 Investigating company_knowledge namespace...
+
+📊 Index Stats:
+  __default__: 1 vectors
+  hr_docs: 46 vectors
+  company_knowledge: 48 vectors
+
+📦 Sampling company_knowledge content:
+
+1. ID: product_dovbush_001
+   Metadata: {
+     "title": "DOVBUSH Коньяк Premium",
+     "category": "products",
+     "brand": "DOVBUSH",
+     "source": "product_catalog"
+   }
+
+[... more samples ...]
+
+📊 Content Analysis:
+
+company_knowledge topics:
+  • DOVBUSH Коньяк
+  • ADJARI Brandy
+  • GREENDAY Vodka
+  • Category: products
+  • Source: product_catalog
+
+hr_docs topics:
+  • Відпустки та лікарняні
+  • СЕД Бліц доступ
+  • Category: vacation
+  • Source: hr_knowledge_base
+
+✅ No topic overlap - namespaces are distinct
+
+📄 INVESTIGATION REPORT
+{
+  "namespaces": {
+    "company_knowledge": {
+      "vector_count": 48,
+      "likely_owner": "Alex Gradus (Products)",
+      "topics": ["DOVBUSH", "ADJARI", "products"]
+    },
+    "hr_docs": {
+      "vector_count": 46,
+      "used_by": "Maya HR Bot",
+      "topics": ["vacation", "SED Blitz", "HR"]
+    }
+  },
+  "recommendation": "Keep separate - Alex uses company_knowledge, Maya uses hr_docs"
+}
+```
+
+---
+
+## SUCCESS CRITERIA
+
+✅ Sampled content from both namespaces
+✅ Identified which bot uses which namespace
+✅ Checked for duplicate content
+✅ Generated clear recommendation
+✅ Report saved with findings
+
+## POSSIBLE OUTCOMES
+
+**Outcome 1: Clean Separation (Expected)**
+- company_knowledge = Alex's products (DOVBUSH, ADJARI, etc.)
+- hr_docs = Maya's HR knowledge
+- Recommendation: Keep separate, no action needed
+
+**Outcome 2: Duplication**
+- Both namespaces have HR content
+- Recommendation: Merge or clean up duplicates
+
+**Outcome 3: Orphaned Data**
+- company_knowledge not used by any bot
+- Recommendation: Delete or repurpose
+
+## NEXT STEPS
+
+Based on investigation results:
+- If Alex's data → Document separation, update bot configs
+- If duplicates → Clean up and consolidate
+- If orphaned → Delete or archive

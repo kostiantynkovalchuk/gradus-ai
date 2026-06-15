@@ -1,0 +1,220 @@
+Create scraper for Delo.ua alcohol business news (Ukrainian source, no translation needed):
+
+📋 TASK: Build Delo.ua scraper for Ukrainian business news
+
+CREATE backend/services/scrapers/delo_ua_scraper.py:
+```python
+import requests
+from bs4 import BeautifulSoup
+import logging
+from typing import List, Dict, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class DeloUaScraper:
+    """
+    Scraper for Delo.ua alcohol/business section
+    Ukrainian language - no translation needed
+    """
+    
+    def __init__(self):
+        self.base_url = "https://delo.ua"
+        self.section_url = "https://delo.ua/business/alkogol/"
+        self.user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    
+    def scrape_articles(self, limit: int = 5) -> List[Dict]:
+        """
+        Scrape articles from Delo.ua alcohol section
+        
+        Args:
+            limit: Number of articles to scrape
+            
+        Returns:
+            List of article dictionaries
+        """
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(self.section_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = []
+            
+            # Find article elements (adjust selectors based on actual site structure)
+            article_elements = soup.select('.article-item, .news-item, .post-item')[:limit]
+            
+            for element in article_elements:
+                try:
+                    article = self._parse_article_card(element)
+                    
+                    if article:
+                        # Get full article content
+                        full_content = self._fetch_article_content(article['url'])
+                        
+                        if full_content:
+                            article['content'] = full_content
+                            articles.append(article)
+                            
+                            logger.info(f"Scraped: {article['title'][:50]}...")
+                            
+                except Exception as e:
+                    logger.error(f"Error parsing article element: {e}")
+                    continue
+            
+            logger.info(f"✅ Scraped {len(articles)} articles from Delo.ua")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"❌ Delo.ua scraping failed: {e}")
+            return []
+    
+    def _parse_article_card(self, element) -> Optional[Dict]:
+        """Parse article card from listing page"""
+        
+        try:
+            # Find title
+            title_elem = element.select_one('h2, h3, .title, .article-title')
+            if not title_elem:
+                return None
+            
+            title = title_elem.get_text(strip=True)
+            
+            # Find link
+            link_elem = element.select_one('a')
+            if not link_elem:
+                return None
+            
+            url = link_elem.get('href')
+            if not url.startswith('http'):
+                url = f"{self.base_url}{url}"
+            
+            # Find image (optional)
+            img_elem = element.select_one('img')
+            image_url = img_elem.get('src') if img_elem else None
+            
+            if image_url and not image_url.startswith('http'):
+                image_url = f"{self.base_url}{image_url}"
+            
+            # Find date (optional)
+            date_elem = element.select_one('.date, .time, time')
+            published_date = date_elem.get_text(strip=True) if date_elem else None
+            
+            return {
+                'title': title,
+                'url': url,
+                'image_url': image_url,
+                'published_date': published_date,
+                'source': 'Delo.ua',
+                'language': 'uk',
+                'needs_translation': False
+            }
+            
+        except Exception as e:
+            logger.error(f"Error parsing article card: {e}")
+            return None
+    
+    def _fetch_article_content(self, url: str) -> Optional[str]:
+        """Fetch full article content from article page"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find article content container (adjust selector)
+            content_elem = soup.select_one('.article-content, .post-content, .entry-content')
+            
+            if not content_elem:
+                # Try alternative selectors
+                content_elem = soup.select_one('article, .article-body')
+            
+            if not content_elem:
+                logger.warning(f"Could not find content for: {url}")
+                return None
+            
+            # Remove unwanted elements
+            for unwanted in content_elem.select('script, style, aside, .ads, .related'):
+                unwanted.decompose()
+            
+            # Extract text
+            content = content_elem.get_text(separator='\n', strip=True)
+            
+            # Clean up
+            content = self._clean_text(content)
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error fetching article content from {url}: {e}")
+            return None
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean scraped text"""
+        
+        # Remove extra whitespace
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        text = '\n\n'.join(lines)
+        
+        # Remove common unwanted patterns
+        text = text.replace('\xa0', ' ')  # Non-breaking spaces
+        
+        return text
+```
+
+UPDATE backend/services/multi_source_scraper.py:
+
+Add Delo.ua to sources:
+```python
+from services.scrapers.delo_ua_scraper import DeloUaScraper
+
+class MultiSourceScraper:
+    
+    def __init__(self):
+        self.sources = {
+            'linkedin': [
+                'the_spirits_business',
+                'delo_ua',  # ← ADD THIS
+                'minfin_ua'
+            ],
+            'facebook': [
+                'just_drinks',
+                'restorator_ua',
+                'the_drinks_report'
+            ]
+        }
+    
+    def _scrape_source(self, source: str, limit: int) -> List[Dict]:
+        """Scrape specific source"""
+        
+        if source == 'delo_ua':
+            scraper = DeloUaScraper()
+            return scraper.scrape_articles(limit)
+        
+        elif source == 'the_spirits_business':
+            from services.news_scraper import NewsScraper
+            scraper = NewsScraper()
+            return scraper.scrape_spirits_business(limit)
+        
+        # ... other scrapers will be added ...
+```
+
+Test the scraper:
+```python
+# Quick test
+if __name__ == "__main__":
+    scraper = DeloUaScraper()
+    articles = scraper.scrape_articles(limit=2)
+    
+    for article in articles:
+        print(f"\nTitle: {article['title']}")
+        print(f"URL: {article['url']}")
+        print(f"Content length: {len(article.get('content', ''))} chars")
+        print(f"Language: {article['language']}")
+        print(f"Needs translation: {article['needs_translation']}")
+```
+
+Please implement Delo.ua scraper!

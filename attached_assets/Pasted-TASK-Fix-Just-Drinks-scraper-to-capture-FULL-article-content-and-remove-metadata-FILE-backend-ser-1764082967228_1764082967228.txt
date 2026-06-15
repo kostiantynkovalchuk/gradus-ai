@@ -1,0 +1,129 @@
+TASK: Fix Just Drinks scraper to capture FULL article content and remove metadata
+
+FILE: backend/services/scrapers/just_drinks_scraper.py
+
+CRITICAL ISSUE: Scraper only capturing article summary/teaser, missing full body content
+
+PROBLEMS:
+1. Content truncated mid-sentence
+2. Duplicate title
+3. Author name present ("Fiona Holland", "Крістіан Бейфорд")
+4. Missing main article body
+
+REQUIRED CHANGES:
+
+=== 1. UPDATE CONTENT SELECTORS ===
+Current selectors may only capture preview text.
+Try these in order of priority:
+```python
+CONTENT_SELECTORS = [
+    '.article-body',           # Main article content
+    '.entry-content',          # Full content area
+    '.post-content',           # Post body
+    'article .content',        # Article content wrapper
+    '.article-content',        # Alternative content class
+    '[itemprop="articleBody"]', # Schema.org markup
+    '.full-article',           # Full article container
+    '.story-body',             # News story body
+    'article',                 # Fallback to article tag
+]
+```
+
+=== 2. HANDLE "READ MORE" SCENARIOS ===
+Check if article has:
+- Truncated text indicator (".article-teaser", ".preview")
+- "Read more" link that needs following
+- Paywall or registration requirement
+
+If content < 200 chars, log warning: "Content too short, may be truncated"
+
+=== 3. REMOVE DUPLICATE TITLE ===
+After extraction, check if title appears twice at start:
+```python
+# If title appears twice, remove first occurrence
+if content.startswith(title + '\n' + title):
+    content = content[len(title):].strip()
+```
+
+=== 4. FILTER AUTHOR NAMES ===
+Remove lines that are likely author names:
+- 2-3 words
+- All capitalized or title case
+- Not ending with punctuation
+- Examples: "Fiona Holland", "Крістіан Бейфорд"
+
+=== 5. UPDATED CLEANING METHOD ===
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean Just Drinks article content"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove duplicate title at start
+    if content.startswith(title + '\n' + title):
+        content = content[len(title):].strip()
+    elif content.startswith(title):
+        # Check if next occurrence is also title
+        lines = content.split('\n')
+        if len(lines) > 1 and lines[1].strip() == title:
+            content = '\n'.join(lines[2:]).strip()
+    
+    # Split into lines
+    lines = content.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        if not line:
+            continue
+        
+        # Skip author names (2-3 words, proper case, no punctuation at end)
+        words = line.split()
+        if (len(words) <= 3 and 
+            not line.endswith('.') and
+            all(w[0].isupper() for w in words if w)):
+            continue
+        
+        # Skip date patterns
+        if re.match(r'\d{1,2}\s+\w+,?\s+\d{4}', line):
+            continue
+        
+        cleaned_lines.append(line)
+    
+    content = '\n\n'.join(cleaned_lines)
+    
+    # Add paragraph breaks at sentence boundaries
+    content = re.sub(r'\.(\s+)([A-ZА-ЯІЇЄ])', r'.\n\n\2', content)
+    
+    # Remove excessive newlines
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
+```
+
+=== 6. ADD CONTENT LENGTH CHECK ===
+After extraction, verify minimum content:
+```python
+if len(content) < 200:
+    logger.warning(f"Just Drinks article too short ({len(content)} chars): {title[:50]}...")
+    # May indicate truncation or paywall
+```
+
+=== 7. TEST WITH MULTIPLE ARTICLES ===
+Scrape 3 test articles and check:
+- Content length > 500 chars (full article)
+- No truncation mid-sentence
+- No duplicate titles
+- No author names
+- Proper paragraphs
+- Source tag present at end
+
+OUTPUT:
+Show:
+1. Updated content selectors being used
+2. Test results from 3 articles with content lengths
+3. Before/after comparison
+4. Confirmation that full article body is captured

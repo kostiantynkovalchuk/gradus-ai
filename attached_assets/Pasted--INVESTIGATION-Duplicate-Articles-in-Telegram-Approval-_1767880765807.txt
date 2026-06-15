@@ -1,0 +1,209 @@
+🐛 INVESTIGATION: Duplicate Articles in Telegram Approval Queue
+
+## ISSUE SUMMARY
+User is receiving duplicate articles in Telegram approval notifications after adding new HoReca sources to the scraper.
+
+## DIAGNOSTIC STEPS (DO THIS FIRST)
+
+### 1. Analyze Current Scraper Logic
+
+Locate and examine:
+- backend/services/content_scraper.py (or similar)
+- Look for all scraping functions
+- Identify all content sources being scraped
+
+Show me:
+- List of all sources currently configured
+- Which sources were recently added (look for HoReca-related sources)
+- How articles are identified as unique (URL? title? hash?)
+
+### 2. Check Duplicate Detection
+
+Search for duplicate prevention logic:
+- Is there a uniqueness check before saving to database?
+- What field is used for uniqueness? (source_url, title, content hash?)
+- Are there database constraints? (UNIQUE constraint on any columns?)
+
+Look for code like:
+```python
+existing = db.query(ContentQueue).filter(ContentQueue.source_url == url).first()
+if existing:
+    return  # Skip duplicate
+```
+
+### 3. Examine Database Schema
+
+Check the ContentQueue table definition:
+- Does source_url have a UNIQUE constraint?
+- Are there any indexes preventing duplicates?
+- Show me the table definition
+
+### 4. Check Scheduler Behavior
+
+In scheduler.py, look for:
+- How often scraping jobs run
+- Are multiple scraping jobs running simultaneously?
+- Could the same source be scraped twice in parallel?
+
+## LIKELY ROOT CAUSES
+
+### Cause 1: Missing Uniqueness Constraint
+New sources might scrape the same article from different URLs or with slight variations.
+
+### Cause 2: Content Hash Collision
+If using content-based deduplication, similar articles might not be detected as duplicates.
+
+### Cause 3: Multiple Sources, Same Content
+HoReca sources might republish the same industry news, causing duplicates with different source URLs.
+
+### Cause 4: No Title/URL Normalization
+"Article Title" vs "Article Title " (trailing space) might be treated as different articles.
+
+## PROPOSED SOLUTIONS
+
+### Solution A: Database-Level Uniqueness (Recommended)
+
+Add a UNIQUE constraint on source_url:
+```python
+# In models.py or wherever ContentQueue is defined
+class ContentQueue(Base):
+    __tablename__ = "content_queue"
+    
+    id = Column(Integer, primary_key=True)
+    source_url = Column(String, unique=True, nullable=False, index=True)  # Add unique=True
+    # ... other fields
+```
+
+Then create a migration:
+```python
+# Create new migration file
+from alembic import op
+
+def upgrade():
+    op.create_unique_constraint('uq_content_queue_source_url', 'content_queue', ['source_url'])
+
+def downgrade():
+    op.drop_constraint('uq_content_queue_source_url', 'content_queue')
+```
+
+### Solution B: Application-Level Deduplication
+
+In the scraper, before saving each article:
+```python
+def save_article(article_data: Dict) -> bool:
+    """Save article with duplicate checking"""
+    
+    # Normalize URL (remove tracking params, trailing slashes)
+    normalized_url = normalize_url(article_data['source_url'])
+    
+    # Check if already exists
+    existing = db.query(ContentQueue).filter(
+        ContentQueue.source_url == normalized_url
+    ).first()
+    
+    if existing:
+        logger.info(f"Skipping duplicate: {article_data['title']}")
+        return False
+    
+    # Also check by title similarity (optional, for cross-source duplicates)
+    similar = db.query(ContentQueue).filter(
+        ContentQueue.title.ilike(f"%{article_data['title'][:50]}%")
+    ).first()
+    
+    if similar:
+        logger.warning(f"Similar article found: {article_data['title']}")
+        # Decide: skip or flag for review
+    
+    # Save new article
+    new_article = ContentQueue(**article_data)
+    db.add(new_article)
+    db.commit()
+    return True
+```
+
+### Solution C: Cross-Source Deduplication
+
+For articles from multiple sources (same story, different sites):
+```python
+import hashlib
+
+def content_hash(title: str, content: str) -> str:
+    """Generate hash from normalized content"""
+    normalized = f"{title.lower().strip()} {content[:500].lower().strip()}"
+    return hashlib.md5(normalized.encode()).hexdigest()
+
+# Add content_hash field to ContentQueue model
+class ContentQueue(Base):
+    content_hash = Column(String, index=True)
+    
+# Before saving:
+article_hash = content_hash(article_data['title'], article_data['content'])
+existing = db.query(ContentQueue).filter(
+    ContentQueue.content_hash == article_hash
+).first()
+```
+
+## INVESTIGATION TASKS
+
+Please perform these checks and report back:
+
+1. **Show me all scraper sources:**
+   - List all URLs/feeds being scraped
+   - Which ones were added recently?
+   - Are any HoReca sources scraping overlapping content?
+
+2. **Show duplicate detection code:**
+   - Is there ANY duplicate checking?
+   - What field is checked?
+   - Show me the exact code
+
+3. **Check database constraints:**
+   - Does content_queue table have UNIQUE constraints?
+   - Show me the table schema
+
+4. **Analyze recent duplicates:**
+   - Query the database: 
+```sql
+     SELECT title, source_url, COUNT(*) 
+     FROM content_queue 
+     WHERE created_at > NOW() - INTERVAL '24 hours'
+     GROUP BY title, source_url 
+     HAVING COUNT(*) > 1
+```
+   - Show me examples of duplicates
+
+5. **Check scheduler timing:**
+   - Are multiple scraping jobs overlapping?
+   - Could race conditions cause duplicates?
+
+## IMPLEMENTATION PLAN
+
+After diagnosis, implement the fix in this order:
+
+1. **Add database constraint** (prevents future duplicates)
+2. **Add application-level checking** (better control)
+3. **Clean existing duplicates** (one-time cleanup)
+4. **Add logging** (monitor for future issues)
+
+## TESTING
+
+After implementing:
+1. Manually trigger scraper: `curl -X POST http://localhost:8000/api/scheduler/trigger/scrape`
+2. Check logs for "Skipping duplicate" messages
+3. Verify only unique articles appear in Telegram
+4. Try scraping the same source twice - should not create duplicates
+
+## IMPORTANT CONSTRAINTS
+
+❌ DO NOT:
+- Delete the database or lose existing approved articles
+- Break existing scraper functionality
+- Remove any content sources
+
+✅ DO:
+- Preserve all existing data
+- Add duplicate detection without breaking current flow
+- Log all duplicate detection events for monitoring
+- Test with recent HoReca sources that caused the issue
+
+Please analyze the current implementation, identify the root cause, and propose a safe fix.

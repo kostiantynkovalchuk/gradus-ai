@@ -1,0 +1,45 @@
+Task: Prepare tenderlot-bot folder for migration to a separate Replit project.
+Context: The tenderlot-bot/ folder currently lives inside the gradus-ai monorepo workspace. We're extracting it to its own Replit project + own GitHub repo. The actual project creation will be done manually by the user; your job is to prepare a clean export and clean up the leftover.
+Step 1 — Diagnose current state.
+Run and report:
+bashls -la ~/workspace/ | grep tenderlot
+ls -la ~/workspace/tenderlot-bot/
+ls -la ~/workspace/~tenderlot-bot/ 2>/dev/null || echo "No tilde folder or empty"
+Confirm which folder has actual code (should be tenderlot-bot/, not ~tenderlot-bot/).
+Step 2 — Clean up before export.
+Inside ~/workspace/tenderlot-bot/:
+
+Remove SQLite databases (they'll regenerate from seed): rm -f tenderlot_bot.db tenderlot_mock.db
+Remove Python cache: find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+Remove any .venv/ or venv/ directories if present
+Remove .replit and replit.nix if they exist inside the folder (we'll generate new ones in the fresh project)
+Verify .env files are NOT present (only .env.example should be there)
+
+Step 3 — Create clean tarball.
+bashcd ~/workspace
+tar -czf /tmp/tenderlot-bot-export.tar.gz \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  --exclude='.venv' \
+  --exclude='venv' \
+  --exclude='*.db' \
+  --exclude='.env' \
+  tenderlot-bot/
+
+ls -lh /tmp/tenderlot-bot-export.tar.gz
+tar -tzf /tmp/tenderlot-bot-export.tar.gz | head -50
+Expected size: under 5 MB. If it's bigger, find what's bloating it and exclude.
+Step 4 — Make the tarball downloadable.
+Move it to a location where the user can download it via Replit's file panel:
+bashcp /tmp/tenderlot-bot-export.tar.gz ~/workspace/tenderlot-bot-export.tar.gz
+Then output exact instructions to the user:
+
+In the file panel on the left, right-click tenderlot-bot-export.tar.gz and select Download
+Save it somewhere on your local machine
+Create new Replit project (Python template, name: tenderlot-bot)
+In the new project's shell, upload the tarball via the file panel (drag and drop into root)
+Run: tar -xzf tenderlot-bot-export.tar.gz --strip-components=1 && rm tenderlot-bot-export.tar.gz
+Verify with: ls -la — should see main.py, pyproject.toml, src/, tests/, etc.
+
+Step 5 — Do NOT delete the original tenderlot-bot/ folder from gradus-ai yet.
+The user will manually verify the new project works before we delete the source. Stop here and report what was done.

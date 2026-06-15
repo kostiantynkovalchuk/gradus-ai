@@ -1,0 +1,63 @@
+AUDIT ONLY — no changes. The Solomon Contracts analysis WORKS (45 findings, queue,
+protocol generation). We have FOUR UX issues to fix WITHOUT touching the working
+analysis/queue path. Confirm each against the real solomon_template.html before any
+edit. Report exactly where each lives and whether the fix is isolated (template-only,
+no backend, no poll-logic risk). DROP the contact-name/MIME-decode item — not now.
+
+ISSUE 4 — MOST IMPORTANT, A REAL BUG (not wording):
+The message "Аналіз триває довше звичайного — зачекайте, сторінка оновиться
+автоматично" appears WHEN ANALYSIS IS ALREADY DONE, and the page does NOT
+auto-refresh — the user must manually reload to see results. Two failures: it claims
+auto-refresh that doesn't happen, and it fires at completion instead of the page
+rendering results on its own.
+- Find the poll loop in solomon_template.html. Paste it.
+- Report the terminal/done condition (docs.some(d=>d.analyzed_at)? engagement
+  status?). When that condition is met, does the poll actually call
+  renderEngagementWorkspace / re-render the results — or does it just stop and leave
+  the message on screen?
+- Diagnose the exact gap: WHY does completion not trigger an auto-render? Is the poll
+  exiting before re-rendering? Is the "longer than usual" message on a pure elapsed
+  timer that fires regardless of real state? Is analyzed_at being set but the poll
+  not catching it / not re-fetching it?
+- We want: on completion → results render automatically, NO manual reload; and that
+  message NEVER shows just because time passed — only if genuinely still running past
+  an abnormal threshold (see Issue 1). Report what change achieves this and whether
+  it risks the poll path.
+
+ISSUE 1 — set an HONEST expectation (we are KEEPING an estimate, fixing it):
+Real runtime is ~5 min. Current copy implies a false ~60-120s estimate, and/or the
+counter ("Аналізую… (229с)") ticks up with no expectation set — both read as
+"frozen/broken".
+- Find where the analysis-in-progress label/copy is built. Report any hardcoded
+  estimate (60-120s) in copy OR logic.
+- We want to replace it with a HARDCODED honest expectation + live elapsed counter,
+  e.g.: "⏳ Аналізую договір… це займає близько 5 хвилин (Xс)". The "близько 5 хвилин"
+  sets expectation; the "(Xс)" proves it's alive. Report what needs to change and
+  whether it's isolated copy/logic.
+- Related to Issue 4: with a 5-min expectation set, the "longer than usual" message
+  should only fire at a GENUINELY abnormal threshold (recommend >8-10 min), not at
+  whatever low value triggers it today. Report the current threshold and where to
+  change it.
+
+ISSUE 2 — remove the redundant "+ Завантажити" step:
+On a NEW/empty engagement we want the drag-and-drop upload panel shown IMMEDIATELY,
+not gated behind clicking "+ Завантажити".
+- Find the upload panel + the "+ Завантажити" toggle. Report how the panel is
+  shown/hidden.
+- Can we render the drop zone inline by default when an engagement has ZERO
+  documents, and keep "+ Завантажити" only for adding a SECOND+ document?
+- CRITICAL: confirm no initialization (drop-zone event binding, file handler setup)
+  runs ONLY on the button click — if showing the panel by default skips that init,
+  drag-drop would silently break. Report whether the init is safe to run on load.
+
+ISSUE 3 — seconds counter shows uppercase Cyrillic "С"; change to lowercase "с".
+- Find the string. Confirm it's a one-character template change, nothing else.
+
+SEQUENCING REQUEST: For each issue, state whether the fix touches (a) only static
+copy, (b) template render logic, or (c) the poll/analysis path. We will likely ship
+Issues 2 + 3 + the Issue 1 copy together (safe), and Issue 4 + the Issue 1 threshold
+as a separate focused change (poll logic — higher risk). Flag anything that could
+break the working 45-finding flow.
+
+Report all. Implementation prompt after, split into a SAFE batch and a poll-logic
+batch. Do not implement.

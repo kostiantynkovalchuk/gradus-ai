@@ -1,0 +1,242 @@
+# Re-embed Missing Content Entries 194-198
+
+## OBJECTIVE
+Generate vector embeddings for content entries 194-198 in the hr_knowledge_base table and upload them to Pinecone to achieve 100% embedding coverage.
+
+## CONTEXT
+Knowledge base audit revealed that 4 content entries (IDs 194-198) are missing vector embeddings in Pinecone. This causes them to be invisible to semantic search, reducing Maya's ability to find relevant information.
+
+Current state:
+- 43 total content entries in hr_knowledge_base
+- 39 have embeddings in Pinecone
+- 4 missing: IDs 194-198
+
+## TASKS
+
+### Step 1: Identify Missing Content
+
+Query the database to find content entries 194-198:
+```python
+from models import get_db
+from models.hr_models import HRKnowledgeBase
+
+db = next(get_db())
+
+missing_ids = [194, 195, 196, 197, 198]
+content_entries = db.query(HRKnowledgeBase).filter(
+    HRKnowledgeBase.id.in_(missing_ids),
+    HRKnowledgeBase.is_active == True
+).all()
+
+print(f"Found {len(content_entries)} entries to embed:")
+for entry in content_entries:
+    print(f"  ID {entry.id}: {entry.title} (category: {entry.category})")
+```
+
+### Step 2: Generate Embeddings
+
+Use OpenAI API to generate embeddings:
+```python
+import os
+import openai
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+embeddings_to_upload = []
+
+for entry in content_entries:
+    # Combine title and content for embedding
+    text_to_embed = f"{entry.title}\n\n{entry.content}"
+    
+    print(f"Generating embedding for ID {entry.id}: {entry.title[:50]}...")
+    
+    response = openai.embeddings.create(
+        model="text-embedding-ada-002",
+        input=text_to_embed
+    )
+    
+    embedding = response.data[0].embedding
+    
+    embeddings_to_upload.append({
+        'id': str(entry.id),
+        'values': embedding,
+        'metadata': {
+            'title': entry.title,
+            'category': entry.category or 'general',
+            'content_preview': entry.content[:200] if entry.content else '',
+            'source': 'hr_knowledge_base'
+        }
+    })
+    
+    print(f"  ✅ Generated {len(embedding)}-dim vector for ID {entry.id}")
+
+print(f"\nTotal embeddings generated: {len(embeddings_to_upload)}")
+```
+
+### Step 3: Upload to Pinecone
+
+Upload embeddings to Pinecone index:
+```python
+from pinecone import Pinecone
+
+# Initialize Pinecone
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index_name = os.getenv("PINECONE_INDEX_NAME", "gradus-media")
+index = pc.Index(index_name)
+
+# Upload with namespace
+namespace = "hr_docs"
+
+print(f"\nUploading {len(embeddings_to_upload)} vectors to Pinecone...")
+print(f"  Index: {index_name}")
+print(f"  Namespace: {namespace}")
+
+# Upsert in batches (Pinecone recommends batches of 100)
+batch_size = 100
+for i in range(0, len(embeddings_to_upload), batch_size):
+    batch = embeddings_to_upload[i:i + batch_size]
+    index.upsert(vectors=batch, namespace=namespace)
+    print(f"  ✅ Uploaded batch {i//batch_size + 1} ({len(batch)} vectors)")
+
+print("\n✅ All embeddings uploaded successfully!")
+```
+
+### Step 4: Verify Upload
+
+Verify all 43 content entries now have embeddings:
+```python
+# Query Pinecone to check total vector count
+stats = index.describe_index_stats()
+namespace_stats = stats.get('namespaces', {}).get('hr_docs', {})
+total_vectors = namespace_stats.get('vector_count', 0)
+
+print(f"\n📊 Pinecone Stats:")
+print(f"  Namespace: hr_docs")
+print(f"  Total vectors: {total_vectors}")
+print(f"  Expected: 43")
+
+if total_vectors >= 43:
+    print("  ✅ All content entries now have embeddings!")
+else:
+    print(f"  ⚠️ Still missing {43 - total_vectors} embeddings")
+
+# Test search with one of the newly embedded entries
+if content_entries:
+    test_entry = content_entries[0]
+    print(f"\n🔍 Testing search with newly embedded content:")
+    print(f"  Query: {test_entry.title[:50]}...")
+    
+    # Generate query embedding
+    query_response = openai.embeddings.create(
+        model="text-embedding-ada-002",
+        input=test_entry.title
+    )
+    query_embedding = query_response.data[0].embedding
+    
+    # Search Pinecone
+    results = index.query(
+        vector=query_embedding,
+        top_k=5,
+        namespace="hr_docs",
+        include_metadata=True
+    )
+    
+    print(f"  Found {len(results.matches)} matches:")
+    for i, match in enumerate(results.matches[:3]):
+        print(f"    {i+1}. ID {match.id} (score: {match.score:.3f}): {match.metadata.get('title', 'N/A')[:50]}")
+```
+
+### Step 5: Generate Report
+
+Create a summary report:
+```python
+report = {
+    "operation": "re-embed_missing_content",
+    "timestamp": datetime.now().isoformat(),
+    "content_ids_processed": missing_ids,
+    "embeddings_generated": len(embeddings_to_upload),
+    "embeddings_uploaded": len(embeddings_to_upload),
+    "pinecone_index": index_name,
+    "pinecone_namespace": namespace,
+    "total_vectors_after": total_vectors,
+    "coverage_percentage": (total_vectors / 43 * 100) if total_vectors else 0,
+    "status": "success" if total_vectors >= 43 else "incomplete"
+}
+
+# Save report
+import json
+with open('/home/claude/re_embed_report.json', 'w', encoding='utf-8') as f:
+    json.dump(report, f, indent=2, ensure_ascii=False)
+
+print(f"\n📄 Report saved to /home/claude/re_embed_report.json")
+print(json.dumps(report, indent=2, ensure_ascii=False))
+```
+
+## EXPECTED OUTPUT
+```
+Found 4 entries to embed:
+  ID 194: [Title] (category: [category])
+  ID 195: [Title] (category: [category])
+  ID 196: [Title] (category: [category])
+  ID 197: [Title] (category: [category])
+
+Generating embedding for ID 194: [Title]...
+  ✅ Generated 1536-dim vector for ID 194
+[... repeat for 195-197...]
+
+Total embeddings generated: 4
+
+Uploading 4 vectors to Pinecone...
+  Index: gradus-media
+  Namespace: hr_docs
+  ✅ Uploaded batch 1 (4 vectors)
+
+✅ All embeddings uploaded successfully!
+
+📊 Pinecone Stats:
+  Namespace: hr_docs
+  Total vectors: 43
+  Expected: 43
+  ✅ All content entries now have embeddings!
+
+🔍 Testing search with newly embedded content:
+  Query: [Title]...
+  Found 5 matches:
+    1. ID 194 (score: 0.999): [Title]
+    2. ID [X] (score: 0.850): [Related title]
+    3. ID [Y] (score: 0.820): [Related title]
+
+📄 Report saved to /home/claude/re_embed_report.json
+```
+
+## SUCCESS CRITERIA
+
+✅ All 4 content entries (194-198) have embeddings generated
+✅ All 4 embeddings uploaded to Pinecone successfully
+✅ Total vector count in Pinecone = 43 (100% coverage)
+✅ Test search returns newly embedded content with high score
+✅ Report confirms success
+
+## ERROR HANDLING
+
+If any content IDs don't exist:
+- Log which IDs are missing
+- Continue with available entries
+- Report partial success
+
+If OpenAI API fails:
+- Retry up to 3 times with exponential backoff
+- Log the error
+- Continue with remaining entries
+
+If Pinecone upload fails:
+- Retry the failed batch
+- Log the error
+- Don't proceed to verification until all uploads succeed
+
+## NOTES
+
+- Use the same embedding model as existing vectors: text-embedding-ada-002
+- Use the same namespace as existing HR vectors: hr_docs
+- This operation should take ~30 seconds for 4 entries
+- Cost: ~$0.0001 per embedding (4 entries = ~$0.0004 total)

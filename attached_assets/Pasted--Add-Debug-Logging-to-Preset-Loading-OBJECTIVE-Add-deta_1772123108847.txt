@@ -1,0 +1,114 @@
+# Add Debug Logging to Preset Loading
+
+## OBJECTIVE
+Add detailed logging to the `_load_presets` function to diagnose why only 31 presets are being loaded when 32 exist in the database.
+
+## PROBLEM
+Database has 32 active presets, but logs consistently show "Loaded 31 preset answers". Need to determine:
+1. Does the database query return 32 or 31?
+2. Are all 32 making it through the list comprehension?
+3. Which preset ID is missing?
+
+## SOLUTION
+
+Update the `_load_presets` function in `backend/services/hr_rag_service.py`:
+```python
+async def _load_presets(self):
+    """Load preset answers from database"""
+    if not self.db_session:
+        self._presets_cache = []
+        return
+    
+    try:
+        from models.hr_models import HRPresetAnswer
+        
+        presets = self.db_session.query(HRPresetAnswer).filter(
+            HRPresetAnswer.is_active == True
+        ).order_by(HRPresetAnswer.priority.desc()).all()
+        
+        # DEBUG: Log count before processing
+        logger.info(f"📊 Query returned {len(presets)} presets from database")
+        
+        # DEBUG: Log all preset IDs from query
+        query_ids = [p.id for p in presets]
+        logger.info(f"📋 Query IDs: {sorted(query_ids)}")
+        
+        self._presets_cache = []
+        
+        # Process each preset with error handling
+        for p in presets:
+            try:
+                preset_dict = {
+                    'id': p.id,
+                    'pattern': p.question_pattern,
+                    'answer': p.answer_text,
+                    'content_ids': p.content_ids or []
+                }
+                self._presets_cache.append(preset_dict)
+            except Exception as preset_error:
+                logger.error(
+                    f"❌ Failed to process preset ID {p.id}: {preset_error}. "
+                    f"Pattern: {getattr(p, 'question_pattern', 'N/A')[:50]}"
+                )
+        
+        # DEBUG: Log final cached IDs
+        cached_ids = [p['id'] for p in self._presets_cache]
+        logger.info(f"✅ Loaded {len(self._presets_cache)} preset answers into cache")
+        logger.info(f"📋 Cached IDs: {sorted(cached_ids)}")
+        
+        # DEBUG: Find missing IDs
+        missing_ids = set(query_ids) - set(cached_ids)
+        if missing_ids:
+            logger.error(f"⚠️ MISSING PRESETS: IDs {sorted(missing_ids)} were queried but not cached!")
+        
+    except Exception as e:
+        logger.error(f"Failed to load presets: {e}", exc_info=True)
+        self._presets_cache = []
+```
+
+## EXPECTED OUTPUT
+
+After implementation, logs will show:
+
+**If query returns 32 but only 31 cache:**
+```
+📊 Query returned 32 presets from database
+📋 Query IDs: [1, 2, 3, ..., 37, 38, 39]
+❌ Failed to process preset ID 38: [specific error]
+✅ Loaded 31 preset answers into cache
+📋 Cached IDs: [1, 2, 3, ..., 37, 39]
+⚠️ MISSING PRESETS: IDs [38] were queried but not cached!
+```
+
+**If query only returns 31:**
+```
+📊 Query returned 31 presets from database
+📋 Query IDs: [1, 2, 3, ..., 37, 39]  ← ID 38 missing!
+✅ Loaded 31 preset answers into cache
+📋 Cached IDs: [1, 2, 3, ..., 37, 39]
+```
+
+## TESTING
+
+After deploying:
+
+1. Restart backend or trigger preset loading
+2. Check logs for the new debug messages
+3. Identify which scenario is happening:
+   - **Scenario A**: Query returns 32, but one fails to cache → Data corruption in that preset
+   - **Scenario B**: Query only returns 31 → Database query issue or connection problem
+
+## SUCCESS CRITERIA
+
+✅ Logs show exact count from database query
+✅ Logs show all preset IDs from query
+✅ Logs show all preset IDs in cache
+✅ If mismatch, logs show which IDs are missing
+✅ If processing fails, logs show specific error for that preset
+
+## NEXT STEPS
+
+Based on debug output:
+- **If preset 38 fails processing**: Check for NULL fields or malformed data
+- **If preset 38 missing from query**: Check database session/transaction isolation
+- **If no missing IDs**: Investigate caching mechanism

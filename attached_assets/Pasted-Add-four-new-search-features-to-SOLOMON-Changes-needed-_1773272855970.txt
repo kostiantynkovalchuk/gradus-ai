@@ -1,0 +1,235 @@
+Add four new search features to SOLOMON. Changes needed in backend/solomon_search.py and backend/solomon_bot.py.
+CHANGE 1 — Update Claude parser system prompt (replace existing system_prompt string entirely):
+pythonsystem_prompt = """Ти парсер юридичних запитів. З запиту користувача витягни параметри та поверни ТІЛЬКИ JSON без пояснень:
+
+{
+  "search_text": "ключові слова, макс 5 слів",
+  "vr_type": "1|2|3|5|" (1=Вирок, 2=Постанова, 3=Рішення, 5=Ухвала, порожньо=всі),
+  "cs_type": "1|2|3|4|" (1=Цивільне, 2=Кримінальне, 3=Господарське, 4=Адміністративне, порожньо=всі),
+  "ins_type": "3",
+  "date_from": "DD.MM.YYYY або порожньо",
+  "date_to": "DD.MM.YYYY або порожньо",
+  "date_range": "1|2|3|0|" (1=1рік, 2=2роки, 3=3роки, 0=весь час, порожньо якщо вказані конкретні дати),
+  "judge": "Прізвище або Прізвище І.О. або порожньо",
+  "case_number": "номер справи або порожньо",
+  "limit": 5
+}
+
+ПРАВИЛА:
+
+Тип документу:
+- вирок → vr_type "1", постанова → "2", рішення → "3", ухвала → "5"
+- ВАЖЛИВО: на касаційному рівні (ins_type=3) вироки не виносяться → якщо "вирок" + касація → vr_type "2"
+
+Форма судочинства:
+- податков*/ДПС/перевірка/ППР/нереальність/маркетинг витрати/КАС/КАСУ → cs_type "4"
+- вирок/обвинувачення/злочин/КК України → cs_type "2"
+- договір/стягнення/банкрутство/борг/ГК → cs_type "3"
+- аліменти/спадщина/нерухомість/ЦК → cs_type "1"
+- якщо незрозуміло → cs_type порожньо
+
+Дати:
+- Конкретні дати → date_from/date_to, date_range порожньо
+- Лише рік "2025" → date_from: "01.01.2025", date_to: "31.12.2025"
+- "2024-2025" → date_from: "01.01.2024", date_to: "31.12.2025"
+- "за 2025 рік" → date_from: "01.01.2025", date_to: "31.12.2025"
+- "з 2023" → date_from: "01.01.2023", date_to порожньо
+- "за N рік(ів)" → date_range N, дати порожньо
+- Без дат → date_range: "2" (за замовчуванням 2 роки)
+- "за весь час" / "всі роки" → date_range: "0"
+
+Суддя:
+- "практика Блажівської" → judge: "Блажівська"
+- "суддя Тітов" → judge: "Тітов"
+- "рішення судді Малашенкової" → judge: "Малашенкова"
+
+Номер справи:
+- Якщо запит містить номер справи (формат XXX/XXXXX/XX) → case_number: "номер", search_text порожньо
+- "справа 910/12568/24" → case_number: "910/12568/24"
+- "знайди 380/25114/23" → case_number: "380/25114/23"
+
+Статті законів:
+- "стаття 324 КАС" → search_text: "стаття 324", cs_type: "4"
+- "ст. 185 КК України" → search_text: "стаття 185", cs_type: "2"
+- "частина 2 статті 42 ГК" → search_text: "стаття 42", cs_type: "3"
+- "стаття 1212 ЦК" → search_text: "стаття 1212", cs_type: "1"
+- ПК (податковий кодекс) → cs_type: "4"
+- Якщо є стаття + ключові слова → search_text: "стаття N ключове_слово" (макс 5 слів загалом)
+
+Кількість результатів:
+- "покажи 10", "дай 3 приклади", "топ 7" → limit: N
+- "більше результатів" або "більше" без числа → limit: 10
+- За замовчуванням → limit: 5
+- Максимум: 20
+
+search_text:
+- Якщо є номер справи → search_text порожньо
+- Якщо є конкретні фільтри (тип + форма + дати) → search_text може бути порожнім
+- Номери статей (234, 185) БЕЗ слова "стаття" — НЕ включати
+- ins_type завжди "3" якщо явно не вказано "апеляція" або "перша інстанція"
+- Зазначений тип документу НЕ включати в search_text"""
+CHANGE 2 — Update search_decisions() function:
+Replace the entire function with this:
+pythondef search_decisions(params: dict) -> list:
+    limit = min(int(params.get("limit", 5)), 20)
+    search_text = " ".join(params.get("search_text", "").split()[:5])
+
+    # --- Direct case number lookup ---
+    if params.get("case_number"):
+        payload = {
+            "case_number": params["case_number"],
+            "limit": limit,
+            "ins_type": params.get("ins_type", "3"),
+            "sort": "1",
+        }
+        logger.info(f"Solomon direct lookup: {params['case_number']}")
+        resp = requests.post(
+            "https://court-search-agent.replit.app/proxy/reyestr",
+            json=payload,
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            judgments = resp.json().get("results", [])
+            logger.info(f"Solomon direct lookup: found {len(judgments)}")
+            return _build_results(judgments, limit)
+        return []
+
+    # --- Build base payload ---
+    base_payload = {
+        "limit": limit,
+        "ins_type": params.get("ins_type", "3"),
+        "sort": "1",
+    }
+    if search_text:
+        base_payload["search_text"] = search_text
+    if params.get("vr_type"):
+        base_payload["vr_type"] = params["vr_type"]
+    if params.get("cs_type"):
+        base_payload["cs_type"] = params["cs_type"]
+    if params.get("judge"):
+        base_payload["judge"] = params["judge"]
+
+    # Date handling
+    date_from = params.get("date_from", "")
+    date_to = params.get("date_to", "")
+    if not date_from:
+        date_range = params.get("date_range", "2")
+        if date_range and date_range != "0":
+            from datetime import datetime, timedelta
+            past = datetime.now() - timedelta(days=365 * int(date_range))
+            date_from = past.strftime("%d.%m.%Y")
+    if date_from:
+        base_payload["date_from"] = date_from
+    if date_to:
+        base_payload["date_to"] = date_to
+
+    logger.info(f"Solomon proxy payload: {base_payload}")
+
+    # --- Fallback cascade ---
+    attempts = [
+        base_payload.copy(),
+        {**base_payload, "vr_type": None},
+        {**base_payload, "vr_type": None, "cs_type": None},
+        {**base_payload, "vr_type": None, "cs_type": None, "date_from": None, "date_to": None},
+    ]
+
+    for i, payload in enumerate(attempts):
+        clean = {k: v for k, v in payload.items() if v is not None and v != ""}
+        resp = requests.post(
+            "https://court-search-agent.replit.app/proxy/reyestr",
+            json=clean,
+            headers={"Authorization": "Bearer gradus-court-2026"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                logger.info(f"Solomon: found {len(results)} judgments on attempt {i+1}")
+                return _build_results(results, limit)
+        logger.info(f"Solomon: attempt {i+1} returned 0, relaxing filters")
+
+    logger.info("Solomon: total 0 judgments after fallback")
+    return []
+
+
+def _build_results(judgments: list, limit: int) -> list:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def fetch_text(doc_id: str) -> str:
+        try:
+            resp = requests.get(
+                f"https://court-search-agent.replit.app/proxy/reyestr/text/{doc_id}",
+                headers={"Authorization": "Bearer gradus-court-2026"},
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("text", "")
+        except Exception as e:
+            logger.warning(f"Failed to fetch text for {doc_id}: {e}")
+        return ""
+
+    doc_ids = [j.get("doc_id", "") for j in judgments[:limit]]
+    texts = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_id = {executor.submit(fetch_text, doc_id): doc_id for doc_id in doc_ids if doc_id}
+        for future in as_completed(future_to_id):
+            texts[future_to_id[future]] = future.result()
+
+    results = []
+    for j in judgments[:limit]:
+        doc_id = j.get("doc_id", "")
+        decision_text = texts.get(doc_id, "")
+
+        bad_signals = ["<", "метадан", "резолютивна частина не наведена"]
+        is_bad = (
+            not decision_text
+            or len(decision_text) < 300
+            or any(s in decision_text[:200] for s in bad_signals)
+        )
+        summary = "" if is_bad else summarize_decision(decision_text)
+        if summary and summary.strip() == "НЕДОСТУПНО":
+            summary = ""
+
+        results.append({
+            "cause_number": j.get("cause_number", "—"),
+            "adjudication_date": j.get("reg_date", ""),
+            "judge": j.get("judge", "—"),
+            "court_name": j.get("court_name", ""),
+            "justice_name": j.get("vr_type", ""),
+            "link": j.get("link", ""),
+            "doc_id": doc_id,
+            "summary": summary,
+        })
+
+    return results
+CHANGE 3 — Update /help command in backend/solomon_bot.py:
+Find the help message text and replace with:
+pythonhelp_text = """🔍 *Як шукати в СОЛОМОН:*
+
+*Звичайний пошук:*
+- скасування ППР нереальність операцій
+- АМКУ антиконкурентні дії господарські
+
+*З фільтрами часу:*
+- стягнення збитків цивільне за 2025 рік
+- банкрутство господарське 2024-2025
+
+*По статті закону:*
+- стаття 324 КАС порушення процедури
+- ст\. 185 КК України 2025
+- стаття 42 ГК стягнення збитків
+
+*По судді:*
+- практика судді Блажівської
+- рішення Тітова за 2025 рік
+
+*По номеру справи:*
+- справа 910/12568/24
+- знайди 380/25114/23
+
+*Кількість результатів:*
+- покажи 10 рішень про банкрутство
+- дай 3 приклади оскарження ППР
+
+/history — останні 5 запитів"""

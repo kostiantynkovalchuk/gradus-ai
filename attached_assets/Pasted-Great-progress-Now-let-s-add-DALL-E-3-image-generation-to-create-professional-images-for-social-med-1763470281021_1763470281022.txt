@@ -1,0 +1,344 @@
+Great progress! Now let's add DALL-E 3 image generation to create professional images for social media posts.
+
+🎯 OBJECTIVE:
+Generate AI images for each article using:
+1. Claude to create professional image prompts based on article content
+2. DALL-E 3 to generate the actual images
+3. Store image URLs and allow regeneration if needed
+
+📋 IMPLEMENTATION:
+
+1. CREATE backend/services/image_generator.py:
+```python
+import os
+import requests
+from anthropic import Anthropic
+from openai import OpenAI
+from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+class ImageGenerator:
+    def __init__(self):
+        self.claude_api_key = os.getenv('CLAUDE_API_KEY')
+        self.openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        self.claude_client = Anthropic(api_key=self.claude_api_key) if self.claude_api_key else None
+        self.openai_client = OpenAI(api_key=self.openai_api_key) if self.openai_api_key else None
+    
+    def generate_image_prompt(self, article_data: Dict) -> str:
+        """
+        Use Claude to generate a professional DALL-E prompt based on article content
+        
+        Args:
+            article_data: Dict with 'title' and 'content'
+            
+        Returns:
+            DALL-E prompt string
+        """
+        if not self.claude_client:
+            logger.error("Claude client not initialized")
+            return ""
+        
+        title = article_data.get('title', '')
+        content = article_data.get('content', '')[:1000]  # First 1000 chars
+        
+        prompt = f"""Based on this alcohol industry article, create a professional DALL-E image prompt for a social media post.
+
+Article Title: {title}
+Article Content: {content}
+
+Requirements for the image prompt:
+- Professional, premium alcohol industry aesthetic
+- Suitable for Facebook/LinkedIn business posts
+- Modern, clean, minimalist design
+- Relevant to the article topic
+- Brand-safe (no specific brand logos unless mentioned in article)
+- Color scheme: premium (blues, golds, silvers, or warm earth tones)
+- Style: photorealistic or professional infographic
+
+Create a detailed DALL-E prompt (2-3 sentences) that will generate an appropriate image.
+Return ONLY the prompt text, nothing else."""
+
+        try:
+            message = self.claude_client.messages.create(
+                model="claude-sonnet-4.5-20250929",
+                max_tokens=300,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
+            )
+            
+            dalle_prompt = message.content[0].text.strip()
+            logger.info(f"Generated DALL-E prompt: {dalle_prompt[:100]}...")
+            return dalle_prompt
+            
+        except Exception as e:
+            logger.error(f"Failed to generate image prompt: {e}")
+            return ""
+    
+    def generate_image(self, dalle_prompt: str) -> Optional[str]:
+        """
+        Generate image using DALL-E 3
+        
+        Args:
+            dalle_prompt: Text prompt for image generation
+            
+        Returns:
+            Image URL or None if failed
+        """
+        if not self.openai_client:
+            logger.error("OpenAI client not initialized")
+            return None
+        
+        if not dalle_prompt:
+            logger.error("Empty prompt provided")
+            return None
+        
+        try:
+            response = self.openai_client.images.generate(
+                model="dall-e-3",
+                prompt=dalle_prompt,
+                size="1024x1024",  # Square format for social media
+                quality="standard",  # or "hd" for higher quality ($0.080 vs $0.040)
+                n=1
+            )
+            
+            image_url = response.data[0].url
+            logger.info(f"Generated image: {image_url}")
+            return image_url
+            
+        except Exception as e:
+            logger.error(f"Failed to generate image: {e}")
+            return None
+    
+    def generate_article_image(self, article_data: Dict) -> Dict[str, str]:
+        """
+        Complete pipeline: generate prompt + generate image
+        
+        Returns:
+            Dict with 'prompt' and 'image_url'
+        """
+        # Step 1: Generate prompt using Claude
+        dalle_prompt = self.generate_image_prompt(article_data)
+        
+        if not dalle_prompt:
+            return {"prompt": "", "image_url": ""}
+        
+        # Step 2: Generate image using DALL-E
+        image_url = self.generate_image(dalle_prompt)
+        
+        return {
+            "prompt": dalle_prompt,
+            "image_url": image_url or ""
+        }
+```
+
+2. ADD IMAGE GENERATION ENDPOINTS in backend/main.py:
+```python
+from services.image_generator import ImageGenerator
+
+@app.post("/api/images/generate/{article_id}")
+async def generate_image_for_article(article_id: int, db: Session = Depends(get_db)):
+    """
+    Generate image for a specific article
+    Updates article with image_url and image_prompt
+    """
+    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    # Prepare article data
+    article_data = {
+        'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+        'content': article.original_text or article.translated_text
+    }
+    
+    # Generate image
+    image_generator = ImageGenerator()
+    result = image_generator.generate_article_image(article_data)
+    
+    if result.get('image_url'):
+        # Save to database
+        article.image_url = result['image_url']
+        article.image_prompt = result['prompt']
+        db.commit()
+        
+        return {
+            "status": "success",
+            "article_id": article_id,
+            "image_url": result['image_url'],
+            "prompt": result['prompt']
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Image generation failed")
+
+
+@app.post("/api/images/regenerate/{article_id}")
+async def regenerate_image(article_id: int, custom_prompt: str = None, db: Session = Depends(get_db)):
+    """
+    Regenerate image for article (if moderator doesn't like the first one)
+    Optionally accepts custom_prompt to override Claude's prompt
+    """
+    article = db.query(ContentQueue).filter(ContentQueue.id == article_id).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    image_generator = ImageGenerator()
+    
+    if custom_prompt:
+        # Use custom prompt directly
+        image_url = image_generator.generate_image(custom_prompt)
+        prompt_used = custom_prompt
+    else:
+        # Generate new prompt and image
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text or article.translated_text
+        }
+        result = image_generator.generate_article_image(article_data)
+        image_url = result.get('image_url')
+        prompt_used = result.get('prompt')
+    
+    if image_url:
+        article.image_url = image_url
+        article.image_prompt = prompt_used
+        db.commit()
+        
+        return {
+            "status": "success",
+            "article_id": article_id,
+            "image_url": image_url,
+            "prompt": prompt_used
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Image regeneration failed")
+
+
+@app.post("/api/images/generate-pending")
+async def generate_images_for_pending(limit: int = 5, db: Session = Depends(get_db)):
+    """
+    Generate images for all articles that don't have one yet
+    """
+    articles_without_images = db.query(ContentQueue).filter(
+        ContentQueue.status == 'pending_approval',
+        ContentQueue.image_url == None
+    ).limit(limit).all()
+    
+    if not articles_without_images:
+        return {"status": "success", "message": "No articles need images"}
+    
+    image_generator = ImageGenerator()
+    generated_count = 0
+    
+    for article in articles_without_images:
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text or article.translated_text
+        }
+        
+        result = image_generator.generate_article_image(article_data)
+        
+        if result.get('image_url'):
+            article.image_url = result['image_url']
+            article.image_prompt = result['prompt']
+            generated_count += 1
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "generated_count": generated_count,
+        "total_without_images": len(articles_without_images)
+    }
+```
+
+3. UPDATE DATABASE MODEL (if needed):
+
+Ensure ContentQueue model has these fields:
+```python
+class ContentQueue(Base):
+    # ... existing fields ...
+    image_url = Column(String, nullable=True)
+    image_prompt = Column(Text, nullable=True)
+```
+
+4. UPDATE FRONTEND - Content Approval Page:
+
+Add image display and regenerate button to frontend/src/pages/ContentApprovalPage.jsx:
+```jsx
+{/* Generated Image Section */}
+{item.image_url && (
+  <div className="mb-4">
+    <h4 className="font-semibold text-gray-700 mb-2">
+      Generated Image:
+    </h4>
+    <div className="bg-gray-50 p-4 rounded border border-gray-200">
+      <img 
+        src={item.image_url} 
+        alt="Generated" 
+        className="w-full max-w-md rounded shadow-lg mb-2"
+      />
+      <p className="text-xs text-gray-500 italic mb-2">
+        Prompt: {item.image_prompt}
+      </p>
+      <button
+        onClick={() => regenerateImage(item.id)}
+        className="text-sm bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+      >
+        🔄 Regenerate Image
+      </button>
+    </div>
+  </div>
+)}
+
+{!item.image_url && (
+  <div className="mb-4">
+    <button
+      onClick={() => generateImage(item.id)}
+      className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+    >
+      🎨 Generate Image
+    </button>
+  </div>
+)}
+```
+
+Add handler functions:
+```jsx
+const generateImage = async (articleId) => {
+  try {
+    const response = await axios.post(`${API_URL}/api/images/generate/${articleId}`);
+    if (response.data.status === 'success') {
+      // Refresh the content list
+      fetchPendingContent();
+      alert('Image generated successfully!');
+    }
+  } catch (error) {
+    console.error('Error generating image:', error);
+    alert('Failed to generate image');
+  }
+};
+
+const regenerateImage = async (articleId) => {
+  try {
+    const response = await axios.post(`${API_URL}/api/images/regenerate/${articleId}`);
+    if (response.data.status === 'success') {
+      fetchPendingContent();
+      alert('Image regenerated!');
+    }
+  } catch (error) {
+    console.error('Error regenerating image:', error);
+    alert('Failed to regenerate image');
+  }
+};
+```
+
+5. ADD OPENAI PACKAGE:
+
+Update backend/requirements.txt:
+openai==1.54.0

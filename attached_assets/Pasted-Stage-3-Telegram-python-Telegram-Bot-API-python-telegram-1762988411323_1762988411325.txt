@@ -1,0 +1,78 @@
+Stage 3: Telegram бот для обучения агентов
+python# Компоненты:
+├── Telegram Bot API (python-telegram-bot)
+├── Claude API (обучающий чат)
+├── RAG на материалах компании
+│   ├── Презентации FUNJU
+│   ├── Brand books
+│   ├── Продуктовые карточки
+│   └── Sales scripts
+└── Quiz/Testing система
+
+# Workflow:
+1. Агент задает вопрос в Telegram
+2. RAG ищет в материалах компании
+3. Claude формулирует ответ + примеры
+4. Опционально: тесты, квизы
+Stage 4: HR бот для поиска кандидатов
+python# Компоненты:
+├── Telegram Bot API
+├── Claude API (скрининг)
+├── RAG на:
+│   ├── Job descriptions
+│   ├── Company culture docs
+│   └── Requirements
+└── Candidate Database (PostgreSQL)
+
+# Workflow:
+1. Кандидат пишет в бот
+2. Claude задает квалифицирующие вопросы
+3. Анализирует ответы через RAG
+4. Формирует профиль кандидата
+5. Уведомляет HR о качественных кандидатах
+```
+
+---
+
+## 🔧 **ОБНОВЛЕННАЯ АРХИТЕКТУРА:**
+
+### **Backend Structure:**
+```
+ai-agent-gradus/
+├── docker-compose.yml
+├── .env
+│
+├── backend/
+│   ├── main.py                    # Main FastAPI app
+│   ├── services/
+│   │   ├── claude_service.py      # Claude API wrapper
+│   │   ├── rag_service.py         # Pinecone + embeddings
+│   │   ├── news_scraper.py        # Stage 1: News scraping
+│   │   ├── social_scraper.py      # Stage 2: Social media
+│   │   ├── telegram_trainer.py    # Stage 3: Training bot
+│   │   ├── telegram_hr.py         # Stage 4: HR bot
+│   │   ├── image_generator.py     # DALL-E integration
+│   │   └── social_poster.py       # FB + LinkedIn posting
+│   ├── models/
+│   │   ├── news.py
+│   │   ├── leads.py
+│   │   ├── training.py
+│   │   └── candidates.py
+│   └── tasks/
+│       └── celery_tasks.py        # Background jobs
+│
+├── frontend/                      # Admin dashboard
+│   └── src/
+│       ├── pages/
+│       │   ├── NewsMonitor.jsx    # Stage 1 dashboard
+│       │   ├── LeadsTracker.jsx   # Stage 2 dashboard
+│       │   ├── TrainingStats.jsx  # Stage 3 analytics
+│       │   └── HRPipeline.jsx     # Stage 4 candidates
+│       └── App.jsx
+│
+└── scripts/
+    ├── setup.sh
+    └── seed_rag.py               # Upload company materials to Pinecone
+```
+
+---

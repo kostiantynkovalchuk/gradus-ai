@@ -1,0 +1,113 @@
+New feature: Alex Gradus Telegram Bot
+
+Bot username: @alexgradus_bot
+Token is in Render as: ALEX_GRADUS_BOT_TOKEN
+
+Architecture decisions confirmed by audit:
+- Separate bot token from all existing bots
+- Reuse existing chat_endpoints.py chat logic (POST /api/chat)
+- Identity bridge needed: telegram_user_id → email → subscription_tier
+- Subscription must be enforced server-side from DB, not honor-system
+
+PHASE 1 — Build the following:
+
+1. MIGRATION 034:
+   Create table telegram_alex_users:
+   - telegram_user_id BIGINT PRIMARY KEY
+   - email VARCHAR
+   - subscription_tier VARCHAR DEFAULT 'free'
+   - linked_at TIMESTAMP DEFAULT NOW()
+   - last_active TIMESTAMP
+   - trial_started_at TIMESTAMP
+   - daily_question_count INTEGER DEFAULT 0
+   - daily_reset_date DATE
+   - is_active BOOLEAN DEFAULT TRUE
+
+2. NEW FILE: backend/routes/alex_tg_webhook.py
+   Register webhook at: /webhook/alex-gradus
+
+   /start handler:
+   - Send Alex photo + welcome message:
+     "Привіт! Я Alex Gradus — ваш AI-експерт з 
+      прибутковості бару 🥃
+      Щоб почати, введіть вашу email-адресу 
+      з gradusmedia.org"
+   - Wait for email input
+   - Look up email in alex_user_profiles table
+   - If found → save to telegram_alex_users:
+     * email
+     * subscription_tier from DB
+     * trial_started_at = account creation date
+   - If not found → 
+     "Email не знайдено. 
+      Зареєструйтесь безкоштовно на gradusmedia.org 👇"
+   - After linking → 
+     "Чудово! Акаунт підключено ✅
+      Тариф: [Standard/Premium/Free]
+      Задайте будь-яке питання про ваш бар 👇"
+
+   Message handler (after linking):
+   - Look up telegram_user_id in telegram_alex_users
+   - If not linked → prompt to /start
+
+   FREE TIER CHECKS (run before every response):
+   
+   Check 1 — Trial expiry:
+   - If today > trial_started_at + 7 days AND tier = 'free':
+     "Ваш 7-денний безкоштовний період завершився 🕐
+      Необмежений доступ до Alex від $7/міс
+      → gradusmedia.org/тарифи"
+   - Stop, do not process message
+   
+   Check 2 — Daily limit:
+   - If daily_reset_date < today → reset daily_question_count = 0
+   - If daily_question_count >= 5 AND tier = 'free':
+     "Ви використали 5 безкоштовних питань сьогодні 💬
+      Повертайтесь завтра або отримайте необмежений 
+      доступ від $7/міс → gradusmedia.org/тарифи"
+   - Stop, do not process message
+
+   PAID TIER (standard/premium):
+   - Skip all checks above
+   - Unlimited questions
+   - Full conversation memory via existing alex_conversations
+     table keyed by email
+
+   AFTER SUCCESSFUL RESPONSE:
+   - Increment daily_question_count
+   - Update daily_reset_date = today
+   - Update last_active = now()
+   - Call chat_with_avatars() with:
+     * message text
+     * user_email from telegram_alex_users
+     * user_tier from telegram_alex_users (enforced from DB)
+     * avatar: "alex"
+   - Send Claude response back to user
+
+   WEB CHAT AUDIT:
+   - Check if web /api/chat endpoint enforces the same 
+     7-day trial + 5 questions/day logic
+   - If not implemented → add the same checks to 
+     chat_endpoints.py using alex_user_profiles table
+   - trial_started_at = created_at from alex_user_profiles
+   - Daily count tracking: add columns to alex_user_profiles:
+     daily_question_count INTEGER DEFAULT 0
+     daily_reset_date DATE
+   - Both Telegram and web must hit identical walls
+
+3. REGISTER WEBHOOK on startup:
+   Set webhook URL: 
+   https://gradus-ai.onrender.com/webhook/alex-gradus
+   Use ALEX_GRADUS_BOT_TOKEN
+
+4. UPDATE main.py:
+   Include alex_tg_webhook router
+
+5. DO NOT modify:
+   - Any existing bot handlers
+   - Photo report bot
+   - Maya Hunt pipeline
+   - LinkedIn or video digest services
+
+After deploy, test by messaging @alexgradus_bot with /start
+Show me the full conversation flow in the test.

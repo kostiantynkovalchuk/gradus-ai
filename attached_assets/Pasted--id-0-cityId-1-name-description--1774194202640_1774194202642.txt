@@ -1,0 +1,235 @@
+{
+  "id": 0,
+  "cityId": 1,
+  "name": "Торговий представник",
+  "description": "Текст опису вакансії (мін 150 символів)",
+  "salary": 25000,
+  "publishType": "Business",
+  "sendResumeType": "1",
+  "contactEMail": "michailova@vinkom.net",
+  "contactPerson": "HR AVTD",
+  "contactPhone": "+380...",
+  "employmentTypes": ["FullTime"],
+  "workTypes": ["Office"]
+}
+```
+
+---
+
+Ось промпт для Replit Agent:
+```
+Phase 3: Repurpose Maya Hunt vacancy posting from Telegram channels to Robota.ua
+
+CONTEXT:
+Maya Hunt has an existing "Post" feature (hunt_poster.py) that was designed to post 
+vacancies to Telegram channels. This feature never went live because Ukrainian TG job 
+channels charge for posting. We're repurposing it to auto-publish vacancies to Robota.ua 
+using their official REST API, which is free with AVTD's employer account.
+
+The action menu after vacancy parsing already has buttons: Search / Post / Both / Skip.
+Currently "Post" triggers hunt_poster.py which tries TG channels. We'll redirect "Post" 
+to publish on Robota.ua instead.
+
+=== EXISTING CODE TO UNDERSTAND FIRST ===
+
+Read these files before making changes:
+1. backend/services/hunt_poster.py — current TG posting logic, understand the interface
+2. backend/services/hunt_service.py — how "Post" and "Both" buttons trigger posting
+3. backend/services/hunt_vacancy_parser.py — what fields are parsed from vacancy text
+4. backend/models/hunt_models.py — HuntVacancy model, HuntPosting model
+5. backend/services/robotaua_auth.py — login_robotaua() for auth
+6. backend/services/robotaua_reference.py — get_city_id() for city resolution
+
+Show me the exact code path: user clicks "Post" → what function is called → what happens.
+
+=== ROBOTA.UA VACANCY API (from official docs) ===
+
+Base URL: https://employer-api.robota.ua
+Auth: Bearer token from login_robotaua()
+
+Endpoints:
+- POST /vacancy/add — create (id=0) or edit (id=existing) vacancy
+- POST /vacancy/state/{id}?state=Publicated — publish vacancy
+- POST /vacancy/state/{id}?state=Closed — close vacancy
+- POST /vacancy/list — list AVTD's vacancies
+- GET /vacancy/get/{id} — get vacancy details
+- GET /values/citylist — city IDs
+- GET /values/vacancy/publicationtype — publication types
+- GET /values/vacancy/state — vacancy states
+
+Minimum required fields for POST /vacancy/add:
+{
+  "id": 0,
+  "cityId": <int from citylist>,
+  "name": "<vacancy title, e.g. Торговий представник>",
+  "description": "<min 150 chars, HTML supported>",
+  "publishType": "Business",
+  "sendResumeType": "3",
+  "contactPerson": "<from HR_CONTACT env or default>",
+  "contactPhone": "<AVTD HR phone>",
+  "contactEMail": "michailova@vinkom.net",
+  "employmentTypes": ["FullTime"],
+  "workTypes": ["Office"]
+}
+
+Optional but useful fields:
+- "salary": <int> — single salary value
+- "salaryRange": {"amountFrom": <int>, "amountTo": <int>} — salary range
+- "salaryDescr": "ставка та бонуси" — salary comment  
+- "endingType": "CloseAndNotify" — what happens when posting period ends
+- "isForStudent": false
+- "scheduleId": 1 (full-time)
+
+Publication flow: 
+1. POST /vacancy/add with id=0 → returns vacancy ID
+2. POST /vacancy/state/{id}?state=Publicated → publishes it
+
+IMPORTANT: Before implementing, EXPLORE the API first:
+- Call GET /values/vacancy/publicationtype to see what types are available on AVTD's account
+- Call POST /vacancy/list to see existing AVTD vacancies (understand response format)
+- Try POST /vacancy/add with a test vacancy (use "NotPublicated" state = draft, don't publish)
+
+=== IMPLEMENTATION ===
+
+1. Create backend/services/hunt_robotaua_poster.py:
+
+async def post_vacancy_to_robotaua(vacancy: dict) -> dict:
+    """
+    Post a Maya Hunt vacancy to Robota.ua.
+    
+    Args:
+        vacancy: parsed vacancy dict with keys: position, city, salary_max, requirements, raw_text
+    
+    Returns:
+        {"success": bool, "vacancy_id": int|None, "url": str|None, "error": str|None}
+    """
+    
+    Flow:
+    a. Get auth token via login_robotaua()
+    b. Resolve city name → cityId via get_city_id()
+    c. Build description from vacancy requirements + raw_text
+       - Must be >= 150 characters
+       - Format nicely with HTML (Robota.ua supports HTML in descriptions)
+       - Include key requirements, city, salary if available
+       - Add "AVTD — Торговий Дім АВ" branding at the bottom
+    d. Determine publication type:
+       - First call GET /values/vacancy/publicationtype to see what's available
+       - Use "Business" as default (most common)
+    e. Build the vacancy body:
+       {
+         "id": 0,
+         "cityId": resolved_city_id,
+         "name": vacancy["position"],
+         "description": formatted_description,  # min 150 chars
+         "publishType": "Business",
+         "sendResumeType": "3",  # only to "Відгуки" section on site
+         "contactPerson": os.getenv("HR_CONTACT_NAME", "HR AVTD"),
+         "contactPhone": os.getenv("HR_CONTACT_PHONE", ""),
+         "contactEMail": os.getenv("ROBOTAUA_EMAIL", "michailova@vinkom.net"),
+         "employmentTypes": ["FullTime"],
+         "workTypes": ["Office"],
+         "endingType": "CloseAndNotify",
+       }
+       If vacancy["salary_max"]:
+         body["salary"] = vacancy["salary_max"]
+    f. POST /vacancy/add → get vacancy_id from response
+    g. POST /vacancy/state/{vacancy_id}?state=Publicated → publish
+    h. Return result with vacancy URL
+
+async def close_vacancy_on_robotaua(robotaua_vacancy_id: int) -> bool:
+    """Close a vacancy on Robota.ua when HR clicks 'Найняти' in Telegram."""
+    token = await login_robotaua()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"https://employer-api.robota.ua/vacancy/state/{robotaua_vacancy_id}?state=Closed",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return resp.status_code == 200
+
+async def get_avtd_vacancies() -> list[dict]:
+    """List all AVTD vacancies on Robota.ua (for dashboard/sync)."""
+    token = await login_robotaua()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://employer-api.robota.ua/vacancy/list",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"vacancyStateId": "4", "page": 0}
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return []
+
+
+2. Modify hunt_service.py — redirect "Post" action:
+
+Currently when HR clicks "Post" or "Both", it calls hunt_poster.py to post to TG channels.
+Change this to call hunt_robotaua_poster.py instead.
+
+Find the callback handler for the "Post" button (likely in hunt_service.py or a callback handler file).
+Change it from:
+    await post_vacancy_to_channels(vacancy_id, ...)
+To:
+    result = await post_vacancy_to_robotaua(vacancy_data)
+    if result["success"]:
+        await bot.send_message(chat_id, f"✅ Вакансію опубліковано на Robota.ua\n🔗 {result['url']}", message_thread_id=thread_id)
+    else:
+        await bot.send_message(chat_id, f"❌ Помилка публікації: {result['error']}", message_thread_id=thread_id)
+
+3. Add robotaua_vacancy_id to hunt_vacancies table:
+
+New migration (next number after 024):
+    ALTER TABLE hunt_vacancies ADD COLUMN IF NOT EXISTS robotaua_vacancy_id INTEGER;
+
+This stores the Robota.ua vacancy ID so we can:
+- Close it when HR clicks "Найняти"
+- Avoid duplicate postings
+- Link back to the Robota.ua vacancy page
+
+4. Auto-close on hire:
+
+Find the callback handler for the "🎯 Найняти" button.
+After marking vacancy as 'filled' in our DB, also close it on Robota.ua:
+
+    if vacancy.robotaua_vacancy_id:
+        await close_vacancy_on_robotaua(vacancy.robotaua_vacancy_id)
+
+5. Duplicate prevention:
+
+Before posting, check if this vacancy already has a robotaua_vacancy_id.
+If yes, don't post again — maybe offer to "update" instead.
+
+Also check by position+city if a similar vacancy already exists on Robota.ua:
+    existing = await get_avtd_vacancies()
+    for vac in existing:
+        if similar_position(vac["name"], vacancy["position"]) and same_city(vac, vacancy):
+            return {"success": False, "error": "Схожа вакансія вже опублікована на Robota.ua"}
+
+6. Update the action menu labels:
+
+Currently buttons say: "🔍 Пошук" / "📢 Опублікувати" / "🔍+📢 Обидва" / "⏭ Пропустити"
+
+Update "📢 Опублікувати" to "📢 Robota.ua" to make it clear where it posts.
+Update "🔍+📢 Обидва" to "🔍+📢 Пошук + Robota.ua"
+
+7. Keep hunt_poster.py as-is (don't delete):
+
+The TG posting code might be useful later. Just don't call it from the main flow.
+Rename or comment the import in hunt_service.py.
+
+
+=== TESTING ===
+
+After implementing:
+1. Explore API: call GET /values/vacancy/publicationtype — what types does AVTD have?
+2. Create a DRAFT vacancy (don't publish): POST /vacancy/add with the test body,
+   then DON'T call /vacancy/state — leave as draft
+3. Verify the draft appears in POST /vacancy/list with state "NotPublicated"
+4. Delete the draft: POST /vacancy/state/{id}?state=Deleted
+5. Test the full flow: create → publish → verify on robota.ua → close
+
+IMPORTANT:
+- Do NOT auto-publish test vacancies — create as drafts first
+- The description MUST be >= 150 characters or the API will reject it
+- Handle all errors gracefully — posting failure should never crash the search flow
+- "Both" button should run search AND posting in parallel (asyncio.gather)
+- Log all posting attempts to hunt_postings table (source="robota.ua")

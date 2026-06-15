@@ -1,0 +1,407 @@
+# URGENT: Add Training Document to HR Knowledge Base
+
+## PROBLEM
+The "Робота в системі Бліц та HR-процеси" training document was uploaded but never added to the hr_content database. It needs to be:
+1. Inserted into hr_content table
+2. Embeddings generated for Pinecone
+3. Available for both keyword and RAG search
+
+## TRAINING DOCUMENT CONTENT
+
+Insert this content into the database:
+
+**Title:** Робота в системі «Бліц» та HR-процеси
+
+**Section:** training
+
+**Subsection:** hr_processes_blitz
+
+**Content Type:** training_manual
+
+**Full content:**
+```
+# РОБОТА В СИСТЕМІ «БЛІЦ» ТА HR-ПРОЦЕСИ
+
+Покрокова інструкція щодо підбору, оформлення та звільнення співробітників.
+
+---
+
+## 📋 ОСНОВНІ СКОРОЧЕННЯ
+
+- СЗ — службова записка
+- ОМ — офіс-менеджер
+- МЧ — мерчендайзер
+- СВ МЧ — супервайзер мерчендайзерів
+- ТП — торговий представник
+- ФМ — фінансовий менеджер
+- СБ — служба безпеки
+- ДФ — директор філії
+- ТТ (ТРТ) — торгівельна точка
+- ПДЗ — прострочена дебіторська заборгованість
+- СКЮ — одне найменування з асортименту
+- СЦ — спецціль
+
+---
+
+# 🔎 ПІДБІР ПЕРСОНАЛУ
+
+## КРОК 1: ЗАПУСК ПОШУКУ КАНДИДАТА
+
+Для початку підбору необхідно створити СЗ.
+
+✓ Використовуємо шаблон №63
+✓ Обираємо маршрут залежно від посади
+✓ Узгоджуємо умови з керівником (ЗП, графік, компенсації, територія)
+
+👤 Відповідальний: Керівник підрозділу / ініціатор
+
+---
+
+## КРОК 2: ПЕРЕВІРКА КАНДИДАТА СБ
+
+Кандидат заповнює анкету на перевірку СБ.
+
+Необхідно:
+
+✓ Скан паспорта (всі заповнені сторінки)
+✓ Скан ІПН
+✓ Якщо ID-картка — довідка про реєстрацію місця проживання
+
+Далі:
+
+- Створюємо СЗ (шаблон №83)
+- Обираємо маршрут №83А «Перевірка СБ (філіали)»
+- Додаємо всі сканкопії
+
+👤 Відповідальний: Ініціатор
+
+---
+
+# 🗂 ОФОРМЛЕННЯ СПІВРОБІТНИКА
+
+## КРОК 3: СТВОРЕННЯ КАРТКИ В «БЛІЦ»
+
+Після позитивної відповіді СБ:
+
+1️⃣ Вкладка «Справочники»
+2️⃣ «Сотрудники»
+3️⃣ «Добавить»
+
+Заповнюємо всі поля (крім «Доменное имя» та «E-mail»).
+
+### Вкладка «Документы»
+
+✓ Додаємо всі скановані документи
+✓ Паспорт та ІПН — лише одне вкладення
+✓ Додаємо заяви, особову карту, довідки тощо
+
+### Вкладки:
+
+- «Семья» — діти до 14 років (+ скан свідоцтва)
+- «Образование» — освіта (+ скан диплому)
+
+⚠️ ВАЖЛИВО: Після заповнення обов'язково натиснути «ОК» у вкладці «Сотрудники», інакше дані не збережуться.
+
+👤 Відповідальний: ОМ / відповідальний за кадровий супровід
+
+---
+
+## КРОК 4: СЗ НА ОФОРМЛЕННЯ
+
+✓ Шаблон №42.1
+✓ Маршрут залежно від посади
+
+### Основні правила:
+
+- Обираємо «полностью»
+- Для МЧ, СВ МЧ (неофіційно) — «неофициально»
+- Дата фактичного та офіційного прийому — однакова
+- НПО = 1
+- Обираємо правильну юр.особу
+
+Додаємо скани:
+
+✓ Заява
+✓ Паспорт
+✓ ІПН
+✓ Довідка з ПФ
+
+Оригінали надсилаємо Новою поштою
+📍 м. Синельникове
+З поміткою «для Планковської»
+
+---
+
+## 💳 ЗАРПЛАТНА КАРТА
+
+Новий співробітник відкриває карту в ПУМБ.
+
+Після відкриття:
+
+- Надсилає IBAN
+- Ви пишете лист Стриженко Наталі:
+«Розрахунковий рахунок ПУМБ співробітника ПІБ»
+
+---
+
+# 💻 ШДС (ДОСТУПИ ТА ОБЛІКОВІ ЗАПИСИ)
+
+Запускаємо для всіх посад, крім ТП та МЧ.
+
+✓ Заповнюємо Excel-бланк ШДС
+✓ Додаємо до СЗ (шаблон №114)
+
+Обов'язково:
+
+- Вказати дату прийому
+- Обрати тип інтернету («стандартний»)
+- Для ДФ та ОМ — «полний» (з поясненням)
+- Вказати шляхи доступу до папок (за потреби)
+
+---
+
+## Доступ до систем
+
+Через портал:
+https://tdav.atlassian.net/servicedesk/customer/portals
+
+Обираємо: «Добавление пользователя»
+
+✓ Вказуємо необхідний додаток
+✓ Надсилаємо форму
+
+---
+
+# 🚪 ЗВІЛЬНЕННЯ СПІВРОБІТНИКА
+
+## КРОК 1: ОТРИМАННЯ ДОКУМЕНТІВ
+
+Надсилаємо лист:
+
+Планковській К.Г.
+Кочуковій Н.М.
+Фастовій М.С.
+
+З текстом:
+«Прошу надіслати наказ на звільнення та розрахунковий лист для ПІБ, дата звільнення ___, причина ___».
+
+---
+
+## КРОК 2: ЗАПУСК СЗ НА ЗВІЛЬНЕННЯ
+
+✓ Шаблон №42.2
+✓ Маршрут залежно від посади
+✓ Обираємо «полностью»
+✓ Вказуємо фактичну причину
+
+Якщо немає прогулу/лікарняного/відпустки — ставимо «нет».
+
+Додаємо скани:
+
+✓ Заява
+✓ Наказ
+✓ Розрахунковий лист
+
+Оригінали надсилаємо в м. Синельникове для Планковської.
+
+---
+
+⏱️ ВАЖЛИВО
+
+- Дотримуйтесь шаблонів СЗ
+- Уважно перевіряйте вкладені документи
+- Не допускайте дублювання файлів
+
+Документ оновлюється HR-департаментом.
+Актуальна версія доступна через Maya HR Bot.
+```
+
+## IMPLEMENTATION STEPS
+
+### Step 1: Insert into hr_content table
+```python
+# Insert the training document
+await db.execute("""
+    INSERT INTO hr_content (
+        section, 
+        subsection, 
+        title, 
+        content, 
+        content_type,
+        menu_order,
+        created_at,
+        updated_at
+    ) VALUES (
+        'training',
+        'hr_processes_blitz',
+        'Робота в системі «Бліц» та HR-процеси',
+        $1,
+        'training_manual',
+        1,
+        NOW(),
+        NOW()
+    )
+    ON CONFLICT (section, subsection, title) DO UPDATE
+    SET content = EXCLUDED.content,
+        updated_at = NOW()
+    RETURNING id
+""", training_content)
+```
+
+### Step 2: Generate embeddings
+```python
+# Generate embedding for the full document
+import openai
+
+response = await openai.embeddings.create(
+    model="text-embedding-3-small",
+    input=training_content[:8000]  # First 8000 chars (token limit)
+)
+
+embedding = response.data[0].embedding
+
+# Store in hr_embeddings table
+await db.execute("""
+    INSERT INTO hr_embeddings (content_id, embedding, created_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (content_id) DO UPDATE
+    SET embedding = EXCLUDED.embedding
+""", content_id, embedding)
+```
+
+### Step 3: Upload to Pinecone
+```python
+# Upsert to Pinecone for RAG
+import pinecone
+
+pinecone_index.upsert(
+    vectors=[(
+        f"hr_content_{content_id}",
+        embedding,
+        {
+            "content_id": content_id,
+            "title": "Робота в системі «Бліц» та HR-процеси",
+            "section": "training",
+            "content": training_content[:1000]  # First 1000 chars as preview
+        }
+    )],
+    namespace="hr_content"
+)
+```
+
+### Step 4: Verify insertion
+```sql
+-- Check it was added
+SELECT id, section, subsection, title, LENGTH(content) as content_length
+FROM hr_content
+WHERE section = 'training';
+
+-- Check embedding exists
+SELECT c.id, c.title, COUNT(e.id) as embedding_count
+FROM hr_content c
+LEFT JOIN hr_embeddings e ON c.id = e.content_id
+WHERE c.section = 'training'
+GROUP BY c.id, c.title;
+
+-- Check Pinecone stats
+-- Show namespace stats
+```
+
+### Step 5: Test queries
+
+Test that the training document now appears in results:
+
+1. **Keyword search:** "Робота в системі Бліц"
+   - Should now find the training document
+   - Should have high score due to title match
+
+2. **RAG search:** "Як оформити нового співробітника?"
+   - Should return training document content
+   - Should mention СЗ, шаблони, Бліц
+
+3. **Specific questions:**
+   - "Що таке СЗ?" → Should say "службова записка"
+   - "Хто такий ДФ?" → Should say "директор філії"
+   - "Як звільнити співробітника?" → Should reference КРОК 1 and КРОК 2
+
+---
+
+## PROCESS FOR FUTURE DOCUMENTS
+
+Create a standard ingestion pipeline:
+```python
+async def ingest_document(title: str, content: str, section: str, subsection: str):
+    """
+    Standard pipeline to add any document to Maya's knowledge base
+    1. Insert into hr_content
+    2. Generate embeddings
+    3. Upload to Pinecone
+    4. Verify
+    """
+    # Step 1: Insert to database
+    content_id = await db.fetchval("""
+        INSERT INTO hr_content (section, subsection, title, content, content_type)
+        VALUES ($1, $2, $3, $4, 'document')
+        RETURNING id
+    """, section, subsection, title, content)
+    
+    # Step 2: Generate embedding
+    response = await openai.embeddings.create(
+        model="text-embedding-3-small",
+        input=content[:8000]
+    )
+    embedding = response.data[0].embedding
+    
+    # Step 3: Store embedding in DB
+    await db.execute("""
+        INSERT INTO hr_embeddings (content_id, embedding)
+        VALUES ($1, $2)
+    """, content_id, embedding)
+    
+    # Step 4: Upload to Pinecone
+    pinecone_index.upsert(
+        vectors=[(f"hr_content_{content_id}", embedding, {
+            "content_id": content_id,
+            "title": title,
+            "section": section,
+            "content": content[:1000]
+        })],
+        namespace="hr_content"
+    )
+    
+    logger.info(f"✅ Ingested document: {title} (ID: {content_id})")
+    return content_id
+```
+
+---
+
+## DELIVERABLES
+
+1. ✅ Training document inserted into hr_content
+2. ✅ Embeddings generated and stored
+3. ✅ Document available in Pinecone for RAG
+4. ✅ Verification queries show it works
+5. ✅ Ingestion pipeline created for future docs
+
+Now every document uploaded will be properly stored and searchable!
+```
+
+**Cost:** ~$5-8 (insertion + embeddings + testing)
+
+---
+
+## **📊 WHAT THIS FIXES**
+
+**Before:**
+```
+hr_content: 42 entries (no training doc)
+Query "Бліц": finds only q6 (preset)
+Query "СЗ": generic answer or no match
+```
+
+**After:**
+```
+hr_content: 43 entries (includes full training doc)
+Query "Бліц": finds training doc + q6
+Query "СЗ": "службова записка" + full context
+Query "Як звільнити": Complete dismissal process

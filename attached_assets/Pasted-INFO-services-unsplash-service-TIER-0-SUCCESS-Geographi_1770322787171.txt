@@ -1,0 +1,50 @@
+INFO:services.unsplash_service:✅ TIER 0 SUCCESS: Geographical image found
+INFO:services.scheduler:[SCHEDULER] Fetched Unsplash image for article 393
+INFO:services.notification_service:Approval notification sent with URL for content 393
+INFO:services.scheduler:✅ [SCHEDULER] Sent 1 notification for article 393
+INFO:services.scheduler:[SCHEDULER] Processing article 392 for image generation
+INFO:services.unsplash_service:📸 Premium image search starting, excluding 108 used images
+INFO:services.unsplash_service:🌍 TIER 0: Country detected: america → napa valley vineyard aerial sunset...
+WARNING:services.unsplash_service:No high-quality photos, using first unused result
+INFO:services.unsplash_service:✅ TIER 0 SUCCESS: Geographical image found
+INFO:services.scheduler:[SCHEDULER] Fetched Unsplash image for article 392
+INFO:services.notification_service:Approval notification sent with URL for content 392
+INFO:services.scheduler:✅ [SCHEDULER] Sent 1 notification for article 392
+INFO:services.scheduler:[SCHEDULER] Processing article 390 for image generation
+INFO:services.unsplash_service:📸 Premium image search starting, excluding 110 used images
+INFO:services.unsplash_service:🌍 TIER 0: Country detected: італ → tuscany vineyard sunset rolling hills...
+WARNING:services.unsplash_service:No high-quality photos, using first unused result
+INFO:services.unsplash_service:✅ TIER 0 SUCCESS: Geographical image found
+INFO:services.scheduler:[SCHEDULER] Fetched Unsplash image for article 390
+INFO:services.notification_service:Approval notification sent with URL for content 390
+INFO:services.scheduler:✅ [SCHEDULER] Sent 1 notification for article 390
+INFO:services.scheduler:[SCHEDULER] Processing article 391 for image generation
+INFO:services.unsplash_service:📸 Premium image search starting, excluding 111 used images
+INFO:services.unsplash_service:🍷 TIER 2: Trying HoReCa fallback: luxury bar interior moody dramatic lighting...
+INFO:services.unsplash_service:✅ Quality photo selected (likes: 94)
+INFO:services.unsplash_service:✅ TIER 2 SUCCESS: HoReCa image found
+INFO:services.scheduler:[SCHEDULER] Fetched Unsplash image for article 391
+INFO:services.notification_service:Approval notification sent with URL for content 391
+INFO:services.scheduler:✅ [SCHEDULER] Sent 1 notification for article 391
+INFO:services.scheduler:✅ [SCHEDULER] Generated 10 images, sent 10 notifications
+INFO:apscheduler.executors.default:Job "Generate images & send Telegram notifications (3x/day) (trigger: cron[hour='6,14,20', minute='15'], next run at: 2026-02-06 06:15:00 UTC)" executed successfully
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: reject_384
+INFO:services.telegram_webhook:Content 384 rejected via Telegram
+INFO:routes.telegram_webhook:✓ Callback processed: success
+INFO:     10.19.170.194:50598 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: regenerate_388
+ERROR:services.telegram_webhook:Error fetching new image for content 388: 'UnsplashService' object has no attribute 'generate_ai_queries'
+INFO:routes.telegram_webhook:✓ Callback processed: error
+INFO:     10.19.170.194:45274 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: reject_391
+INFO:services.telegram_webhook:Content 391 rejected via Telegram
+INFO:routes.telegram_webhook:✓ Callback processed: success
+INFO:     10.23.128.132:44702 - "POST /api/telegram/webhook HTTP/1.1" 200 OK
+INFO:routes.telegram_webhook:📞 Telegram webhook: ['update_id', 'callback_query']
+INFO:routes.telegram_webhook:🔘 Callback query: regenerate_389
+ERROR:services.telegram_webhook:Error fetching new image for content 389: 'UnsplashService' object has no attribute 'generate_ai_queries'
+INFO:routes.telegram_webhook:✓ Callback processed: error
+INFO:     10.19.170.194:45630 - "POST /api/telegram/webhook HTTP/1.1" 200 OK

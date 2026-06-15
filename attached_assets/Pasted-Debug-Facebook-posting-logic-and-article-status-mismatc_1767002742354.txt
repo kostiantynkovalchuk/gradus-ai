@@ -1,0 +1,65 @@
+Debug Facebook posting logic and article status mismatch.
+
+ISSUE:
+- Admin dashboard shows: 39 "Approved" articles
+- API returns: 0 articles with status="approved"
+- This indicates a status field value mismatch
+
+TASKS:
+
+1. **Find the Facebook posting function:**
+   Search for the function that posts to Facebook at 18:00 UTC daily
+   File likely: backend/services/scheduler.py
+   Function likely named: post_facebook_task or similar
+   
+   Show me:
+   - How it queries for articles to post
+   - What status value it looks for (approved? Approved? pending_approval?)
+   - How it selects which article to post (oldest? random? first?)
+
+2. **Check database status values:**
+   In backend/models/content.py, find ContentQueue model
+   Check the CheckConstraint for valid status values
+   
+   Show me the EXACT valid status strings defined in the database
+
+3. **Trace approval workflow:**
+   Find where Telegram approval sets the status
+   File: backend/services/telegram_webhook.py
+   Function: _approve_content
+   
+   Show me what status value it sets after approval
+
+4. **Check API filtering:**
+   Find the /api/articles endpoint
+   File likely: backend/routes/articles_api.py
+   
+   Show me how it filters by status
+
+5. **Create diagnostic endpoint:**
+   Add a test endpoint to show status distribution:
+```python
+   @app.get("/api/debug/status-count")
+   async def debug_status_count(db: Session = Depends(get_db)):
+       from sqlalchemy import func
+       from models.content import ContentQueue
+       
+       counts = db.query(
+           ContentQueue.status,
+           func.count(ContentQueue.id)
+       ).group_by(ContentQueue.status).all()
+       
+       return {
+           "status_counts": {status: count for status, count in counts},
+           "total": sum(count for _, count in counts)
+       }
+```
+
+EXPECTED OUTPUT:
+Provide:
+1. The EXACT status value used by Facebook poster
+2. The EXACT status value set by Telegram approval
+3. Code snippets showing the posting selection logic
+4. Explanation of why dashboard shows 39 but API shows 0
+
+After investigation, suggest fix if there's a mismatch.

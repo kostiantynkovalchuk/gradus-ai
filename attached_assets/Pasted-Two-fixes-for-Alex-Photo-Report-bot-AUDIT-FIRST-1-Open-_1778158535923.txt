@@ -1,0 +1,99 @@
+Two fixes for Alex Photo Report bot.
+
+## AUDIT FIRST
+
+1. Open backend/photo_report/bot.py
+   Find where "Новий звіт" button press is handled —
+   what happens immediately after agent taps it?
+   Does any instruction message get sent before photo request?
+
+2. Find where the final report is sent to agent after all retries.
+   What is the condition that triggers rejection vs passing?
+   Paste the exact if/else logic around scoring and rejection.
+
+## FIX 1 — Pre-capture instruction before photo request
+
+When agent taps "📸 Новий звіт", BEFORE asking for photos,
+send this instruction message:
+
+```python
+PHOTO_INSTRUCTIONS = """📸 Як правильно сфотографувати полицю:
+
+1️⃣ *Загальний огляд* — стань за 1.5–2м
+Вся алкогольна секція в кадрі
+
+2️⃣ *Горілка* — крупний план полиці з горілкою
+Етикетки мають бути чітко читабельні
+
+3️⃣ *Коньяк / Вино / Ігристе* — окреме фото кожного
+Тільки якщо є на полиці, крупний план
+
+⛔ *Не підходить:*
+- Фото з кута або від каси
+- Занадто далеко — етикетки нечіткі
+- Темно або засвічено спалахом
+
+Надішли 2–5 фото 👇"""
+```
+
+Send this message with reply_markup=ReplyKeyboardRemove() 
+to clear any existing keyboard — agent just sends photos directly after.
+
+Do NOT add a confirmation button — just send the instruction 
+and immediately move to COLLECTING_PHOTOS state.
+Fewer taps = better field UX.
+
+## FIX 2 — Reject when all categories = 0% after retries
+
+After all retries complete, before scoring, add this check:
+
+```python
+# After all retries, check if everything is 0
+vodka_share = result.get('shelf_share', {}).get('vodka', {}).get('percent', 0) or 0
+adjari = result.get('cognac', {}).get('adjari_facings', 0) or 0
+dovbush = result.get('cognac', {}).get('dovbush_facings', 0) or 0
+jean_jack = result.get('cognac', {}).get('jean_jack_facings', 0) or 0
+villa_ua = result.get('wine', {}).get('villa_ua_facings', 0) or 0
+kosher = result.get('wine', {}).get('kosher_facings', 0) or 0
+villa_sparkling = result.get('sparkling', {}).get('villa_ua_sparkling_facings', 0) or 0
+
+avtd_total = (vodka_share + adjari + dovbush + jean_jack + 
+              villa_ua + kosher + villa_sparkling)
+
+if avtd_total == 0:
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            "📷 Не вдалося розпізнати жодного бренду АВТД.\n\n"
+            "Можливі причини:\n"
+            "• Фото занадто далеке — етикетки нечіткі\n"
+            "• Поганe освітлення\n"
+            "• Товари АВТД відсутні на полиці\n\n"
+            "Якщо товар є — надішли крупний план полиці 👆"
+        ),
+        reply_markup=MAIN_MENU
+    )
+    # Save as rejected
+    await save_report(
+        report_data={**result, 'scoring_version': 'v2_all_zero'},
+        photos=collected_photos,
+        db=db
+    )
+    return ConversationHandler.END
+```
+
+Place this check AFTER all retries, BEFORE calling scoring.py.
+
+## IMPORTANT
+- Fix 1: instruction message must appear EVERY time agent starts 
+  a new report — not just first time
+- Fix 2: 'v2_all_zero' scoring_version distinguishes this rejection 
+  from wide-angle rejection ('v2_rejected') in analytics
+- Check how save_report() is called elsewhere and match exact signature
+
+## DO NOT TOUCH
+- vision.py — no prompt changes
+- scoring.py — no scoring logic changes  
+- Any other bot files
+- Database schema
+- Reference images

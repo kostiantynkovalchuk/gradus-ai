@@ -1,0 +1,267 @@
+# One-Click Phone Verification with Button
+
+## IMPROVED FLOW
+User sends phone → Maya stores it → User clicks confirm → Instant verification
+
+## IMPLEMENTATION
+
+### Step 1: Store phone in context
+```python
+@router.message(F.text & ~F.command())
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route user messages."""
+    
+    user = update.effective_user
+    telegram_id = user.id
+    message_text = update.message.text.strip()
+    
+    # Check authentication
+    user_data = await get_user_from_db(telegram_id)
+    
+    if not user_data or not user_data.get('verified'):
+        # User not authenticated
+        
+        # Detect if they sent a phone number
+        if is_phone_number(message_text):
+            # Store phone in context for later use
+            context.user_data['pending_phone'] = message_text
+            
+            logger.info(f"📱 Phone stored for {telegram_id}: {message_text}")
+            
+            # Show confirmation button
+            keyboard = [
+                [InlineKeyboardButton(
+                    text="✅ Підтвердити і верифікуватись",
+                    callback_data=f"auth:verify_phone:{message_text}"
+                )],
+                [InlineKeyboardButton(
+                    text="✏️ Ввести інший номер",
+                    callback_data="auth:start"
+                )]
+            ]
+            
+            await update.message.reply_text(
+                f"📱 Номер отримано: `{message_text}`\n\n"
+                f"Натисніть кнопку для верифікації:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return
+        
+        else:
+            # Regular message from unauthenticated user
+            await update.message.reply_text(
+                f"👋 Привіт, {user.first_name}!\n\n"
+                f"Для роботи зі мною потрібна верифікація.\n\n"
+                f"Надішли свій робочий номер телефону:\n"
+                f"📱 Формат: `+380501234567` або `0501234567`",
+                parse_mode='Markdown'
+            )
+            return
+    
+    # Authenticated user - route to HR service
+    # ... existing logic ...
+```
+
+### Step 2: Handle verify button click
+```python
+@router.callback_query()
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button clicks."""
+    
+    query = update.callback_query
+    await query.answer()
+    
+    callback_data = query.data
+    telegram_id = query.from_user.id
+    
+    # Phone verification button
+    if callback_data.startswith("auth:verify_phone:"):
+        phone = callback_data.replace("auth:verify_phone:", "")
+        
+        logger.info(f"✅ Verifying phone {phone} for {telegram_id}")
+        
+        # Show loading message
+        await query.message.edit_text(
+            f"🔍 Перевіряю номер {phone}...\n"
+            f"Зачекайте кілька секунд."
+        )
+        
+        try:
+            # Call SED API
+            from services.hr_sed_service import verify_employee_in_sed
+            
+            employee = await verify_employee_in_sed(phone)
+            
+            if employee:
+                # Success!
+                await save_verified_user(telegram_id, employee)
+                
+                # Clear pending phone
+                context.user_data.pop('pending_phone', None)
+                
+                # Show success with main menu
+                await query.message.edit_text(
+                    f"✅ Вітаю, {employee['full_name']}!\n\n"
+                    f"Ви успішно авторизовані.\n"
+                    f"📋 Посада: {employee.get('position', 'N/A')}\n"
+                    f"🏢 Відділ: {employee.get('department', 'N/A')}\n\n"
+                    f"Тепер можете ставити будь-які HR-питання! 💬",
+                    reply_markup=get_hr_main_menu_keyboard()
+                )
+                
+            else:
+                # Not found
+                keyboard = [
+                    [InlineKeyboardButton(
+                        text="🔄 Спробувати інший номер",
+                        callback_data="auth:start"
+                    )],
+                    [InlineKeyboardButton(
+                        text="📞 Зв'язатись з HR",
+                        url="mailto:hr@vinkom.net"
+                    )]
+                ]
+                
+                await query.message.edit_text(
+                    f"❌ Номер `{phone}` не знайдено в базі TD AV.\n\n"
+                    f"Можливі причини:\n"
+                    f"• Номер не зареєстровано в Бліц\n"
+                    f"• Ви ще не оформлені як співробітник\n"
+                    f"• Помилка у форматі номера\n\n"
+                    f"Що робити:",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                
+        except Exception as e:
+            logger.error(f"Verification error: {e}", exc_info=True)
+            
+            keyboard = [
+                [InlineKeyboardButton(
+                    text="🔄 Спробувати ще раз",
+                    callback_data=f"auth:verify_phone:{phone}"
+                )]
+            ]
+            
+            await query.message.edit_text(
+                f"❌ Виникла помилка при перевірці.\n\n"
+                f"Спробуйте ще раз або зверніться до HR-відділу.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        return
+    
+    # Start/restart auth flow
+    if callback_data == "auth:start":
+        await query.message.edit_text(
+            f"👋 Привіт, {query.from_user.first_name}!\n\n"
+            f"Надішли свій робочий номер телефону:\n\n"
+            f"📱 Формат: `+380501234567` або `0501234567`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # ... existing callback handlers (hr_menu, feedback, etc.)
+```
+
+### Step 3: Add phone number validator
+```python
+def is_phone_number(text: str) -> bool:
+    """
+    Detect if message is a phone number.
+    """
+    if not text:
+        return False
+    
+    # Remove spaces, dashes, parentheses
+    cleaned = re.sub(r'[\s\-\(\)]', '', text.strip())
+    
+    # Check format
+    if not re.match(r'^\+?\d+$', cleaned):
+        return False
+    
+    # Length check (10-15 digits)
+    digit_count = len(cleaned.replace('+', ''))
+    
+    return 10 <= digit_count <= 15
+```
+
+## COMPLETE USER FLOW
+
+### Happy Path ✅
+```
+User: +380503343534
+
+Maya: 📱 Номер отримано: +380503343534
+      
+      Натисніть кнопку для верифікації:
+      
+      [✅ Підтвердити і верифікуватись]
+      [✏️ Ввести інший номер]
+
+User: [clicks ✅]
+
+Maya: 🔍 Перевіряю номер +380503343534...
+      Зачекайте кілька секунд.
+
+Maya: ✅ Вітаю, Vasile Rotaru!
+      
+      Ви успішно авторизовані.
+      📋 Посада: Marketing Director
+      🏢 Відділ: Marketing
+      
+      Тепер можете ставити будь-які HR-питання! 💬
+      
+      [📋 HR меню]
+      [💬 Запитати]
+```
+
+### Error Path ❌
+```
+User: +380123456789
+
+Maya: 📱 Номер отримано: +380123456789
+      [✅ Підтвердити і верифікуватись]
+
+User: [clicks ✅]
+
+Maya: 🔍 Перевіряю...
+
+Maya: ❌ Номер +380123456789 не знайдено в базі TD AV.
+      
+      Можливі причини:
+      • Номер не зареєстровано в Бліц
+      • Ви ще не оформлені як співробітник
+      
+      [🔄 Спробувати інший номер]
+      [📞 Зв'язатись з HR]
+```
+
+### Wrong Input Path 🔄
+```
+User: Hello
+
+Maya: 👋 Привіт!
+      
+      Для роботи зі мною потрібна верифікація.
+      
+      Надішли свій робочий номер телефону:
+      📱 Формат: +380501234567 або 0501234567
+```
+
+## KEY IMPROVEMENTS
+✅ User sends phone ONCE (not twice)
+✅ Clear confirmation before verification
+✅ Loading state during API call
+✅ Option to change number if typo
+✅ Direct link to HR if issues
+✅ Clean error handling
+
+## TESTING CHECKLIST
+- [ ] Send valid phone → confirm → success
+- [ ] Send invalid phone → confirm → clear error
+- [ ] Click "інший номер" → can re-enter
+- [ ] Multiple format variations work (with +, without, spaces)
+- [ ] Loading message shows during verification
+- [ ] Success shows employee details

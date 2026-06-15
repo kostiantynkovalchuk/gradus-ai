@@ -1,0 +1,593 @@
+You are extending the Maya Hunt module in Gradus AI / Maya HR project.
+Do NOT break any existing functionality.
+This prompt adds 4 major features:
+1. Interactive UX menu after vacancy posted
+2. Vacancy auto-posting to Telegram channels
+3. Hire tracking ("✅ Найняти" button)
+4. Full ROI + analytics dashboard tab in /hr admin
+
+══════════════════════════════════════════════
+PART 1 — INTERACTIVE UX MENU AFTER VACANCY
+══════════════════════════════════════════════
+
+## Change _handle_hunt_vacancy in telegram_webhook.py:
+Remove automatic run_hunt() call.
+After saving vacancy, send action menu instead:
+
+Message text:
+"✅ Вакансію збережено: {position}, {city}
+
+Що робимо далі?"
+
+Inline keyboard (2x2):
+Row 1: [🔍 Шукати кандидатів] [📢 Розмістити вакансію]
+Row 2: [🔍+📢 Обидва варіанти] [⏸ Зберегти на потім]
+
+callback_data format:
+hunt_action_search_{vacancy_id}
+hunt_action_post_{vacancy_id}
+hunt_action_both_{vacancy_id}
+hunt_action_skip_{vacancy_id}
+
+## Add callback handler in telegram_webhook.py:
+
+if callback_data.startswith("hunt_action_"):
+    await handle_hunt_action(callback_query, db)
+    return
+
+async def handle_hunt_action(callback_query: dict, db):
+    data = callback_query["data"]  
+    # parse: hunt_action_{action}_{vacancy_id}
+    parts = data.split("_")
+    action = parts[2]  # search/post/both/skip
+    vacancy_id = int(parts[3])
+    
+    chat_id = callback_query["message"]["chat"]["id"]
+    message_id = callback_query["message"]["message_id"]
+    thread_id = callback_query["message"].get("message_thread_id")
+    
+    # Answer callback to remove spinner
+    await answer_callback_query(callback_query["id"])
+    
+    status_messages = {
+        "search": "🔍 Шукаю кандидатів...",
+        "post": "📢 Розміщую вакансію в каналах...",
+        "both": "🔍📢 Шукаю кандидатів та розміщую вакансію...",
+        "skip": "⏸ Збережено. Вакансія чекає на обробку."
+    }
+    
+    # Edit menu message to show status
+    await edit_tg_message(chat_id, message_id, status_messages[action])
+    
+    # Load vacancy from DB
+    vacancy = db.query(HuntVacancy).filter(HuntVacancy.id == vacancy_id).first()
+    if not vacancy:
+        return
+    
+    if action in ["search", "both"]:
+        asyncio.create_task(
+            run_hunt(vacancy_id, vacancy.raw_text, thread_id, chat_id)
+        )
+    
+    if action in ["post", "both"]:
+        asyncio.create_task(
+            run_vacancy_posting(vacancy_id, chat_id, thread_id)
+        )
+
+══════════════════════════════════════════════
+PART 2 — VACANCY AUTO-POSTING SERVICE
+══════════════════════════════════════════════
+
+## New file: backend/services/hunt_poster.py
+
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+import os, asyncio, logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+async def run_vacancy_posting(vacancy_id: int, chat_id: int, thread_id: int):
+    
+    from db import SessionLocal
+    from models import HuntVacancy, HuntSource
+    from services.hunt_card_formatter import send_tg_message
+    
+    db = SessionLocal()
+    
+    try:
+        vacancy = db.query(HuntVacancy).filter(
+            HuntVacancy.id == vacancy_id
+        ).first()
+        if not vacancy:
+            return
+        
+        # Format public post
+        requirements = vacancy.requirements or ""
+        req_lines = "\n".join([
+            f"— {r.strip()}" 
+            for r in requirements.split(",") if r.strip()
+        ])
+        salary_text = (
+            f"До {vacancy.salary_max}$/міс" 
+            if vacancy.salary_max 
+            else "За домовленістю"
+        )
+        position_tag = (vacancy.position or "вакансія").replace(" ", "_").lower()
+        city_tag = (vacancy.city or "україна").lower()
+        hr_contact = os.getenv("HR_CONTACT", "@avtd_hr")
+        
+        formatted_post = f"""🔔 Вакансія | Торговий Дім АВ
+
+💼 {vacancy.position or "Вакансія"}
+📍 {vacancy.city or "Україна"}
+
+📋 Вимоги:
+{req_lines or "— За домовленістю"}
+
+💰 {salary_text}
+
+📩 Відгукнутись: {hr_contact}
+
+#вакансія #{position_tag} #{city_tag} #AVTD"""
+
+        # Load channels
+        channels = db.query(HuntSource).filter(
+            HuntSource.is_active == True
+        ).all()
+        channel_names = [c.tg_channel for c in channels]
+        
+        if not channel_names:
+            channel_names = ["DniproVakansiiq", "kharkiv_robota1", 
+                           "works_dnepr", "kieve_rabota"]
+        
+        # Telethon credentials
+        session_string = (
+            os.getenv("HR_TELETHON_SESSION") or 
+            os.getenv("TELETHON_SESSION")
+        )
+        api_id = int(os.getenv("TELETHON_API_ID", "0"))
+        api_hash = os.getenv("TELETHON_API_HASH", "")
+        
+        if not all([session_string, api_id, api_hash]):
+            await send_tg_message(
+                chat_id, thread_id,
+                "⚠️ HR_TELETHON_SESSION не налаштовано.\n"
+                "Додайте credentials в Render Environment Variables."
+            )
+            return
+        
+        # Post to channels
+        posted = []
+        failed = []
+        
+        async with TelegramClient(
+            StringSession(session_string), api_id, api_hash
+        ) as client:
+            for channel in channel_names:
+                try:
+                    await client.send_message(channel, formatted_post)
+                    posted.append(channel)
+                    logger.info(f"Posted vacancy #{vacancy_id} to {channel}")
+                    
+                    # Save to hunt_postings
+                    _save_posting(db, vacancy_id, channel, "posted")
+                    
+                    await asyncio.sleep(3)  # Rate limit
+                    
+                except Exception as e:
+                    logger.error(f"Failed to post to {channel}: {e}")
+                    failed.append(channel)
+                    _save_posting(db, vacancy_id, channel, "failed", str(e))
+        
+        # Update vacancy status
+        vacancy.status = "posted"
+        db.commit()
+        
+        # Send report to supergroup thread
+        report = f"📢 Вакансію розміщено!\n\n"
+        report += f"✅ Успішно: {len(posted)} каналів\n"
+        if failed:
+            report += f"❌ Помилка: {len(failed)} каналів\n"
+        report += f"\n📡 Охоплення: ~{len(posted) * 5000:,} підписників"
+        report += f"\n\nКанали:\n"
+        report += "\n".join([f"• @{c}" for c in posted])
+        
+        await send_tg_message(chat_id, thread_id, report)
+        
+    except Exception as e:
+        logger.error(f"run_vacancy_posting error: {e}")
+        await send_tg_message(
+            chat_id, thread_id,
+            f"❌ Помилка розміщення: {str(e)}"
+        )
+    finally:
+        db.close()
+
+
+def _save_posting(db, vacancy_id, channel, status, error=None):
+    from models import HuntPosting
+    posting = HuntPosting(
+        vacancy_id=vacancy_id,
+        channel=channel,
+        status=status,
+        error_message=error
+    )
+    db.add(posting)
+    db.commit()
+
+══════════════════════════════════════════════
+PART 3 — HIRE TRACKING
+══════════════════════════════════════════════
+
+## Add "✅ Найняти" button to candidate cards in hunt_service.py:
+
+Current keyboard per card:
+[✅ В роботу] [❌ Пропустити] [💾 Зберегти]
+
+New keyboard per card:
+[✅ В роботу] [❌ Пропустити]
+[💾 Зберегти] [🎯 Найняти]
+
+callback_data: hunt_hire_{candidate_id}
+
+## Add to callback handler in telegram_webhook.py:
+
+if callback_data.startswith("hunt_hire_"):
+    candidate_id = int(callback_data.split("_")[2])
+    await handle_hunt_hire(callback_query, candidate_id, db)
+    return
+
+async def handle_hunt_hire(callback_query, candidate_id, db):
+    from models import HuntCandidate, HuntVacancy
+    from datetime import datetime
+    
+    candidate = db.query(HuntCandidate).filter(
+        HuntCandidate.id == candidate_id
+    ).first()
+    
+    if candidate:
+        candidate.hr_decision = "hired"
+        candidate.hired_at = datetime.now()
+        
+        # Mark vacancy as filled
+        vacancy = db.query(HuntVacancy).filter(
+            HuntVacancy.id == candidate.vacancy_id
+        ).first()
+        if vacancy:
+            vacancy.status = "filled"
+        
+        db.commit()
+        
+        # Edit card message
+        await edit_tg_message_reply_markup(
+            callback_query["message"]["chat"]["id"],
+            callback_query["message"]["message_id"],
+            "🎯 Найнято через Maya Hunt!"
+        )
+        
+        await answer_callback_query(
+            callback_query["id"],
+            "🎯 Кандидата відмічено як найнятого!"
+        )
+
+## Add hired_at column to hunt_candidates:
+Add to migration 013:
+ALTER TABLE hunt_candidates ADD COLUMN IF NOT EXISTS hired_at TIMESTAMP;
+
+## Add filled status to hunt_vacancies:
+Already handled by vacancy.status = "filled" above.
+
+══════════════════════════════════════════════
+PART 4 — NEW DB TABLES (Migration 013)
+══════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS hunt_postings (
+    id SERIAL PRIMARY KEY,
+    vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+    channel VARCHAR(100),
+    status VARCHAR(20),
+    error_message TEXT,
+    posted_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hunt_salary_data (
+    id SERIAL PRIMARY KEY,
+    vacancy_id INTEGER REFERENCES hunt_vacancies(id),
+    source VARCHAR(50),
+    data_type VARCHAR(20),  -- 'candidate' or 'employer'
+    position VARCHAR(200),
+    city VARCHAR(100),
+    salary_min INTEGER,
+    salary_max INTEGER,
+    salary_median INTEGER,
+    currency VARCHAR(10) DEFAULT 'USD',
+    skills TEXT,
+    source_url TEXT,
+    collected_at TIMESTAMP DEFAULT NOW()
+);
+
+ALTER TABLE hunt_candidates 
+    ADD COLUMN IF NOT EXISTS hired_at TIMESTAMP;
+
+## New SQLAlchemy models in hunt_models.py:
+
+class HuntPosting(Base):
+    __tablename__ = "hunt_postings"
+    id = Column(Integer, primary_key=True)
+    vacancy_id = Column(Integer, ForeignKey("hunt_vacancies.id"))
+    channel = Column(String(100))
+    status = Column(String(20))
+    error_message = Column(Text)
+    posted_at = Column(DateTime, default=datetime.now)
+
+class HuntSalaryData(Base):
+    __tablename__ = "hunt_salary_data"
+    id = Column(Integer, primary_key=True)
+    vacancy_id = Column(Integer, ForeignKey("hunt_vacancies.id"))
+    source = Column(String(50))
+    data_type = Column(String(20))
+    position = Column(String(200))
+    city = Column(String(100))
+    salary_min = Column(Integer)
+    salary_max = Column(Integer)
+    salary_median = Column(Integer)
+    currency = Column(String(10), default="USD")
+    skills = Column(Text)
+    source_url = Column(Text)
+    collected_at = Column(DateTime, default=datetime.now)
+
+══════════════════════════════════════════════
+PART 5 — ANALYTICS API ENDPOINT
+══════════════════════════════════════════════
+
+## Add to backend/routes/hr_routes.py:
+
+GET /api/hr/hunt/analytics
+
+Query DB and return:
+{
+  "kpi": {
+    "total_vacancies": int,
+    "total_filled": int,
+    "total_hires": int,
+    "total_candidates_processed": int,
+    "candidates_today": int,
+    "candidates_this_week": int,
+    "acceptance_rate": float,  -- approved / total shown %
+    "avg_candidates_per_vacancy": float,
+    "avg_time_to_first_card_seconds": float,
+    "total_channels_posted": int,
+    "estimated_reach": int,  -- sum of postings × 5000 (avg channel size)
+    "cost_saved_usd": float,  -- hires × 385
+    "hours_saved": float,     -- vacancies × 2.67 (avg 160min saved per vacancy)
+    "cost_per_hire_maya": float,  -- (api_costs_estimate) / hires
+    "traditional_cost_per_hire": 400
+  },
+  "salary_by_city": [
+    {
+      "city": str,
+      "position": str,
+      "candidate_median": int,
+      "employer_median": int,
+      "gap": int,
+      "sample_size": int,
+      "sources": [{"name": str, "url": str}]
+    }
+  ],
+  "top_skills": [
+    {"skill": str, "count": int, "avg_salary": int}
+  ],
+  "salary_trends": [
+    {"month": str, "candidate_median": int, "employer_median": int}
+  ],
+  "hire_funnel": {
+    "found": int,
+    "reviewed": int,
+    "approved": int,
+    "saved": int,
+    "hired": int
+  },
+  "source_performance": [
+    {
+      "source": str,
+      "candidates_found": int,
+      "approved": int,
+      "hired": int,
+      "approval_rate": float
+    }
+  ],
+  "posting_performance": [
+    {
+      "channel": str,
+      "total_posted": int,
+      "last_posted": str
+    }
+  ],
+  "recent_vacancies": [
+    {
+      "id": int,
+      "position": str,
+      "city": str,
+      "status": str,
+      "candidates_found": int,
+      "channels_posted": int,
+      "hired": bool,
+      "created_at": str
+    }
+  ]
+}
+
+## Cost calculation logic in the endpoint:
+hires = count of candidates with hr_decision = 'hired'
+cost_saved_usd = hires * 385
+hours_saved = total_vacancies * 2.67
+cost_per_hire_maya = total_vacancies * 0.15 / max(hires, 1)
+# 0.15 = estimated avg Claude API cost per vacancy search
+
+══════════════════════════════════════════════
+PART 6 — DASHBOARD FRONTEND
+══════════════════════════════════════════════
+
+Add a new tab "🔍 Maya Hunt" to the existing /hr admin dashboard.
+Find where existing tabs are defined and add this tab.
+
+The tab contains these sections in order:
+
+## SECTION 1 — ROI Banner (full width, prominent)
+Dark gradient banner with large numbers:
+
+┌────────────────────────────────────────────┐
+│  💰 Зекономлено    ⏱ Годин збережено      │
+│  $X,XXX            XXX год                 │
+│                                            │
+│  🎯 Найнято        📉 Вартість найму       │
+│  X осіб            $XX (vs $400 традиційно)│
+└────────────────────────────────────────────┘
+
+Use green color for savings, show comparison to traditional.
+
+## SECTION 2 — KPI Cards Row (6 cards):
+1. Вакансій оброблено
+2. Кандидатів знайдено  
+3. Кандидатів сьогодні
+4. Прийнято HR (acceptance rate %)
+5. Розміщено в каналах
+6. Охоплення аудиторії
+
+## SECTION 3 — Hire Funnel (left) + Source Performance (right)
+
+LEFT — Vertical funnel chart using Chart.js:
+Знайдено → Переглянуто → Прийнято → Збережено → Найнято
+Show count and % conversion at each stage
+Color: gradient from blue (top) to green (bottom)
+
+RIGHT — Horizontal bar chart: Source Performance
+Bars: candidates found per source
+Color intensity = approval rate
+Show: source name, candidates, hired count, approval %
+
+## SECTION 4 — Salary Intelligence (full width)
+
+Title: "📊 Аналіз ринку зарплат"
+Subtitle: "Дані зібрані Maya Hunt з відкритих джерел"
+
+Grouped bar chart (Chart.js):
+- X axis: cities
+- Y axis: USD salary
+- Blue bars: Очікування кандидатів
+- Orange bars: Пропозиції роботодавців
+- Show gap indicator between bars
+- Tooltip: median value, sample size, clickable source links
+- Legend at bottom
+
+Empty state (when no data):
+"📊 Дані з'являться після першого пошуку кандидатів
+Maya автоматично збирає статистику зарплат під час кожного пошуку."
+
+## SECTION 5 — Top Skills (left) + Salary Trends (right)
+
+LEFT — Horizontal bar chart: Top Skills
+Top 10 skills by demand frequency
+Bar color = heat (red=high salary, blue=low salary)
+Show skill name + count + avg salary
+
+RIGHT — Line chart: Salary Trends over time
+Two lines: candidate expectations vs employer offers
+X axis: months
+Show convergence/divergence trend
+
+## SECTION 6 — Recent Vacancies Table
+
+Columns:
+Вакансія | Місто | Статус | Кандидатів | Каналів | Найнято | Дата
+
+Status badges with colors:
+- searching → blue spinner
+- completed → green
+- posted → orange  
+- filled → purple ✓
+- no_results → gray
+
+"Найнято" column: show 🎯 if hired, — if not
+
+## SECTION 7 — Data Sources Panel
+
+Title: "📡 Джерела даних"
+Cards for each source:
+┌─────────────────────┐
+│ 📱 Telegram         │
+│ 12 каналів активно  │
+│ Останнє: сьогодні   │
+│ Даних: X записів    │
+└─────────────────────┘
+┌─────────────────────┐
+│ 💼 Work.ua          │
+│ ⚠️ Не налаштовано   │
+│ Потрібен акаунт     │
+│ [Додати credentials]│
+└─────────────────────┘
+┌─────────────────────┐
+│ 🔍 Robota.ua        │
+│ ⚠️ Не налаштовано   │
+│ [Додати credentials]│
+└─────────────────────┘
+
+## SECTION 8 — Efficiency Comparison Table
+
+"Порівняння з традиційним рекрутингом"
+
+| Метрика              | Традиційно | Maya Hunt | Економія |
+|---------------------|-----------|-----------|---------|
+| Час пошуку          | 3 год      | 5 хв      | 97%     |
+| Вартість найму      | $400       | $15       | 96%     |
+| Кандидатів на день  | 2-3        | 20+       | 10x     |
+| Охоплення каналів   | 1-2        | 12        | 6x      |
+
+Values in the table should use actual data where available,
+fall back to benchmark values where not.
+
+══════════════════════════════════════════════
+IMPLEMENTATION NOTES
+══════════════════════════════════════════════
+
+## Chart.js usage:
+All charts use Chart.js loaded from CDN (already in project).
+Make charts responsive with maintainAspectRatio: false.
+Use these colors consistently:
+- Candidates: #3B82F6 (blue)
+- Employers: #F97316 (orange)  
+- Hired/Success: #10B981 (green)
+- Warning: #F59E0B (amber)
+- Danger/Gap: #EF4444 (red)
+
+## Data fetching:
+Dashboard fetches /api/hr/hunt/analytics on tab open.
+Show skeleton loading state while fetching.
+Auto-refresh every 60 seconds when tab is active.
+Show "Оновлено: X хв тому" timestamp.
+
+## Empty states:
+Every chart/section must have a friendly empty state.
+Never show errors to the user — show "немає даних" instead.
+
+## Mobile responsive:
+All sections must work on mobile.
+Charts stack vertically on mobile.
+KPI cards: 2 per row on mobile, 3 on tablet, 6 on desktop.
+
+## New env vars (add as placeholders):
+HR_TELETHON_SESSION=    # Natalia's TG session
+HR_CONTACT=@avtd_hr     # Contact shown in posted vacancies
+
+══════════════════════════════════════════════
+CRITICAL RULES
+══════════════════════════════════════════════
+- Keep ALL existing /hr dashboard functionality intact
+- Keep ALL existing Maya HR bot functionality intact
+- All TG messages in Ukrainian
+- Never auto-post without explicit HR button click
+- Rate limit: 3 second delay between channel posts
+- All DB operations use existing SessionLocal pattern
+- Empty states on all charts — never crash on missing data
+- Migration 013 must use IF NOT EXISTS for safety

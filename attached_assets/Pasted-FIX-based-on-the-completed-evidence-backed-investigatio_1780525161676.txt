@@ -1,0 +1,48 @@
+FIX — based on the completed, evidence-backed investigation. The root cause is
+proven: stale .local/session_plan.md contains a Solomon P1–P7 plan, was never
+deleted when Solomon work finished, and the agent consults it every session as its
+"current plan," causing it to resume Solomon during Maya HR tasks. Execute the
+cleanup below. This is a filesystem cleanup + adding one scope marker — no app code,
+no migrations.
+
+STEP 1 — confirm before deleting (read, report, then proceed):
+- Quote the current first ~5 lines of each of these to confirm they are the stale
+  Solomon files identified, not something newly written:
+    .local/session_plan.md
+    .local/solomon_handover.md
+    ./solomon_handover.md   (repo root)
+- grep the codebase (backend/, scripts/, any .py/.sh) for literal references to
+  'session_plan.md' or 'solomon_handover' — does any RUNNING code read these paths?
+  (The delegation SKILL references session_plan.md via fromPlan — note that, but
+  that's a skill instruction, not app code.) Report hits. If any running app code
+  depends on these files, STOP and report before deleting.
+
+STEP 2 — delete the stale files (plain rm, only after Step 1 is clean):
+    rm .local/session_plan.md
+    rm .local/solomon_handover.md
+    rm ./solomon_handover.md
+- Do NOT touch .local/tasks/*.md (those are old Maya HR briefs, harmless) or
+  .local/state/ (platform state). Only the three files above.
+- After deletion, confirm each is gone (ls / test -f) and report.
+
+STEP 3 — add a project-scope marker so a stale plan can't silently reassign scope
+again:
+- Create ./PROJECT_SCOPE.md at repo root with a short explicit statement that this
+  workspace contains TWO independent projects sharing one codebase — MAYA HR
+  (Telegram bot: HR, Hunt, Pulse, recruitment) and SOLOMON (Court Search +
+  Contracts, phases P1–P7) — and that a session works on ONE project at a time as
+  named by the user's prompt. State plainly: a session_plan.md or handover file
+  describing the OTHER project is NOT a signal to switch projects; if the only thing
+  telling the agent what to do is a plan file for a project the user did not name,
+  the agent must stop and ask, not resume that project.
+- Keep it short and factual. This is a readable marker, not executable.
+
+STEP 4 — report what you could NOT clean (honest boundary):
+- The platform follow-up task queue (proposeFollowUpTasks, refs #7/#9) is opaque and
+  not on disk. State that you cannot inspect or clear it from the filesystem. If you
+  have ANY supported mechanism to list or cancel platform follow-up tasks, report
+  what it is — but do NOT guess or fabricate task contents. If those refs contain
+  Solomon items, only the user cancelling them in the Replit UI will clear them.
+
+Report each step. Do not start any Solomon OR Maya HR feature work — this pass is
+cleanup only.

@@ -1,0 +1,63 @@
+Dashboard cleanup + Pulse data investigation.
+
+=== TASK 1: Maya Hunt tab — remove efficiency/comparison tables ===
+
+In hr_admin.py, find the Maya Hunt dashboard HTML section.
+Remove these blocks entirely:
+
+a) "Порівняння з традиційним рекрутингом" table 
+   (Час пошуку 3 год vs 5 хв, Вартість найму $400 vs $4.51, etc.)
+   Delete the entire card/container with this comparison table.
+
+b) "Найзатребуваніші навички" bar chart
+   Delete the chart and its container.
+
+c) "Тренди зарплат" chart (Очікування кандидатів / Пропозиції роботодавців)
+   Delete the chart and its container.
+
+Also remove any JavaScript functions that fetch data for these removed sections
+(look for functions that populate skills chart, salary trends, efficiency table).
+
+Keep: ROI banner (Зекономлено, Годин збережено, Найнято, Вакансій оброблено),
+candidate search results, vacancy list — the operational stuff stays.
+
+=== TASK 2: Pulse dashboard — investigate why real data not showing ===
+
+The dashboard shows:
+- 0.0% Охоплення опитуванням
+- "—" Середня оцінка
+- 0 Тригерів за 30 днів  
+- 0/225 Відповідей цього місяця
+- "Відповідей ще немає" in department chart
+
+But we KNOW there are 100+ survey responses in pulse_surveys table.
+
+Investigate:
+
+1. Show me the /hr/api/pulse-overview endpoint code — full function
+
+2. Run this SQL and report results:
+   SELECT survey_month, COUNT(*) FROM pulse_surveys GROUP BY survey_month ORDER BY survey_month;
+   SELECT COUNT(*) FROM pulse_triggers WHERE fired_at > NOW() - INTERVAL '30 days';
+   SELECT COUNT(DISTINCT telegram_id) FROM hr_users WHERE is_active = TRUE AND telegram_id IS NOT NULL AND telegram_id != 0;
+
+3. Check: does the pulse-overview endpoint filter by current month only?
+   If survey_month = '2026-04' but current month is '2026-05', 
+   the dashboard would show 0 for "цього місяця".
+
+4. Check: does the JavaScript fetch /hr/api/pulse-overview correctly?
+   Show the loadPulseData() function.
+
+5. Check column name mismatch: the code might use 'month_key' 
+   but the DB column is 'survey_month' (or vice versa).
+
+6. Fix whatever is blocking the data from displaying.
+   After fix, the dashboard should show:
+   - Real response count from pulse_surveys
+   - Real average score
+   - Real trigger count from pulse_triggers
+   - Department breakdown from pulse_surveys joined with hr_users
+
+=== AFTER CHANGES ===
+Show me the updated dashboard — screenshot or describe what changed.
+Do NOT modify any Pulse functionality — only fix data display.

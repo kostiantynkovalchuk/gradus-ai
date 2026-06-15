@@ -1,0 +1,39 @@
+IMPLEMENTATION. access_level normalization to canonical 'hr_admin'. Per the
+pre-flight audit. Follow the Rules. Migration and code in ONE deploy — do not land
+the migration before the code, or the validator rejects 'hr_admin' during the gap.
+Grep each symbol before editing; if any site differs from the audit, STOP and
+report (Rule 2).
+
+== MIGRATION (next number from audit — Rule 6, append-only) ==
+In a single migration, in THIS order:
+1. UPDATE hr_whitelist SET access_level='hr_admin' WHERE access_level='admin_hr'
+   (Natalia — closes the propagation path that would re-create the split on
+   re-verification). This is the only hr_whitelist row touched.
+2. ADD CHECK constraint on hr_users ONLY:
+   CHECK (access_level IN ('employee','contractor','hr_admin','admin_it','developer'))
+   Do NOT add any constraint to hr_whitelist — it intentionally carries non-standard
+   values (e.g. Фелікс's row) and is left unconstrained by design. Do NOT touch,
+   delete, or modify Фелікс's row or any other hr_whitelist row.
+
+== CODE: replace 'admin_hr' → 'hr_admin' at every site from the audit's exhaustive
+sweep (use that list, not this one, if they differ) ==
+Known sites:
+  hr_auth.py: 112, 300, 487, 551, 598, 642 (validator), 649 (help text), 695, 740,
+              832, and the help label at 614 if present
+  survey_service.py: 39
+  scheduler.py: 833
+  telegram_webhook.py: 2302
+- broadcast_service.py:51 and hr_keyboards.py:533 already use 'hr_admin' — DO NOT
+  touch; confirm left as-is.
+- Line 642 validator: post-change valid_levels must contain 'hr_admin' and not
+  'admin_hr', so future /adduser hr_admin assignments succeed.
+- Both copies of get_inline_menu_for_access_level (hr_auth.py:817 +
+  hr_keyboards.py:529) must agree on 'hr_admin'. Do NOT consolidate the duplicate
+  function here — note it as a separate follow-up (Rule 1).
+
+== RECONCILIATION (Rule 5) ==
+After deploy, confirm these importers still import cleanly and report:
+  telegram_webhook.py (hr_auth, hr_keyboards, survey_service, broadcast_service),
+  main.py (scheduler), routes/hr_admin.py + scheduler.py (survey_service).
+Report the migration number applied and confirm the 4 hr_admin users now pass the
+/admin, /adduser, /logs, /stats, and document-upload guards.

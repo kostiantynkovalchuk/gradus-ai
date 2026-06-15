@@ -1,0 +1,128 @@
+Prompt 1 → gradus-ai (migration + feedback system):
+
+Implement SOLOMON self-learning feedback system in Telegram. Three changes needed:
+Change 1 — Migration 018 in backend/db_migrations.py, add:
+python"018_solomon_feedback": """
+    CREATE TABLE IF NOT EXISTS solomon_feedback (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER REFERENCES solomon_sessions(id),
+        query_text TEXT,
+        parsed_params JSONB,
+        doc_id TEXT,
+        cause_number TEXT,
+        feedback VARCHAR(10) CHECK (feedback IN ('like', 'dislike')),
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_solomon_feedback_doc ON solomon_feedback(doc_id);
+    CREATE INDEX IF NOT EXISTS idx_solomon_feedback_session ON solomon_feedback(session_id);
+"""
+Change 2 — Update solomon_bot.py to attach inline keyboard to each result card:
+After building each result message, append an inline keyboard with like/dislike buttons. The callback data must encode doc_id and cause_number:
+pythonfrom aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+def make_feedback_keyboard(doc_id: str, cause_number: str) -> InlineKeyboardMarkup:
+    safe_case = cause_number.replace("/", "_")[:20]
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👍 Корисно", callback_data=f"sfb_like_{doc_id}_{safe_case}"),
+        InlineKeyboardButton(text="👎 Не те", callback_data=f"sfb_dislike_{doc_id}_{safe_case}"),
+        InlineKeyboardButton(text="🔗 Читати", url=f"https://reyestr.court.gov.ua/Review/{doc_id}"),
+    ]])
+Each result card gets its own keyboard. The "Читати повністю" link moves into the keyboard row.
+Change 3 — Add callback handler in solomon_bot.py:
+python@dp.callback_query(lambda c: c.data and c.data.startswith("sfb_"))
+async def handle_solomon_feedback(callback: CallbackQuery):
+    parts = callback.data.split("_", 3)
+    # sfb_like_DOCID_CASENUMBER or sfb_dislike_DOCID_CASENUMBER
+    feedback = parts[1]  # "like" or "dislike"
+    doc_id = parts[2]
+    cause_number = parts[3].replace("_", "/") if len(parts) > 3 else ""
+    
+    user_id = callback.from_user.id
+    
+    # Get session_id from DB
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM solomon_sessions WHERE telegram_id = %s", (user_id,))
+    session = cur.fetchone()
+    session_id = session[0] if session else None
+    
+    # Save feedback
+    cur.execute("""
+        INSERT INTO solomon_feedback (session_id, doc_id, cause_number, feedback)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+    """, (session_id, doc_id, cause_number, feedback))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    # Update button to show selection
+    if feedback == "like":
+        new_text = "✅ Корисно"
+        reply = "Дякую! Це допоможе покращити пошук."
+    else:
+        new_text = "❌ Не те"
+        reply = "Зрозуміло. Спробуйте уточнити запит."
+    
+    # Update keyboard — mark selected button
+    try:
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=new_text if feedback=="like" else "👍 Корисно", callback_data="sfb_done"),
+            InlineKeyboardButton(text=new_text if feedback=="dislike" else "👎 Не те", callback_data="sfb_done"),
+            InlineKeyboardButton(text="🔗 Читати", url=f"https://reyestr.court.gov.ua/Review/{doc_id}"),
+        ]]))
+    except:
+        pass
+    
+    await callback.answer(reply)
+Change 4 — Add feedback analytics to /law/analytics endpoint — add a /law/analytics/data JSON endpoint that returns feedback stats:
+In backend/solomon_router.py:
+python@router.get("/analytics/data")
+async def solomon_analytics_data(credentials: HTTPBasicCredentials = Depends(verify_solomon_credentials)):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT 
+            COUNT(*) FILTER (WHERE feedback='like') as likes,
+            COUNT(*) FILTER (WHERE feedback='dislike') as dislikes,
+            COUNT(DISTINCT session_id) as users,
+            COUNT(*) as total
+        FROM solomon_feedback
+        WHERE created_at > NOW() - INTERVAL '30 days'
+    """)
+    stats = cur.fetchone()
+    
+    cur.execute("""
+        SELECT cause_number, COUNT(*) as likes
+        FROM solomon_feedback
+        WHERE feedback = 'like'
+        GROUP BY cause_number
+        ORDER BY likes DESC
+        LIMIT 5
+    """)
+    top_liked = cur.fetchall()
+    
+    cur.execute("""
+        SELECT cause_number, COUNT(*) as dislikes
+        FROM solomon_feedback  
+        WHERE feedback = 'dislike'
+        GROUP BY cause_number
+        ORDER BY dislikes DESC
+        LIMIT 5
+    """)
+    top_disliked = cur.fetchall()
+    
+    cur.close()
+    conn.close()
+    
+    return {
+        "last_30_days": {
+            "likes": stats[0], "dislikes": stats[1],
+            "users": stats[2], "total": stats[3],
+            "satisfaction": round(stats[0] / stats[3] * 100) if stats[3] > 0 else 0
+        },
+        "top_liked": [{"cause_number": r[0], "likes": r[1]} for r in top_liked],
+        "top_disliked": [{"cause_number": r[0], "dislikes": r[1]} for r in top_disliked],
+    }
+

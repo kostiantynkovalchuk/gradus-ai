@@ -1,0 +1,171 @@
+TASK: Fix Delo.ua scraper for chaotic line breaks and metadata issues
+
+FILE: backend/services/scrapers/delo_ua_scraper.py
+
+CRITICAL PROBLEMS IN ARTICLE:
+1. Merged category+title: "Новині компанійBlack Friday..."
+2. Title appears 3 times (merged, metadata line, actual title, duplicate)
+3. Chaotic line breaks throughout entire article:
+   - Quotes split across multiple lines
+   - Names split across lines
+   - Section headers split
+   - Random periods on separate lines
+4. Content cuts off mid-sentence at end
+
+ROOT CAUSE: Scraper preserving HTML line breaks meant for web display, not reading
+
+COMPREHENSIVE FIX - REPLACE _clean_content METHOD:
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Clean Delo.ua content with aggressive line joining"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Step 1: Remove merged category pattern at very start
+    # Pattern: "Новини компанійTitle" without space
+    content = re.sub(r'^Новини компаній' + re.escape(title), title, content)
+    content = re.sub(r'^Новини компаній', '', content)
+    
+    # Step 2: Remove metadata patterns
+    patterns_to_remove = [
+        r'^Категорія\s*\n\s*[^\n]+\n',
+        r'^Дата публікації\s*\n\s*[^\n]+\n',
+        r'^Новини\s*\n',
+        r'^\d{1,2}\s+\w+\s+\d{2}:\d{2}\s*\n',
+        r'Змінити мову.*?\n',
+        r'Читать на русском.*?\n',
+    ]
+    
+    for pattern in patterns_to_remove:
+        content = re.sub(pattern, '', content, flags=re.MULTILINE)
+    
+    # Step 3: Handle duplicate titles
+    # Split into lines and remove duplicate titles in first 10 lines
+    lines = content.split('\n')
+    seen_title = False
+    filtered_lines = []
+    
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        
+        # Skip empty
+        if not line_stripped:
+            continue
+        
+        # Skip metadata lines
+        if line_stripped in ['Категорія', 'Новини', 'Дата публікації', 'Новині компаній']:
+            continue
+        
+        # Handle title duplicates (only keep first)
+        if line_stripped == title:
+            if not seen_title:
+                filtered_lines.append(line_stripped)
+                seen_title = True
+            continue
+        
+        filtered_lines.append(line_stripped)
+    
+    # Step 4: AGGRESSIVE LINE JOINING
+    # Join ALL lines into single text block
+    # The chaotic breaks need to be completely rebuilt
+    full_text = ' '.join(filtered_lines)
+    
+    # Step 5: Fix spacing issues
+    # Remove multiple spaces
+    full_text = re.sub(r'  +', ' ', full_text)
+    
+    # Fix spacing around quotes
+    full_text = re.sub(r'\s+"', ' "', full_text)
+    full_text = re.sub(r'"\s+', '" ', full_text)
+    
+    # Step 6: Rebuild paragraph structure
+    # Split ONLY at proper boundaries:
+    # 1. After closing quote + comma/period + space + capital letter
+    # 2. After period + space + capital letter (not in quotes)
+    # 3. At section headers (short lines with : at end, like "ЦеТе:")
+    
+    # Mark paragraph boundaries
+    # After quote + attribution + punctuation
+    full_text = re.sub(r'([.!?]"\s*,?\s*)([A-ZА-ЯІЇЄ])', r'\1\n\n\2', full_text)
+    
+    # After period + space + capital (regular paragraph break)
+    full_text = re.sub(r'([.!?]\s+)([A-ZА-ЯІЇЄ][а-яіїєa-z])', r'\1\n\n\2', full_text)
+    
+    # Before section headers (capital word + colon, or short title line)
+    full_text = re.sub(r'\.(\s+)([А-ЯІЇЄ][^\n]{10,80}:)', r'.\n\n\2', full_text)
+    
+    # Step 7: Clean up excessive breaks
+    full_text = re.sub(r'\n{3,}', '\n\n', full_text)
+    
+    # Step 8: Remove trailing incomplete sentences if they exist
+    # (like "доступні на офіційному" without URL)
+    lines = full_text.split('\n')
+    if lines:
+        last_line = lines[-1].strip()
+        # If last line is very short and doesn't end with punctuation
+        if len(last_line) < 50 and not last_line.endswith(('.', '!', '?', '"')):
+            lines = lines[:-1]
+    
+    full_text = '\n'.join(lines)
+    
+    return full_text.strip()
+```
+
+ALTERNATIVE SIMPLER VERSION (if above fails):
+```python
+def _clean_content(self, content: str, title: str) -> str:
+    """Simplified aggressive cleaning"""
+    if not content:
+        return ""
+    
+    import re
+    
+    # Remove all metadata patterns
+    content = re.sub(r'Новини компаній', '', content)
+    content = re.sub(r'Категорія|Дата публікації|Новини', '', content)
+    
+    # Get all lines
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    
+    # Remove duplicate title (keep only first occurrence)
+    seen_title = False
+    filtered = []
+    for line in lines:
+        if line == title:
+            if not seen_title:
+                filtered.append(line)
+                seen_title = True
+        else:
+            filtered.append(line)
+    
+    # Join everything with space
+    text = ' '.join(filtered)
+    
+    # Fix multiple spaces
+    text = re.sub(r'  +', ' ', text)
+    
+    # Add paragraph breaks at sentence boundaries
+    text = re.sub(r'([.!?"]\s+)([A-ZА-ЯІЇЄ])', r'\1\n\n\2', text)
+    
+    # Clean up
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+```
+
+TEST WITH PROBLEM ARTICLE:
+Scrape "Black Friday в Епіцентрі" article
+Show before and after cleaning
+Verify:
+- Only ONE title at start
+- No "Новині компаній" metadata
+- Consistent paragraph spacing throughout
+- No random line breaks in quotes
+- No line breaks in middle of names
+- Section headers on single lines
+- Content length 1000+ chars
+
+OUTPUT:
+Show full cleaned article with proper formatting

@@ -1,0 +1,273 @@
+# URGENT: Fix missing admin keyboard buttons for developer/admin users
+
+## PROBLEM
+After successful authentication, developer and admin_hr users see "Developer Mode Active" message but their menu keyboard doesn't include admin command buttons (/admin, /stats, /logs, /adduser, etc.). Only regular employee buttons are shown.
+
+## INVESTIGATION
+
+**Check these files:**
+1. `backend/routes/telegram_webhook.py` - main message handler
+2. `backend/services/hr_auth_handlers.py` - authentication handlers
+3. Any file handling keyboard generation
+
+**Find where keyboards are created and ensure:**
+- `get_menu_for_access_level()` function exists
+- It's called with correct user access_level
+- Developer keyboard includes admin buttons
+- Keyboard is applied in ALL message handlers, not just /start
+
+## REQUIRED FIXES
+
+### Fix 1: Ensure Developer Keyboard is Defined
+
+**In `hr_auth_handlers.py` or wherever keyboards are defined:**
+```python
+def get_menu_for_access_level(access_level: str):
+    """Return appropriate keyboard based on user access level"""
+    
+    if access_level == "developer":
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Тех. підтримка", "📞 Контакти"],
+            ["📄 Юридичні документи"],
+            ["💬 Задати своє питання"],
+            ["👨‍💻 Admin", "📊 Stats", "🔍 Logs"],
+            ["➕ Add User", "🔄 Sync Users"]
+        ]
+    elif access_level == "admin_hr":
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Тех. підтримка", "📞 Контакти"],
+            ["📄 Юридичні документи"],
+            ["💬 Задати своє питання"],
+            ["⚙️ Admin Panel", "➕ Add User", "📊 Stats"]
+        ]
+    else:  # employee or contractor
+        keyboard = [
+            ["📖 Про компанію", "🚀 Новачкам"],
+            ["💼 Робочі питання", "💰 Зарплата"],
+            ["🔧 Тех. підтримка", "📞 Контакти"],
+            ["📄 Юридичні документи"],
+            ["💬 Задати своє питання"]
+        ]
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+```
+
+### Fix 2: Apply Keyboard After Every Authentication
+
+**In the authentication success handlers, ensure keyboard is set:**
+
+**File: `hr_auth_handlers.py` - in `create_whitelisted_user()` function:**
+```python
+async def create_whitelisted_user(telegram_id, phone, whitelist_entry, update, context):
+    """Create user from whitelist entry"""
+    
+    # ... existing code to create user in database ...
+    
+    # Get appropriate keyboard for access level
+    keyboard = get_menu_for_access_level(whitelist_entry["access_level"])
+    
+    # Different messages based on access level
+    if whitelist_entry["access_level"] == "developer":
+        message = (
+            f"🔓 **Developer Mode Active**\n\n"
+            f"Привіт, {whitelist_entry['full_name']}! 👨‍💻\n\n"
+            f"✅ Повний доступ до всіх функцій\n"
+            f"✅ Адмін-панель: /admin\n"
+            f"✅ Логи системи: /logs\n"
+            f"✅ Статистика: /stats\n"
+            f"✅ Додати користувача: /adduser\n\n"
+            f"Використовуй кнопки нижче або команди вище 👇"
+        )
+    # ... rest of conditions ...
+    
+    await update.message.reply_text(
+        message, 
+        reply_markup=keyboard,  # CRITICAL: Apply keyboard here
+        parse_mode="Markdown"
+    )
+```
+
+### Fix 3: Persistent Keyboard on Every Message
+
+**Important:** The keyboard should persist across ALL interactions, not just /start.
+
+**In main message handler (likely in `telegram_webhook.py`):**
+```python
+async def handle_general_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle general messages - ensure keyboard persists"""
+    
+    telegram_id = update.effective_user.id
+    
+    # Get user info
+    user = await db.fetchrow(
+        "SELECT * FROM hr_users WHERE telegram_id = $1 AND is_active = TRUE",
+        telegram_id
+    )
+    
+    if not user:
+        # Redirect to auth
+        return
+    
+    # Get appropriate keyboard for this user
+    keyboard = get_menu_for_access_level(user["access_level"])
+    
+    # Process message and respond
+    response = await process_user_message(update.message.text, user)
+    
+    # ALWAYS send keyboard with response
+    await update.message.reply_text(
+        response,
+        reply_markup=keyboard  # Reapply keyboard on every message
+    )
+```
+
+### Fix 4: Handle Button Text Commands
+
+**Ensure button text is mapped to actual commands:**
+```python
+async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle keyboard button presses"""
+    
+    message_text = update.message.text
+    telegram_id = update.effective_user.id
+    
+    # Get user to check access level
+    user = await db.fetchrow(
+        "SELECT access_level FROM hr_users WHERE telegram_id = $1",
+        telegram_id
+    )
+    
+    keyboard = get_menu_for_access_level(user["access_level"])
+    
+    # Map button text to actions
+    button_actions = {
+        "👨‍💻 Admin": lambda: admin_command(update, context),
+        "📊 Stats": lambda: stats_command(update, context),
+        "🔍 Logs": lambda: logs_command(update, context),
+        "➕ Add User": lambda: adduser_command(update, context),
+        "🔄 Sync Users": lambda: sync_users_command(update, context),
+        "⚙️ Admin Panel": lambda: admin_command(update, context),
+    }
+    
+    # Execute action if button matches
+    if message_text in button_actions:
+        await button_actions[message_text]()
+        return
+    
+    # Otherwise process as normal message
+    # ... existing message handling logic ...
+```
+
+### Fix 5: Add Keyboard Refresh Command
+
+**Add a /menu command to manually refresh keyboard:**
+```python
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Refresh keyboard menu based on user access level"""
+    
+    telegram_id = update.effective_user.id
+    
+    user = await db.fetchrow(
+        "SELECT access_level, first_name FROM hr_users WHERE telegram_id = $1",
+        telegram_id
+    )
+    
+    if not user:
+        await update.message.reply_text("⚠️ Потрібна реєстрація: /start")
+        return
+    
+    keyboard = get_menu_for_access_level(user["access_level"])
+    
+    await update.message.reply_text(
+        f"📱 Меню оновлено для рівня доступу: {user['access_level']}\n\n"
+        f"Привіт, {user['first_name']}! Використовуй кнопки нижче 👇",
+        reply_markup=keyboard
+    )
+
+# Register in bot
+app.add_handler(CommandHandler("menu", menu_command))
+```
+
+## TESTING CHECKLIST
+
+After deployment:
+
+1. **Send /start** as developer
+2. **Check keyboard** - should show admin buttons
+3. **Send any message** - keyboard should persist
+4. **Try /menu** - should refresh keyboard
+5. **Click "👨‍💻 Admin" button** - should trigger /admin command
+6. **Click "📊 Stats" button** - should trigger /stats command
+
+## DEBUGGING
+
+If buttons still don't appear:
+
+**Add logging to see what's happening:**
+```python
+import logging
+logger = logging.getLogger(__name__)
+
+# In create_whitelisted_user():
+logger.info(f"Creating keyboard for access_level: {whitelist_entry['access_level']}")
+keyboard = get_menu_for_access_level(whitelist_entry["access_level"])
+logger.info(f"Keyboard created with {len(keyboard.keyboard)} rows")
+```
+
+Check logs to confirm:
+- Access level is correctly identified as "developer"
+- Keyboard generation is called
+- Correct number of keyboard rows are created
+
+## CRITICAL NOTES
+
+- Admin buttons MUST be in the keyboard, not just available as commands
+- Keyboard should persist across ALL messages, not just /start
+- Different access levels get different keyboards
+- Buttons should trigger the actual command functions
+
+IMPLEMENT ALL FIXES ABOVE AND TEST WITH DEVELOPER ACCOUNT.
+```
+
+---
+
+## **🧪 IMMEDIATE WORKAROUND**
+
+While waiting for the fix, you can still use commands directly:
+
+**Type these commands (they should still work):**
+```
+/admin
+/stats
+/logs
+/adduser
+/migration_status
+```
+
+The commands exist, they're just not visible as buttons.
+
+---
+
+## **📊 AFTER FIX - EXPECTED RESULT**
+
+**Your keyboard should look like this:**
+```
+┌─────────────────────────────────────┐
+│ 📖 Про компанію    🚀 Новачкам      │
+├─────────────────────────────────────┤
+│ 💼 Робочі питання  💰 Зарплата      │
+├─────────────────────────────────────┤
+│ 🔧 Тех. підтримка  📞 Контакти      │
+├─────────────────────────────────────┤
+│ 📄 Юридичні документи               │
+├─────────────────────────────────────┤
+│ 💬 Задати своє питання              │
+├─────────────────────────────────────┤
+│ 👨‍💻 Admin  📊 Stats  🔍 Logs       │
+├─────────────────────────────────────┤
+│ ➕ Add User    🔄 Sync Users        │
+└─────────────────────────────────────┘

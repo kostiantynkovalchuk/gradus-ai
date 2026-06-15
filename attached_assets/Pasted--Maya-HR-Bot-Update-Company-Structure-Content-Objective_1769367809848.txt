@@ -1,0 +1,294 @@
+# Maya HR Bot - Update Company Structure Content
+
+## Objective
+Update the "Структура компанії" (Company Structure) content in Maya HR bot to display properly formatted organizational structure with icons and leadership information.
+
+---
+
+## Task
+
+Update the database entry for "Структура компанії" in the `hr_content` table with the following formatted content:
+
+### SQL Update Statement
+
+```sql
+-- First, check if the entry exists
+SELECT id, section, subsection, title FROM hr_content 
+WHERE title LIKE '%Структура%' OR content LIKE '%Структура компан%';
+
+-- Update the existing entry (or INSERT if it doesn't exist)
+UPDATE hr_content 
+SET content = '🏢 **СТРУКТУРА КОМПАНІЇ**
+
+**Департаменти:**
+
+🏭 **Виробництво**
+📊 **Продажі**
+📣 **Маркетинг**
+💰 **Фінанси, облік та аналітика**
+👥 **Персонал**
+🌍 **Експорт**
+🔐 **Безпека**
+
+---
+
+👔 **КЕРІВНИЦТВО КОМПАНІЇ**
+
+🧭 **Виконавчий директор**
+└─ Владислав Валерійович Василенко
+
+📣 **Директор з маркетингу**
+└─ Василь Михайлович Профір
+
+📊 **Директор з продажу**
+└─ Іван Сергійович Гоц
+
+💰 **Директор департаменту фінансів, обліку та аналітики**
+└─ Алла Петрівна Горбенко
+
+👥 **Директор департаменту персоналу**
+└─ Вакансія ⏳ 
+└─ (тимчасово виконує обов''язки — Наталя Олександрівна Решетілова)
+
+🌍 **Керівник відділу експорту**
+└─ Євген Олександрович Шаповалов
+
+🔐 **Директор з безпеки**
+└─ Олег Григорович Глухой'
+WHERE section = 'about' AND subsection = 'structure';
+
+-- If the entry doesn't exist, INSERT it
+INSERT INTO hr_content (section, subsection, title, content, category, display_order)
+SELECT 
+    'about',
+    'structure', 
+    'Структура компанії',
+    '🏢 **СТРУКТУРА КОМПАНІЇ**
+
+**Департаменти:**
+
+🏭 **Виробництво**
+📊 **Продажі**
+📣 **Маркетинг**
+💰 **Фінанси, облік та аналітика**
+👥 **Персонал**
+🌍 **Експорт**
+🔐 **Безпека**
+
+---
+
+👔 **КЕРІВНИЦТВО КОМПАНІЇ**
+
+🧭 **Виконавчий директор**
+└─ Владислав Валерійович Василенко
+
+📣 **Директор з маркетингу**
+└─ Василь Михайлович Профір
+
+📊 **Директор з продажу**
+└─ Іван Сергійович Гоц
+
+💰 **Директор департаменту фінансів, обліку та аналітики**
+└─ Алла Петрівна Горбенко
+
+👥 **Директор департаменту персоналу**
+└─ Вакансія ⏳ 
+└─ (тимчасово виконує обов''язки — Наталя Олександрівна Решетілова)
+
+🌍 **Керівник відділу експорту**
+└─ Євген Олександрович Шаповалов
+
+🔐 **Директор з безпеки**
+└─ Олег Григорович Глухой',
+    'About',
+    5
+WHERE NOT EXISTS (
+    SELECT 1 FROM hr_content 
+    WHERE section = 'about' AND subsection = 'structure'
+);
+```
+
+---
+
+## Alternative: Russian Version (if needed)
+
+If the bot should display in Russian instead of Ukrainian:
+
+```sql
+UPDATE hr_content 
+SET content = '🏢 **СТРУКТУРА КОМПАНИИ**
+
+**Департаменты:**
+
+🏭 **Производство**
+📊 **Продажи**
+📣 **Маркетинг**
+💰 **Финансы, учет и аналитика**
+👥 **Персонал**
+🌍 **Экспорт**
+🔐 **Безопасность**
+
+---
+
+👔 **РУКОВОДСТВО КОМПАНИИ**
+
+🧭 **Исполнительный директор**
+└─ Владислав Валериевич Василенко
+
+📣 **Директор по маркетингу**
+└─ Василий Михайлович Профир
+
+📊 **Директор по продажам**
+└─ Иван Сергеевич Гоц
+
+💰 **Директор департамента финансов, учета и аналитики**
+└─ Алла Петровна Горбенко
+
+👥 **Директор департамента персонала**
+└─ Вакансия ⏳ 
+└─ (временно исполняет обязанности — Наталья Александровна Решетилова)
+
+🌍 **Руководитель отдела экспорта**
+└─ Евгений Александрович Шаповалов
+
+🔐 **Директор по безопасности**
+└─ Олег Григорьевич Глухой'
+WHERE section = 'about' AND subsection = 'structure';
+```
+
+---
+
+## Verification Steps
+
+After running the update, verify the changes:
+
+```sql
+-- Check the updated content
+SELECT 
+    id,
+    section,
+    subsection,
+    title,
+    LEFT(content, 100) as content_preview,
+    category,
+    display_order
+FROM hr_content 
+WHERE section = 'about' AND subsection = 'structure';
+```
+
+---
+
+## Navigation Update (if needed)
+
+Ensure the "About" section keyboard includes "Структура компанії" button:
+
+In `hr_keyboards.py`, verify this function includes the structure button:
+
+```python
+def get_about_keyboard():
+    """About company submenu."""
+    keyboard = [
+        [InlineKeyboardButton("🏢 Структура компанії", callback_data="hr:content:about:structure")],
+        [InlineKeyboardButton("📍 Контакти", callback_data="hr:content:about:contacts")],
+        [InlineKeyboardButton("ℹ️ Про компанію", callback_data="hr:content:about:info")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="hr:main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+```
+
+---
+
+## Regenerate Embeddings
+
+After updating the content, regenerate embeddings so the new structure information is searchable:
+
+```python
+# Run this in Python environment
+from hr_content_processor import process_and_store_content
+import asyncio
+
+async def update_embeddings():
+    await process_and_store_content()
+    print("✅ Embeddings updated for company structure!")
+
+asyncio.run(update_embeddings())
+```
+
+---
+
+## Testing Checklist
+
+After implementation:
+
+- [ ] Click "👥 Про компанію" in main menu
+- [ ] Click "🏢 Структура компанії" button
+- [ ] Verify all icons display correctly
+- [ ] Verify formatting (bold, line breaks, hierarchy)
+- [ ] Verify Ukrainian/Russian language is correct
+- [ ] Test semantic search with query "хто директор з маркетингу?"
+- [ ] Verify back button works correctly
+
+---
+
+## Expected Result
+
+When user clicks "Структура компанії", they should see:
+
+```
+🏢 СТРУКТУРА КОМПАНІЇ
+
+Департаменти:
+
+🏭 Виробництво
+📊 Продажі
+📣 Маркетинг
+💰 Фінанси, облік та аналітика
+👥 Персонал
+🌍 Експорт
+🔐 Безпека
+
+---
+
+👔 КЕРІВНИЦТВО КОМПАНІЇ
+
+🧭 Виконавчий директор
+└─ Владислав Валерійович Василенко
+
+📣 Директор з маркетингу
+└─ Василь Михайлович Профір
+
+[...and so on...]
+```
+
+All icons should render properly in Telegram with clean formatting.
+
+---
+
+## Implementation Command
+
+```bash
+# In Replit, execute the SQL update statement in your database console
+# OR create a migration script:
+
+python3 << 'EOF'
+import asyncio
+from db import get_db
+
+async def update_company_structure():
+    async with get_db() as db:
+        # Your SQL UPDATE/INSERT statement here
+        await db.execute("""
+            UPDATE hr_content 
+            SET content = '...' 
+            WHERE section = 'about' AND subsection = 'structure'
+        """)
+        await db.commit()
+        print("✅ Company structure updated!")
+
+asyncio.run(update_company_structure())
+EOF
+```
+
+---
+
+**Ready for implementation!** 🚀

@@ -1,0 +1,121 @@
+# REPLIT PROMPT: Fix Helsinki Detection — Update Reference Images
+
+## Problem
+
+Helsinki vodka is detected in only 1 out of 12 expert-corrected reports (8% detection rate). This is the #1 blocker for achieving 5% vodka accuracy. Ukrainka improved dramatically after adding reference images (0 → 21 facings), but Helsinki still fails.
+
+**Root cause:** Current references only show Helsinki Ice Palace flagship bottle. On real shelves, Helsinki appears as:
+- Transparent bottles WITHOUT boxes (not in dark packaging)
+- Multiple SKUs with different colored labels (Ice Palace=light blue, Winter Capital=grey, Ultramarin=dark blue, Frosty Citrus=orange, Salted Caramel=brown)
+- Often positioned NEXT TO GreenDay on the vodka shelf
+- Shelf-strip "HELSINKI PREMIUM VODKA" sometimes visible
+
+## Changes Required
+
+### 1. Add new reference images to `backend/photo_report/references/`
+
+**Add 3 new files:**
+
+- `helsinki_lineup.jpg` — Full lineup of all 5 Helsinki SKUs (Ice Palace, Winter Capital, Ultramarin, Frosty Citrus, Salted Caramel). Production photo with mountain background. This replaces the old `helsinki_lineup.jpg` that was cropped from HoReCa PDF.
+
+- `shelf_ref_21.jpg` — Real shelf: Helsinki transparent bottles (no boxes!) on 4th shelf from ground, positioned next to GreenDay. Also shows Klinkov boxes on top shelf (dark blue+gold — NOT Helsinki), ADJARI mid shelves. Good for learning Helsinki vs Klinkov distinction.
+
+- `shelf_ref_22.jpg` — Real shelf: 6 Helsinki SKUs without boxes on top shelf right side. "HELSINKI" shelf-strip visible. Also shows all AVTD brands: KLINKOV, ЖАН-ЖАК, UKRAINKA, ДОВБУШ, GREENDAY, ADJARI, VILLA UA shelf-strips. Best Helsinki shelf reference.
+
+**I will upload these 3 files to the `references/` directory manually after you create the directory structure.**
+
+### 2. Update `references.py` — add labels for new images
+
+Add these entries to `REFERENCE_LABELS` dict:
+
+```python
+# In REFERENCE_LABELS dict, update/add:
+"helsinki_lineup": "Helsinki FULL LINEUP — 5 SKUs: Ice Palace (light blue label), Winter Capital (grey), Ultramarin (dark blue), Frosty Citrus (orange), Salted Caramel (brown). All are TRANSPARENT bottles with mountain/winter scene. CRITICAL: Do NOT confuse with Klinkov (dark boxes) or Nemiroff.",
+
+"shelf_ref_21": "IDEAL SHELF: Helsinki transparent bottles (NO BOXES) next to GreenDay on vodka shelf. Top shelf has Klinkov BOXES (dark blue+gold) — these are NOT Helsinki. ADJARI cognac on middle shelves.",
+
+"shelf_ref_22": "IDEAL SHELF: 6 Helsinki SKUs on top shelf RIGHT SIDE — transparent bottles, no boxes. HELSINKI shelf-strip visible. All AVTD brands present with shelf-strips: KLINKOV, HELSINKI, ЖАН-ЖАК, UKRAINKA, ДОВБУШ, GREENDAY, ADJARI, VILLA UA.",
+```
+
+### 3. Update Vision prompt — add Helsinki-specific guidance
+
+In the `SYSTEM_PROMPT` or `ANALYSIS_PROMPT` in `vision.py`, add this to the vodka scanning section:
+
+```
+HELSINKI DETECTION — CRITICAL:
+- Helsinki bottles are TRANSPARENT with winter landscape labels. They do NOT come in dark boxes on shelves.
+- Do NOT confuse Klinkov dark blue/gold BOXES with Helsinki. Klinkov = cognac in boxes. Helsinki = vodka in transparent bottles.
+- Helsinki has 5 SKUs with different label colors: Ice Palace (light blue), Winter Capital (grey), Ultramarin (dark blue), Frosty Citrus (orange), Salted Caramel (brown).
+- Helsinki is often positioned NEXT TO GreenDay on the vodka shelf.
+- Look for "HELSINKI" text on shelf-strips and on bottle labels.
+- If you see GreenDay but not Helsinki — look again carefully at transparent bottles nearby. Helsinki is easy to miss because the bottles are clear/transparent.
+```
+
+### 4. Resize uploaded images
+
+After I upload the 3 files, resize them to match existing references:
+- Max 1200px on longest side
+- JPEG quality 85
+- Convert PNG to JPG if needed
+
+```python
+from PIL import Image
+from io import BytesIO
+
+for fname in ['helsinki_lineup.jpg', 'shelf_ref_21.jpg', 'shelf_ref_22.jpg']:
+    path = f'backend/photo_report/references/{fname}'
+    img = Image.open(path)
+    if max(img.size) > 1200:
+        ratio = 1200 / max(img.size)
+        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    buf = BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=85)
+    with open(path, 'wb') as f:
+        f.write(buf.getvalue())
+    print(f"Optimized {fname}: {img.size}")
+```
+
+## After Deployment — Verify
+
+Run benchmark with photos known to contain Helsinki:
+
+```bash
+cd backend
+python -m photo_report.benchmark.run_benchmark --dir photo_report/benchmark --count 5
+```
+
+Check that Helsinki facings > 0 in reports where Helsinki is present on the shelf.
+
+## Expected Impact
+
+- Helsinki detection: 8% → 60%+ 
+- Vodka accuracy: 25% avg deviation → ~10% avg deviation
+- Key distinction learned: Klinkov boxes ≠ Helsinki bottles
+
+## Total reference images after this update: 17
+
+```
+references/
+  # Product photos (6+1 = 7)
+  greenday_classic_500.jpg
+  greenday_lineup.jpg
+  helsinki_ice_palace_500.jpg
+  helsinki_lineup.jpg              ← UPDATED (new full lineup photo)
+  ukrainka_traditional_500.jpg
+  ukrainka_lineup.jpg
+  
+  # Ideal shelf photos (8+2 = 10)
+  shelf_ref_02.jpg
+  shelf_ref_05.jpg
+  shelf_ref_07.jpg
+  shelf_ref_12.jpg
+  shelf_ref_13.jpg
+  shelf_ref_16.jpg
+  shelf_ref_17.jpg
+  shelf_ref_19.jpg
+  shelf_ref_21.jpg                ← NEW (Helsinki next to GreenDay)
+  shelf_ref_22.jpg                ← NEW (6 Helsinki SKUs + all shelf-strips)
+```
+
+Cost impact: 17 images × ~150KB = ~2.5MB, ~8,000 tokens, +$0.05 per report. Still acceptable.

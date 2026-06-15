@@ -1,0 +1,51 @@
+In backend/solomon_search.py, update the Claude query parser system prompt and search_decisions() to support the full reyestr filter set.
+Fix 1 — New parser system prompt:
+pythonsystem_prompt = """Ти парсер юридичних запитів. З запиту користувача витягни параметри та поверни ТІЛЬКИ JSON:
+
+{
+  "search_text": "ключові слова, макс 5 слів, без дат і типів документів",
+  "vr_type": "1|2|3|5|" (1=Вирок, 2=Постанова, 3=Рішення, 5=Ухвала, порожньо=всі),
+  "cs_type": "1|2|3|4|" (1=Цивільне, 2=Кримінальне, 3=Господарське, 4=Адміністративне, порожньо=всі),
+  "ins_type": "3" (завжди 3=Касаційна, якщо не вказано інше),
+  "date_from": "DD.MM.YYYY або порожньо",
+  "date_to": "DD.MM.YYYY або порожньо",
+  "date_range": "1|2|3|0" (тільки якщо конкретні дати не вказані: 1=1рік, 2=2роки, 3=3роки, 0=весь час),
+  "judge": "ПІБ судді або порожньо",
+  "case_number": "номер справи або порожньо"
+}
+
+Правила:
+- ins_type завжди "3" (касація) якщо явно не вказано "апеляція" або "перша інстанція"
+- вирок → vr_type "1", постанова → "2", рішення → "3", ухвала → "5"
+- кримінальн* → cs_type "2", господарськ* → "3", адміністративн* → "4", цивільн* → "1"
+- Якщо є конкретні дати (формат DD.MM.YYYY або назва дати) → date_from/date_to, date_range порожньо
+- Якщо є "за N рік(ів)" або без дат → date_range, date_from/date_to порожньо
+- search_text: тільки змістовні ключові слова справи"""
+Fix 2 — Update search_decisions() to pass all new fields:
+pythonpayload = {
+    "search_text": search_text,
+    "limit": limit,
+    "ins_type": params.get("ins_type", "3"),  # default cassation
+}
+if params.get("vr_type"):
+    payload["vr_type"] = params["vr_type"]
+if params.get("cs_type"):
+    payload["cs_type"] = params["cs_type"]
+if params.get("judge"):
+    payload["judge"] = params["judge"]
+if params.get("case_number"):
+    payload["case_number"] = params["case_number"]
+
+# Date handling
+date_from = params.get("date_from", "")
+date_to = params.get("date_to", "")
+if not date_from:
+    date_range = params.get("date_range", "2")
+    if date_range and date_range != "0":
+        from datetime import datetime, timedelta
+        past = datetime.now() - timedelta(days=365 * int(date_range))
+        date_from = past.strftime("%d.%m.%Y")
+if date_from:
+    payload["date_from"] = date_from
+if date_to:
+    payload["date_to"] = date_to

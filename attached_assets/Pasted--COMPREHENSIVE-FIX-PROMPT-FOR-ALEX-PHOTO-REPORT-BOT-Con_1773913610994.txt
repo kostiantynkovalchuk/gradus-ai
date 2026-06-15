@@ -1,0 +1,732 @@
+# COMPREHENSIVE FIX PROMPT FOR ALEX PHOTO REPORT BOT
+
+## Context
+
+I'm building **Alex Photo Report** — a Telegram bot for verifying merchandising compliance at retail stores for AVTD (Торговий Дім АВ, Ukraine). The bot uses Claude Vision API to analyze shelf photos and generate reports.
+
+**Stack:** FastAPI/Render, Neon PostgreSQL, python-telegram-bot, Claude Vision API  
+**Repo:** github.com/kostiantynkovalchuk/gradus-ai  
+**Bot files:** `backend/photo_report/`  
+**Bot:** @avtd_photo_report_bot
+
+We tested with our merchandising expert Alexandr and found **critical issues** that need fixing. Below is a complete bug report with screenshots analysis, root causes, and required fixes.
+
+---
+
+## ISSUE 1 (CRITICAL): False Shelf-Talker / Shelf-Stopper Detection
+
+### Problem
+The AI consistently reports: "Відсутній шелфстрипер GREENDAY при наявності конкурентських POS-матеріалів" (Missing GREENDAY shelf-strip when competitor POS materials are present). But **there are NO competitor shelf-talkers** in the photos. The AI mistakes **store price tags** (white paper labels with prices like "126,00", "75,00" etc.) for competitor POS materials.
+
+### Evidence (from test reports)
+- Report #12: Expert says "Ошибочно идентифицирует шелфтокер - их там нет"  
+- Report #13: Same false detection of shelf-talkers  
+- Report #14: "С шелфтокерами то же самое"  
+- Report #15: "По шелфам то де самое"  
+- Report #17: Same issue  
+- Report #18: "Те же ошибки, и по посам, и по %"  
+
+### Root Cause
+The Vision model sees white horizontal paper strips under shelves (standard Ukrainian store **price tags** showing numbers like "126,00 грн") and misidentifies them as competitor branded POS materials (shelf-strips/shelf-talkers).
+
+### Required Fix in SYSTEM_PROMPT
+Add clear differentiation rules:
+
+```
+CRITICAL — POS Material Identification Rules:
+
+A COMPETITOR SHELF-TALKER/SHELF-STRIP is ONLY:
+- A plastic or cardboard strip attached to the shelf edge
+- That displays a COMPETITOR BRAND LOGO or BRAND NAME (e.g., Nemiroff, Khortytsia, Absolut logo)
+- Usually colored with brand colors, not white/plain
+
+The following are NOT competitor POS materials:
+- Store price tags (paper/plastic cards showing PRICES as numbers like "126,00", "75,00 грн") — these are standard retail price labels
+- Shelf edge labels with product names and prices — these are store inventory labels
+- White/plain paper strips under products showing numbers — these are price tags
+
+RULE: Only flag missing AVTD shelf-strip if you see ACTUAL branded competitor materials with competitor LOGOS visible. Price tags with numbers ≠ competitor POS.
+
+If unsure whether something is a competitor POS or a store price tag, DEFAULT TO "store price tag" — do NOT flag it as competitor POS.
+```
+
+---
+
+## ISSUE 2 (CRITICAL): Vodka Shelf Share Calculation Error — Counting Only GreenDay Instead of ALL AVTD Brands
+
+### Problem
+The AI calculates "Доля полиці горілки" (vodka shelf share) by counting only GreenDay facings, but it should count ALL AVTD vodka brands together: **GreenDay + Ukrainka + Helsinki**.
+
+### Evidence
+- Report #12: Expert says "водку нашу он определил в 50% — там 3 водочных полки из 8и. То есть он считает долю ГД по наше продукции, а должен считать ГД+УКР+ХЕЛ от всей водки"
+- Report #15: "Наш ГД посчитал меньше 25% — что неверно, коньяк и вино наше не видит вообще"
+
+### Root Cause
+The shelf share formula in the prompt likely only counts GreenDay facings as "ours" and treats Ukrainka and Helsinki as competitors.
+
+### Required Fix in SYSTEM_PROMPT
+
+```
+AVTD VODKA BRANDS (all count as "OURS" for shelf share):
+1. GREENDAY (Green Day) — green bottles/labels, variants: Classic, Crystal, Air, Lemon, Citrus
+2. UKRAINKA (Українка) — clear/white bottles with "UKRAINKA" or "Українка" label
+3. HELSINKI — blue/silver bottles with "HELSINKI" branding
+
+VODKA SHELF SHARE FORMULA:
+  our_share = (GreenDay_facings + Ukrainka_facings + Helsinki_facings) / total_vodka_facings × 100%
+
+Where total_vodka_facings = ALL vodka bottles on the shelf (ours + competitors like Khortytsia, Nemiroff, Prime, Hlibny Dar, etc.)
+
+CRITICAL ERROR TO AVOID: Do NOT count only GreenDay as "ours". ALL THREE brands (GreenDay, Ukrainka, Helsinki) are AVTD products.
+
+Minimum threshold: ≥25% = PASS, <25% = FAIL
+```
+
+---
+
+## ISSUE 3 (CRITICAL): ADJARI Cognac Misidentified as Competitor
+
+### Problem
+ADJARI is AVTD's own cognac brand, but the AI sometimes:
+1. Doesn't recognize ADJARI as ours, counting it as competitor cognac
+2. Confuses the top shelf (import whisky like Jameson, VAT69, Jack Daniel's, King Charles) with cognac category
+3. Reports incorrect cognac shelf share (e.g., 67% when it should be 100% ours)
+
+### Evidence
+- Report #12: "Коньяк на фото только наш, почему 67% — не знаю. Что-то он из наших брендов идентифицировал как конкурентские"
+- Report #16: "Доля как 100% придумана, не идентифицировал конкурентов"
+- Report #17: "Коньяк с 2го фото — он его считал по верхней полке вкупе с водкой"
+
+### Required Fix in SYSTEM_PROMPT
+
+```
+AVTD COGNAC/BRANDY BRANDS (ALL count as "OURS"):
+- ADJARI — variants: 3-star (3★), 5-star (5★), 2.0, Cherry, Orange, Classic
+  Visual identification:
+  - Name "ADJARI" prominently on the bottle
+  - Dark brown/amber bottle with golden cap
+  - Mountain landscape on the label
+  - Diamond mesh/net pattern on bottle
+  - Various star ratings and fruit flavors
+- DOVBUSH — variants: 3-star (3★), 4-star (4★)
+  Visual identification:
+  - Name "DOVBUSH" on the bottle
+  - Ukrainian Carpathian heritage branding
+- KLINKOV — variants: VSOP, S-Class
+  Visual identification:
+  - Name "KLINKOV" on the bottle
+  - Premium cognac positioning
+- ЖАН-ЖАК (JEAN-JACK / Jean Jack) — French-style premium brandy
+  Visual identification:
+  - Name "ЖАН-ЖАК" or "JEAN JACK" on the bottle
+  - Premium brandy positioning, French-inspired label design
+
+CRITICAL CATEGORY SEPARATION:
+- TOP SHELF with imported spirits (Jameson, VAT69, Bell's, Jack Daniel's, King Charles, El Grapote, Martini) = IMPORTED/PREMIUM category, NOT cognac
+- COGNAC/BRANDY = only bottles labeled "коньяк/cognac/бренді" — usually ADJARI, DOVBUSH, KLINKOV, ЖАН-ЖАК on these shelves
+- Do NOT mix imported whisky/spirits into the cognac count
+
+COGNAC SHELF SHARE FORMULA:
+  our_cognac_share = (ADJARI + DOVBUSH + KLINKOV + ЖАН-ЖАК facings) / total_cognac_facings × 100%
+  (where total_cognac = all bottles in the cognac section, NOT the import section)
+```
+
+---
+
+## ISSUE 4 (IMPORTANT): "General Overview" False Negatives — Not Recognizing Store Boundaries
+
+### Problem
+The AI flags "Відсутній загальний огляд всіх полиць" (Missing general overview of all shelves) even when the photo DOES show the full alcohol section. It doesn't recognize that refrigerators, end-caps, or category transitions mark the boundaries of the alcohol zone.
+
+### Evidence
+- Report #16: Expert says "Не определил края алкогольных полок как пограничные — там холодильники с 2х сторон как границы алкогольных полок"
+- Report #17: "Да, общего вида нет. Доля 60%, он, я так понял, округляет"
+- Photos 5, 6, 7, 10 clearly show full alcohol sections bounded by fridges and store corners
+
+### Required Fix in SYSTEM_PROMPT
+
+```
+GENERAL OVERVIEW DETECTION:
+A photo counts as a "general overview" if BOTH edges of the alcohol shelf zone are visible.
+
+Boundaries/edges can be ANY of:
+- Wall
+- Refrigerator/cooler (glass door fridge)
+- Corner of the room
+- Different product category (snacks, non-food, etc.)
+- End of shelving unit
+- Store counter/checkout area
+- Door/entrance
+
+The photo does NOT need to show walls specifically. If you can see where the alcohol shelves START and END (left + right boundaries), that IS a general overview.
+
+Common layout: alcohol shelves in an L-shape or straight line, bounded by fridges on one/both sides — this IS a general overview.
+```
+
+---
+
+## ISSUE 5 (CRITICAL): Score Shows "PASSED" Even When Auto-Fail Conditions Are Met
+
+### Problem
+When vodka shelf share is below 25%, the report should be an automatic fail (НЕ ПРОЙДЕНО). But some reports show "ПРОЙДЕНО" (PASSED) with a decent score even though they have auto-fail conditions.
+
+### Required Fix in SYSTEM_PROMPT and/or scoring logic
+
+```
+AUTO-FAIL CONDITIONS (any one of these = report is НЕ ПРОЙДЕНО, score capped at max 55):
+1. Vodka shelf share < 25%
+2. AVTD products completely absent from shelves
+
+If auto-fail is triggered:
+- Status MUST be "НЕ ПРОЙДЕНО" (NOT PASSED)
+- Score MUST be ≤ 55/100
+- The auto-fail reason must be listed as the FIRST error
+
+IMPORTANT: Check auto-fail conditions AFTER calculating shelf share. 
+If shelf share < 25%, override any "ПРОЙДЕНО" status to "НЕ ПРОЙДЕНО".
+```
+
+---
+
+## ISSUE 6 (IMPORTANT): Wine Category Not Detected
+
+### Problem
+AVTD wine brand **Villa UA** is present on shelves but the AI doesn't identify it, reporting 0% wine share.
+
+### Evidence
+- Report #15: Expert says "Вино наше и коньяк не видит"
+- Report #18: Same issue
+- Photos 8, 9 clearly show Villa UA wine bottles (pink/rosé and white varieties)
+
+### Required Fix in SYSTEM_PROMPT
+
+```
+AVTD WINE BRANDS (ALL count as "OURS"):
+- VILLA UA — wine bottles with "Villa UA" label
+  Visual identification:
+  - "VILLA UA" text on label
+  - Wine bottles (750ml standard wine shape)
+  - Varieties: Chardonnay, Muscat, Merlot, Rosé, Saperavi, etc.
+  - Medallion/seal on the label
+  - Available in white, rosé, and red varieties
+- DIDI LARI — Georgian-style wine
+  Visual identification:
+  - "DIDI LARI" text on label
+  - Typically darker bottles with ornate label design
+- KRISTI VALLEY — wine brand
+  Visual identification:
+  - "KRISTI VALLEY" text on label
+- KOSHER — kosher wine
+  Visual identification:
+  - "KOSHER" text on label
+
+WINE SHELF SHARE FORMULA:
+  our_wine_share = (Villa_UA + Didi_Lari + Kristi_Valley + Kosher facings) / total_wine_facings × 100%
+  Phase 2 target: ≥40%
+```
+
+---
+
+## ISSUE 7 (IMPORTANT): Evolution/Planet/Discovery Premium Line Detection Always Fails
+
+### Problem
+Every report shows "❌ Evolution/Planet/Discovery на елітній полиці" (premium GreenDay lines not found on premium shelf), even when the top shelf hasn't been properly examined, or these products may simply not be stocked at that store.
+
+### Required Fix
+The AI should:
+1. First check if a premium/top shelf section exists in the photo
+2. Look specifically for GreenDay Evolution, GreenDay Planet, or GreenDay Discovery bottles
+3. If the premium shelf contains only imported brands (Jameson, Jack Daniel's, etc.) and no GD premium — report as absent but DON'T heavily penalize
+4. If the top shelf is not visible in the photos — report "не видно верхню полицю" instead of auto-failing
+
+```
+GREENDAY PREMIUM LINE (for top/elite shelf):
+- GreenDay Evolution
+- GreenDay Planet  
+- GreenDay Discovery
+
+CHECK LOGIC:
+1. Is a premium/top shelf visible? (usually top shelf with imported spirits)
+   - If NOT visible → "Верхня полиця не видна на фото" (informational, -5 points max)
+   - If visible → check for GD premium bottles among the imports
+2. Are any GD Premium bottles present on the top shelf?
+   - Yes → PASS
+   - No → Flag as missing (-10 points, not auto-fail)
+```
+
+---
+
+## ISSUE 8 (MEDIUM): Sparkling Wine (Ігристе) Category Handling
+
+### Problem
+The bot reports "Ігристе: 0% (норма Phase 2 ≥20%)" but doesn't specify which AVTD sparkling wine brands to look for, leading to 0% in all reports.
+
+### Required Fix in SYSTEM_PROMPT
+
+```
+AVTD SPARKLING WINE BRANDS:
+- VILLA UA SPARKLING — variants: Asti, Semi-Sweet, Brut, Grand Cuvee, Bellini Pati, Pina Colada
+  Visual identification:
+  - "VILLA UA" text on label with sparkling/champagne-style bottle
+  - Dark bottles with foil wrapping on neck
+  - Various flavored and classic variants
+
+SPARKLING WINE SHELF SHARE:
+  our_sparkling_share = Villa_UA_sparkling_facings / total_sparkling_facings × 100%
+  Phase 2 target: ≥20%
+
+Note: Sparkling wine is typically on a separate shelf from still wine, often near champagne-style bottles. Do NOT confuse VILLA UA still wine with VILLA UA sparkling — they are different categories.
+```
+
+---
+
+## COMPLETE UPDATED BRAND REFERENCE (for SYSTEM_PROMPT)
+
+```
+=== AVTD BRAND PORTFOLIO (COMPLETE) ===
+
+VODKA (Горілка):
+  - GREENDAY (Грін Дей): Classic, Crystal, Air, Lemon, Citrus
+    → Green bottles/labels, "GD" logo, various sizes 0.1L-1L
+  - UKRAINKA (Українка): various sub-brands  
+    → Clear/white bottles, "UKRAINKA/Українка" text
+  - HELSINKI (Хельсінкі): 
+    → Blue/silver bottles, "HELSINKI" text
+
+COGNAC/BRANDY (Коньяк/Бренді):
+  - ADJARI (Аджарі): 3★, 5★, 2.0, Cherry, Orange, Classic
+    → Dark bottles, golden caps, mountain landscape label, diamond net pattern
+  - DOVBUSH (Довбуш): 3★, 4★
+    → Carpathian heritage branding
+  - KLINKOV (Клінков): VSOP, S-Class
+    → Premium cognac positioning
+  - ЖАН-ЖАК (JEAN-JACK / Jean Jack): French-style premium brandy
+    → "ЖАН-ЖАК" or "JEAN JACK" text, French-inspired label design
+
+WINE (Вино):
+  - VILLA UA: Chardonnay, Muscat, Merlot, Rosé, Saperavi, etc.
+    → Standard wine bottles, "Villa UA" label, medallion seal
+  - DIDI LARI: Georgian-style wine
+    → "DIDI LARI" text, ornate label
+  - KRISTI VALLEY: wine
+    → "KRISTI VALLEY" text on label
+  - KOSHER: kosher wine
+    → "KOSHER" text on label
+
+SPARKLING (Ігристе):
+  - VILLA UA SPARKLING: Asti, Semi-Sweet, Brut, Grand Cuvee, Bellini Pati, Pina Colada
+    → Champagne-style dark bottles, foil neck wrapping, "Villa UA" label
+
+SOJU:
+  - FUNJU (Фанжу): Korean-style soju
+    → Small green bottles, "FUNJU" / "편주" text, typically 0.36L
+
+PREMIUM VODKA (for elite/top shelf):
+  - GreenDay Evolution
+  - GreenDay Planet
+  - GreenDay Discovery
+
+=== COMPETITORS (NOT ours) ===
+Vodka: Nemiroff, Khortytsia (Хортиця), Prime, Absolut, Finlandia, Smirnoff, Hlibny Dar
+Cognac: any non-ADJARI/non-DOVBUSH/non-KLINKOV/non-ЖАН-ЖАК cognac (including Aznauri, Tavria, etc.)
+Wine: any non-VILLA UA/non-DIDI LARI/non-KRISTI VALLEY/non-KOSHER wine
+Sparkling: any non-VILLA UA sparkling wine (e.g., Odesa, Oreanda, etc.)
+Imported spirits (top shelf): Jameson, Jack Daniel's, VAT69, Bell's, King Charles, Martini — these are a SEPARATE category, not vodka or cognac
+```
+
+---
+
+## ISSUE 9 (CRITICAL ARCHITECTURE): Multi-Photo Stitching — Combine Data Across All Photos Into One Report
+
+### Problem
+A single store visit produces 3-5 photos (left wall, center, right wall, general overview, close-ups). Currently the bot either analyzes only the first photo or analyzes each photo independently. This causes wildly inaccurate shelf share calculations — the AI only "sees" part of the store and reports partial data as if it were the whole picture.
+
+### Evidence
+- Report #17: Expert says cognac was counted from photo 2 mixed with vodka from photo 1
+- Report #16: "Доля как 100% придумана" — AI saw only one section and assumed it was everything
+- Reports consistently show different percentages depending on which single photo was analyzed
+
+### Required Implementation
+
+**Option A: Sequential multi-image analysis (recommended for MVP)**
+Send ALL photos from one report to Claude Vision in a single API call as multiple images. The SYSTEM_PROMPT must instruct Claude to:
+1. First scan ALL images to understand the full store layout
+2. Identify which photos overlap (same shelves from different angles)
+3. De-duplicate — don't count the same bottle twice if visible in multiple photos
+4. Calculate shelf shares based on the COMBINED view of all photos
+5. Only then generate the report
+
+```python
+# In vision.py — send all photos at once
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": photo1_b64}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": photo2_b64}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": photo3_b64}},
+            # ... up to 5 photos
+            {"type": "text", "text": "Analyze ALL photos as one store visit. These are different angles of the same alcohol section."}
+        ]
+    }
+]
+```
+
+**Add to SYSTEM_PROMPT:**
+```
+MULTI-PHOTO ANALYSIS RULES:
+You will receive 1-5 photos from the SAME store visit. These show different angles/sections of the same alcohol shelf area.
+
+Step 1: SCAN all photos first. Identify:
+  - Which photos show the same shelves from different angles (overlap)
+  - Which photos show different sections (left wall vs right wall vs center)
+  - Which photo is the "general overview" (shows full shelf zone with boundaries)
+
+Step 2: BUILD a mental map of the full store shelf layout by combining all photos.
+  - Do NOT double-count bottles visible in multiple photos
+  - If the same bottle/section appears in 2 photos, count it ONCE
+
+Step 3: CALCULATE shelf shares based on the COMPLETE combined view.
+  - Vodka share = all AVTD vodka across ALL photos / all vodka across ALL photos
+  - Same for cognac, wine, sparkling
+
+Step 4: GENERATE one unified report for the entire store visit.
+
+If only 1 photo is provided, note in the report: "Аналіз на основі 1 фото — результати можуть бути неповними"
+```
+
+**Option B: Two-pass analysis (more robust, higher cost)**
+Pass 1: Analyze each photo individually, get structured JSON with counts per brand
+Pass 2: Merge JSONs in Python, de-duplicate overlapping sections, calculate final shares
+
+---
+
+## ISSUE 10 (CRITICAL ARCHITECTURE): Deterministic Scoring Engine — Move Scoring Out of the LLM
+
+### Problem
+Currently, scoring (score out of 100, PASS/FAIL status, error list) appears to be generated by Claude as part of the Vision analysis. This is unreliable because:
+- Claude may "forget" auto-fail rules mid-response
+- Claude rounds percentages inconsistently
+- The same photo can get different scores on repeated analysis
+- No way to update scoring rules without rewriting the entire prompt
+
+### Required Implementation
+
+**Split the flow into two stages:**
+
+**Stage 1: Claude Vision → Structured Facts (JSON)**
+Claude's ONLY job is to identify what's on the shelves and return structured data. No scoring, no pass/fail, no error messages.
+
+```python
+# vision.py — Claude returns ONLY raw data
+VISION_PROMPT = """
+Analyze the shelf photos and return ONLY a JSON object with these fields:
+{
+  "photos_analyzed": 3,
+  "has_general_overview": true,
+  
+  "vodka": {
+    "greenday_facings": 12,
+    "greenday_skus": ["Classic 0.5L", "Crystal 0.7L", "Air 0.5L"],
+    "ukrainka_facings": 5,
+    "helsinki_facings": 3,
+    "competitor_facings": 8,
+    "competitor_brands": ["Nemiroff", "Khortytsia"],
+    "total_vodka_facings": 28
+  },
+  
+  "cognac": {
+    "adjari_facings": 10,
+    "adjari_skus": ["3★ 0.5L", "5★ 0.5L", "Cherry 0.5L"],
+    "dovbush_facings": 0,
+    "klinkov_facings": 0,
+    "jean_jack_facings": 2,
+    "competitor_facings": 0,
+    "total_cognac_facings": 12
+  },
+  
+  "wine": {
+    "villa_ua_facings": 6,
+    "didi_lari_facings": 2,
+    "kristi_valley_facings": 0,
+    "kosher_facings": 0,
+    "competitor_facings": 10,
+    "total_wine_facings": 18
+  },
+  
+  "sparkling": {
+    "villa_ua_sparkling_facings": 0,
+    "competitor_facings": 8,
+    "total_sparkling_facings": 8
+  },
+  
+  "soju": {
+    "funju_facings": 2,
+    "total_soju_facings": 2
+  },
+  
+  "pos_materials": {
+    "competitor_shelf_talkers_present": false,
+    "avtd_shelf_strip_present": false,
+    "description": "Only store price tags visible, no branded competitor POS"
+  },
+  
+  "premium_shelf": {
+    "top_shelf_visible": true,
+    "gd_evolution_present": false,
+    "gd_planet_present": false,
+    "gd_discovery_present": false,
+    "imported_brands_visible": ["Jameson", "VAT69", "Bell's"]
+  },
+  
+  "notes": "Small store, alcohol section bounded by fridges on both sides. ADJARI well-represented in cognac section."
+}
+"""
+```
+
+**Stage 2: Python Scoring Engine → Deterministic Score**
+A separate Python function takes the JSON and applies business rules:
+
+```python
+# scoring.py — deterministic, testable, no LLM involved
+def calculate_score(vision_data: dict) -> dict:
+    score = 100
+    errors = []
+    info = []
+    auto_fail = False
+    
+    # --- Vodka shelf share ---
+    v = vision_data["vodka"]
+    our_vodka = v["greenday_facings"] + v["ukrainka_facings"] + v["helsinki_facings"]
+    total_vodka = v["total_vodka_facings"]
+    vodka_share = round(our_vodka / total_vodka * 100) if total_vodka > 0 else 0
+    
+    if vodka_share < 25:
+        auto_fail = True
+        errors.append({
+            "code": "1_108608",
+            "text": f"Частка полиці горілки менше 25% — провал звіту (загальне)",
+            "severity": "critical"
+        })
+    
+    # --- Cognac shelf share ---
+    c = vision_data["cognac"]
+    our_cognac = c["adjari_facings"] + c["dovbush_facings"] + c["klinkov_facings"] + c["jean_jack_facings"]
+    total_cognac = c["total_cognac_facings"]
+    cognac_share = round(our_cognac / total_cognac * 100) if total_cognac > 0 else 0
+    
+    # --- POS materials ---
+    pos = vision_data["pos_materials"]
+    if pos["competitor_shelf_talkers_present"] and not pos["avtd_shelf_strip_present"]:
+        score -= 15
+        errors.append({
+            "code": "1_108106",
+            "text": "Відсутній шелфстрипер AVTD при наявності конкурентських POS",
+            "severity": "major"
+        })
+    
+    # --- General overview ---
+    if not vision_data.get("has_general_overview"):
+        score -= 15
+        errors.append({
+            "code": "NP59_200009734",
+            "text": "Відсутній загальний огляд всіх полиць",
+            "severity": "major"
+        })
+    
+    # --- Premium shelf ---
+    ps = vision_data["premium_shelf"]
+    if ps["top_shelf_visible"]:
+        if not any([ps["gd_evolution_present"], ps["gd_planet_present"], ps["gd_discovery_present"]]):
+            score -= 10
+            errors.append({
+                "text": "Evolution/Planet/Discovery на елітній полиці — відсутні",
+                "severity": "minor"
+            })
+    else:
+        score -= 5
+        info.append("Верхня полиця не видна на фото")
+    
+    # --- Auto-fail override ---
+    if auto_fail:
+        score = min(score, 55)
+        status = "НЕ ПРОЙДЕНО"
+    else:
+        status = "ПРОЙДЕНО" if score >= 60 else "НЕ ПРОЙДЕНО"
+    
+    return {
+        "score": max(0, score),
+        "status": status,
+        "errors": errors,
+        "info": info,
+        "shelf_shares": {
+            "vodka": vodka_share,
+            "cognac": cognac_share,
+            # ... wine, sparkling
+        }
+    }
+```
+
+**Benefits of this split:**
+- Scoring rules can be changed WITHOUT touching the Claude prompt
+- Same JSON can be re-scored when rules change (no re-analysis needed)
+- Easy to write unit tests for scoring edge cases
+- Claude focuses on what it's good at (visual recognition) instead of math
+- Consistent scores — same data always produces same score
+
+---
+
+## ISSUE 11 (IMPORTANT ARCHITECTURE): Photo Storage & Audit Trail
+
+### Problem
+For dispute resolution and quality auditing, the system must store original photos linked to each report. Without this:
+- Managers can't verify AI mistakes
+- No way to re-analyze old reports with updated prompts
+- No evidence trail for compliance audits
+
+### Required Implementation
+
+**Store photos directly in Neon PostgreSQL:**
+
+Since we already use Neon PostgreSQL, store compressed photos as `bytea` or base64-encoded text directly in the database. Telegram photos are typically 100-200KB each, so 5 photos per report = ~1MB — well within Neon's capabilities.
+
+```python
+# photo_storage.py
+import base64
+from io import BytesIO
+from PIL import Image
+
+async def compress_and_store(report_id: int, photos: list[bytes], db) -> int:
+    """Compress photos and store in Neon PostgreSQL"""
+    stored = 0
+    for i, photo_bytes in enumerate(photos):
+        # Compress to reduce storage (optional, Telegram already compresses)
+        img = Image.open(BytesIO(photo_bytes))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        compressed = buf.getvalue()
+        
+        await db.execute(
+            """INSERT INTO report_photos (report_id, photo_order, photo_data, size_bytes)
+               VALUES ($1, $2, $3, $4)""",
+            report_id, i + 1, compressed, len(compressed)
+        )
+        stored += 1
+    return stored
+
+async def get_report_photos(report_id: int, db) -> list[bytes]:
+    """Retrieve all photos for a report from Neon"""
+    rows = await db.fetch(
+        """SELECT photo_data FROM report_photos 
+           WHERE report_id = $1 ORDER BY photo_order""",
+        report_id
+    )
+    return [row["photo_data"] for row in rows]
+```
+
+**Database schema addition:**
+
+```sql
+-- Add photos table storing images directly in Neon PostgreSQL
+CREATE TABLE report_photos (
+    id SERIAL PRIMARY KEY,
+    report_id INTEGER REFERENCES reports(id) ON DELETE CASCADE,
+    photo_order INTEGER NOT NULL,        -- 1, 2, 3...
+    photo_data BYTEA NOT NULL,           -- compressed JPEG stored directly
+    size_bytes INTEGER,                  -- for monitoring storage usage
+    uploaded_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_report_photos_report_id ON report_photos(report_id);
+
+-- Add raw vision JSON to reports for re-scoring
+ALTER TABLE reports ADD COLUMN vision_raw_json JSONB;
+ALTER TABLE reports ADD COLUMN scoring_version VARCHAR(10) DEFAULT 'v1';
+```
+
+**Flow update:**
+1. Agent sends photos → bot receives them
+2. Bot stores compressed photos to Neon PostgreSQL → gets report_photo IDs
+3. Bot sends photos to Claude Vision → gets JSON
+4. Bot runs scoring engine on JSON → gets score
+5. Bot saves to DB: report + raw vision JSON + score (photos already stored in step 2)
+6. Bot sends formatted report to agent
+
+**Re-analysis capability:**
+```python
+async def re_analyze_report(report_id: int, db):
+    """Re-run analysis on stored photos with current prompt version"""
+    photos = await get_report_photos(report_id, db)  # fetch from Neon
+    vision_result = await analyze_photos(photos)       # re-run Claude Vision
+    new_score = calculate_score(vision_result)          # re-score with current rules
+    await update_report(report_id, vision_result, new_score, db)
+```
+
+**Neon storage considerations:**
+- Neon free tier: 512MB storage — enough for ~500 reports × 5 photos × 200KB
+- Neon Pro: 50GB+ — scales to tens of thousands of reports
+- Monitor with: `SELECT pg_size_pretty(pg_total_relation_size('report_photos'));`
+- If storage becomes a concern later, migrate photos to R2/S3 and replace `photo_data BYTEA` with `photo_url TEXT`
+
+---
+
+## SUMMARY OF ALL CHANGES NEEDED
+
+### In `vision.py` SYSTEM_PROMPT (or wherever the Claude Vision analysis prompt lives):
+
+1. **Shelf-talker detection** — Add strict rules to distinguish store price tags from competitor POS materials. Default to "price tag" when uncertain.
+
+2. **Vodka shelf share formula** — Change from GreenDay-only to GreenDay + Ukrainka + Helsinki combined vs all vodka.
+
+3. **Brand recognition** — Add complete AVTD brand portfolio: Cognac (ADJARI, DOVBUSH, KLINKOV, ЖАН-ЖАК), Wine (VILLA UA, DIDI LARI, KRISTI VALLEY, KOSHER), Sparkling (VILLA UA Sparkling), Soju (FUNJU).
+
+4. **Category separation** — Explicitly separate imported spirits (top shelf) from cognac category. Don't mix Jameson/JD into cognac counts.
+
+5. **General overview detection** — Accept fridges, corners, category transitions as shelf zone boundaries.
+
+6. **Auto-fail enforcement** — Ensure vodka share <25% always results in НЕ ПРОЙДЕНО with score ≤55.
+
+7. **Premium line check** — Make Evolution/Planet/Discovery check conditional on top shelf visibility. Don't auto-fail if shelf not visible.
+
+8. **Wine & Sparkling** — Add VILLA UA, DIDI LARI, KRISTI VALLEY, KOSHER wine recognition + VILLA UA Sparkling (Asti, Brut, etc.).
+
+### In `vision.py` — Multi-photo support (ISSUE 9):
+9. **Send all photos in one API call** — Combine up to 5 photos as multiple images in a single Claude Vision request. Add multi-photo analysis instructions to SYSTEM_PROMPT.
+
+### In scoring — Deterministic engine (ISSUE 10):
+10. **Split Claude output to JSON-only** — Claude returns structured data (facing counts, brand lists), NOT scores or pass/fail.
+11. **New `scoring.py` file** — Python function that takes vision JSON and applies business rules deterministically. All thresholds, auto-fail logic, and point deductions live here.
+12. **Validate auto-fail override** — After all scoring, re-check if any auto-fail condition is met. If yes, force status to НЕ ПРОЙДЕНО and cap score.
+
+### In `bot.py` (or equivalent):
+13. **UX fix** — The bot should accept the store name more gracefully (currently referenced as Bug #2 in the original KB).
+
+### In photo storage (ISSUE 11):
+14. **Store photos in Neon PostgreSQL** as BYTEA with `report_photos` table (compressed JPEG, ~200KB each).
+15. **Save raw vision JSON** to DB for re-analysis capability.
+16. **Add `report_photos` table** and `vision_raw_json` column to reports.
+
+---
+
+## TEST VERIFICATION
+
+After making these changes, re-test with the same photos from Alexandr's testing session. Expected results:
+
+**Test Set 1 (Photos 1-4, small store with ADJARI + Ukrainka + GreenDay):**
+- Shelf-talkers: No competitor POS detected (only store price tags)
+- Vodka share: Should count GD + Ukrainka + Helsinki facings ÷ all vodka ≈ 60-70%
+- Cognac: ADJARI = 100% (all cognac on shelf is ADJARI)
+- Wine: Villa UA + Didi Lari present on lower shelves
+- Soju: FUNJU visible (green bottles with Korean text "편주")
+
+**Test Set 2 (Photos 5-7, larger store corner section):**
+- General overview: SHOULD be detected (bounded by fridges on sides)
+- Vodka share: Count all 3 AVTD vodka brands
+- No false shelf-talker detection
+- Sparkling: Check for Villa UA sparkling variants among champagne-style bottles
+
+**Test Set 3 (Photos 8-9, store with wines + vodka):**  
+- Villa UA wine should be identified (still wine section)
+- GreenDay Classic bottles clearly visible
+- Ukrainka Crystal visible
+- Didi Lari wine bottles visible (Photo 8, left side)

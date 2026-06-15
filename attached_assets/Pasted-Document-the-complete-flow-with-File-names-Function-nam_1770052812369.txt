@@ -1,0 +1,701 @@
+Document the complete flow with:
+- File names
+- Function names
+- Line numbers
+- Processing time (if measurable)
+- API calls made (if any)
+
+STEP 4: ANALYZE FREE TEXT HANDLERS
+
+Find message_handler for free text input:
+```python
+@bot.message_handler(content_types=['text'])
+async def handle_text(message):
+    # What happens here?
+```
+
+Questions:
+1. Is there a separate handler for free text vs buttons?
+2. How does bot distinguish "Ask Your Question" flow from random text?
+3. Does free text correctly use preset → RAG flow?
+
+STEP 5: EXAMINE MENU STRUCTURE
+
+Find where bot menus/keyboards are defined:
+```python
+# Look for InlineKeyboardMarkup definitions
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Example structure:
+def get_salary_menu():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("📅 Строки виплати", callback_data="???")
+    )
+```
+
+Questions:
+1. What are the callback_data values?
+2. Are they semantic (e.g., "salary_dates") or query strings (e.g., "коли зарплата")?
+3. Is there a complete mapping of all buttons?
+
+STEP 6: BENCHMARK CURRENT PERFORMANCE
+
+If possible, measure response times:
+```python
+import time
+
+# For button click:
+start = time.time()
+# ... handle button click ...
+button_time = time.time() - start
+
+# For free text:
+start = time.time()
+# ... handle free text query ...
+text_time = time.time() - start
+
+print(f"Button click: {button_time*1000}ms")
+print(f"Free text: {text_time*1000}ms")
+```
+
+Expected results:
+- Button clicks should be <50ms if direct mapping
+- Button clicks >1s indicates RAG/API usage (problem!)
+- Free text should be ~2-3s (preset + RAG is normal)
+
+=============================================================================
+PHASE 2: IDENTIFY OPTIMIZATION OPPORTUNITIES
+=============================================================================
+
+Based on audit findings, identify:
+
+INEFFICIENCY 1: Button Clicks Using RAG
+If button clicks trigger RAG system:
+- Wasted API calls ($0.002 each)
+- Slow response (2-3s vs <10ms)
+- Unnecessary complexity
+- 99% of user interactions affected
+
+INEFFICIENCY 2: No Separation of Concerns
+If buttons and free text use same handler:
+- Can't optimize separately
+- Mixed concerns
+- Harder to maintain
+
+INEFFICIENCY 3: Preset System for Known Content
+If buttons convert to query strings then match presets:
+- Extra pattern matching overhead
+- Risk of wrong preset matching
+- Still slower than direct lookup
+
+INEFFICIENCY 4: Video Content Handling
+If videos go through RAG:
+- Videos should ALWAYS be direct
+- No AI needed for "show company values video"
+
+=============================================================================
+PHASE 3: DESIGN OPTIMIZED ARCHITECTURE
+=============================================================================
+
+PROPOSED ARCHITECTURE:
+```python
+# ============================================================
+# FILE: backend/services/maya_hr_content.py
+# ============================================================
+
+# Content database with direct mapping
+HR_CONTENT = {
+    # Videos (About Company)
+    "company_overview": {
+        "type": "video",
+        "video_url": "BAACAgIAAxkBAAIBB...",  # Telegram file_id
+        "caption": "🎥 Загальна інформація про AVTD",
+        "video_only": True  # Don't send text
+    },
+    "company_values": {
+        "type": "video",
+        "video_url": "BAACAgIAAxkBAAIBC...",
+        "caption": "🎥 Цінності компанії AVTD",
+        "video_only": True
+    },
+    "company_history": {
+        "type": "video",
+        "video_url": "BAACAgIAAxkBAAIBD...",
+        "caption": "🎥 Історія компанії AVTD (25+ років)",
+        "video_only": True
+    },
+    
+    # Structured text content
+    "company_structure": {
+        "type": "text",
+        "content": """🏢 Структура компанії AVTD
+
+**Департаменти:**
+🏭 Виробництво
+📊 Продажі
+📣 Маркетинг
+💰 Фінанси, облік та аналітика
+👥 Персонал
+🌍 Експорт
+🔐 Безпека
+
+**Керівництво:**
+🧭 Виконавчий директор: Василенко В.В.
+📣 Директор з маркетингу: Профір В.М.
+📊 Директор з продажу: Гоц І.С.
+..."""
+    },
+    
+    # Newcomers
+    "employment_docs": {
+        "type": "text",
+        "content": """📄 Документи для прийому на роботу:
+
+✅ 1 фото 3х4
+✅ Оригінал паспорта або ID
+✅ Оригінал ІПН
+✅ Виписка про прописку (якщо ID)
+✅ Диплом про вищу освіту
+✅ Свідоцтво про народження дітей (<14 років)
+✅ Довідка з ПФУ про соцстрахування
+
+**Інструкція отримання довідки ПФУ:**
+1. Встановіть додаток "Пенсійний фонд"
+2. Авторизуйтесь через ID банку
+3. Подайте запит: "витяг з ЕТК" + довідка про стаж
+4. Збережіть PDF
+5. Передайте кадровику"""
+    },
+    
+    "corporate_access": {
+        "type": "text",
+        "content": """🔐 Корпоративний доступ (УЗ)
+
+**Що це:**
+Логін і пароль для:
+- Удаленого робочого столу (УРС)
+- Корп. пошти
+- СЕД "Бліц"
+- Директум (не всім)
+- Учетних систем
+
+**Як замовити:**
+📞 Звернутись до:
+- Офіс-менеджера філії
+- Територіального менеджера (продажі)
+- Регіонального HR (ЦО)
+- Сисадміна (завод)
+
+⏱️ Створюється за 2 робочі дні до виходу на роботу
+📝 Запускається МЗ в СЕД Бліц (шаблон №114)"""
+    },
+    
+    # Salary
+    "salary_payment_dates": {
+        "type": "text",
+        "content": """💰 Строки виплати заробітної плати
+
+📅 **20-22 числа поточного місяця**
+Аванс на наступний місяць
+
+📅 **5-7 числа наступного місяця**
+Зарплата за відпрацьований місяць
+
+Виплати здійснюються 2 рази на місяць згідно законодавства України."""
+    },
+    
+    "salary_questions": {
+        "type": "text",
+        "content": """💵 Питання по зарплаті
+
+**До кого звертатись:**
+
+📊 **Департамент продажу:**
+Фінансовий менеджер філії
+
+🏭 **Інші департаменти:**
+Економіст підрозділу
+
+Вони надають детальну інформацію про нарахування та розрахунок заробітної плати."""
+    },
+    
+    # Tech Support
+    "pc_problems": {
+        "type": "text",
+        "content": """🖥️ Проблеми з ПК
+
+**Якщо не працює комп'ютер, тонкий клієнт або ноутбук:**
+
+📞 **Телефон:**
+- Внутрішній: 3636
+- Мобільний: +380676235555
+
+📧 **Email:**
+support@const.dp.ua
+
+⚠️ **Важливо:**
+ІТ підтримує ТІЛЬКИ корпоративну техніку.
+З особистою технікою не працюють."""
+    },
+    
+    "sed_blitz": {
+        "type": "text",
+        "content": """📊 СЕД Бліц - підтримка
+
+**При проблемах з роботою СЕД Бліц:**
+
+🔗 **Подати заявку:**
+https://tdav.atlassian.net/servicedesk/customer/portals
+
+📂 **Розділ:**
+"Питання пов'язані з СЕД Бліц / Інші питання"
+
+📝 **У заявці:**
+- Опишіть проблему
+- Прикріпіть скріншот (за потреби)
+
+При першому вході потрібна реєстрація на порталі."""
+    },
+    
+    "urs_setup": {
+        "type": "text",
+        "content": """🌐 Налаштування УРС (удаленки)
+
+📄 **Інструкція:**
+http://docs.google.com/document/d/1DSgEljpUkojs7M0LwsLV4UTOiwWOp7io/edit
+
+📥 **Завантажити Forti:**
+http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
+
+**Якщо не працює на корп. техніці:**
+📞 3636 або +380676235555
+📧 support@const.dp.ua
+
+**Якщо на особистому ПК:**
+🔗 https://tdav.atlassian.net/servicedesk/customer/portals
+Розділ: "Питання пов'язані з виправленням ПЗ" """
+    },
+    
+    "office_supplies": {
+        "type": "text",
+        "content": """✏️ Замовлення канцтоварів
+
+**Процес замовлення:**
+
+📅 **Коли:** ~10 числа кожного місяця
+
+📝 **Хто формує заявку:**
+- Офіс-менеджер філії
+- Територіальний менеджер
+- Відповідальна особа на заводі
+
+📧 **Кому відправити:**
+Секретарю бізнесу
+
+⏱️ **Строк доставки:** 2-3 тижні"""
+    },
+    
+    "kpk_tablet": {
+        "type": "text",
+        "content": """📱 КПК / Планшет - проблеми
+
+**Якщо не працює пристрій:**
+
+📞 **Звернутись до:**
+- Аналітика
+- Територіального менеджера
+- Регіонального супервайзера
+
+Вони допоможуть з відновленням або заміною.
+
+**Якщо проблема з Мобільною Торгівлею:**
+(помилки при завантаженні/вигрузці, некоректні дані)
+
+📞 Аналітик / ТМ / регіональний аналітик знають куди звернутись."""
+    },
+}
+
+# Menu structure with callback_data keys
+HR_MENUS = {
+    "main_menu": {
+        "text": "❤️ **Maya HR** — ваш помічник з HR питань\n\nОберіть розділ:",
+        "buttons": [
+            [{"text": "📋 Про компанію", "callback_data": "menu_about"}],
+            [{"text": "👔 Новачкам", "callback_data": "menu_newcomers"}],
+            [{"text": "💼 Робочі питання", "callback_data": "menu_work"}],
+            [{"text": "💻 Тех.підтримка", "callback_data": "menu_tech"}],
+            [{"text": "📞 Контакти", "callback_data": "menu_contacts"}],
+            [{"text": "⚖️ Юр.документи", "callback_data": "menu_legal"}],
+            [{"text": "💬 Задати своє питання", "callback_data": "free_text_mode"}]
+        ]
+    },
+    
+    "menu_about": {
+        "text": "📋 **Про компанію AVTD**\n\nОберіть тему:",
+        "buttons": [
+            [{"text": "🎯 Загальна інформація", "callback_data": "company_overview"}],
+            [{"text": "💎 Цінності", "callback_data": "company_values"}],
+            [{"text": "📜 Історія", "callback_data": "company_history"}],
+            [{"text": "🏢 Структура", "callback_data": "company_structure"}],
+            [{"text": "◀️ Назад", "callback_data": "main_menu"}]
+        ]
+    },
+    
+    "menu_newcomers": {
+        "text": "👔 **Інформація для новачків**\n\nОберіть тему:",
+        "buttons": [
+            [{"text": "📄 Документи для прийому", "callback_data": "employment_docs"}],
+            [{"text": "🔐 Корпоративний доступ", "callback_data": "corporate_access"}],
+            [{"text": "👣 Перші кроки", "callback_data": "first_steps"}],
+            [{"text": "◀️ Назад", "callback_data": "main_menu"}]
+        ]
+    },
+    
+    "menu_work": {
+        "text": "💼 **Робочі питання**\n\nОберіть тему:",
+        "buttons": [
+            [{"text": "💰 Зарплата", "callback_data": "menu_salary"}],
+            [{"text": "🏖️ Відпустка", "callback_data": "vacation"}],
+            [{"text": "🏥 Лікарняний", "callback_data": "sick_leave"}],
+            [{"text": "🏠 Віддалена робота", "callback_data": "remote_work"}],
+            [{"text": "✈️ Відрядження", "callback_data": "business_trip"}],
+            [{"text": "◀️ Назад", "callback_data": "main_menu"}]
+        ]
+    },
+    
+    "menu_salary": {
+        "text": "💰 **Питання по зарплаті**\n\nОберіть тему:",
+        "buttons": [
+            [{"text": "📅 Строки виплати", "callback_data": "salary_payment_dates"}],
+            [{"text": "💵 До кого звертатись", "callback_data": "salary_questions"}],
+            [{"text": "◀️ Назад", "callback_data": "menu_work"}]
+        ]
+    },
+    
+    "menu_tech": {
+        "text": "💻 **Технічна підтримка**\n\nОберіть тему:",
+        "buttons": [
+            [{"text": "🖥️ Проблеми з ПК", "callback_data": "pc_problems"}],
+            [{"text": "📱 КПК/Планшет", "callback_data": "kpk_tablet"}],
+            [{"text": "📊 СЕД Бліц", "callback_data": "sed_blitz"}],
+            [{"text": "🌐 Налаштування УРС", "callback_data": "urs_setup"}],
+            [{"text": "✏️ Канцтовари", "callback_data": "office_supplies"}],
+            [{"text": "◀️ Назад", "callback_data": "main_menu"}]
+        ]
+    },
+}
+
+
+# ============================================================
+# FILE: backend/services/maya_hr_bot.py
+# ============================================================
+
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from .maya_hr_content import HR_CONTENT, HR_MENUS
+from .hr_rag_service import search_hr_content  # Only for free text
+
+bot = AsyncTeleBot(TELEGRAM_BOT_TOKEN)
+
+# User state management (for free text mode)
+user_states = {}
+
+def create_keyboard(menu_key: str):
+    """Create keyboard from menu definition"""
+    menu = HR_MENUS[menu_key]
+    keyboard = InlineKeyboardMarkup()
+    
+    for row in menu["buttons"]:
+        keyboard.row(*[
+            InlineKeyboardButton(btn["text"], callback_data=btn["callback_data"])
+            for btn in row
+        ])
+    
+    return keyboard
+
+@bot.message_handler(commands=['start'])
+async def start_command(message):
+    """Start command - show main menu"""
+    keyboard = create_keyboard("main_menu")
+    await bot.send_message(
+        message.chat.id,
+        HR_MENUS["main_menu"]["text"],
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+@bot.callback_query_handler(func=lambda call: True)
+async def handle_button_click(call):
+    """
+    Handle ALL button clicks with direct mapping
+    No RAG, no preset matching - just instant content delivery
+    """
+    
+    callback_data = call.data
+    chat_id = call.message.chat.id
+    
+    # SPECIAL CASE 1: Menu navigation
+    if callback_data.startswith("menu_"):
+        menu_key = callback_data
+        keyboard = create_keyboard(menu_key)
+        await bot.edit_message_text(
+            HR_MENUS[menu_key]["text"],
+            chat_id,
+            call.message.message_id,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        return
+    
+    # SPECIAL CASE 2: Main menu
+    if callback_data == "main_menu":
+        keyboard = create_keyboard("main_menu")
+        await bot.edit_message_text(
+            HR_MENUS["main_menu"]["text"],
+            chat_id,
+            call.message.message_id,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        return
+    
+    # SPECIAL CASE 3: Free text mode activation
+    if callback_data == "free_text_mode":
+        user_states[call.from_user.id] = "free_text"
+        await bot.send_message(
+            chat_id,
+            "💬 **Задайте своє питання**\n\n"
+            "Напишіть текстом що вас цікавить, і я спробую знайти відповідь.\n\n"
+            "Щоб повернутись до меню, відправте /menu",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # MAIN LOGIC: Direct content mapping
+    if callback_data in HR_CONTENT:
+        content = HR_CONTENT[callback_data]
+        
+        if content["type"] == "video":
+            # Send video only (no text)
+            await bot.send_video(
+                chat_id,
+                content["video_url"],
+                caption=content["caption"]
+            )
+            
+        elif content["type"] == "text":
+            # Send text content
+            # Add "Back" button
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton("◀️ Назад до меню", callback_data="main_menu"))
+            
+            await bot.send_message(
+                chat_id,
+                content["content"],
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+    else:
+        # Unknown callback_data
+        await bot.answer_callback_query(
+            call.id,
+            "⚠️ Контент не знайдено. Зверніться до HR.",
+            show_alert=True
+        )
+
+@bot.message_handler(commands=['menu'])
+async def menu_command(message):
+    """Return to main menu"""
+    user_states.pop(message.from_user.id, None)  # Exit free text mode
+    await start_command(message)
+
+@bot.message_handler(content_types=['text'])
+async def handle_free_text(message):
+    """
+    Handle free text input
+    ONLY active when user is in "free_text_mode"
+    Uses preset → RAG flow
+    """
+    
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Check if user is in free text mode
+    if user_states.get(user_id) != "free_text":
+        # User sent random text, redirect to menu
+        await bot.send_message(
+            chat_id,
+            "Скористайтесь меню для навігації 👇",
+            reply_markup=create_keyboard("main_menu")
+        )
+        return
+    
+    # User is in free text mode - use preset/RAG
+    query = message.text
+    
+    # Send "typing..." indicator
+    await bot.send_chat_action(chat_id, "typing")
+    
+    try:
+        # Search through presets first, then RAG
+        answer = await search_hr_content(query)
+        
+        # Add feedback buttons
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton("👍 Корисно", callback_data=f"feedback_pos:{query[:50]}"),
+            InlineKeyboardButton("👎 Не те", callback_data=f"feedback_neg:{query[:50]}")
+        )
+        keyboard.add(InlineKeyboardButton("◀️ Назад до меню", callback_data="main_menu"))
+        
+        await bot.send_message(
+            chat_id,
+            answer,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        await bot.send_message(
+            chat_id,
+            "⚠️ Вибачте, виникла помилка при пошуку відповіді.\n"
+            "Спробуйте інше формулювання або зверніться до HR: @natalia",
+            reply_markup=create_keyboard("main_menu")
+        )
+
+
+# ============================================================
+# Performance Comparison
+# ============================================================
+
+"""
+BEFORE OPTIMIZATION (if using RAG for buttons):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Button click: [📅 Строки виплати]
+    ↓ convert to query: "строки виплати зп"
+    ↓ generate embedding: 500ms, $0.0001
+    ↓ vector search: 50ms
+    ↓ LLM synthesis: 2000ms, $0.002
+    ↓ response
+Total: ~2.5s, $0.0021
+
+For 800 employees × 10 queries/month = 8,000 queries
+Cost: 8,000 × $0.0021 = $16.80/month
+UX: Slow, frustrating
+
+AFTER OPTIMIZATION (direct mapping):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Button click: [📅 Строки виплати]
+    ↓ lookup: callback_data = "salary_payment_dates"
+    ↓ HR_CONTENT["salary_payment_dates"]
+    ↓ response
+Total: <10ms, $0
+
+For 8,000 queries (99% buttons, 1% free text)
+Cost: 7,920 × $0 + 80 × $0.002 = $0.16/month
+UX: Instant, delightful
+
+SAVINGS: $16.64/month, 250x faster, better UX
+"""
+```
+
+=============================================================================
+PHASE 4: IMPLEMENTATION STEPS
+=============================================================================
+
+STEP 1: Create maya_hr_content.py
+- Copy HR_CONTENT dictionary above
+- Copy HR_MENUS dictionary above
+- Ensure all content from knowledge base is included
+
+STEP 2: Refactor maya_hr_bot.py
+- Implement direct button handling as shown
+- Add user state management for free text mode
+- Remove RAG/preset calls from button handlers
+
+STEP 3: Test Each Button Path
+For each button in the menu:
+□ Click button
+□ Verify instant response (<50ms)
+□ Verify correct content displayed
+□ Verify "Back" navigation works
+□ Verify videos play correctly
+
+STEP 4: Test Free Text Mode
+□ Click "💬 Задати своє питання"
+□ Send test queries
+□ Verify preset/RAG flow works
+□ Verify feedback buttons work
+□ Verify return to menu works
+
+STEP 5: Benchmark Performance
+```python
+import time
+from statistics import mean
+
+# Test 100 button clicks
+button_times = []
+for i in range(100):
+    start = time.time()
+    # ... simulate button click ...
+    button_times.append(time.time() - start)
+
+# Test 20 free text queries
+text_times = []
+for i in range(20):
+    start = time.time()
+    # ... simulate free text query ...
+    text_times.append(time.time() - start)
+
+print(f"Button avg: {mean(button_times)*1000:.1f}ms")
+print(f"Free text avg: {mean(text_times)*1000:.1f}ms")
+```
+
+Expected results:
+- Button clicks: <50ms average
+- Free text: 2000-3000ms average
+
+=============================================================================
+PHASE 5: CLEANUP
+=============================================================================
+
+After optimization, remove/simplify:
+
+1. **Preset patterns for button content**
+   - Keep presets only for free text variations
+   - Remove presets that match button labels
+
+2. **Content ID references**
+   - Direct content in HR_CONTENT dict
+   - No need for database lookups for buttons
+
+3. **Complex routing logic**
+   - Simpler codebase
+   - Easier to maintain
+
+=============================================================================
+DELIVERABLES
+=============================================================================
+
+1. Complete audit report:
+   - Current architecture diagram
+   - Identified inefficiencies
+   - Performance measurements
+
+2. Optimized implementation:
+   - maya_hr_content.py with complete content map
+   - Refactored maya_hr_bot.py with direct mapping
+   - User state management for free text mode
+
+3. Test results:
+   - All button paths tested
+   - Free text mode tested
+   - Performance benchmarks
+
+4. Cost/performance comparison:
+   - Before vs after metrics
+   - Estimated monthly savings
+   - UX improvements
+
+BEGIN ARCHITECTURAL AUDIT NOW.

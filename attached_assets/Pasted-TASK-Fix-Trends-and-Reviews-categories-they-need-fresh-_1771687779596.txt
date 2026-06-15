@@ -1,0 +1,80 @@
+TASK: Fix Trends and Reviews categories - they need fresh articles with Unsplash images
+
+CURRENT PROBLEM:
+- News category shows fresh articles with Unsplash photos ✅
+- Trends and Reviews are stuck with old articles with DALL-E images (no image_photographer) ❌
+- Not enough new articles are being categorized as 'trends' or 'reviews'
+
+STEP 1 - DATABASE AUDIT:
+Run this SQL to understand the current state:
+
+  -- Articles per category with Unsplash vs DALL-E images
+  SELECT 
+    category,
+    status,
+    COUNT(*) as total,
+    SUM(CASE WHEN image_photographer IS NOT NULL THEN 1 ELSE 0 END) as unsplash,
+    SUM(CASE WHEN image_url IS NOT NULL AND image_photographer IS NULL THEN 1 ELSE 0 END) as dalle,
+    SUM(CASE WHEN image_url IS NULL THEN 1 ELSE 0 END) as no_image
+  FROM content_queue
+  GROUP BY category, status
+  ORDER BY category, status;
+
+Report the full results.
+
+STEP 2 - FIX DALL-E IMAGES IN TRENDS/REVIEWS:
+Update the migrate-dalle-to-unsplash endpoint (or scheduler logic) to include
+ALL statuses including 'published'. Articles in trends/reviews with DALL-E images
+must get Unsplash replacements regardless of whether they've been posted to Facebook.
+
+After fixing, run the migration for ALL categories (not just news/draft):
+  UPDATE content_queue SET image_photographer = NULL 
+  WHERE image_url IS NOT NULL AND image_photographer IS NULL;
+  -- (just audit first, don't delete - replace via Unsplash service)
+
+STEP 3 - FIX CATEGORIZATION BIAS:
+Open backend/services/categorization.py and check the current keyword scoring.
+
+The problem: most scraped articles contain generic news keywords so everything
+defaults to 'news'. We need smarter categorization.
+
+Update the categorize_article function with expanded Ukrainian + English keywords:
+
+  trend_keywords = [
+    '2025', '2026', '2027', 'forecast', 'trend', 'future', 'prediction',
+    'outlook', 'next year', 'emerging', 'growing', 'rise of', 'shift',
+    'consumer behavior', 'market shift', 'industry direction',
+    'тренд', 'прогноз', 'майбутнє', 'зростання', 'перспектив'
+  ]
+  
+  review_keywords = [
+    'review', 'tasting', 'award', 'rating', 'flavor', 'taste', 'recommend',
+    'best', 'top', 'ranked', 'score', 'notes', 'palate', 'finish', 'aroma',
+    'distillery visit', 'bottle', 'expression', 'edition', 'release',
+    'огляд', 'дегустація', 'нагорода', 'рейтинг', 'смак', 'аромат', 'рекомендуємо'
+  ]
+
+Also lower the threshold for category assignment from score >= 2 to score >= 1,
+so that a single strong keyword match wins instead of defaulting to 'news'.
+
+STEP 4 - RECATEGORIZE EXISTING ARTICLES:
+After updating the categorization logic, recategorize articles that are currently
+marked as 'news' but may actually be trends or reviews.
+
+Write a script that:
+1. Fetches all articles with category = 'news' (status: approved OR published)
+2. Runs categorize_article() on each one with the NEW improved logic
+3. Updates category if result is 'trends' or 'reviews' (don't override correct news articles)
+4. Logs how many changed per new category
+
+This should populate Trends and Reviews with properly categorized content.
+
+STEP 5 - VERIFY FRONTEND API:
+Confirm that GET /api/articles?category=trends and GET /api/articles?category=reviews
+return different articles than GET /api/articles?category=news.
+Test each endpoint and report the count returned per category.
+
+Report at the end:
+- Articles per category after recategorization
+- How many DALL-E images were replaced in trends/reviews  
+- Sample of 3 article titles that moved to trends, 3 to reviews

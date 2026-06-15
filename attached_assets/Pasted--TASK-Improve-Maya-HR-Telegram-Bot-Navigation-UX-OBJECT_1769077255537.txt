@@ -1,0 +1,457 @@
+# TASK: Improve Maya HR Telegram Bot Navigation & UX
+
+## OBJECTIVE
+Fix critical navigation issue and implement UX enhancements based on mobile usability analysis.
+
+## CURRENT ISSUE
+
+**Problem:** Users viewing content (e.g., "Company History") can only return to Main Menu, not back to parent category ("About Company"). This breaks natural browsing flow and forces unnecessary clicks.
+
+**Current Flow:**
+```
+Main Menu → About Company → Company History
+                              └── [🏠 Main Menu] only
+                              
+To view next item (e.g., "Values"):
+User must: Main Menu → About Company → Values  (3 clicks)
+Should be: Back → Values  (2 clicks)
+```
+
+## REQUIREMENTS
+
+### Priority 1: Add Back Button (CRITICAL)
+
+**What to implement:**
+1. Add "Back" button to all content screens
+2. Button should navigate to parent category menu
+3. Keep existing "Main Menu" button alongside
+4. Apply to ALL content types: text, video, tables
+
+**Visual Layout:**
+```
+┌─────────────────────────────────────┐
+│  [Content Title]                    │
+│  [Content Text...]                  │
+├─────────────────────────────────────┤
+│  ⬅️ Назад          🏠 Головне меню  │
+└─────────────────────────────────────┘
+```
+
+### Priority 2: Increase Button Height (OPTIONAL)
+
+**What to change:**
+- Increase all menu button heights by 8px for better thumb reach
+- Apply to: Main menu, category menus, navigation buttons
+- Maintain current spacing and padding proportions
+
+### Priority 3: Visual Distinction for "Ask Question" (OPTIONAL)
+
+**What to change:**
+- Make "❓ Задати питання" button visually distinct from category buttons
+- Options:
+  - Use outline/border style instead of filled
+  - Use lighter shade of green
+  - Add subtle visual difference
+
+## IMPLEMENTATION
+
+### 1. Update Keyboard Builders
+
+**File:** `backend/services/hr_keyboards.py`
+
+**Current Code (to find and replace):**
+```python
+def create_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Creates main HR menu"""
+    buttons = [
+        [
+            InlineKeyboardButton(text="📖 Про компанію", callback_data="menu:about"),
+            InlineKeyboardButton(text="🚀 Новачкам", callback_data="menu:onboarding")
+        ],
+        # ... other categories ...
+        [
+            InlineKeyboardButton(text="❓ Задати питання", callback_data="action:ask")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+```
+
+**New Code (add this function):**
+```python
+def create_content_navigation_keyboard(parent_category: str = None) -> InlineKeyboardMarkup:
+    """
+    Creates navigation buttons for content screens
+    
+    Args:
+        parent_category: Category to go back to (e.g., 'about', 'onboarding')
+    
+    Returns:
+        InlineKeyboardMarkup with Back and Main Menu buttons
+    """
+    buttons = []
+    
+    # Create row with Back + Main Menu buttons
+    row = []
+    
+    if parent_category:
+        row.append(InlineKeyboardButton(
+            text="⬅️ Назад", 
+            callback_data=f"menu:{parent_category}"
+        ))
+    
+    row.append(InlineKeyboardButton(
+        text="🏠 Головне меню", 
+        callback_data="menu:main"
+    ))
+    
+    buttons.append(row)
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# Category name mapping for user-friendly back button text
+CATEGORY_NAMES = {
+    'about': 'Про компанію',
+    'onboarding': 'Новачкам',
+    'work': 'Робочі питання',
+    'salary': 'Зарплата',
+    'tech': 'Тех. підтримка',
+    'contacts': 'Контакти'
+}
+
+def create_content_navigation_with_context(parent_category: str = None) -> InlineKeyboardMarkup:
+    """
+    Creates navigation with parent category name shown
+    Example: [⬅️ Про компанію] [🏠 Головне меню]
+    """
+    buttons = []
+    row = []
+    
+    if parent_category and parent_category in CATEGORY_NAMES:
+        row.append(InlineKeyboardButton(
+            text=f"⬅️ {CATEGORY_NAMES[parent_category]}", 
+            callback_data=f"menu:{parent_category}"
+        ))
+    elif parent_category:
+        row.append(InlineKeyboardButton(
+            text="⬅️ Назад", 
+            callback_data=f"menu:{parent_category}"
+        ))
+    
+    row.append(InlineKeyboardButton(
+        text="🏠 Головне меню", 
+        callback_data="menu:main"
+    ))
+    
+    buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+```
+
+### 2. Update Handler to Pass Parent Category
+
+**File:** `backend/bot/handlers.py`
+
+**Find the content handler (around line where content is displayed):**
+```python
+@router.callback_query(F.data.startswith("content:"))
+async def content_handler(callback: CallbackQuery):
+    """Show specific content"""
+    await callback.answer()
+    
+    content_id = callback.data.split(":")[1]
+    
+    # Fetch content...
+    # Display content...
+    
+    # CURRENT (OLD):
+    await callback.message.edit_text(
+        f"**{title}**\n\n{content}",
+        parse_mode="Markdown",
+        reply_markup=create_main_menu_keyboard()  # ❌ Only main menu
+    )
+```
+
+**Replace with (NEW):**
+```python
+# Content ID to category mapping
+CONTENT_CATEGORY_MAP = {
+    'section_1_general': 'about',
+    'section_2_values': 'about',
+    'section_3_history': 'about',
+    'section_4_structure': 'about',
+    'section_4_advantages': 'about',
+    'q1_documents': 'onboarding',
+    'q2_account_creation': 'onboarding',
+    'q6_sed_access': 'onboarding',
+    'q8_vacation_rules': 'work',
+    'q9_vacation_days': 'work',
+    'q10_sick_leave': 'work',
+    'q11_remote_work': 'work',
+    'q12_business_trip': 'work',
+    'q20_conflict': 'work',
+    'q26_resignation': 'work',
+    'q13_salary_dates': 'salary',
+    'q14_salary_questions': 'salary',
+    'q15_mobile_device': 'tech',
+    'q16_sed_issues': 'tech',
+    'q17_pc_issues': 'tech',
+    'q18_remote_setup': 'tech',
+    'q19_remote_issues': 'tech',
+    'appendix_22': 'contacts',
+    # Add more as needed
+}
+
+@router.callback_query(F.data.startswith("content:"))
+async def content_handler(callback: CallbackQuery):
+    """Show specific content"""
+    await callback.answer()
+    
+    content_id = callback.data.split(":")[1]
+    
+    # Determine parent category
+    parent_category = CONTENT_CATEGORY_MAP.get(content_id)
+    
+    # Fetch content from API...
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{settings.API_BASE_URL}/api/hr/content/{content_id}"
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            title = data.get('title', '')
+            content_type = data.get('content_type', 'text')
+            content = data.get('content', '')
+            
+            # TEXT CONTENT
+            if content_type == 'text':
+                await callback.message.edit_text(
+                    f"**{title}**\n\n{content}",
+                    parse_mode="Markdown",
+                    reply_markup=create_content_navigation_keyboard(parent_category)  # ✅ NEW
+                )
+            
+            # VIDEO CONTENT
+            elif content_type == 'video' and data.get('video_url'):
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                
+                await callback.message.answer_video(
+                    video=data['video_url'],
+                    caption=f"🎬 **{title}**",
+                    parse_mode="Markdown",
+                    reply_markup=create_content_navigation_keyboard(parent_category)  # ✅ NEW
+                )
+            
+            # TABLE CONTENT
+            elif content_type == 'table':
+                table_data = data.get('metadata', {}).get('table_data', {})
+                formatted_table = format_table_for_telegram(table_data)
+                
+                await callback.message.edit_text(
+                    f"**{title}**\n\n{formatted_table}",
+                    parse_mode="Markdown",
+                    reply_markup=create_content_navigation_keyboard(parent_category)  # ✅ NEW
+                )
+```
+
+### 3. Optional: Increase Button Height
+
+**File:** `backend/services/hr_keyboards.py`
+
+If Telegram API allows custom button styling (check documentation), you can add height parameter. Otherwise, this is controlled by Telegram's native rendering and cannot be changed via code.
+
+**Note:** Telegram Bot API uses native platform UI, so button height is fixed by the platform. This improvement may not be implementable via code. Skip if not possible.
+
+### 4. Optional: Distinguish "Ask Question" Button
+
+**File:** `backend/services/hr_keyboards.py`
+
+**Update main menu to make "Ask Question" visually distinct:**
+```python
+def create_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Creates main HR menu with distinct Ask Question button"""
+    buttons = [
+        [
+            InlineKeyboardButton(text="📖 Про компанію", callback_data="menu:about"),
+            InlineKeyboardButton(text="🚀 Новачкам", callback_data="menu:onboarding")
+        ],
+        [
+            InlineKeyboardButton(text="💼 Робочі питання", callback_data="menu:work"),
+            InlineKeyboardButton(text="💰 Зарплата", callback_data="menu:salary")
+        ],
+        [
+            InlineKeyboardButton(text="🔧 Тех. підтримка", callback_data="menu:tech"),
+            InlineKeyboardButton(text="📞 Контакти", callback_data="menu:contacts")
+        ],
+        # Visually separate "Ask Question" - full width button
+        [
+            InlineKeyboardButton(
+                text="💬 Задати своє питання", 
+                callback_data="action:ask"
+            )
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+```
+
+**Changes made:**
+- Changed emoji from ❓ to 💬 (more conversational)
+- Changed text to "Задати своє питання" (more personal)
+- Kept as full-width button (already visually distinct)
+
+## TESTING CHECKLIST
+
+### Test Back Button Navigation
+
+1. **Test Category: About Company**
+```
+   /hr → 📖 Про компанію → 🎬 Загальна інформація
+   Expected: [⬅️ Назад] [🏠 Головне меню]
+   
+   Click ⬅️ Назад
+   Expected: Returns to "About Company" menu (with 5 options)
+   
+   Click 🎬 Цінності компанії
+   Expected: Shows content with [⬅️ Назад] [🏠 Головне меню]
+```
+
+2. **Test Category: Onboarding**
+```
+   /hr → 🚀 Новачкам → 📋 Документи для працевлаштування
+   Expected: [⬅️ Назад] [🏠 Головне меню]
+   
+   Click ⬅️ Назад
+   Expected: Returns to "Onboarding" menu
+```
+
+3. **Test Category: Work**
+```
+   /hr → 💼 Робочі питання → 🏖️ Відпустки
+   Expected: [⬅️ Назад] [🏠 Головне меню]
+```
+
+4. **Test Main Menu Button**
+```
+   From any content screen
+   Click 🏠 Головне меню
+   Expected: Returns to main 6-category menu
+```
+
+5. **Test Content Without Parent Category**
+```
+   If parent_category is None (shouldn't happen, but test)
+   Expected: Only [🏠 Головне меню] button shows
+```
+
+### Test All Content Types
+
+- [ ] Text content (e.g., Q1 Documents)
+- [ ] Video content (e.g., Company History)
+- [ ] Table content (e.g., Contacts - Appendix 22)
+- [ ] Long content (split across multiple messages)
+
+### Test Edge Cases
+
+- [ ] Content ID not in CONTENT_CATEGORY_MAP → gracefully show only Main Menu
+- [ ] Rapid button clicks (no errors)
+- [ ] Back button from submenu (e.g., Vacation submenu)
+
+## ACCEPTANCE CRITERIA
+
+✅ **Must Have:**
+- [ ] All content screens have Back button when parent category is known
+- [ ] Back button navigates to correct parent category menu
+- [ ] Main Menu button always present alongside Back button
+- [ ] No regression - existing navigation still works
+- [ ] All 6 main categories tested successfully
+- [ ] Works for text, video, and table content types
+
+✅ **Nice to Have:**
+- [ ] "Ask Question" button visually distinct (different emoji/text)
+- [ ] Consistent button order: [Back] [Main Menu] on all screens
+
+## FILES TO MODIFY
+```
+backend/
+├── services/
+│   └── hr_keyboards.py              # Add create_content_navigation_keyboard()
+│                                    # Add CONTENT_CATEGORY_MAP
+│                                    # Optional: Update main menu
+├── bot/
+│   └── handlers.py                  # Update content_handler to pass parent_category
+│                                    # Use new navigation keyboard
+└── (optional)
+    └── Any other content handlers   # Apply same pattern
+```
+
+## IMPLEMENTATION NOTES
+
+1. **Start with hr_keyboards.py** - Add the new function first
+2. **Update handlers.py** - Modify content_handler to use new keyboard
+3. **Test thoroughly** - Check all 6 categories, all content types
+4. **If button height can't be changed** - Document this limitation (Telegram API restriction)
+5. **Deploy incrementally** - Test on development bot first, then production
+
+## VISUAL BEFORE/AFTER
+
+**BEFORE:**
+```
+┌─────────────────────────────────────┐
+│  Історія компанії                   │
+│  [Content...]                       │
+├─────────────────────────────────────┤
+│        🏠 Головне меню              │  ← Only one option
+└─────────────────────────────────────┘
+```
+
+**AFTER:**
+```
+┌─────────────────────────────────────┐
+│  Історія компанії                   │
+│  [Content...]                       │
+├─────────────────────────────────────┤
+│  ⬅️ Назад          🏠 Головне меню  │  ← Two options
+└─────────────────────────────────────┘
+```
+
+## SUCCESS METRICS
+
+After implementation, users should:
+- Reduce clicks to navigate between related content by 33% (3 clicks → 2 clicks)
+- Browse more content per session (easier to explore categories)
+- Lower bounce rate from content screens (more navigation options)
+
+## DEPLOYMENT
+```bash
+# After testing locally
+git add backend/services/hr_keyboards.py
+git add backend/bot/handlers.py
+git commit -m "feat: Add Back button navigation to HR content screens
+
+- Add create_content_navigation_keyboard() function
+- Update content handlers to include parent category
+- Add CONTENT_CATEGORY_MAP for proper routing
+- Improve UX by reducing navigation clicks
+- Optional: Distinguish Ask Question button
+
+Fixes: Users can now navigate back to category menu
+Impact: 33% reduction in navigation clicks (3→2)"
+
+git push origin main
+```
+
+## ROLLBACK PLAN
+
+If issues occur:
+1. The change is non-breaking (only adds functionality)
+2. Worst case: Back button doesn't work → user still has Main Menu
+3. To rollback: `git revert HEAD` and redeploy
+
+---
+
+**Priority:** 🔴 HIGH (Back button is critical UX issue)  
+**Estimated Time:** 30-45 minutes  
+**Complexity:** Low (straightforward keyboard update)  
+**Risk:** Very Low (additive change, no breaking changes)

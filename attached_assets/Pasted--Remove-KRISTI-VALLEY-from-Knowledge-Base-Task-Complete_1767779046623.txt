@@ -1,0 +1,174 @@
+# Remove KRISTI VALLEY from Knowledge Base
+
+## Task
+Completely remove all KRISTI VALLEY references from the knowledge base and vector database so Maya never mentions it.
+
+---
+
+## Step 1: Search for KRISTI VALLEY in Knowledge Base
+
+Find all files mentioning KRISTI VALLEY:
+```bash
+# Search all knowledge base files
+grep -ri "kristi valley\|kristal valley\|крісті\|крістал" backend/knowledge_base/
+grep -ri "kristi valley\|kristal valley" backend/data/
+
+# Also check scraped content
+grep -ri "kristi valley\|kristal valley" backend/scrapers/
+```
+
+Delete or remove sections mentioning KRISTI VALLEY from found files.
+
+---
+
+## Step 2: Remove from Pinecone Vector Database
+
+**Update the existing cleanup script:**
+
+**Modify: `backend/scripts/remove_discontinued_products.py`**
+
+Add KRISTI VALLEY to the removal list:
+```python
+import os
+from pinecone import Pinecone
+from openai import OpenAI
+
+pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+index = pc.Index(os.getenv('PINECONE_INDEX_NAME'))
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+def get_embedding(text):
+    response = openai_client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return response.data[0].embedding
+
+# Products to remove
+products_to_remove = [
+    # Previously discontinued
+    'marlin vodka', 'марлін горілка',
+    'adjari cognac', 'аджарі коньяк',
+    
+    # Add KRISTI VALLEY
+    'kristi valley', 'kristal valley', 'крісті веллі', 'крістал веллі',
+    'kristi valley wine', 'kristi valley вино'
+]
+
+print("🔍 Removing discontinued products from vector DB...")
+
+for product in products_to_remove:
+    query_embedding = get_embedding(product)
+    
+    results = index.query(
+        vector=query_embedding,
+        top_k=50,
+        include_metadata=True
+    )
+    
+    ids_to_delete = []
+    for match in results.matches:
+        metadata_text = str(match.metadata).lower()
+        # Check for KRISTI/KRISTAL variations
+        if any(word in metadata_text for word in ['kristi', 'kristal', 'крісті', 'крістал', 'marlin', 'marlín', 'adjari']):
+            ids_to_delete.append(match.id)
+            print(f"  📌 Found: {match.id} (score: {match.score:.3f})")
+    
+    if ids_to_delete:
+        index.delete(ids=ids_to_delete)
+        print(f"✅ Deleted {len(ids_to_delete)} entries for: {product}")
+    else:
+        print(f"ℹ️ No entries found for: {product}")
+
+print("🎉 Cleanup complete!")
+```
+
+**Run the script:**
+```bash
+python backend/scripts/remove_discontinued_products.py
+```
+
+---
+
+## Step 3: Update Portfolio Documentation
+
+**If KRISTI VALLEY is mentioned in any portfolio lists, remove it.**
+
+Check files like:
+- System prompts
+- /help message
+- Best Brands product lists
+- Any marketing materials
+
+**Updated Best Brands Portfolio (without KRISTI VALLEY):**
+```markdown
+## Best Brands Active Portfolio (January 2026)
+
+**Горілка (Vodka):**
+- GREENDAY - український преміум
+- HELSINKI - фінський бренд
+- UKRAINKA - український класичний
+
+**Коньяк/Spirits:**
+- DOVBUSH (Довбуш Карпатський) - український коньяк
+
+**Вино (Wine):**
+- VILLA UA - українські ігристі вина
+- ADJARI - грузинські вина
+
+**Соджу (Soju):**
+- FUNJU - перше українське соджу за корейським рецептом
+```
+
+---
+
+## Step 4: Verification
+
+After removal, test that KRISTI VALLEY is gone:
+```bash
+# Check knowledge base
+grep -ri "kristi\|kristal" backend/knowledge_base/
+
+# Should return nothing or very few results
+```
+
+**Test queries:**
+```
+User: Розкажи про KRISTI VALLEY
+Expected: "На жаль, у мене немає інформації про цей продукт"
+
+User: Які вина є у Best Brands?
+Expected: Lists only VILLA UA and ADJARI (no KRISTI VALLEY)
+
+User: Що таке Funju?
+Expected: "FUNJU — перше українське соджу, виготовлене за корейським рецептом"
+```
+
+---
+
+## Files to Modify
+
+1. **MODIFY:** `backend/scripts/remove_discontinued_products.py` (add KRISTI VALLEY to removal list)
+2. **SEARCH & DELETE:** Any knowledge base files mentioning KRISTI VALLEY
+3. **RUN:** Cleanup script to remove from Pinecone
+4. **VERIFY:** Portfolio lists don't mention it
+5. **UPDATE:** Correct FUNJU description (soju, not cocktails)
+
+---
+
+## Expected Result
+
+**After removal:**
+- ✅ No KRISTI VALLEY in vector database
+- ✅ No KRISTI VALLEY in knowledge base files  
+- ✅ Maya doesn't mention it when asked about portfolio
+- ✅ No hallucinations about "Armenian cognac"
+- ✅ FUNJU correctly described as Ukrainian soju (not cocktails)
+
+**Best Brands complete portfolio:**
+- **Vodka:** GREENDAY, HELSINKI, UKRAINKA
+- **Cognac/Spirits:** DOVBUSH
+- **Wine:** VILLA UA, ADJARI
+- **Soju:** FUNJU (перше українське соджу за корейським рецептом)
+
+Simple and accurate!

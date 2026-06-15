@@ -1,0 +1,185 @@
+Add Telegram bot integration for Maya - reuse existing personality and RAG system.
+
+OBJECTIVE:
+Add Telegram webhook so Maya can chat on Telegram using same personality, RAG knowledge, and language detection as Facebook Messenger.
+
+USER PROVIDES:
+- TELEGRAM_BOT_TOKEN: [user will provide from BotFather]
+
+STEP 1: CREATE backend/routes/telegram_webhook.py
+```python
+from fastapi import APIRouter, Request
+from fastapi.responses import Response
+import os
+import httpx
+from services.avatar_personalities import get_avatar_response
+
+router = APIRouter()
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+@router.post("/webhook")
+async def handle_telegram_webhook(request: Request):
+    """Handle incoming Telegram messages"""
+    
+    data = await request.json()
+    
+    # Process message
+    if "message" in data:
+        await process_telegram_message(data["message"])
+    
+    return {"ok": True}
+
+
+async def process_telegram_message(message: dict):
+    """Process individual Telegram message"""
+    try:
+        # Extract message info
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "")
+        user_name = message.get("from", {}).get("first_name", "Friend")
+        
+        if not text or not chat_id:
+            return
+        
+        # Skip commands for now (can add later)
+        if text.startswith("/"):
+            if text == "/start":
+                await send_telegram_message(
+                    chat_id,
+                    "Привіт! Я Maya 👋\n\nАI-експертка з маркетингу та трендів алкогольної індустрії від Gradus Media.\n\nЗапитай мене про бренди, коктейлі, тренди ринку - я завжди рада допомогти! 🍸"
+                )
+            return
+        
+        print(f"📨 Telegram message from {chat_id}: {text[:50]}...")
+        
+        # Send typing indicator
+        await send_typing_action(chat_id)
+        
+        # Get Maya's response using existing system
+        response_data = await get_avatar_response(
+            message=text,
+            avatar="maya",  # Always Maya for customer engagement
+            user_context={
+                "platform": "telegram",
+                "user_name": user_name,
+                "chat_id": chat_id
+            }
+        )
+        
+        # Handle ChatResponse object
+        if hasattr(response_data, 'response'):
+            response_text = response_data.response
+        elif isinstance(response_data, dict):
+            response_text = response_data.get("response", "Вибачте, виникла помилка.")
+        else:
+            response_text = str(response_data)
+        
+        # Send response
+        await send_telegram_message(chat_id, response_text)
+        
+        print(f"✅ Maya responded to {user_name} on Telegram")
+        
+    except Exception as e:
+        print(f"❌ Error processing Telegram message: {e}")
+        try:
+            await send_telegram_message(
+                chat_id,
+                "Вибачте, виникла помилка. Спробуйте ще раз! 🙏"
+            )
+        except:
+            pass
+
+
+async def send_typing_action(chat_id: int):
+    """Show typing indicator"""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendChatAction",
+                json={
+                    "chat_id": chat_id,
+                    "action": "typing"
+                }
+            )
+    except Exception as e:
+        print(f"⚠️ Error sending typing action: {e}")
+
+
+async def send_telegram_message(chat_id: int, text: str):
+    """Send message to Telegram user"""
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ No Telegram bot token available")
+        return
+    
+    try:
+        # Telegram has 4096 char limit
+        max_length = 4096
+        
+        if len(text) > max_length:
+            messages = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+        else:
+            messages = [text]
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for msg in messages:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": msg,
+                        "parse_mode": "Markdown"  # Support basic formatting
+                    },
+                    timeout=10.0
+                )
+                
+                if response.status_code != 200:
+                    print(f"❌ Telegram send error: {response.text}")
+                    raise Exception(f"Telegram API error: {response.status_code}")
+                
+                print(f"✅ Message sent to Telegram chat {chat_id}")
+    
+    except Exception as e:
+        print(f"❌ Error sending Telegram message: {e}")
+        raise
+```
+
+STEP 2: UPDATE backend/main.py
+
+Add Telegram router:
+```python
+from routes.telegram_webhook import router as telegram_router
+
+# Add with other routers
+app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
+```
+
+STEP 3: COMMIT AND PUSH
+```bash
+git add backend/routes/telegram_webhook.py backend/main.py
+git commit -m "Add Telegram bot integration for Maya"
+git push origin main
+```
+
+After deployment, user needs to:
+1. Add TELEGRAM_BOT_TOKEN to Render environment
+2. Set webhook URL via Telegram API
+
+BENEFITS:
+- Reuses all existing Maya infrastructure (personality, RAG, language detection)
+- Same knowledge base (AVTD brands, cocktails, etc)
+- /start command for welcome message
+- Typing indicators for natural feel
+- Markdown support for rich formatting
+- Perfect for Ukrainian B2B market
+
+NEXT STEPS FOR USER:
+After Render deploys, run this command to set webhook:
+```bash
+curl "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://gradus-ai.onrender.com/api/telegram/webhook"
+```
+
+Then test by sending message to the bot on Telegram!

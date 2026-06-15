@@ -1,0 +1,174 @@
+# REPLIT AGENT — AUDIT ONLY (No Code Changes)
+## Issue: Personal Telegram messages leaking into /hr Analytics Dashboard
+
+---
+
+## CONTEXT
+
+The `/hr` admin dashboard at `gradus-ai.onrender.com/hr` shows a chat analytics table
+(user messages, response times, types). The table is currently displaying messages from
+**personal Telegram chats** of the bot owner's account — not just bot interactions.
+
+This is a **privacy + security issue**. The audit must identify root cause(s) before
+any fix is written.
+
+---
+
+## YOUR TASK: AUDIT ONLY — DO NOT MODIFY ANY FILES
+
+Read the files listed below. Report findings. Do not write code, do not create migrations,
+do not modify anything. This is a read-only investigation.
+
+---
+
+## STEP 1 — FIND THE CHAT LOG TABLE
+
+Search the codebase for the table that stores chat messages shown in the dashboard.
+Look for any of these names: `chat_logs`, `messages`, `bot_messages`, `maya_logs`, `user_messages`.
+
+Report:
+- Exact table name
+- Full schema (all columns, types, constraints)
+- Which migration file created it (migrations/ directory)
+- Is there a `chat_id` column? A `bot_source` or `source` column? A `user_id` column?
+- Is there any column that identifies WHICH bot or WHICH Telegram chat the message came from?
+
+---
+
+## STEP 2 — FIND THE TELETHON CLIENT AND ITS EVENT HANDLERS
+
+The system uses Telethon with a **personal account session** (StringSession stored in
+`TELETHON_SESSION` env var), NOT a bot token. This means Telethon receives ALL messages
+from ALL chats the account is in — personal DMs, groups, channels, everything.
+
+Find the Telethon client initialization and ALL registered event handlers.
+Check these files first:
+- `backend/services/hunt_tg_scraper.py`
+- `backend/routes/telegram_webhook.py`
+- Any file that imports from `telethon`
+
+Report for EACH event handler found:
+- File name and line number
+- What event type it listens to (`NewMessage`, `CallbackQuery`, etc.)
+- Does it filter by `chats=` parameter? (e.g. `@client.on(events.NewMessage(chats=[...]))`)
+- Does it filter by `chat_id` inside the handler body?
+- Does it call any logging/save function? What function name?
+
+---
+
+## STEP 3 — FIND THE LOGGING FUNCTION
+
+Trace where messages get saved to the database. Look for INSERT statements into the
+chat log table found in Step 1.
+
+Report:
+- Which file and function does the INSERT
+- What values are inserted — is `chat_id` saved? Is `bot_source` saved?
+- Is there any guard/check BEFORE inserting that filters out non-bot messages?
+- Is there any check like `if chat_id > 0: return` (DM filter)?
+- Is there any check against an allowlist of known bot/group chat IDs?
+
+---
+
+## STEP 4 — FIND THE DASHBOARD QUERY
+
+Find the FastAPI route that serves data to the `/hr` analytics table.
+Look in:
+- `backend/routes/hr_dashboard.py` or similar
+- Any route with path `/hr` or `/hr/api/`
+
+Report:
+- Exact SQL query (or ORM query) used to fetch chat log records
+- Does it have a `WHERE` clause filtering by `chat_id` or `bot_source`?
+- Does it have a `WHERE` clause filtering by any env var like `HUNT_TG_SUPERGROUP_ID`?
+- What columns does it SELECT?
+- What's the ORDER BY and LIMIT?
+
+---
+
+## STEP 5 — ENVIRONMENT VARIABLES AUDIT
+
+List ALL env vars that contain Telegram chat IDs or session tokens.
+Look in: `.env.example`, `render.yaml`, any config file, and grep for:
+- `CHAT_ID`
+- `SUPERGROUP`
+- `TELETHON_SESSION`
+- `HR_TELETHON_SESSION`
+- `BOT_TOKEN` / `TELEGRAM_`
+
+Report:
+- Variable name
+- Its purpose (from comments or usage in code)
+- Is it used in any filter/guard in the message handler?
+
+---
+
+## STEP 6 — IDENTIFY ALL ACTIVE BOTS AND THEIR CHAT SOURCES
+
+The system has multiple bots. Report what you find:
+- `TELEGRAM_MAYA_BOT_TOKEN` — Maya HR bot (webhook-based)
+- `TELETHON_SESSION` — Personal account used for CV scanning (hunt_tg_scraper.py)
+- `HR_TELETHON_SESSION` — Natalia's session (check if active)
+- Any other bot tokens
+
+For each: is its message flow guarded before reaching the chat_log INSERT?
+
+---
+
+## STEP 7 — SAMPLE THE LEAKED DATA (if safe to do so)
+
+Run this READ-ONLY query against the Neon DB and report results:
+
+```sql
+SELECT
+    chat_id,
+    bot_source,
+    COUNT(*) as message_count,
+    MIN(created_at) as first_seen,
+    MAX(created_at) as last_seen
+FROM chat_logs   -- replace with actual table name from Step 1
+GROUP BY chat_id, bot_source
+ORDER BY message_count DESC
+LIMIT 20;
+```
+
+Report the output. This will show which chat_ids are in the table and confirm
+which ones are personal chats vs known bot groups.
+
+---
+
+## DELIVERABLE FORMAT
+
+After completing all 7 steps, produce a structured report:
+
+```
+=== AUDIT REPORT: Chat Log Privacy Leak ===
+
+ROOT CAUSE(S):
+[List each confirmed root cause with file:line reference]
+
+AFFECTED FILES:
+[List every file that needs to be changed to fix this]
+
+DATA AT RISK:
+[What's already in the DB that shouldn't be there]
+
+PROPOSED FIX ARCHITECTURE (describe only, no code):
+1. ...
+2. ...
+3. ...
+
+MIGRATION NEEDED: YES / NO
+ESTIMATED RISK OF FIX: LOW / MEDIUM / HIGH
+```
+
+---
+
+## IMPORTANT CONSTRAINTS
+
+- DO NOT edit any file
+- DO NOT run any INSERT, UPDATE, or DELETE queries
+- DO NOT deploy or restart anything
+- This is a read-only audit session
+- If you cannot find a file mentioned, say so — do not guess
+```

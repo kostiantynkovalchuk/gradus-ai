@@ -1,0 +1,97 @@
+Critical scheduler bug! Image generation task fails with "'NoneType' object is not callable"
+
+🐛 ERROR IN LOGS:
+ERROR:services.scheduler:❌ [SCHEDULER] Image generation failed: 'NoneType' object is not callable
+
+This is likely caused by NotificationService not being properly initialized in the scheduler task.
+
+📋 FIX:
+
+UPDATE backend/services/scheduler.py:
+
+Fix the generate_images_task method:
+```python
+def generate_images_task(self):
+    """
+    Task: Generate images for articles without images
+    Runs at: Every hour at :30 (00:30, 01:30, etc.)
+    """
+    logger.info("🤖 [SCHEDULER] Starting image generation task...")
+    
+    try:
+        db = SessionLocal()
+        
+        # Get articles without images
+        articles_without_images = db.query(ContentQueue).filter(
+            ContentQueue.status == 'pending_approval',
+            ContentQueue.image_url == None
+        ).limit(5).all()
+        
+        if not articles_without_images:
+            logger.info("No articles need images")
+            db.close()
+            return
+        
+        # Import here to avoid circular imports
+        from services.image_generator import ImageGenerator
+        from services.notification_service import NotificationService
+        
+        image_generator = ImageGenerator()
+        notification_service = NotificationService()
+        generated_count = 0
+        notifications_sent = 0
+        
+        for article in articles_without_images:
+            article_data = {
+                'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                'content': article.original_text or article.translated_text
+            }
+            
+            try:
+                result = image_generator.generate_article_image(article_data)
+                
+                if result.get('image_url'):
+                    article.image_url = result['image_url']
+                    article.image_prompt = result['prompt']
+                    generated_count += 1
+                    
+                    logger.info(f"Generated image for article {article.id}")
+                    
+                    # NOW send notification WITH image!
+                    notification_data = {
+                        'id': article.id,
+                        'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                        'translated_text': article.translated_text or article.original_text,
+                        'image_url': article.image_url,
+                        'source': article.extra_metadata.get('source', 'The Spirits Business') if article.extra_metadata else 'The Spirits Business',
+                        'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
+                    }
+                    
+                    try:
+                        notification_service.send_approval_notification(notification_data)
+                        notifications_sent += 1
+                        logger.info(f"✅ Notification with image sent for article {article.id}")
+                    except Exception as notif_error:
+                        logger.error(f"Failed to send notification for article {article.id}: {notif_error}")
+                        
+            except Exception as e:
+                logger.error(f"Failed to generate image for article {article.id}: {e}")
+        
+        db.commit()
+        db.close()
+        
+        logger.info(f"✅ [SCHEDULER] Generated {generated_count} images, sent {notifications_sent} notifications")
+        
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] Image generation failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+```
+
+Key changes:
+1. Import services INSIDE the task function (avoid circular imports)
+2. Proper error handling for each step
+3. Full traceback logging for debugging
+4. Separate counters for images and notifications
+
+Please fix the scheduler bug!

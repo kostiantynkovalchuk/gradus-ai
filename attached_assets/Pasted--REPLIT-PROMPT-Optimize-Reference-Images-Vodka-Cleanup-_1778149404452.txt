@@ -1,0 +1,178 @@
+# REPLIT PROMPT: Optimize Reference Images — Vodka Cleanup + Cognac Lineups
+
+## Context
+
+Currently 24 reference images. Many are individual bottle photos that can be replaced with lineup images (like we did for Jean Jack). This reduces token cost per API call without losing accuracy.
+
+## Changes
+
+### Step 1: Create Cognac Lineups from existing files
+
+Run this Python script in the backend directory:
+
+```python
+from PIL import Image
+import os
+
+refs = 'backend/photo_report/references'
+
+def create_lineup(file_list, output_name, target_h=1200, max_w=2400):
+    """Combine multiple product photos into one lineup image."""
+    imgs = []
+    for f in file_list:
+        path = os.path.join(refs, f)
+        if os.path.exists(path):
+            imgs.append(Image.open(path))
+            print(f"  Loaded {f}")
+        else:
+            print(f"  WARNING: {f} not found, skipping")
+    
+    if not imgs:
+        print(f"  ERROR: No images found for {output_name}")
+        return
+    
+    # Resize all to same height
+    resized = []
+    for img in imgs:
+        ratio = target_h / img.height
+        resized.append(img.resize((int(img.width * ratio), target_h), Image.LANCZOS))
+    
+    # Combine with spacing
+    spacing = 20
+    total_w = sum(i.width for i in resized) + spacing * (len(resized) - 1)
+    lineup = Image.new('RGB', (total_w, target_h), (255, 255, 255))
+    x = 0
+    for img in resized:
+        lineup.paste(img, (x, 0))
+        x += img.width + spacing
+    
+    # Resize if too wide
+    if lineup.width > max_w:
+        ratio = max_w / lineup.width
+        lineup = lineup.resize((max_w, int(lineup.height * ratio)), Image.LANCZOS)
+    
+    out_path = os.path.join(refs, output_name)
+    lineup.save(out_path, format="JPEG", quality=85)
+    print(f"  Created {output_name}: {lineup.size[0]}x{lineup.size[1]}")
+
+
+print("=== Creating ADJARI lineup ===")
+create_lineup(
+    ['adjari_3star_500.jpg', 'adjari_5star_tubus.jpg', 'adjari_7star_500.jpg'],
+    'adjari_lineup.jpg'
+)
+
+print("\n=== Creating DOVBUSH lineup ===")
+create_lineup(
+    ['dovbush_3star_500.jpg', 'dovbush_4star_500.jpg', 'dovbush_4star_round.jpg', 'dovbush_honey_500.jpg'],
+    'dovbush_lineup.jpg'
+)
+
+print("\n=== Deleting individual files ===")
+to_delete = [
+    # Vodka flagships (lineup already covers them)
+    'greenday_classic_500.jpg',
+    'helsinki_ice_palace_500.jpg',
+    'ukrainka_traditional_500.jpg',
+    # Cognac individuals (replaced by lineups)
+    'adjari_3star_500.jpg',
+    'adjari_5star_tubus.jpg',
+    'adjari_7star_500.jpg',
+    'dovbush_3star_500.jpg',
+    'dovbush_4star_500.jpg',
+    'dovbush_4star_round.jpg',
+    'dovbush_honey_500.jpg',
+]
+
+for f in to_delete:
+    path = os.path.join(refs, f)
+    if os.path.exists(path):
+        os.remove(path)
+        print(f"  Deleted {f}")
+    else:
+        print(f"  Already gone: {f}")
+
+print("\n=== Final file count ===")
+remaining = sorted([f for f in os.listdir(refs) if f.endswith('.jpg')])
+print(f"Total: {len(remaining)} reference images")
+for f in remaining:
+    print(f"  {f}")
+```
+
+### Step 2: Update `references.py` — replace labels
+
+**Remove these 10 labels** from `REFERENCE_LABELS` dict:
+```
+greenday_classic_500
+helsinki_ice_palace_500
+ukrainka_traditional_500
+adjari_3star_500
+adjari_5star_tubus
+adjari_7star_500
+dovbush_3star_500
+dovbush_4star_500
+dovbush_4star_round
+dovbush_honey_500
+```
+
+**Add these 2 new labels:**
+```python
+"adjari_lineup": "ADJARI (Аджарі) FULL LINEUP — 3 key SKUs of AVTD cognac/brandy. Left to right: ADJARI 3★ (golden label, most common on shelves), ADJARI 5★ in CYLINDRICAL TUBE packaging (dark brown tube — do NOT confuse with Klinkov RECTANGULAR boxes), ADJARI 7★ 'Мудрий Аджарелія' (BLACK label with portrait, premium). All have mountain landscape, eagle emblem, text 'ADJARI'. ALL are AVTD brands.",
+
+"dovbush_lineup": "DOVBUSH (Довбуш) FULL LINEUP — 4 SKUs of AVTD cognac/brandy. All have SQUARE bottle shape (NOT rounded like ADJARI!) with WOODEN CORK cap. Left to right: 3★ Карпатський (Cyrillic text 'ДОВБУШ', Cossack portrait), 4★ 'Big Four' (GREEN label, LATIN text 'DOVBUSH the Carpathian'), 4★ alternative (round stamp design), Honey/Медовий (bright ORANGE/YELLOW honeycomb label, bee icon, 37.5% — tincture not cognac but still AVTD). Usually stands NEXT TO ADJARI on cognac shelf.",
+```
+
+**Keep these existing labels unchanged:**
+```
+greenday_lineup
+helsinki_lineup
+ukrainka_lineup
+jeanjack_lineup
+shelf_ref_02 through shelf_ref_22 (all 10)
+```
+
+### Step 3: Update module docstring
+
+Update the reference count in the docstring to reflect new totals:
+```
+Vodka: 3 lineups (GreenDay, Helsinki, Ukrainka)
+Cognac: 3 lineups (ADJARI, Dovbush, Jean Jack)
+Shelf: 10 ideal shelf photos
+Total: 16 reference images
+```
+
+### Step 4: Verify
+
+Restart backend and check log:
+```
+Loaded 16 reference images (6 product lineups, 10 shelf)
+```
+
+Run benchmark:
+```bash
+cd backend
+python -m photo_report.benchmark.run_benchmark --dir photo_report/benchmark --count 3
+```
+
+Verify ADJARI, Dovbush, Jean Jack, GreenDay, Ukrainka, Helsinki all still detected correctly.
+
+## Summary of changes
+
+| Before | After |
+|--------|-------|
+| greenday_classic_500.jpg | DELETED (covered by greenday_lineup.jpg) |
+| helsinki_ice_palace_500.jpg | DELETED (covered by helsinki_lineup.jpg) |
+| ukrainka_traditional_500.jpg | DELETED (covered by ukrainka_lineup.jpg) |
+| adjari_3star_500.jpg | DELETED → merged into adjari_lineup.jpg |
+| adjari_5star_tubus.jpg | DELETED → merged into adjari_lineup.jpg |
+| adjari_7star_500.jpg | DELETED → merged into adjari_lineup.jpg |
+| dovbush_3star_500.jpg | DELETED → merged into dovbush_lineup.jpg |
+| dovbush_4star_500.jpg | DELETED → merged into dovbush_lineup.jpg |
+| dovbush_4star_round.jpg | DELETED → merged into dovbush_lineup.jpg |
+| dovbush_honey_500.jpg | DELETED → merged into dovbush_lineup.jpg |
+| — | NEW: adjari_lineup.jpg |
+| — | NEW: dovbush_lineup.jpg |
+
+**24 files → 16 files. Saved 8 reference images = ~$0.08 per report.**
+
+Ready for Stage 3 wine: 16 current + 6 wine lineups = 22 total (under our 24 budget).

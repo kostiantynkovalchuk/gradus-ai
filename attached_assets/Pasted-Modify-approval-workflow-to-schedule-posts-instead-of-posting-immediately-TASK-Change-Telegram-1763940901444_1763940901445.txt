@@ -1,0 +1,368 @@
+Modify approval workflow to schedule posts instead of posting immediately:
+
+📋 TASK: Change Telegram approval to mark as 'approved' status, then scheduler posts at optimal times (LinkedIn Mon/Wed/Fri 9am, Facebook daily 6pm)
+
+CURRENT BEHAVIOR (WRONG):
+- User approves in Telegram
+- System immediately posts to Facebook
+- No control over posting time
+
+NEW BEHAVIOR (CORRECT):
+- User approves in Telegram
+- System marks as 'approved' status (ready to post)
+- Scheduler posts at optimal times:
+  * LinkedIn articles: Mon/Wed/Fri 9:00 AM
+  * Facebook articles: Every day 6:00 PM
+
+═══════════════════════════════════════
+
+STEP 1: UPDATE backend/services/telegram_webhook.py
+
+FIND the approve_content() method and REPLACE with:
+```python
+def approve_content(self, content_id: int) -> bool:
+    """
+    Approve content for posting (NO IMMEDIATE POST)
+    Just marks as 'approved' - scheduler will post at optimal time
+    """
+    from database import SessionLocal
+    from models import ContentQueue
+    
+    db = SessionLocal()
+    
+    try:
+        article = db.query(ContentQueue).filter(
+            ContentQueue.id == content_id
+        ).first()
+        
+        if not article:
+            logger.error(f"Article not found: {content_id}")
+            db.close()
+            return False
+        
+        # Mark as approved (ready for scheduled posting)
+        article.status = 'approved'
+        article.extra_metadata['approved_at'] = datetime.now().isoformat()
+        article.extra_metadata['approved_by'] = 'telegram'
+        
+        db.commit()
+        
+        # Determine posting schedule
+        platform = article.target_platform or 'both'
+        
+        posting_schedule = ""
+        if platform == 'linkedin':
+            posting_schedule = "📅 Буде опубліковано: Пн/Ср/Пт о 9:00"
+        elif platform == 'facebook':
+            posting_schedule = "📅 Буде опубліковано: Щодня о 18:00"
+        else:  # both
+            posting_schedule = "📅 Буде опубліковано:\n• LinkedIn: Пн/Ср/Пт 9:00\n• Facebook: Щодня 18:00"
+        
+        # Send confirmation (NO POSTING YET)
+        self._send_approval_confirmation(article, posting_schedule)
+        
+        logger.info(f"✅ Article {content_id} approved, scheduled for posting")
+        
+        db.close()
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error approving content: {e}")
+        db.rollback()
+        db.close()
+        return False
+
+def _send_approval_confirmation(self, article, posting_schedule: str):
+    """Send confirmation that article is approved and scheduled"""
+    
+    title = article.translated_title or article.extra_metadata.get('title', '')
+    platform = article.target_platform or 'both'
+    platform_emoji = "💼" if platform == 'linkedin' else "📱" if platform == 'facebook' else "💼📱"
+    
+    message = f"""✅ <b>Контент схвалено!</b>
+
+{platform_emoji} <b>{title}</b>
+
+✅ Статус: Готово до публікації
+🆔 ID: {article.id}
+
+{posting_schedule}
+
+💡 Система автоматично опублікує в оптимальний час"""
+    
+    try:
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
+        requests.post(url, json=payload, timeout=10)
+        
+    except Exception as e:
+        logger.error(f"Error sending approval confirmation: {e}")
+```
+
+═══════════════════════════════════════
+
+STEP 2: UPDATE backend/services/scheduler.py
+
+ADD these platform-specific posting tasks:
+```python
+def post_to_linkedin_task(self):
+    """
+    Post to LinkedIn at scheduled time
+    Runs: Mon/Wed/Fri at 9:00 AM
+    Selects oldest approved LinkedIn content
+    """
+    logger.info("🤖 [SCHEDULER] Posting to LinkedIn...")
+    
+    try:
+        from services.linkedin_poster import LinkedInPoster
+        from models import ContentQueue
+        
+        db = self._get_db_session()
+        
+        # Get oldest approved LinkedIn content (FIFO queue)
+        article = db.query(ContentQueue).filter(
+            ContentQueue.status == 'approved',
+            ContentQueue.target_platform.in_(['linkedin', 'both']),
+            ContentQueue.posted_at.is_(None)
+        ).order_by(ContentQueue.created_at.asc()).first()
+        
+        if not article:
+            logger.info("No approved LinkedIn content to post")
+            db.close()
+            return
+        
+        # Post to LinkedIn
+        linkedin_poster = LinkedInPoster()
+        
+        content_data = {
+            'title': article.translated_title or article.extra_metadata.get('title', ''),
+            'text': article.translated_text or article.original_text,
+            'image_url': article.image_url,
+            'source_url': article.source_url
+        }
+        
+        result = linkedin_poster.post_to_linkedin(content_data)
+        
+        if result.get('status') == 'success':
+            article.status = 'posted'
+            article.posted_at = datetime.now()
+            if not article.extra_metadata:
+                article.extra_metadata = {}
+            article.extra_metadata['linkedin_post_url'] = result.get('post_url')
+            article.extra_metadata['posted_platform'] = 'linkedin'
+            
+            logger.info(f"✅ Posted to LinkedIn: Article {article.id}")
+            
+            # Send success notification
+            self._send_posting_notification(article, 'linkedin', result.get('post_url'))
+        else:
+            logger.error(f"❌ LinkedIn posting failed: {result.get('message')}")
+        
+        db.commit()
+        db.close()
+        
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] LinkedIn posting failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def post_to_facebook_task(self):
+    """
+    Post to Facebook at scheduled time
+    Runs: Every day at 6:00 PM
+    Selects oldest approved Facebook content
+    """
+    logger.info("🤖 [SCHEDULER] Posting to Facebook...")
+    
+    try:
+        from services.facebook_poster import FacebookPoster
+        from models import ContentQueue
+        
+        db = self._get_db_session()
+        
+        # Get oldest approved Facebook content (FIFO queue)
+        article = db.query(ContentQueue).filter(
+            ContentQueue.status == 'approved',
+            ContentQueue.target_platform.in_(['facebook', 'both']),
+            ContentQueue.posted_at.is_(None)
+        ).order_by(ContentQueue.created_at.asc()).first()
+        
+        if not article:
+            logger.info("No approved Facebook content to post")
+            db.close()
+            return
+        
+        # Post to Facebook
+        facebook_poster = FacebookPoster()
+        
+        content_data = {
+            'translated_title': article.translated_title or article.extra_metadata.get('title', ''),
+            'translated_text': article.translated_text or article.original_text,
+            'media_url': article.image_url,
+            'media_type': 'image',
+            'source': article.extra_metadata.get('source', ''),
+            'source_url': article.source_url
+        }
+        
+        result = facebook_poster.post_to_facebook(content_data)
+        
+        if result.get('id'):  # Facebook returns post ID
+            article.status = 'posted'
+            article.posted_at = datetime.now()
+            if not article.extra_metadata:
+                article.extra_metadata = {}
+            article.extra_metadata['facebook_post_id'] = result.get('id')
+            article.extra_metadata['facebook_post_url'] = result.get('post_url')
+            article.extra_metadata['posted_platform'] = 'facebook'
+            
+            logger.info(f"✅ Posted to Facebook: Article {article.id}")
+            
+            # Send success notification
+            self._send_posting_notification(article, 'facebook', result.get('post_url'))
+        else:
+            logger.error(f"❌ Facebook posting failed")
+        
+        db.commit()
+        db.close()
+        
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] Facebook posting failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def _send_posting_notification(self, article, platform: str, post_url: str):
+    """Send Telegram notification that article was posted"""
+    
+    from services.notification_service import NotificationService
+    
+    notification_service = NotificationService()
+    
+    title = article.translated_title or article.extra_metadata.get('title', '')
+    platform_emoji = "💼" if platform == 'linkedin' else "📱"
+    
+    message = f"""📢 <b>Опубліковано!</b>
+
+{platform_emoji} <b>Платформа:</b> {platform.upper()}
+
+📰 <b>{title}</b>
+
+🔗 <a href="{post_url}">Переглянути пост</a>
+
+✅ Статус: Успішно опубліковано
+🆔 ID: {article.id}
+🕐 Час: {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
+    
+    try:
+        url = f"https://api.telegram.org/bot{notification_service.bot_token}/sendMessage"
+        payload = {
+            "chat_id": notification_service.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+        
+        requests.post(url, json=payload, timeout=10)
+        
+    except Exception as e:
+        logger.error(f"Error sending posting notification: {e}")
+```
+
+NOW UPDATE the start() method in scheduler to ADD posting jobs:
+```python
+def start(self):
+    """Start scheduler with all tasks including scheduled posting"""
+    
+    # ... existing scraping tasks (keep as is) ...
+    
+    # ... existing translation task (keep as is) ...
+    
+    # ... existing image generation task (keep as is) ...
+    
+    # ========================================
+    # POSTING (Platform-specific schedules)
+    # ========================================
+    
+    # LinkedIn: Mon/Wed/Fri at 9:00 AM
+    self.scheduler.add_job(
+        self.post_to_linkedin_task,
+        CronTrigger(day_of_week='mon,wed,fri', hour=9, minute=0),
+        id='post_linkedin',
+        name='Post to LinkedIn (scheduled)',
+        replace_existing=True
+    )
+    
+    # Facebook: Every day at 6:00 PM
+    self.scheduler.add_job(
+        self.post_to_facebook_task,
+        CronTrigger(hour=18, minute=0),  # 6:00 PM
+        id='post_facebook',
+        name='Post to Facebook (scheduled)',
+        replace_existing=True
+    )
+    
+    # ... existing maintenance tasks (keep as is) ...
+    
+    self.scheduler.start()
+    
+    logger.info("✅ Scheduler started with scheduled posting")
+    logger.info("📅 LinkedIn posting: Mon/Wed/Fri 9:00 AM")
+    logger.info("📅 Facebook posting: Daily 6:00 PM")
+```
+
+═══════════════════════════════════════
+
+SUMMARY OF CHANGES:
+
+1. ✅ Telegram approval NO LONGER posts immediately
+2. ✅ Approval sets status='approved' (ready to post)
+3. ✅ Scheduler posts approved content at optimal times:
+   - LinkedIn: Mon/Wed/Fri 9:00 AM
+   - Facebook: Daily 6:00 PM
+4. ✅ FIFO queue (oldest approved posted first)
+5. ✅ Confirmation messages at approval & posting
+6. ✅ No Redis needed - uses existing database
+
+WORKFLOW NOW:
+┌─────────────────────────────────────────┐
+│ Mon/Wed/Fri 1am: Scrape LinkedIn        │
+│ Daily 2am: Scrape Facebook              │
+└─────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────┐
+│ Save as 'draft' in database             │
+└─────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────┐
+│ Every 4 hours: Translate (Claude)       │
+│ Status: 'draft' → 'pending_approval'    │
+└─────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────┐
+│ Every 4 hours: Generate images (DALL-E) │
+│ Send Telegram notification              │
+└─────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────┐
+│ YOU: Click ✅ Approve in Telegram       │
+│ Status: 'pending_approval' → 'approved' │
+│ (NOT posted yet!)                       │
+└─────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────┐
+│ WAIT FOR SCHEDULED TIME                 │
+│ LinkedIn: Mon/Wed/Fri 9:00 AM           │
+│ Facebook: Daily 6:00 PM                 │
+└─────────────────────────────────────────┘
+           ↓
+┌─────────────────────────────────────────┐
+│ Auto-post at scheduled time             │
+│ Status: 'approved' → 'posted'           │
+│ Confirmation sent to Telegram           │
+└─────────────────────────────────────────┘
+
+Please implement scheduled posting instead of immediate posting!

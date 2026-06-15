@@ -1,0 +1,90 @@
+RESTORE ORIGINAL (FROM KNOWLEDGE BASE):
+```python
+"dismissal": {
+    "type": "text",
+    "content": """📤 **Як правильно запустити процес звільнення?**
+
+**⏸️ Прежде чем принимать решение, дай себе немного времени.**
+
+Сложные периоды бывают в любой работе — это нормально. Часто именно они становятся точкой роста и нового опыта.
+
+**Важно помнить:** у нас сильные бренды, масштабные задачи и команда, в которой можно развиваться и усиливаться профессионально.
+
+**Если после спокойного размышления ты всё же чувствуешь, что хочешь двигаться дальше:**
+
+1️⃣ **Поговори с руководителем**
+Честно опиши свою ситуацию и обсуди возможные варианты изменений — задач, роли или формата работы.
+
+2️⃣ **Обсуди сроки**
+Предварительно согласуй сроки увольнения с непосредственным руководителем.
+
+3️⃣ **Обратись к офис-менеджеру**
+После обсуждения с руководителем обратись к офис-менеджеру своего подразделения, чтобы пройти процесс корректно и спокойно.
+
+💬 **Главное — принимать решение без спешки и на холодную голову.**
+
+Не принимай окончательное решение в моменты эмоционального напряжения или усталости. Дай себе время все взвесить.
+
+**Мы ценим каждого сотрудника и хотим, чтобы твоё решение было осознанным и правильным для тебя.**"""
+}
+```
+
+UPDATE IN maya_hr_content.py:
+- Replace current dismissal content with full original text
+- Restore thoughtful, supportive tone
+- Include reflection period encouragement
+
+=============================================================================
+TESTING CHECKLIST AFTER FIXES
+=============================================================================
+
+□ **Videos:**
+  - Click "Цінності" → Video plays OR text fallback shows
+  - Click "Історія" → Video plays OR text fallback shows
+  - Click "Про компанію" → Video plays OR text fallback shows
+
+□ **Text Fallback:**
+  - If video fails, text version displays
+  - Text includes all 5 values with descriptions
+  - Formatting is readable
+
+□ **Documents:**
+  - Click "Відрядження" → Appendix 12 & 12.1 buttons appear
+  - Click appendix button → Image/PDF sends
+  - Click "Основні фонди" → Appendix 21 & 21.1 buttons appear
+  - Appendix 22 (contacts) accessible and formatted correctly
+
+□ **Dismissal:**
+  - Click "Звільнення" → Full thoughtful text displays
+  - Includes reflection encouragement
+  - Mentions brand strength, growth opportunities
+  - Has step-by-step process
+  - Supportive tone maintained
+
+=============================================================================
+DELIVERABLES
+=============================================================================
+
+1. **Video Issue Resolution:**
+   - Root cause identified
+   - Videos working OR text fallback implemented
+   - Test results documented
+
+2. **Text Fallback Added:**
+   - Company values full text in maya_hr_content.py
+   - Bot logic updated to handle fallback
+   - All 3 videos have text alternatives
+
+3. **Documents System:**
+   - HR_DOCUMENTS dictionary created
+   - Images extracted and uploaded to Telegram
+   - file_ids stored
+   - Bot sends attachments correctly
+   - At least Appendix 22 (contacts table) working as text
+
+4. **Dismissal Text Restored:**
+   - Full original text from knowledge base
+   - Thoughtful, supportive tone
+   - Proper formatting
+
+BEGIN INVESTIGATION AND FIXES NOW.

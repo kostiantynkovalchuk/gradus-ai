@@ -1,0 +1,167 @@
+Critical workflow issue: Telegram notifications are sent BEFORE images are generated, so they arrive without image previews!
+
+🐛 PROBLEM:
+- Translation endpoint sends notifications immediately
+- Image generation happens AFTER notifications already sent
+- Result: Notifications appear without images
+
+✅ SOLUTION:
+Move notification sending from translation to image generation step.
+
+📋 CHANGES NEEDED:
+
+1. UPDATE backend/main.py - /api/translate/pending endpoint:
+
+REMOVE notification sending:
+```python
+@app.post("/api/translate/pending")
+async def translate_pending(db: Session = Depends(get_db)):
+    """Translate pending articles (notifications sent later with images)"""
+    
+    draft_articles = db.query(ContentQueue).filter(
+        ContentQueue.status == 'draft',
+        ContentQueue.translated_text == None
+    ).limit(10).all()
+    
+    if not draft_articles:
+        return {"status": "success", "message": "No articles to translate", "translated_count": 0}
+    
+    translation_service = TranslationService()
+    translated_count = 0
+    
+    logger.info(f"Translating {len(draft_articles)} draft articles...")
+    
+    for article in draft_articles:
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text,
+            'summary': article.original_text[:1000]
+        }
+        
+        try:
+            # Translate WITHOUT notification
+            translation = translation_service.translate_article(article_data)
+            
+            if translation:
+                article.translated_text = translation
+                article.translated_title = article.extra_metadata.get('title', '') if article.extra_metadata else ''
+                article.status = 'pending_approval'
+                translated_count += 1
+                
+                logger.info(f"Translated article {article.id}: {article.extra_metadata.get('title', '')[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to translate article {article.id}: {e}")
+    
+    db.commit()
+    
+    logger.info(f"Translation completed: {translated_count}/{len(draft_articles)} articles translated")
+    
+    return {
+        "status": "success",
+        "translated_count": translated_count,
+        "message": f"Translated {translated_count} articles. Run image generation next to send notifications."
+    }
+```
+
+2. UPDATE backend/main.py - /api/images/generate-pending endpoint:
+
+ADD notification sending AFTER image generation:
+```python
+@app.post("/api/images/generate-pending")
+async def generate_images_for_pending(db: Session = Depends(get_db)):
+    """Generate images AND send Telegram notifications with image previews"""
+    
+    articles_without_images = db.query(ContentQueue).filter(
+        ContentQueue.status == 'pending_approval',
+        ContentQueue.image_url == None
+    ).limit(10).all()
+    
+    if not articles_without_images:
+        return {
+            "status": "success",
+            "message": "No articles need images",
+            "generated_count": 0,
+            "total_without_images": 0
+        }
+    
+    image_generator = ImageGenerator()
+    notification_service = NotificationService()
+    generated_count = 0
+    
+    logger.info(f"Generating images for {len(articles_without_images)} articles...")
+    
+    for article in articles_without_images:
+        article_data = {
+            'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+            'content': article.original_text or article.translated_text
+        }
+        
+        try:
+            result = image_generator.generate_article_image(article_data)
+            
+            if result.get('image_url'):
+                article.image_url = result['image_url']
+                article.image_prompt = result['prompt']
+                generated_count += 1
+                
+                logger.info(f"Generated image for article {article.id}")
+                
+                # NOW send notification WITH image!
+                notification_data = {
+                    'id': article.id,
+                    'title': article.extra_metadata.get('title', '') if article.extra_metadata else '',
+                    'translated_text': article.translated_text or article.original_text,
+                    'image_url': article.image_url,  # Image is ready!
+                    'source': article.extra_metadata.get('source', 'The Spirits Business') if article.extra_metadata else 'The Spirits Business',
+                    'created_at': article.created_at.strftime('%Y-%m-%d %H:%M') if article.created_at else ''
+                }
+                
+                try:
+                    notification_service.send_approval_notification(notification_data)
+                    logger.info(f"✅ Notification with image sent for article {article.id}")
+                except Exception as notif_error:
+                    logger.error(f"Failed to send notification for article {article.id}: {notif_error}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to generate image for article {article.id}: {e}")
+    
+    db.commit()
+    
+    logger.info(f"Image generation completed: {generated_count}/{len(articles_without_images)}")
+    
+    return {
+        "status": "success",
+        "generated_count": generated_count,
+        "total_without_images": len(articles_without_images),
+        "message": f"Generated {generated_count} images and sent Telegram notifications"
+    }
+```
+
+3. ALSO UPDATE backend/services/notification_service.py:
+
+Remove the Ukrainian flag emoji:
+```python
+def send_approval_notification(self, content_data: Dict[str, Any]) -> bool:
+    # ... existing code ...
+    
+    # Caption WITHOUT Ukrainian flag emoji
+    caption = f"""🆕 <b>Новий контент для перевірки</b>
+
+📰 <b>{title}</b>
+
+{preview_text}
+
+📰 {source}
+🔗 ID: {content_id}
+⏰ {content_data.get('created_at', '')}"""
+    
+    # Remove "🇺🇦 {preview_text}" and use just {preview_text}
+```
+
+This ensures:
+✅ Notifications sent AFTER images are ready
+✅ Telegram shows image preview
+✅ One notification per article (not two)
+✅ No Ukrainian flag emoji
+
+Please fix the notification timing!

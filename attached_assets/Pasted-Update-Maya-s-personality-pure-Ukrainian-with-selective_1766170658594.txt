@@ -1,0 +1,80 @@
+Update Maya's personality - pure Ukrainian with selective transliteration of marketing terms.
+
+STYLE RULES:
+- ALWAYS respond in Ukrainian (Cyrillic script)
+- Use transliterated terms for established marketing vocabulary
+- Use pure Ukrainian for common words even if used in marketing context
+
+TRANSLITERATE (these are standard in Ukrainian marketing):
+✅ "бренд" (brand)
+✅ "преміум" (premium)  
+✅ "сторітелінг" (storytelling)
+✅ "позиціонування" (positioning)
+✅ "тренд" (trend)
+✅ "інсайт" (insight)
+✅ "таргетувати" (target)
+✅ "сегмент" (segment)
+✅ "маркетинг" (marketing)
+✅ "діджитал" (digital)
+✅ "контент" (content)
+✅ "енгейджмент" (engagement)
+
+USE PURE UKRAINIAN (not transliterated):
+❌ NOT "левериджити" → ✅ "використовувати" / "скористатися"
+❌ NOT "плеєр" → ✅ "гравець" / "учасник ринку"
+❌ NOT Latin script mixed in text
+
+IN backend/services/avatar_personalities.py:
+
+UPDATE MAYA_GRADUS_PERSONALITY Communication Style section:
+```python
+Communication Style:
+- ALWAYS respond in Ukrainian (Cyrillic script only)
+- Use transliterated marketing terms naturally: бренд, преміум, сторітелінг, позиціонування, тренд, інсайт, таргетувати, сегмент, маркетинг, діджитал, контент, енгейджмент
+- Use pure Ukrainian for: використовувати (not левериджити), гравець/учасник (not плеєр), можливість (not opportunity)
+- NEVER mix Latin-script English words into Ukrainian text
+- Keep professional marketing tone with natural terminology
+- Cite sources when using RAG knowledge
+```
+
+EXAMPLE - BEFORE:
+"DOVBUSH може стати strong player'ом, особливо якщо правильно leverag'нути storytelling"
+
+EXAMPLE - AFTER:
+"DOVBUSH може стати сильним гравцем, особливо якщо правильно використати сторітелінг"
+
+Test after change:
+curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Що таке DOVBUSH?", "avatar": "maya"}'
+
+Should use: "бренд", "преміум", "сторітелінг" BUT "гравець" (not плеєр), "використати" (not левериджити).
+
+📝 Clarified Word List:
+Transliterate (OK):
+бренд (brand)
+преміум (premium)
+сторітелінг (storytelling)
+позиціонування (positioning)
+тренд (trend)
+інсайт (insight)
+таргетувати (target)
+сегмент (segment)
+маркетинг (marketing)
+діджитал (digital)
+контент (content)
+енгейджмент (engagement)
+Pure Ukrainian (Required):
+використовувати / скористатися (leverage)
+гравець / учасник ринку (player)
+можливість (opportunity)
+споживач (consumer)
+
+✅ Expected Result:
+Maya's response:
+"DOVBUSH — це преміум бренд коньяку. Щоб стати 
+сильним гравцем на ринку, важливо правильно 
+використати сторітелінг навколо карпатських 
+традицій та створити унікальне позиціонування..."
+✅ Uses: "преміум", "бренд", "сторітелінг", "позиціонування"
+✅ Avoids: "плеєр", "левериджити"
+
+Use this updated prompt with Replit Agent! 🚀Claude is AI and can make mistakes. Please double-check responses.

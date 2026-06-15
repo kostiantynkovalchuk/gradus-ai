@@ -1,0 +1,84 @@
+# Fix Document Service SQL Syntax Error
+
+## PROBLEM
+Document linking fails with error:
+`Neither 'InstrumentedAttribute' object has an attribute 'overlap'`
+
+The issue is in `backend/services/document_service.py` - it's mixing SQLAlchemy ORM with raw SQL syntax.
+
+## ROOT CAUSE
+Line in `find_documents_by_topics`:
+```python
+WHERE topics && $1  -- PostgreSQL array overlap operator
+```
+
+This works in raw asyncpg SQL but NOT with SQLAlchemy models.
+
+## FIX
+
+In `backend/services/document_service.py`, update `find_documents_by_topics` method:
+
+**Replace the query with pure asyncpg (raw SQL):**
+```python
+@staticmethod
+async def find_documents_by_topics(query: str, limit: int = 3) -> List[Dict]:
+    """
+    Find documents by matching query keywords to document topics.
+    Uses PostgreSQL array overlap operator (&&).
+    """
+    import re
+    
+    # Extract meaningful words from query
+    query_lower = query.lower()
+    words = re.findall(r'\b\w{3,}\b', query_lower)
+    
+    # Remove stopwords
+    stopwords = {'який', 'як', 'що', 'коли', 'де', 'можна', 'треба', 'потрібно', 'чому'}
+    keywords = [w for w in words if w not in stopwords]
+    
+    if not keywords:
+        return []
+    
+    # Get database connection pool
+    from services.database import get_db_pool
+    pool = await get_db_pool()
+    
+    # Raw SQL query using asyncpg (NOT SQLAlchemy)
+    rows = await pool.fetch("""
+        SELECT 
+            id, title, document_type, document_number,
+            url, category, description,
+            (
+                SELECT COUNT(*)
+                FROM unnest(topics) topic
+                WHERE topic = ANY($1)
+            ) as relevance
+        FROM hr_documents
+        WHERE topics && $1::text[]
+          AND is_active = TRUE
+        ORDER BY relevance DESC, document_number
+        LIMIT $2
+    """, keywords, limit)
+    
+    return [dict(row) for row in rows]
+```
+
+**Key changes:**
+1. Added `::text[]` cast to ensure $1 is treated as text array
+2. Confirmed using `pool.fetch()` (asyncpg raw SQL, not ORM)
+3. Proper parameter binding
+
+## TEST AFTER FIX
+```bash
+# Should work without warnings:
+curl -X POST https://gradus-ai.onrender.com/api/hr/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Як працювати в бліц?", "user_id": 441389791}'
+```
+
+Expected: Response includes `📚 **Документи:**` section with Додаток №33 link.
+
+## SUCCESS CRITERIA
+- ✅ No more "overlap" error in logs
+- ✅ Documents attached to relevant answers
+- ✅ Query logs show document count > 0

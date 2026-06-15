@@ -1,0 +1,88 @@
+AUDIT ONLY — no code changes. We are about to make THREE recall fixes to Solomon
+Contracts. Recall (real risks caught vs Andrey's manual list) sits ~0.70; we want it
+comfortably above. The infrastructure (queue, parallel scan, protocol, UI) is DONE
+and must NOT be touched. NOTE: the queue rebuild moved analysis into worker.py and
+may have shifted line numbers — confirm CURRENT locations, don't trust old ones.
+
+Ground truth context: Andrey's manual protocol flagged these as real risks that
+Solomon currently MISSES — the fixes target exactly these:
+- 7.17 (10% penalty for doc errors) — Solomon FOUND it but emitted it as range
+  "7.3–7.17", and the §10.1 guardrail REJECTED it as clause_ref_not_found. It's
+  sitting in solcon_rejected_findings right now.
+- 3.1.4, 3.2.5, 5.8, 6.3–6.5 — Solomon scanned them but SUPPRESSED them as
+  "routine/standard" when they're actually one-sided (asymmetric) risks.
+
+═══════════════════════════════════════════════════════════
+PART A — THE RANGE-GUARDRAIL (Fix 1: recover 7.17)
+═══════════════════════════════════════════════════════════
+A1. Find the §10.1 guardrail that validates clause_ref against parsed clauses
+    (analyzer.py, or wherever it now lives post-rebuild). Paste the validation logic.
+    Confirm: when a finding's clause_ref is a RANGE (e.g. "7.3–7.17", "9.3–9.12"),
+    what exactly happens? Does it try to match the whole string as one clause and
+    reject? Paste the reject path.
+A2. Confirm 7.17's current state: query solcon_rejected_findings — is there a row
+    with clause_ref='7.3–7.17' (or similar §7 range) and reason='clause_ref_not_found'?
+    Report what's there.
+A3. The "Pattern A" instruction in the scan prompt that tells the model to collapse
+    one-sided blocks into a single range finding — find it, paste it. Which sections
+    does it apply to (just §9, or any)? It applied to §7 here, producing 7.3–7.17.
+A4. For the fix (DON'T implement): to ACCEPT a valid range, the guardrail would need
+    to parse the range endpoints (7.3 and 7.17), check BOTH exist in the parsed clause
+    list, and if so accept. Report: is the parsed-clause list available at the
+    guardrail point? Can we reliably split a range string into endpoints (what
+    dash/format variants appear — "–", "-", "—")? Any case where endpoint-validation
+    would wrongly accept garbage?
+
+═══════════════════════════════════════════════════════════
+PART B — THE SUPPRESSION LIST (Fix 2: recover 3.1.4/3.2.5/5.8/6.x)
+═══════════════════════════════════════════════════════════
+B1. Find the scan prompt's "routine / standard / ignore" suppression section — the
+    part telling the model NOT to flag certain clauses (e.g. "standard delivery
+    deadlines", "normal buyer audit rights", "routine FMCG operational"). Paste it
+    verbatim. Which file/line is it in now?
+B2. For each missed clause, report what it actually says in the contract and which
+    suppression rule likely ate it:
+    - 5.8 (buyer inspects supplier's production)
+    - 3.1.4, 3.2.5 (delivery/confirmation deadlines)
+    - 6.3–6.5 (packaging-return obligation, supplier collects at own cost)
+B3. The intended fix reframes suppression from TOPIC to ASYMMETRY: a clause is
+    "routine" ONLY if bilateral/symmetric; if an obligation/cost/audit/deadline/
+    penalty falls on the Supplier with NO reciprocal on the Buyer, it's REPORTABLE
+    even if the topic sounds routine. Report: where in the prompt this reframing
+    would go, and whether the prompt ALREADY has any asymmetry language we'd be
+    extending vs. contradicting.
+B4. PRECISION RISK ASSESSMENT (important): this fix makes Solomon flag MORE. Report
+    your read — what's the risk it over-flags genuinely-balanced clauses as
+    asymmetric? Are there clauses in this contract that are legitimately bilateral
+    that a too-aggressive asymmetry rule might wrongly flag? This tells us how
+    carefully to word the prompt and what to check after.
+
+═══════════════════════════════════════════════════════════
+PART C — SEVERITY-AWARE CAP (Fix 3: future-proof, no change today)
+═══════════════════════════════════════════════════════════
+C1. Find the cap (worker.py per the rebuild — "Cap applied: kept 45/N"). Paste the
+    sort + slice. Confirm current behaviour: today 45 = ~5-6 critical + ~30 high +
+    medium tail, so all critical+high survive (the dropped 23 are medium/low).
+C2. For the severity-aware version (DON'T implement): keep ALL critical+high, then
+    fill remaining slots up to the cap with top medium/low. Report where this slots
+    into the current sort/slice and confirm it produces the SAME output on today's
+    data (since crit+high already all survive) — i.e. it's pure future-proofing,
+    zero change to the current 45.
+
+═══════════════════════════════════════════════════════════
+SEQUENCING / SAFETY
+═══════════════════════════════════════════════════════════
+- These fixes are SUPPOSED to change the output (find more) — unlike the
+  infrastructure work. So report, for each, whether it touches scan/guardrail/cap and
+  what the expected output delta is.
+- Order of risk: Fix 1 (range) = low risk, recovers 7.17, no precision downside.
+  Fix 2 (asymmetry) = higher value, precision-sensitive, needs after-check. Fix 3 =
+  zero change today.
+- Confirm NONE of these touch the queue/worker scheduling, the poll loop, the
+  protocol generator, or the upload UI — only the analysis content logic.
+- Report import reconciliation impact (Rule 5) if guardrail/cap/scan-prompt files are
+  shared.
+
+Report all. Implementation will be SEPARATE prompts, likely Fix 1 alone first
+(verify 7.17 returns, recall ticks up), THEN Fix 2 (re-run, check recall up AND
+precision didn't collapse), THEN Fix 3 (confirm 45 unchanged).

@@ -1,0 +1,231 @@
+Two fixes for Alex Photo Report bot.
+
+## AUDIT FIRST
+
+1. Open backend/photo_report/references/references.py
+   - How are reference images loaded and labeled?
+   - What is the exact format for adding a new reference image?
+   - What metadata fields does each reference image have?
+   - How is is_shelf_ref determined?
+
+2. Open backend/photo_report/vision.py
+   - Find where _retry_category() or equivalent retry 
+     functions are defined
+   - Find the vodka retry trigger condition — paste exact code
+   - Find the cognac retry trigger condition — paste exact code
+   - Find the wine retry trigger condition — paste exact code
+   - What threshold currently triggers a retry? (only 0, 
+     or also low counts?)
+   - Paste the exact retry trigger logic for all categories
+
+3. Check backend/photo_report/references/ directory
+   - List all files currently present
+   - Confirm shelf_ref_02.jpg and shelf_ref_21.jpg exist
+
+## FIX 1 — Competitor reference images
+
+### Step 1 — Download competitor reference images
+Run this Python script to download reference images for 
+the two main competitors that cause false positives:
+
+```python
+import httpx, pathlib
+
+refs_dir = pathlib.Path("backend/photo_report/references")
+
+# Nemiroff — Ukraine's #1 vodka competitor
+# Distinctive: black/dark label, NEMIROFF text, wheat logo
+nemiroff_url = "https://nemiroff.ua/upload/iblock/nemiroff-vodka.jpg"
+
+# Villa Krim — wine competitor confused with Villa UA  
+# Distinctive: similar bottle shape to Villa UA but different label
+villakrim_url = "https://villakrim.ua/image/catalog/wine.jpg"
+
+for name, url in [("nemiroff_competitor.jpg", nemiroff_url), 
+                   ("villakrim_competitor.jpg", villakrim_url)]:
+    try:
+        r = httpx.get(url, timeout=10, follow_redirects=True)
+        if r.status_code == 200:
+            (refs_dir / name).write_bytes(r.content)
+            print(f"✅ {name} downloaded")
+        else:
+            print(f"❌ {name} failed: {r.status_code}")
+    except Exception as e:
+        print(f"❌ {name} error: {e}")
+```
+
+If download fails — report which URLs failed and I will 
+provide alternative sources. Do NOT proceed with Fix 1 
+if images cannot be downloaded.
+
+### Step 2 — Register in references.py
+Following the exact pattern used for existing references,
+add the two competitor images with these properties:
+
+```python
+{
+    "filename": "nemiroff_competitor.jpg",
+    "label": "COMPETITOR — Nemiroff vodka. DO NOT count as AVTD. "
+             "Distinctive: dark label, NEMIROFF text in large font, "
+             "wheat/grain logo. Common sizes: 0.5L, 0.7L, 1L. "
+             "This is Ukraine's largest competitor vodka brand.",
+    "category": "competitor_vodka",
+    "is_shelf_ref": False
+},
+{
+    "filename": "villakrim_competitor.jpg", 
+    "label": "COMPETITOR — Villa Krim wine. DO NOT count as AVTD. "
+             "Similar bottle shape to Villa UA but DIFFERENT brand. "
+             "Key difference: label says 'Villa Krim' NOT 'Villa UA'. "
+             "Villa UA has a medallion/coin on label. "
+             "Villa Krim does NOT have the medallion.",
+    "category": "competitor_wine", 
+    "is_shelf_ref": False
+}
+```
+
+### Step 3 — Inject into Claude API call in vision.py
+Find where product lineup references are injected into 
+the content list (the section with "REFERENCE — AVTD PRODUCTS").
+
+Add a NEW section AFTER all AVTD product refs and BEFORE 
+shelf refs:
+
+```python
+# Add this text block
+{
+    "type": "text",
+    "text": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "REFERENCE — KEY COMPETITORS TO NOT CONFUSE WITH AVTD\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "The following images show competitor brands that are "
+            "commonly confused with AVTD brands. Memorize the "
+            "differences. NEVER count these as AVTD products."
+},
+# Then inject competitor ref images using same pattern as product refs
+```
+
+Filter competitor refs from BRAND_REFERENCES using 
+category field: `r["category"].startswith("competitor_")`
+
+### Step 4 — Add differentiation note to SYSTEM_PROMPT
+Find the section in SYSTEM_PROMPT about counting rules.
+Add after the Ukrainka SKU variants paragraph:
+CRITICAL COMPETITOR CONFUSION PAIRS — study reference images:
+
+Villa Krim (COMPETITOR) vs Villa UA (OURS):
+Villa UA has a gold medallion/coin on every label.
+Villa Krim does NOT have this medallion.
+If you see "Villa Krim" text → competitor, do NOT count.
+Nemiroff (COMPETITOR) vs GreenDay/Ukrainka/Helsinki (OURS):
+Nemiroff has dark label with large NEMIROFF text and wheat logo.
+If label clearly says NEMIROFF → competitor, do NOT count.
+When in doubt on vodka shelf → check for GD logo,
+Helsinki winter landscape, or Ukrainka diamond pattern.
+
+
+## FIX 2 — Low-count retry for suspiciously low but non-zero results
+
+Currently retries only trigger when AVTD = 0.
+Add secondary retry triggers for suspiciously low counts.
+
+### Thresholds (based on expert correction data):
+
+```python
+# After existing 0-count retry logic, add:
+
+# Vodka low-count retry
+vodka_avtd = (result.get('vodka', {}).get('greenday_facings', 0) or 0) + \
+             (result.get('vodka', {}).get('ukrainka_facings', 0) or 0) + \
+             (result.get('vodka', {}).get('helsinki_facings', 0) or 0)
+vodka_total = result.get('vodka', {}).get('total_vodka_facings', 0) or 0
+vodka_share = (vodka_avtd / vodka_total * 100) if vodka_total > 5 else None
+
+if (vodka_share is not None and 
+    vodka_share < 30 and 
+    vodka_total > 5 and
+    result.get('vodka', {}).get('confidence') != 'low'):
+    logger.info(f"[PhotoReport] Vodka low-share retry: "
+                f"{vodka_avtd}/{vodka_total} = {vodka_share:.0f}%")
+    # Run focused vodka retry with all vodka refs
+    # Use existing _retry_ukrainka_helsinki pattern but 
+    # include ALL vodka refs (greenday + ukrainka + helsinki)
+
+# Cognac low-count retry  
+cognac_avtd = (result.get('cognac', {}).get('adjari_facings', 0) or 0) + \
+              (result.get('cognac', {}).get('dovbush_facings', 0) or 0) + \
+              (result.get('cognac', {}).get('jean_jack_facings', 0) or 0) + \
+              (result.get('cognac', {}).get('klinkov_facings', 0) or 0)
+cognac_total = result.get('cognac', {}).get('total_cognac_facings', 0) or 0
+cognac_share = (cognac_avtd / cognac_total * 100) if cognac_total > 5 else None
+
+if (cognac_share is not None and
+    cognac_share < 30 and
+    cognac_total > 5 and
+    result.get('cognac', {}).get('confidence') != 'low'):
+    logger.info(f"[PhotoReport] Cognac low-share retry: "
+                f"{cognac_avtd}/{cognac_total} = {cognac_share:.0f}%")
+    # Run focused cognac retry with adjari+dovbush+jeanjack refs
+
+# Wine low-count retry
+wine_avtd = (result.get('wine', {}).get('villa_ua_facings', 0) or 0) + \
+            (result.get('wine', {}).get('kristi_valley_facings', 0) or 0) + \
+            (result.get('wine', {}).get('kosher_facings', 0) or 0)
+wine_total = result.get('wine', {}).get('total_wine_facings', 0) or 0
+wine_share = (wine_avtd / wine_total * 100) if wine_total > 5 else None
+
+if (wine_share is not None and
+    wine_share < 20 and
+    wine_total > 5 and
+    result.get('wine', {}).get('confidence') != 'low'):
+    logger.info(f"[PhotoReport] Wine low-share retry: "
+                f"{wine_avtd}/{wine_total} = {wine_share:.0f}%")
+    # Run focused wine retry with villa_ua refs
+```
+
+### Retry logic for low-share:
+When low-share retry triggers:
+1. Run the existing category retry function 
+   (same as 0-count retry)
+2. If retry returns HIGHER AVTD count → use retry result
+3. If retry returns same or lower → keep original
+4. Log result as: "[PhotoReport] Low-share retry improved 
+   vodka: 25% → 61%" or "did not improve"
+
+### Important — retry budget:
+Low-share retry uses same max_tokens as category retry (1024).
+Do NOT increase max_tokens for low-share retries.
+
+### Retry ordering — place low-share checks AFTER 
+existing 0-count retries, BEFORE calculate_score() call.
+This preserves existing retry priority order:
+1. Wide-angle rejection
+2. All-zero rejection (v2_all_zero) 
+3. Vodka focused retry (GreenDay>0 but UA+HEL=0)
+4. Cognac 0-count retry
+5. Wine 0-count retry  
+6. Sparkling 0-count retry
+7. ← NEW: Vodka low-share retry (<30%, total>5)
+8. ← NEW: Cognac low-share retry (<30%, total>5)
+9. ← NEW: Wine low-share retry (<20%, total>5)
+10. calculate_score()
+
+## IMPORTANT NOTES
+
+- Fix 1 image download may fail if URLs are blocked — 
+  report back and I will provide images another way
+- Fix 2 thresholds (30% vodka, 30% cognac, 20% wine) 
+  are based on expert correction data showing AI 
+  systematically undercounts — adjust if audit shows 
+  different retry function signatures
+- Both fixes are independent — if Fix 1 image download 
+  fails, still implement Fix 2
+
+## DO NOT TOUCH
+- scoring.py
+- bot.py  
+- alex_admin.py
+- hr_rag_service.py
+- Any other bot files
+- Database schema
+- SYSTEM_PROMPT few-shot block added in previous session

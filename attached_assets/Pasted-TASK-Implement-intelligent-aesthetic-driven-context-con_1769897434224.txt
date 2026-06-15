@@ -1,0 +1,590 @@
+TASK: Implement intelligent, aesthetic-driven, context-congruent image fetching for GradusMedia
+
+OVERVIEW:
+Replace the current simple keyword matching with a sophisticated 3-stage AI system:
+1. SEMANTIC ANALYSIS - What is this article actually about?
+2. VISUAL STRATEGY - What should the photo show?
+3. AESTHETIC EXECUTION - Apply GradusMedia's visual signature
+
+CONTEXT:
+Current system has poor success rate (4-40%) and mismatches context:
+- Supermarket article → Shows boardroom ❌
+- Brand-specific article → Shows competitor products ❌
+- Generic stock photos → No premium aesthetic ❌
+
+REQUIRED: Context-congruent + aesthetically premium imagery
+
+=============================================================================
+PART 1: IMPLEMENTATION ARCHITECTURE
+=============================================================================
+
+File: backend/services/unsplash_service.py
+
+CREATE NEW FUNCTION:
+```python
+async def analyze_and_generate_queries(title: str, content: str) -> dict:
+    """
+    3-stage intelligent image query generation:
+    1. Semantic content analysis
+    2. Visual strategy determination  
+    3. Aesthetic-driven query generation
+    
+    Returns: {
+        "content_analysis": {...},
+        "visual_strategy": {...},
+        "queries": [...]
+    }
+    """
+    
+    prompt = f"""You are GradusMedia's AI photo editor. Your job: analyze articles and find PERFECT header images.
+
+GradusMedia is a premium beverage/hospitality publication with a sophisticated visual identity:
+- Dark, moody, cinematic aesthetic
+- Amber liquids, warm lighting, bokeh
+- Editorial quality (Monocle/Kinfolk style)
+- Brand-safe, context-congruent imagery
+
+===== ARTICLE TO ANALYZE =====
+
+Title: {title}
+Content: {content[:1000]}
+
+===== STAGE 1: SEMANTIC CONTENT ANALYSIS =====
+
+Read the article carefully and answer:
+
+1. WHAT IS THE ACTUAL SUBJECT?
+   - Product (specific spirit/beverage)
+   - Place (bar, restaurant, distillery, supermarket, venue)
+   - Company (business news, acquisition, appointment)
+   - Trend (market data, consumer behavior, statistics)
+   - Event (opening, festival, competition)
+   - Policy (regulation, tariffs, legislation)
+
+2. SPECIFIC ENTITIES MENTIONED
+   - Brand names: Grey Goose, Jameson, Hennessy, etc.
+   - Locations: Ukraine, London, France, Scotland, etc.
+   - Product categories: whisky, vodka, cognac, wine, beer, etc.
+   - Venues: specific bars, restaurants, supermarkets
+
+3. ARTICLE TONE/CONTEXT
+   - Celebratory (launch, opening, success)
+   - Analytical (market trends, statistics)
+   - Serious (crisis, challenges, policy)
+   - Innovative (new products, techniques)
+
+===== STAGE 2: VISUAL STRATEGY DETERMINATION =====
+
+Based on content analysis, determine the PERFECT visual approach:
+
+DECISION TREE:
+
+IF article mentions SPECIFIC BRANDS (Grey Goose, Jameson, etc.):
+→ STRATEGY: Brand-neutral scenes (glasses, ambiance, production)
+→ AVOID: Bottles with visible labels
+→ SHOW: Liquid in crystal glass, bar ambiance, distillery equipment
+
+IF article is about SPECIFIC PLACE (bar, restaurant, supermarket, venue):
+→ STRATEGY: Show that type of place
+→ FOCUS: Interior ambiance, setting atmosphere
+→ EXAMPLE: Supermarket → premium grocery interior, NOT boardroom
+
+IF article is about PRODUCT CATEGORY (whisky in general, vodka market):
+→ STRATEGY: Generic category imagery OK (no specific brands)
+→ SHOW: Category-appropriate scenes (whisky tasting, vodka cocktails)
+
+IF article is about BUSINESS/CORPORATE (acquisitions, appointments, financials):
+→ STRATEGY: Business scenes relevant to industry
+→ SHOW: Upscale bar handshake, distillery executives, elegant meeting
+→ AVOID: Generic corporate boardroom if article is about beverage industry
+
+IF article is about TRENDS/STATISTICS (market growth, consumer behavior):
+→ STRATEGY: Show the subject matter, not abstract data
+→ EXAMPLE: "Protein market grows" → protein shakes, NOT graphs
+→ EXAMPLE: "Wine consumption drops" → vineyard, NOT charts
+
+IF article is about POLICY/REGULATION (tariffs, laws, restrictions):
+→ STRATEGY: Show affected products/places, not politics
+→ EXAMPLE: "Wine tariffs" → French vineyard/bottles, NOT politicians
+→ EXAMPLE: "Bar licensing" → upscale bar interior, NOT legal docs
+
+===== STAGE 3: GRADUSMEDIA AESTHETIC EXECUTION =====
+
+Now generate 5-7 Unsplash search queries that are:
+✓ Context-congruent (match article subject exactly)
+✓ Brand-safe (no competitor products visible)
+✓ Aesthetically premium (GradusMedia visual DNA)
+
+GRADUSMEDIA VISUAL DNA (apply to EVERY query):
+
+COLOR & LIGHTING:
+- "dark background" / "moody lighting" / "dramatic"
+- "warm light" / "golden hour" / "candlelight" / "backlit"
+- "amber tones" / "golden glow" / "warm colors"
+- "bokeh" / "shallow depth of field" / "blurred background"
+
+QUALITY & STYLE:
+- "premium" / "luxury" / "elegant" / "sophisticated"
+- "cinematic" / "editorial" / "atmospheric"
+- "artisan" / "craft" / "professional"
+
+SUBJECTS (when relevant):
+- "crystal glass" / "elegant glassware" / "tumbler"
+- "upscale bar" / "luxury lounge" / "premium restaurant"
+- "copper stills" / "oak barrels" / "distillery equipment"
+
+AVOID IN QUERIES:
+- "bright" / "fluorescent" / "daylight" / "white background"
+- "office" / "corporate" / "boardroom" (unless article is actually about that)
+- "stock photo" / "generic" / "cheap"
+- Brand names in queries
+
+QUERY STRUCTURE:
+
+Query 1 (Most Specific):
+[Exact subject from article] + [aesthetic keywords] + [quality keywords]
+Example: "premium supermarket interior dark moody lighting modern"
+
+Query 2 (Specific Scene):
+[Related scene/experience] + [GradusMedia aesthetic] + [quality]
+Example: "whiskey tasting crystal glass amber liquid bokeh warm light"
+
+Query 3 (Industry Context):
+[Broader category/setting] + [moody aesthetic] + [premium quality]
+Example: "craft distillery copper stills atmospheric golden light"
+
+Query 4 (Emotional/Tonal):
+[Article tone + subject] + [cinematic aesthetic] + [sophisticated]
+Example: "luxury bar interior celebration dark ambiance elegant"
+
+Query 5 (Category Fallback):
+[General category] + [GradusMedia aesthetic] + [premium]
+Example: "premium spirits service moody bar counter bokeh"
+
+Query 6-7 (Safety Fallback):
+Ultra-generic but aesthetically on-brand
+Examples: 
+- "luxury hospitality interior dark sophisticated atmosphere"
+- "premium bar ambiance warm moody lighting cinematic"
+
+===== EXAMPLES OF CORRECT ANALYSIS =====
+
+EXAMPLE 1:
+Title: "У Києві на Троєщині деякі продуктові супермаркети працюватимуть цілодобово"
+Content: [About supermarkets staying open 24/7 during energy crisis]
+
+ANALYSIS:
+- Subject: PLACE (supermarkets)
+- Specific brands: None
+- Tone: Serious (crisis response)
+
+VISUAL STRATEGY: Show actual supermarkets, not boardrooms or offices
+
+QUERIES:
+[
+  "premium supermarket interior dark moody lighting modern sophisticated",
+  "grocery store aisle warm atmospheric lighting elegant professional",
+  "upscale market interior ambient light cinematic contemporary",
+  "food retail premium dark ambiance sophisticated design",
+  "convenience store elegant interior moody warm light",
+  "luxury retail interior dark atmospheric professional",
+  "premium hospitality retail moody lighting cinematic"
+]
+
+EXAMPLE 2:
+Title: "Grey Goose представляє Berry Rouge"
+Content: [Grey Goose launches new vodka product]
+
+ANALYSIS:
+- Subject: PRODUCT (vodka launch)
+- Specific brands: Grey Goose (AVOID showing bottles!)
+- Tone: Celebratory (product launch)
+
+VISUAL STRATEGY: Brand-neutral vodka imagery (glasses, cocktails, bar scenes)
+
+QUERIES:
+[
+  "vodka martini crystal glass dark background bokeh elegant",
+  "craft cocktail preparation moody bar warm light sophisticated",
+  "premium vodka pour crystal tumbler amber light cinematic",
+  "luxury bar counter vodka service dark ambiance bokeh",
+  "upscale cocktail lounge moody lighting elegant atmosphere",
+  "craft bartender mixing drinks warm light sophisticated",
+  "premium spirits bar dark cinematic bokeh professional"
+]
+
+EXAMPLE 3:
+Title: "Новий український бар у Лондоні подаватиме коктейлі"
+Content: [New Ukrainian bar opening in London serving cocktails]
+
+ANALYSIS:
+- Subject: PLACE (new bar opening)
+- Location: London
+- Specific brands: None mentioned
+- Tone: Celebratory (new opening)
+
+VISUAL STRATEGY: Show bar interior, cocktail service, London ambiance
+
+QUERIES:
+[
+  "london cocktail bar interior dark moody lighting sophisticated",
+  "craft cocktail bar counter warm ambient light elegant",
+  "upscale bar interior bokeh golden hour cinematic london",
+  "premium lounge dark atmosphere sophisticated modern design",
+  "luxury bar service crystal glasses warm light moody",
+  "contemporary bar interior atmospheric lighting elegant",
+  "premium cocktail bar dark ambiance sophisticated cinematic"
+]
+
+EXAMPLE 4:
+Title: "Білок продовжує залишатися однією з найшвидше зростаючих категорій"
+Content: [Protein market continues rapid growth]
+
+ANALYSIS:
+- Subject: TREND (protein market statistics)
+- Category: Protein beverages/supplements
+- Tone: Analytical (market data)
+
+VISUAL STRATEGY: Show protein products/consumption, NOT abstract business scenes
+
+QUERIES:
+[
+  "protein shake glass dark background moody fitness premium",
+  "wellness beverage elegant presentation warm light sophisticated",
+  "health drink modern aesthetic dark moody lighting professional",
+  "fitness nutrition premium dark background cinematic elegant",
+  "protein beverage sophisticated presentation moody atmospheric",
+  "health supplement elegant dark aesthetic warm light",
+  "premium wellness drink moody lighting sophisticated cinematic"
+]
+
+EXAMPLE 5:
+Title: "США погрожують Франції 200% митом на вина"
+Content: [US threatens 200% tariffs on French wines]
+
+ANALYSIS:
+- Subject: POLICY (wine tariffs)
+- Location: France
+- Product: Wine
+- Tone: Serious (trade conflict)
+
+VISUAL STRATEGY: Show French wine/vineyard, NOT politics or meetings
+
+QUERIES:
+[
+  "french wine bottles vineyard dark moody lighting premium",
+  "burgundy wine cellar atmospheric warm light sophisticated",
+  "wine barrel cellar france moody ambient light cinematic",
+  "premium wine glass dark background bokeh elegant french",
+  "vineyard france atmospheric golden light sophisticated",
+  "french winery cellar dark moody professional cinematic",
+  "luxury wine tasting dark ambiance warm light elegant"
+]
+
+===== OUTPUT FORMAT =====
+
+Return ONLY a JSON object (no markdown, no explanation):
+
+{
+  "content_analysis": {
+    "subject_type": "place/product/company/trend/event/policy",
+    "specific_subject": "supermarket/bar/vodka/etc",
+    "brands_mentioned": ["Brand1"] or [],
+    "locations": ["London", "France"] or [],
+    "product_category": "whisky/vodka/wine/etc" or null,
+    "tone": "celebratory/analytical/serious/innovative"
+  },
+  "visual_strategy": {
+    "approach": "brand-neutral-scenes/place-specific/category-generic/business-context",
+    "show": "what to show in the image",
+    "avoid": "what to avoid showing",
+    "reasoning": "why this strategy fits the article"
+  },
+  "queries": [
+    "query1 with aesthetic keywords",
+    "query2 with aesthetic keywords",
+    "query3 with aesthetic keywords",
+    "query4 with aesthetic keywords",
+    "query5 with aesthetic keywords",
+    "query6 fallback",
+    "query7 fallback"
+  ]
+}
+
+===== CRITICAL VERIFICATION CHECKLIST =====
+
+Before returning queries, verify:
+□ Does Query 1 match the ACTUAL subject? (supermarket → supermarket, NOT boardroom)
+□ If brands mentioned, are queries brand-neutral? (no "Grey Goose bottle")
+□ Does EVERY query include aesthetic keywords? (dark/moody/bokeh/warm/elegant)
+□ Are queries context-congruent? (wine tariff → vineyard, NOT politics)
+□ Do queries avoid trashy stock aesthetic? (premium/sophisticated/cinematic)
+□ Are quality keywords present? (luxury/elegant/premium/sophisticated)
+
+Generate the perfect queries now.
+"""
+
+    # Call Claude Haiku with comprehensive prompt
+    response = await anthropic_client.messages.create(
+        model="claude-haiku-4-20250514",
+        max_tokens=1000,
+        temperature=0.3,  # Lower temperature for consistency
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    result = json.loads(response.content[0].text)
+    return result
+```
+
+=============================================================================
+PART 2: UPDATE IMAGE SEARCH FUNCTION
+=============================================================================
+```python
+async def fetch_unsplash_images_smart(title: str, content: str, limit: int = 5) -> list:
+    """
+    Intelligent image search using 3-stage AI analysis
+    """
+    
+    try:
+        # Stage 1-3: AI analysis + query generation
+        analysis = await analyze_and_generate_queries(title, content)
+        
+        queries = analysis['queries']
+        
+        # Log analysis for debugging
+        logger.info(f"Content Analysis: {analysis['content_analysis']}")
+        logger.info(f"Visual Strategy: {analysis['visual_strategy']}")
+        logger.info(f"Generated Queries: {queries}")
+        
+    except Exception as e:
+        logger.error(f"AI analysis failed: {e}")
+        # Fallback to old keyword system
+        queries = current_keyword_extraction(title, content)
+    
+    # Search Unsplash with AI-generated queries
+    images = []
+    seen_ids = set()
+    
+    for query in queries:
+        if len(images) >= limit:
+            break
+            
+        try:
+            results = await unsplash_api.search(
+                query=query,
+                orientation="landscape",
+                content_filter="high",
+                color="black_and_white,yellow,orange",  # Dark + warm tones
+                per_page=10
+            )
+            
+            for img in results:
+                if img['id'] in seen_ids:
+                    continue
+                    
+                # Apply aesthetic scoring
+                score = calculate_aesthetic_score(img)
+                
+                if score >= 5:  # Minimum aesthetic threshold
+                    img['aesthetic_score'] = score
+                    img['query_used'] = query
+                    images.append(img)
+                    seen_ids.add(img['id'])
+                    
+                if len(images) >= limit:
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Unsplash search failed for '{query}': {e}")
+            continue
+    
+    # Sort by aesthetic score + likes
+    images.sort(key=lambda x: (x['aesthetic_score'], x['likes']), reverse=True)
+    
+    return images
+
+def calculate_aesthetic_score(image: dict) -> int:
+    """
+    Score image based on GradusMedia aesthetic criteria
+    """
+    description = (image.get('description', '') + ' ' + 
+                   image.get('alt_description', '')).lower()
+    
+    score = 0
+    
+    # Positive aesthetic indicators
+    if any(word in description for word in ['dark', 'moody', 'dramatic', 'noir']):
+        score += 3
+    if any(word in description for word in ['bokeh', 'blur', 'depth of field', 'shallow']):
+        score += 3
+    if any(word in description for word in ['warm', 'golden', 'amber', 'glow', 'candlelight']):
+        score += 2
+    if any(word in description for word in ['glass', 'crystal', 'tumbler', 'snifter']):
+        score += 2
+    if any(word in description for word in ['bar', 'restaurant', 'lounge', 'pub', 'distillery']):
+        score += 2
+    if any(word in description for word in ['luxury', 'premium', 'elegant', 'sophisticated', 'upscale']):
+        score += 1
+    if any(word in description for word in ['cinematic', 'atmospheric', 'editorial']):
+        score += 2
+    
+    # Negative indicators
+    if any(word in description for word in ['bright', 'fluorescent', 'daylight', 'sunny']):
+        score -= 3
+    if any(word in description for word in ['office', 'boardroom', 'corporate', 'cubicle']):
+        score -= 3
+    if any(word in description for word in ['generic', 'stock', 'template']):
+        score -= 2
+    
+    # Like count bonus (quality indicator)
+    if image['likes'] > 2000:
+        score += 2
+    elif image['likes'] > 1000:
+        score += 1
+    
+    return score
+```
+
+=============================================================================
+PART 3: UPDATE MIGRATION ENDPOINT
+=============================================================================
+```python
+@router.post("/articles/{article_id}/fetch-image")
+async def fetch_new_image_smart(article_id: int):
+    """
+    Fetch image using intelligent 3-stage AI analysis
+    """
+    article = await db.get_article(article_id)
+    
+    # Use new smart search
+    images = await fetch_unsplash_images_smart(
+        title=article.title,
+        content=article.content,
+        limit=5
+    )
+    
+    if not images:
+        raise HTTPException(404, "No suitable images found")
+    
+    # Use best match (highest aesthetic score)
+    best_image = images[0]
+    
+    # Update article
+    await db.update_article_image(
+        article_id=article_id,
+        image_url=best_image['url'],
+        image_photographer=best_image['photographer'],
+        image_credit=f"Photo by {best_image['photographer']} on Unsplash",
+        image_credit_url=best_image['photographer_url'],
+        unsplash_image_id=best_image['id']
+    )
+    
+    # Trigger download for attribution
+    trigger_download(best_image['download_url'])
+    
+    # Return analysis + options for transparency
+    return {
+        "success": True,
+        "applied_image": best_image,
+        "aesthetic_score": best_image['aesthetic_score'],
+        "query_used": best_image['query_used'],
+        "all_options": images  # For future image picker feature
+    }
+```
+
+=============================================================================
+PART 4: UPDATE SCHEDULER
+=============================================================================
+```python
+# In scheduler.py, replace old unsplash call with:
+
+images = await fetch_unsplash_images_smart(
+    title=article.title,
+    content=article.content,
+    limit=1
+)
+```
+
+=============================================================================
+PART 5: TESTING & VALIDATION
+=============================================================================
+
+After deployment, test with these specific articles:
+
+TEST 1 - Supermarket Article:
+Title: "У Києві на Троєщині деякі продуктові супермаркети"
+Expected: Supermarket interior (NOT boardroom)
+Aesthetic: Dark retail space, warm lighting
+
+TEST 2 - Brand-Specific Article:
+Title: "Grey Goose представляє Berry Rouge"
+Expected: Vodka glass/cocktail (NOT branded bottle)
+Aesthetic: Crystal glass, bokeh, amber liquid
+
+TEST 3 - Bar Opening:
+Title: "Новий український бар у Лондоні"
+Expected: Bar interior (NOT generic)
+Aesthetic: Dark moody bar, warm light, sophisticated
+
+TEST 4 - Market Trend:
+Title: "Білок продовжує залишатися однією з найшвидше зростаючих"
+Expected: Protein shake/wellness (NOT business meeting)
+Aesthetic: Modern fitness aesthetic, dark background
+
+TEST 5 - Policy Article:
+Title: "США погрожують Франції 200% митом на вина"
+Expected: French vineyard/wine (NOT politics/boardroom)
+Aesthetic: Vineyard ambiance, wine cellar, moody
+
+=============================================================================
+EXPECTED OUTCOMES
+=============================================================================
+
+BEFORE (Current System):
+- Success rate: 4-40%
+- Context mismatches: Supermarket → boardroom
+- Brand conflicts: Article about Jameson → shows Johnnie Walker
+- Aesthetic: Generic stock photos, bright, corporate
+
+AFTER (Intelligent System):
+- Success rate: 80%+
+- Context congruence: Supermarket → supermarket interior
+- Brand safety: Brand articles → neutral scenes (glasses, ambiance)
+- Aesthetic: Premium, dark, moody, bokeh, cinematic
+
+COST ANALYSIS:
+- Claude Haiku per article: ~$0.001
+- Previous DALL-E cost: $0.04
+- Net savings: $0.039 per article
+- Quality improvement: Immeasurable
+
+=============================================================================
+DEPLOYMENT CHECKLIST
+=============================================================================
+
+□ Implement analyze_and_generate_queries() function
+□ Implement calculate_aesthetic_score() function
+□ Update fetch_unsplash_images_smart() function
+□ Update migration endpoint to use smart search
+□ Update scheduler to use smart search
+□ Add comprehensive logging for debugging
+□ Test with 5 different article types
+□ Verify aesthetic scores make sense
+□ Check brand safety working correctly
+□ Verify context congruence (subject matches image)
+□ Deploy to production
+□ Run migration on remaining 81 DALL-E articles
+□ Monitor success rate (expect 80%+)
+□ Check Anthropic API costs (~$0.08 for full migration)
+
+BEGIN IMPLEMENTATION NOW.
+
+This is the comprehensive solution that combines:
+✓ Semantic content analysis
+✓ Visual strategy determination
+✓ GradusMedia aesthetic enforcement
+✓ Brand safety
+✓ Context congruence
+✓ Quality scoring
+
+The result: Publication-quality imagery that matches article context perfectly while maintaining GradusMedia's premium, sophisticated visual identity.

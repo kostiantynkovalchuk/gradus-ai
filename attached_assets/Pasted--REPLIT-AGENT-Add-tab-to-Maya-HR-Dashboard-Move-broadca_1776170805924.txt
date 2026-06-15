@@ -1,0 +1,149 @@
+# REPLIT AGENT — Add "Розсилка" tab to Maya HR Dashboard
+## Move broadcast/survey content out of "Пульс команди" into dedicated tab
+
+---
+
+## CONFIRMED CONTEXT
+
+- Dashboard file: `backend/templates/hr_dashboard.html` (or similar — find it)
+- Current tabs: Аналітика | Maya Hunt | 💛 Пульс команди
+- Survey card ("🐣 Опитування: Вихідний 13/04") is currently inside Пульс команди tab
+- Existing API endpoint: `GET /api/hr/broadcasts` → returns hr_broadcast_log
+- Existing table: `hr_broadcast_log` (migration 031)
+- Existing table: `hr_surveys` + `hr_survey_votes` + `hr_survey_meta`
+
+---
+
+## YOUR TASK
+
+Add a 4th tab "📋 Розсилка" to the HR dashboard and move all broadcast/survey
+content there. Do NOT change any backend logic, routes, or DB — frontend only.
+
+---
+
+## STEP 0 — AUDIT FIRST, CODE SECOND
+
+Before changing anything, read and report:
+
+1. The dashboard HTML file — exact file path
+2. How tabs are implemented — CSS classes, JS switching logic, data-tab attributes
+3. Where the survey card div starts and ends (find the element with "Опитування" text)
+4. Where the broadcast history section is (if it exists in the HTML already)
+5. What JS functions load survey data and broadcast history
+   (loadSurveyResults / loadBroadcasts / etc.)
+6. Confirm `/api/hr/broadcasts` returns data — check the route exists in hr_routes.py or hr_admin.py
+
+Report findings, then proceed.
+
+---
+
+## STEP 1 — ADD THE NEW TAB BUTTON
+
+Find the tab navigation bar. It currently has:
+```
+[📊 Аналітика] [🔍 Maya Hunt] [💛 Пульс команди]
+```
+
+Add a 4th tab immediately after Пульс команди:
+```
+[📊 Аналітика] [🔍 Maya Hunt] [💛 Пульс команди] [📋 Розсилка]
+```
+
+Match the EXACT same HTML structure, CSS classes, and data attributes
+as the existing tabs. Do not invent new patterns.
+
+---
+
+## STEP 2 — CREATE THE РОЗСИЛКА TAB CONTENT PANEL
+
+Add a new tab panel div with the same show/hide pattern as existing panels.
+
+It should contain TWO sections:
+
+### Section A — Active Survey Card
+Move (cut, not copy) the entire survey card div from "Пульс команди"
+into this new panel. This is the card that shows:
+- Survey title (🐣 Опитування: Вихідний 13/04)
+- Так / Ні vote counts and percentages
+- Progress bars
+- Оновити / Закрити buttons
+
+### Section B — Broadcast History Table
+Below the survey card, add a broadcast history section:
+
+```
+📤 Історія розсилок
+
+[table]
+Час | Тип | Зміст | Надіслано | Статус
+----+-----+-------+-----------+-------
+data from /api/hr/broadcasts
+[/table]
+```
+
+Table columns:
+- Час — formatted as DD.MM.YYYY HH:mm (Kyiv time)
+- Тип — content_type field
+- Зміст — content_preview, truncated to 60 chars
+- Надіслано — "sent_count / recipient_count"
+- Статус — map to emoji: completed→✅, cancelled→❌, pending→⏳, sending→📤
+
+If `/api/hr/broadcasts` returns empty array, show:
+"Розсилок ще не було"
+
+---
+
+## STEP 3 — UPDATE ПУЛЬС КОМАНДИ TAB
+
+After moving the survey card to Розсилка tab, Пульс команди should contain
+ONLY the KPI cards at the bottom:
+- 33.6% Охоплення опитуванням
+- 2.38/3 Середня оцінка (місяць)
+- 1 Тригерів за 30 днів
+- 72/214 Відповідей цього місяця
+
+If Пульс команди becomes empty after the move, add a placeholder:
+```
+<p style="color: #888; text-align: center; padding: 40px 0;">
+  Активних опитувань немає. Нові опитування з'являться тут автоматично.
+</p>
+```
+
+---
+
+## STEP 4 — UPDATE JS LOADING LOGIC
+
+The survey card and broadcast table need their data loaded when
+the Розсилка tab is opened, not on page load.
+
+Find how other tabs lazy-load their data (check Maya Hunt tab for example).
+Apply the same pattern:
+- Load broadcast history when Розсилка tab is clicked
+- Auto-refresh every 30 seconds while Розсилка tab is active
+- Stop refresh when switching away from Розсилка tab
+
+If the existing survey loading (loadSurveyResults or similar) is called
+on page load, move it to fire on Розсилка tab activation instead.
+
+---
+
+## STEP 5 — VERIFY
+
+After changes:
+1. All 4 tabs visible in navigation
+2. Clicking Розсилка shows survey card + broadcast table
+3. Пульс команди no longer shows the survey card
+4. Broadcast table calls /api/hr/broadcasts and renders rows
+5. No JS errors in browser console
+6. Tab switching works without page reload
+
+---
+
+## CONSTRAINTS
+
+- Frontend changes ONLY — no backend, no migrations, no new routes
+- Match existing CSS/design exactly — do not introduce new styles
+- Do not break existing tab switching logic
+- Do not remove or rename any existing JS functions — only move call sites
+- If /api/hr/broadcasts endpoint does not exist in backend, STOP and report —
+  do not create it (backend is out of scope for this task)

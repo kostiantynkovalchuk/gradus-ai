@@ -1,0 +1,764 @@
+REPLIT AGENT PROMPT — Alex Photo Report Bot
+Copy-paste this entire prompt into Replit Agent
+
+Build a new Telegram bot called "Alex Photo Report" inside the existing gradus-ai project.
+This is a merchandising verification bot for AVTD trade agents. 
+It must be completely separate from the Maya HR bot — separate bot token, separate routes, 
+separate DB tables, but same Render deployment.
+
+---
+
+## ARCHITECTURE OVERVIEW
+
+- Telegram Bot: python-telegram-bot (same version as Maya HR)
+- Vision AI: Claude claude-sonnet-4-20250514 via Anthropic API (already configured)
+- Database: Neon PostgreSQL (existing connection) — add new tables
+- Deployment: Render (existing gradus-ai service)
+- Language: Ukrainian for all user-facing text
+
+---
+
+## STEP 1 — DATABASE MIGRATION
+
+Create migration file: `backend/migrations/photo_report_001.py`
+
+Add to the automated migration system (db_migrations.py) as migration ID 018.
+
+SQL to execute:
+```sql
+-- Trade agents registry
+CREATE TABLE IF NOT EXISTS photo_agents (
+    id SERIAL PRIMARY KEY,
+    telegram_id BIGINT UNIQUE NOT NULL,
+    full_name VARCHAR(200),
+    region VARCHAR(100),
+    role VARCHAR(20) DEFAULT 'agent' CHECK (role IN ('agent', 'supervisor', 'admin')),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Photo reports
+CREATE TABLE IF NOT EXISTS photo_reports (
+    id SERIAL PRIMARY KEY,
+    agent_id BIGINT REFERENCES photo_agents(telegram_id),
+    trade_point_name VARCHAR(300),
+    trade_point_type VARCHAR(20) CHECK (trade_point_type IN ('retail', 'horeca', 'unknown')),
+    region VARCHAR(100),
+    score INTEGER,
+    passed BOOLEAN,
+    errors JSONB DEFAULT '[]',
+    shelf_share JSONB DEFAULT '{}',
+    brands_found JSONB DEFAULT '{}',
+    raw_ai_response JSONB,
+    photo_count INTEGER DEFAULT 0,
+    has_gps BOOLEAN DEFAULT false,
+    no_license_comment BOOLEAN DEFAULT false,
+    agent_comment TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Individual photos per report
+CREATE TABLE IF NOT EXISTS photo_report_images (
+    id SERIAL PRIMARY KEY,
+    report_id INTEGER REFERENCES photo_reports(id) ON DELETE CASCADE,
+    file_id VARCHAR(200),
+    sequence_number INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_photo_reports_agent ON photo_reports(agent_id);
+CREATE INDEX IF NOT EXISTS idx_photo_reports_date ON photo_reports(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_photo_reports_passed ON photo_reports(passed);
+```
+
+---
+
+## STEP 2 — ENVIRONMENT VARIABLES
+
+Add to Render environment (do NOT hardcode):
+PHOTO_REPORT_BOT_TOKEN=<will be provided separately>
+
+All other vars (ANTHROPIC_API_KEY, DATABASE_URL) already exist.
+
+---
+
+## STEP 3 — FILE STRUCTURE
+
+Create these files:
+backend/
+photo_report/
+init.py
+bot.py           # Main bot logic
+vision.py        # Claude Vision API call
+formatter.py     # JSON → Telegram message formatter
+keyboards.py     # Telegram keyboards
+db.py            # Database operations
+routes/
+photo_report_webhook.py   # FastAPI webhook endpoint
+
+---
+
+## STEP 4 — VISION MODULE (backend/photo_report/vision.py)
+```python
+import anthropic
+import base64
+import json
+import os
+from typing import Optional
+
+SYSTEM_PROMPT = """Ти — AI-аналітик мерчандайзингу компанії AVTD (Торговий Дім АВ).
+Твоє завдання — аналізувати фотографії торгових точок і перевіряти відповідність 
+стандартам МЧ та ДП. Відповідай виключно на українській мові.
+Поверни ВИКЛЮЧНО валідний JSON без будь-якого тексту до або після.
+
+## КРОК 1 — ПЕРЕВІРКА ЯКОСТІ ФОТО
+
+ВІДХИЛИТИ якщо:
+- Фото темне/розмите — неможливо прочитати етикетки → помилка 3_24633
+- Фото з монітора/екрану телефону → помилка 1_39426
+- Відсутній загальний огляд всіх полиць (лівий+центр+правий край) → помилка NP59_200009734
+Відсутність загального огляду — помилка БЕЗ права на виправлення.
+Максимум 5 фото. Аналізуй всі фото РАЗОМ і роби єдиний висновок.
+
+## КРОК 2 — ВИЗНАЧЕННЯ ТИПУ ТОРГОВОЇ ТОЧКИ
+RETAIL (магазин/супермаркет/кіоск/АЗС) або HORECA (бар/ресторан/кафе)
+
+## КРОК 3 — ІДЕНТИФІКАЦІЯ БРЕНДІВ AVTD
+
+ГОРІЛКА GREENDAY — два типи пляшок:
+
+CLASSIC-ФОРМА (квадратна з гранями, вертикальний дизайн):
+- Classic: зелена етикетка, напис "CLASSIC GD"
+- Crystal: ЧОРНА етикетка, логотип смарагду, чорна кришка з GD
+- Air: СИНЯ етикетка, напис "AIR"
+- Original Life: біло-зелена етикетка, напис "ORIGINAL LIFE"
+- Ultra Soft: БІЛА етикетка, напис "ULTRA SOFT"
+- Organic Life: зелена етикетка, еко-сертифікат "UA-ORGANIC-001"
+- Lemon: ЖОВТА пляшка/рідина та етикетка, зображення лимону
+- Green Tea: темно-зелена етикетка, зображення листків чаю
+- Hot Spices: ЧЕРВОНА етикетка, зображення зелених перців халапеньйо
+- Power: КАМУФЛЯЖНА зелена етикетка, напис "POWER"
+Кришка: срібна/сіра (500/700ml), біла (200ml), чорна тільки Crystal
+
+DISCOVERY/EVOLUTION-ФОРМА (округла знизу, широка основа):
+КЛЮЧОВІ ОЗНАКИ: напис "GREENDAY EVOLUTION" по дну + чорна кришка + зелене кільце
+- Discovery: біла/срібляста етикетка, мотив компасу
+- Evolution: ЧОРНА етикетка, мотив дерева/нейронної мережі
+- Planet: ТЕМНО-СИНЯ етикетка, мотив Землі
+- Salted Caramel: КОРИЧНЕВА етикетка, фото карамелі
+- Citrus: ЖОВТА-ПОМАРАНЧЕВА етикетка, фото апельсину
+Обсяги: 500ml та 750ml
+
+ОБСЯГИ Classic-форми: 0.1L / 0.2L / 0.375L / 0.5L / 0.7L / 1.0L
+ОБОВ'ЯЗКОВИЙ порядок виставлення: малий → великий
+
+GD Evolution/Planet/Discovery + HELSINKI → в "елітній" секції (поруч з віскі/ромом)
+якщо вона існує. GD Evolution/Planet/Discovery ОБОВ'ЯЗКОВО на ВЕРХНІЙ полиці серед імпортних.
+
+ІНШІ БРЕНДИ AVTD:
+- ГОРІЛКА: HELSINKI, UKRAINKA, HLIBNY DAR, OXYGEN, CELSIUS
+- КОНЬЯК: ADJARI (3*/5*/2.0), AZNAURI, DOVBUSH, KLINKOV, ADAMYAN, ALIKO, KOBLEVO VS
+- ВИНО: VILLA UA (порядок: класична→мускатна→рислінг→апетит→авторська→арт; біле→червоне)
+         DIDI LARI (поруч з грузинськими Az... брендами)
+         VIAGGIO, KRISTI VALLEY, PEDRO MARTINEZ
+- Pina Colada ЗАВЖДИ поруч з Bellini Pati
+
+НЕ ПЛУТАТИ з конкурентами: Nemiroff, Хортиця, Finlandia, Absolut, Villa Krim≠Villa UA
+
+## КРОК 4 — ПЕРЕВІРКА МЧ
+
+ЗАГАЛЬНІ ПРАВИЛА:
+1. Якщо конкурент має шелфстрипер+цінник → наш ОБОВ'ЯЗКОВИЙ. Відсутність = AUTO_FAIL [1_108106]
+2. Кожна пляшка повинна мати цінник
+3. Нижня полиця ЗАБОРОНЕНА (якщо тільки вся категорія там) [1_108750]
+4. Видимість пляшки >50% (ялинкою/herringbone дозволено)
+5. Блок бренду не переривати (1L/1.5L та преміум — виняток)
+6. До 2 помилок = ПРОЙДЕНО. Два однотипні в одному бренді = 1 помилка
+
+ВНУТРІШНІ ПРАВИЛА (НЕ помилка якщо конкуренти так само):
+горілка по об'єму, вино по кольору, товар по ціновій категорії
+
+СТАНДАРТ АЗС: "золота" (очі) або "срібна" (руки) полиця. Якщо низькі — верхня полиця.
+
+## КРОК 5 — ЧАСТКА ПОЛИЦІ
+
+RETAIL (потрібно 10+ SKU AVTD):
+- ГОРІЛКА ≥25%: рахувати Hot Spices, Lemon, Zubrivka; НЕ рахувати ягідні лікери, бальзами
+- ВИНО ≥40%: НЕ рахувати фруктові вина, тетрапак, вермут, box-wine, грузинські вина
+- КОНЬЯК ≥33%
+- ІГРИСТЕ ≥20% від українського АБО 4 SKU
+- Підполиці виключати. Порожні місця НЕ наші. Провал в 1 категорії = провал звіту [1_108608]
+
+HORECA (тільки якщо МЧ пройдено):
+- ВИНО/КОНЬЯК/ГОРІЛКА ≥25% від вітчизняних (джерело: тільки меню!)
+- Грузинські коньяки виключати. Villa Krim замість Villa UA → [NP50_710]
+- Обов'язково 1 SKU Villa UA ігристого якщо є українське ігристе
+
+Якщо агент написав "без ліцензії" → рахувати тільки наші позиції.
+
+## КРОК 6 — ВІДПОВІДЬ
+
+Поверни ТІЛЬКИ цей JSON:
+{
+  "trade_point_type": "retail|horeca",
+  "score": 0-100,
+  "passed": true|false,
+  "photo_quality": {
+    "has_overview": true|false,
+    "has_gps": true|false,
+    "photo_count": 1,
+    "quality_issues": []
+  },
+  "errors": [
+    {"code": "код", "description": "опис", "brand": "бренд", "severity": "auto_fail|standard"}
+  ],
+  "shelf_share": {
+    "vodka": {"our_facings": 0, "total_facings": 0, "percent": 0, "threshold": 25, "passed": true},
+    "wine": {"our_facings": 0, "total_facings": 0, "percent": 0, "threshold": 40, "passed": true},
+    "cognac": {"our_facings": 0, "total_facings": 0, "percent": 0, "threshold": 33, "passed": true},
+    "sparkling": {"our_facings": 0, "total_facings": 0, "percent": 0, "threshold": 20, "passed": true}
+  },
+  "brands_found": {
+    "greenday_classic": [],
+    "greenday_evolution_line": [],
+    "helsinki": false,
+    "ukrainka": false,
+    "villa_ua": false,
+    "didi_lari": false,
+    "adjari": false,
+    "dovbush": false
+  },
+  "elite_shelf_check": {
+    "elite_section_exists": false,
+    "gd_evolution_on_top": false,
+    "helsinki_in_elite": false
+  },
+  "volume_order_check": {"correct_order": true, "details": ""},
+  "pos_materials": {
+    "competitor_has_pos": false,
+    "our_pos_required": false,
+    "our_pos_present": false
+  },
+  "internal_store_rules": [],
+  "notes": ""
+}
+
+ПІДРАХУНОК БАЛІВ: старт 100. Кожна помилка: -10. auto_fail: -25. 
+Провал частки: -15 за категорію. Відсутність огляду: -20.
+passed = score≥70 І errors≤2 І немає auto_fail"""
+
+
+async def analyze_photos(photo_b64_list: list[str], agent_comment: str = "") -> dict:
+    """
+    Send up to 5 photos to Claude Vision for merchandising analysis.
+    Returns parsed JSON report.
+    """
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    
+    content = []
+    
+    # Add all photos
+    for b64 in photo_b64_list[:5]:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}
+        })
+    
+    # Add analysis request
+    user_text = "Проаналізуй ці фотографії торгової точки згідно стандартів МЧ AVTD."
+    if agent_comment:
+        user_text += f"\nКоментар агента: {agent_comment}"
+    user_text += "\nПоверни тільки JSON."
+    
+    content.append({"type": "text", "text": user_text})
+    
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2000,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": content}]
+    )
+    
+    raw_text = response.content[0].text.strip()
+    
+    # Strip markdown fences if present
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+    
+    return json.loads(raw_text)
+```
+
+---
+
+## STEP 5 — FORMATTER (backend/photo_report/formatter.py)
+```python
+def format_report_for_telegram(report: dict, agent_name: str, point_name: str) -> str:
+    score = report.get("score", 0)
+    passed = report.get("passed", False)
+    errors = report.get("errors", [])
+    share = report.get("shelf_share", {})
+    elite = report.get("elite_shelf_check", {})
+    
+    status_icon = "✅" if passed else "❌"
+    status_text = "ПРОЙДЕНО" if passed else "НЕ ПРОЙДЕНО"
+    
+    lines = [
+        f"📊 *Звіт: {point_name}*",
+        f"👤 {agent_name}",
+        f"{status_icon} *{status_text} — {score}/100*",
+        ""
+    ]
+    
+    if errors:
+        lines.append(f"❌ *Помилки ({len(errors)}):*")
+        for e in errors:
+            prefix = "🚫" if e.get("severity") == "auto_fail" else "⚠️"
+            brand = f" ({e['brand']})" if e.get("brand") else ""
+            lines.append(f"{prefix} {e['description']}{brand} `[{e['code']}]`")
+        lines.append("")
+    
+    # Shelf share
+    cat_names = {"vodka": "Горілка", "wine": "Вино", "cognac": "Коньяк", "sparkling": "Ігристе"}
+    share_lines = []
+    for cat, data in share.items():
+        if data.get("total_facings", 0) > 0:
+            icon = "✅" if data.get("passed") else "❌"
+            share_lines.append(
+                f"{icon} {cat_names.get(cat, cat)}: {data.get('percent', 0)}% "
+                f"(норма ≥{data.get('threshold', 0)}%)"
+            )
+    if share_lines:
+        lines.append("📈 *Доля полки:*")
+        lines.extend(share_lines)
+        lines.append("")
+    
+    # Elite shelf
+    if elite.get("elite_section_exists"):
+        ev_icon = "✅" if elite.get("gd_evolution_on_top") else "❌"
+        lines.append(f"{ev_icon} Evolution/Planet/Discovery на елітній полиці")
+    
+    if report.get("notes"):
+        lines.append(f"\n💬 _{report['notes']}_")
+    
+    return "\n".join(lines)
+```
+
+---
+
+## STEP 6 — DATABASE OPERATIONS (backend/photo_report/db.py)
+```python
+from sqlalchemy import text
+from backend.database import get_db_session  # use existing session factory
+
+async def get_or_create_agent(telegram_id: int, full_name: str) -> dict:
+    async with get_db_session() as session:
+        result = await session.execute(
+            text("SELECT * FROM photo_agents WHERE telegram_id = :tid"),
+            {"tid": telegram_id}
+        )
+        agent = result.mappings().first()
+        if not agent:
+            await session.execute(
+                text("""INSERT INTO photo_agents (telegram_id, full_name, role) 
+                        VALUES (:tid, :name, 'agent')"""),
+                {"tid": telegram_id, "name": full_name}
+            )
+            await session.commit()
+            result = await session.execute(
+                text("SELECT * FROM photo_agents WHERE telegram_id = :tid"),
+                {"tid": telegram_id}
+            )
+            agent = result.mappings().first()
+        return dict(agent)
+
+async def save_report(agent_id: int, point_name: str, report: dict, 
+                      photo_file_ids: list, comment: str) -> int:
+    async with get_db_session() as session:
+        result = await session.execute(
+            text("""INSERT INTO photo_reports 
+                    (agent_id, trade_point_name, trade_point_type, score, passed,
+                     errors, shelf_share, brands_found, raw_ai_response, 
+                     photo_count, has_gps, agent_comment)
+                    VALUES (:agent_id, :name, :tp_type, :score, :passed,
+                            :errors::jsonb, :share::jsonb, :brands::jsonb, 
+                            :raw::jsonb, :count, :gps, :comment)
+                    RETURNING id"""),
+            {
+                "agent_id": agent_id,
+                "name": point_name,
+                "tp_type": report.get("trade_point_type", "unknown"),
+                "score": report.get("score", 0),
+                "passed": report.get("passed", False),
+                "errors": json.dumps(report.get("errors", []), ensure_ascii=False),
+                "share": json.dumps(report.get("shelf_share", {}), ensure_ascii=False),
+                "brands": json.dumps(report.get("brands_found", {}), ensure_ascii=False),
+                "raw": json.dumps(report, ensure_ascii=False),
+                "count": len(photo_file_ids),
+                "gps": report.get("photo_quality", {}).get("has_gps", False),
+                "comment": comment
+            }
+        )
+        report_id = result.scalar()
+        
+        for i, file_id in enumerate(photo_file_ids):
+            await session.execute(
+                text("""INSERT INTO photo_report_images (report_id, file_id, sequence_number)
+                        VALUES (:rid, :fid, :seq)"""),
+                {"rid": report_id, "fid": file_id, "seq": i + 1}
+            )
+        await session.commit()
+        return report_id
+
+async def get_agent_stats(telegram_id: int) -> dict:
+    async with get_db_session() as session:
+        result = await session.execute(
+            text("""SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN passed THEN 1 ELSE 0 END) as passed_count,
+                    ROUND(AVG(score), 1) as avg_score
+                    FROM photo_reports WHERE agent_id = :tid
+                    AND created_at > NOW() - INTERVAL '30 days'"""),
+            {"tid": telegram_id}
+        )
+        return dict(result.mappings().first())
+```
+
+---
+
+## STEP 7 — MAIN BOT LOGIC (backend/photo_report/bot.py)
+```python
+import io
+import base64
+import asyncio
+import logging
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, 
+    ConversationHandler, filters, ContextTypes
+)
+from .vision import analyze_photos
+from .formatter import format_report_for_telegram
+from .db import get_or_create_agent, save_report, get_agent_stats
+import os
+
+logger = logging.getLogger(__name__)
+
+# Conversation states
+WAITING_POINT_NAME = 1
+WAITING_PHOTOS = 2
+WAITING_CONFIRM = 3
+
+# Store pending reports in memory (per user)
+pending_reports = {}
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await get_or_create_agent(user.id, user.full_name)
+    
+    keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("📸 Новий звіт")], [KeyboardButton("📊 Моя статистика")]],
+        resize_keyboard=True
+    )
+    await update.message.reply_text(
+        f"Привіт, {user.first_name}! 👋\n\n"
+        "Я — Alex Photo Report. Перевіряю виставлення товарів AVTD.\n\n"
+        "Натисни *📸 Новий звіт* щоб почати.",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+
+async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📍 *Новий звіт*\n\n"
+        "Напиши назву торгової точки:\n"
+        "_(наприклад: АТБ Хрещатик або Кафе Ромашка)_",
+        parse_mode="Markdown"
+    )
+    return WAITING_POINT_NAME
+
+
+async def receive_point_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    point_name = update.message.text.strip()
+    
+    pending_reports[user_id] = {
+        "point_name": point_name,
+        "photos_b64": [],
+        "photo_file_ids": [],
+        "comment": ""
+    }
+    
+    await update.message.reply_text(
+        f"✅ Точка: *{point_name}*\n\n"
+        "📸 Надішли фотографії (до 5 штук).\n\n"
+        "⚠️ *Обов'язково:* загальний огляд всіх полиць!\n\n"
+        "Коли завантажиш всі фото — натисни *Готово* або напиши коментар "
+        "(напр: 'без ліцензії', 'дефіцит центрального складу').",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(
+            [["✅ Готово", "❌ Скасувати"]],
+            resize_keyboard=True
+        )
+    )
+    return WAITING_PHOTOS
+
+
+async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    if user_id not in pending_reports:
+        await update.message.reply_text("Спочатку почни новий звіт: /start")
+        return WAITING_PHOTOS
+    
+    report_data = pending_reports[user_id]
+    
+    if len(report_data["photos_b64"]) >= 5:
+        await update.message.reply_text("⚠️ Максимум 5 фото. Натисни *Готово*.", parse_mode="Markdown")
+        return WAITING_PHOTOS
+    
+    # Download photo (highest resolution)
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    
+    photo_bytes = io.BytesIO()
+    await file.download_to_memory(photo_bytes)
+    photo_bytes.seek(0)
+    b64 = base64.b64encode(photo_bytes.read()).decode("utf-8")
+    
+    report_data["photos_b64"].append(b64)
+    report_data["photo_file_ids"].append(photo.file_id)
+    
+    count = len(report_data["photos_b64"])
+    await update.message.reply_text(
+        f"📸 Фото {count}/5 отримано. "
+        f"{'Надішли ще або натисни Готово.' if count < 5 else 'Натисни Готово.'}"
+    )
+    return WAITING_PHOTOS
+
+
+async def process_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    
+    if user_id not in pending_reports:
+        await update.message.reply_text("Спочатку почни новий звіт.")
+        return ConversationHandler.END
+    
+    report_data = pending_reports[user_id]
+    
+    if not report_data["photos_b64"]:
+        await update.message.reply_text("⚠️ Додай хоча б одне фото!")
+        return WAITING_PHOTOS
+    
+    # Check if message has a comment (not "Готово" button)
+    text = update.message.text
+    if text and text not in ["✅ Готово", "Готово"]:
+        report_data["comment"] = text
+    
+    await update.message.reply_text(
+        f"⏳ Аналізую {len(report_data['photos_b64'])} фото...\n_Це займе ~15 секунд_",
+        parse_mode="Markdown"
+    )
+    
+    try:
+        # Call Claude Vision
+        ai_report = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: asyncio.run(analyze_photos(
+                report_data["photos_b64"],
+                report_data["comment"]
+            ))
+        )
+        
+        # Save to DB
+        report_id = await save_report(
+            agent_id=user_id,
+            point_name=report_data["point_name"],
+            report=ai_report,
+            photo_file_ids=report_data["photo_file_ids"],
+            comment=report_data["comment"]
+        )
+        
+        # Format and send
+        tg_message = format_report_for_telegram(
+            ai_report, 
+            user.full_name,
+            report_data["point_name"]
+        )
+        tg_message += f"\n\n_ID звіту: #{report_id}_"
+        
+        await update.message.reply_text(
+            tg_message,
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup(
+                [["📸 Новий звіт"], ["📊 Моя статистика"]],
+                resize_keyboard=True
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"Photo report error: {e}")
+        await update.message.reply_text(
+            "❌ Помилка аналізу. Спробуй ще раз або звернись до супервайзера."
+        )
+    finally:
+        pending_reports.pop(user_id, None)
+    
+    return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pending_reports.pop(update.effective_user.id, None)
+    await update.message.reply_text(
+        "❌ Звіт скасовано.",
+        reply_markup=ReplyKeyboardMarkup(
+            [["📸 Новий звіт"], ["📊 Моя статистика"]],
+            resize_keyboard=True
+        )
+    )
+    return ConversationHandler.END
+
+
+async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    stats = await get_agent_stats(user_id)
+    
+    total = stats.get("total", 0)
+    passed = stats.get("passed_count", 0)
+    avg = stats.get("avg_score", 0)
+    rate = round(passed / total * 100) if total > 0 else 0
+    
+    await update.message.reply_text(
+        f"📊 *Твоя статистика (30 днів)*\n\n"
+        f"📋 Звітів: {total}\n"
+        f"✅ Пройдено: {passed} ({rate}%)\n"
+        f"⭐ Середній бал: {avg}/100",
+        parse_mode="Markdown"
+    )
+
+
+def create_photo_report_app() -> Application:
+    token = os.environ.get("PHOTO_REPORT_BOT_TOKEN")
+    if not token:
+        raise ValueError("PHOTO_REPORT_BOT_TOKEN not set")
+    
+    app = Application.builder().token(token).build()
+    
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("report", new_report),
+            MessageHandler(filters.Regex("^📸 Новий звіт$"), new_report)
+        ],
+        states={
+            WAITING_POINT_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_point_name)
+            ],
+            WAITING_PHOTOS: [
+                MessageHandler(filters.PHOTO, receive_photo),
+                MessageHandler(filters.Regex("^(✅ Готово|Готово)$"), process_report),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_report),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("^❌ Скасувати$"), cancel)
+        ]
+    )
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_handler)
+    app.add_handler(MessageHandler(filters.Regex("^📊 Моя статистика$"), my_stats))
+    
+    return app
+```
+
+---
+
+## STEP 8 — WEBHOOK ROUTE (backend/routes/photo_report_webhook.py)
+```python
+from fastapi import APIRouter, Request, HTTPException
+from telegram import Update
+from ..photo_report.bot import create_photo_report_app
+import os
+import logging
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_photo_app = None
+
+def get_photo_app():
+    global _photo_app
+    if _photo_app is None:
+        _photo_app = create_photo_report_app()
+    return _photo_app
+
+
+@router.post("/webhook/photo-report")
+async def photo_report_webhook(request: Request):
+    try:
+        app = get_photo_app()
+        data = await request.json()
+        update = Update.de_json(data, app.bot)
+        await app.process_update(update)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Photo report webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+---
+
+## STEP 9 — REGISTER ROUTE IN MAIN APP
+
+In `backend/main.py`, add:
+```python
+from backend.routes.photo_report_webhook import router as photo_report_router
+app.include_router(photo_report_router)
+```
+
+---
+
+## STEP 10 — SET TELEGRAM WEBHOOK ON STARTUP
+
+In `backend/main.py` startup event, add alongside Maya HR webhook:
+```python
+@app.on_event("startup")
+async def set_webhooks():
+    # existing Maya HR webhook code...
+    
+    # Photo Report bot
+    photo_token = os.environ.get("PHOTO_REPORT_BOT_TOKEN")
+    if photo_token:
+        render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{photo_token}/setWebhook",
+                json={"url": f"{render_url}/webhook/photo-report"}
+            )
+```
+
+---
+
+## SUCCESS CRITERIA
+
+After deployment, verify:
+1. Bot responds to /start command
+2. Migration 018 applied — tables photo_agents, photo_reports, photo_report_images exist
+3. Agent can send 1-5 photos and receive analysis
+4. Score and errors correctly returned in Ukrainian
+5. Report saved to DB (check with: SELECT * FROM photo_reports LIMIT 5;)
+6. No interference with Maya HR bot
+
+## NOTES
+
+- Use `claude-sonnet-4-20250514` (not Haiku) — this is client-facing quality analysis
+- analyze_photos() is synchronous anthropic call, wrap in run_in_executor
+- Max 5 photos per report — enforce both in bot AND vision call
+- Do NOT modify any existing Maya HR files

@@ -1,0 +1,106 @@
+Team Pulse — Upload videos + seed memes + fix remaining bugs.
+
+=== PART 1: UPLOAD 5 VIDEO FILES ===
+
+I will upload 5 MP4 files to the Replit project:
+- pulse_breathing.mp4
+- pulse_burnout.mp4  
+- pulse_confident.mp4
+- pulse_conflict.mp4
+- pulse_manager.mp4
+
+Place them in: backend/static/pulse_videos/
+
+For pulse_decision.mp4 — we reuse the existing video already in the system.
+Find the video that plays when user asks "як звільнитися" (preset q26, 
+file_id cached as "video_offboarding_v5" or similar).
+
+In pulse_service.py, update PULSE_VIDEOS mapping:
+- "decision" and "resignation" → use the same file_id as video_offboarding_v5
+  (find it in the codebase — it's already cached somewhere)
+- "breathing" → "pulse_breathing.mp4"
+- "burnout" → "pulse_burnout.mp4"
+- "confident" → "pulse_confident.mp4"  
+- "conflict" → "pulse_conflict.mp4"
+- "manager" → "pulse_manager.mp4"
+
+When sending video: try file_id cache first, then fall back to file upload.
+After first upload, cache the returned file_id for future sends.
+
+=== PART 2: SEED 7 MEMES INTO DATABASE ===
+
+The 7 meme images will be uploaded to: backend/static/pulse_memes/
+
+Insert them into pulse_memes table:
+
+INSERT INTO pulse_memes (category, file_url, caption, is_active) VALUES
+('stress', 'backend/static/pulse_memes/capybara.png', 'Капібара-дзен 🧘', true),
+('deadline', 'backend/static/pulse_memes/cat_laptop.png', 'Дедлайн vs реальність 🐱', true),
+('general', 'backend/static/pulse_memes/elephant.png', 'Цінний гвинтик 🐘', true),
+('stress', 'backend/static/pulse_memes/sloth.png', 'Команда підтримає 🦥', true),
+('burnout', 'backend/static/pulse_memes/chameleon.png', 'Дзен-хамелеон 🦎', true),
+('stress', 'backend/static/pulse_memes/dog_coffee.png', 'Зроби видих ☕', true),
+('general', 'backend/static/pulse_memes/panda.png', 'Граціозно шкереберть 🐼', true);
+
+=== PART 3: MEME CAROUSEL UX ===
+
+When user presses "😄 Мем-терапія" (hr_pulse:meme callback):
+
+1. Send a random meme as PHOTO (not document) with caption
+2. Below the photo, show ONE button:
+   [ 😄 Ще мем! ]  callback: hr_pulse:meme
+
+3. When user presses "Ще мем!" — send ANOTHER random meme as a NEW message
+   (don't edit the previous one — user keeps the collection of memes in chat).
+   Again with [ 😄 Ще мем! ] button below.
+
+4. This creates an infinite scroll of memes — user taps "Ще мем!" as many 
+   times as they want. Each time a new random meme appears.
+
+5. Deduplicate within session: don't repeat the same meme until all 7 are shown.
+   Simple approach: store recently_sent = [] in memory (dict by telegram_id),
+   reset when all 7 exhausted.
+
+Implementation for sending meme photo from local file:
+- Read the image file from backend/static/pulse_memes/
+- Send via Telegram sendPhoto API with the file
+- Cache the returned file_id for future sends (update pulse_memes.file_id column)
+- Next time, use cached file_id (instant delivery, no re-upload)
+
+=== PART 4: FIX "ІНШЕ" FREE TEXT BUG ===
+
+Current bug: WARNING: [PULSE] awaiting_text processing error: 'str' object is not callable
+
+Find the PULSE_AWAITING_TEXT handler in telegram_webhook.py.
+The error means SQLAlchemy's `text()` is shadowed by a local variable.
+
+Fix: use the _models pattern:
+  import models as _models
+  from sqlalchemy import text as sa_text
+  db = _models.SessionLocal()
+  db.execute(sa_text("UPDATE pulse_surveys SET problem_category='other', problem_text=:txt ..."), {...})
+
+After saving text:
+1. Send to user: "❤️ Пульс команди\n\nДякую. HR зверне на це увагу. 🤍"
+2. Send HR alert with the free text included
+3. Return (don't continue to handle_hr_question)
+
+=== PART 5: FIX editMessageText 400 ON PROBLEM CALLBACKS ===
+
+hr_pulse:problem:{category} callbacks return 400 Bad Request.
+Same Markdown parsing issue as before.
+
+Find the editMessageText call for problem category confirmation.
+Remove parse_mode or use direct httpx call without parse_mode.
+The confirmation text should be plain text, no Markdown.
+
+=== AFTER ALL CHANGES ===
+
+1. Upload all files (5 videos + 7 memes) to the correct directories
+2. Run the SQL INSERT for memes
+3. Restart backend
+4. Test: send survey to tid=441389791, tap each path
+5. Test: tap "Мем-терапія" → verify photo appears with "Ще мем!" button
+6. Test: tap "Ще мем!" 3 times → verify different memes each time
+7. Test: tap 💔 → "Інше" → type text → verify HR alert sent
+8. Push to GitHub for Render deploy

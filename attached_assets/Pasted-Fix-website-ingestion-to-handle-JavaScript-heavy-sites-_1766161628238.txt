@@ -1,0 +1,94 @@
+Fix website ingestion to handle JavaScript-heavy sites like avtd.com using Playwright.
+
+CURRENT ISSUE:
+- WebBaseLoader works for static sites (Wikipedia ✅)
+- Fails for JavaScript sites like avtd.com (returns empty content ❌)
+
+SOLUTION:
+Update backend/services/rag_utils.py to use Playwright as fallback for JS sites.
+
+IN ingest_website() FUNCTION:
+
+Replace the document loading section with this smart loader:
+```python
+async def ingest_website(url: str, company_name: str, index, embedder=None) -> dict:
+    try:
+        print(f"Starting ingestion of {url}...")
+        
+        # Try WebBaseLoader first (fast for static sites)
+        print("Trying WebBaseLoader...")
+        loader = WebBaseLoader(url)
+        documents = loader.load()
+        
+        # Check if we got meaningful content
+        has_content = (
+            documents and 
+            len(documents) > 0 and 
+            len(documents[0].page_content.strip()) > 100
+        )
+        
+        if not has_content:
+            print(f"WebBaseLoader got no content, trying Playwright...")
+            
+            # Use Playwright for JavaScript sites
+            from playwright.async_api import async_playwright
+            from langchain.schema import Document
+            
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                
+                # Navigate and wait for content
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(2000)  # Extra wait for dynamic content
+                
+                # Get rendered HTML
+                content = await page.content()
+                
+                # Extract text from HTML
+                text_content = await page.evaluate('''() => {
+                    // Remove script and style tags
+                    const scripts = document.querySelectorAll('script, style, noscript');
+                    scripts.forEach(s => s.remove());
+                    
+                    // Get body text
+                    return document.body.innerText || document.body.textContent;
+                }''')
+                
+                await browser.close()
+                
+                print(f"✅ Playwright loaded {len(text_content)} characters")
+                
+                if len(text_content.strip()) < 100:
+                    return {
+                        "status": "error",
+                        "message": "Не знайдено контенту на сторінці"
+                    }
+                
+                # Create document from extracted text
+                documents = [Document(
+                    page_content=text_content,
+                    metadata={"source": url, "method": "playwright"}
+                )]
+        else:
+            print(f"✅ WebBaseLoader loaded {len(documents[0].page_content)} characters")
+        
+        # Rest of function stays the same (chunking, embeddings, upload)...
+```
+
+KEY CHANGES:
+1. Try WebBaseLoader first (fast path)
+2. Check if content is meaningful (>100 chars)
+3. Fallback to Playwright if empty
+4. Wait for networkidle + 2s extra for dynamic content
+5. Extract clean text using JavaScript evaluation
+6. Better error messages
+
+TEST:
+1. Static site: curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Вивчи https://en.wikipedia.org/wiki/Vodka"}'
+   Should use WebBaseLoader (fast)
+
+2. JS site: curl -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"message": "Вивчи https://avtd.com"}'
+   Should use Playwright, successfully ingest content
+
+After tests pass, commit and deploy.

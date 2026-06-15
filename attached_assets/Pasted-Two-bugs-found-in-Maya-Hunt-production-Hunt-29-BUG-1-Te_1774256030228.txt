@@ -1,0 +1,48 @@
+Two bugs found in Maya Hunt production (Hunt #29):
+
+BUG 1: Telegram card formatting error
+One of 5 candidate cards failed to send:
+"Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 945"
+
+This is an unclosed HTML/Markdown entity in the card text.
+
+Fix in backend/services/hunt_card_formatter.py:
+1. Find where the card text is built
+2. Ensure all HTML entities are properly escaped/closed
+3. Add a safety wrapper: if sending with parse_mode="HTML" fails with 400,
+   retry WITHOUT parse_mode (plain text fallback)
+4. The retry logic should be in hunt_service.py where sendMessage is called:
+
+   try:
+       resp = await bot.send_message(chat_id, card_text, parse_mode="HTML", ...)
+       if not resp.get("ok"):
+           # Fallback: strip HTML and send as plain text
+           import re
+           plain = re.sub(r'<[^>]+>', '', card_text)
+           await bot.send_message(chat_id, plain, ...)
+   except:
+       pass
+
+BUG 2: Too many "Невідомо" names (7 out of 10 scored candidates)
+The scorer relies on raw_text to extract candidate info. If raw_text doesn't
+contain the name prominently, Claude returns "Невідомо".
+
+Check:
+1. In hunt_robotaua_scraper.py — how is raw_text built? Does it include full_name?
+   The raw_text MUST start with the candidate's name if available:
+   raw_text = f"Ім'я: {full_name}\nПосада: {role}\nМісто: {city}\n..."
+
+2. In hunt_tg_scraper.py — Telegram messages often don't have structured names.
+   The name field is always "" (empty). This is expected for TG.
+   But raw_text should still have whatever text the message contains.
+
+3. In hunt_workua_scraper.py — does raw_text include the scraped full_name?
+
+4. The scorer (hunt_scorer.py) should also receive full_name as a separate field
+   in the prompt context, not just rely on raw_text extraction.
+   
+   Check the scorer prompt — does it receive candidate["full_name"]?
+   If not, add it: include full_name, city, age, source alongside raw_text
+   in the Claude prompt for scoring.
+
+Fix both bugs. Show me the diffs.

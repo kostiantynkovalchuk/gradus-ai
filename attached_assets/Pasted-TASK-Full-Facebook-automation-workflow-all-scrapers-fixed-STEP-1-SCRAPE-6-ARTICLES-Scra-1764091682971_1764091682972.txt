@@ -1,0 +1,82 @@
+TASK: Full Facebook automation workflow - all scrapers fixed
+
+=== STEP 1: SCRAPE 6 ARTICLES ===
+ScraperManager.scrape_source():
+
+1. just_drinks: 2 articles
+   - Language: en
+   - needs_translation: True
+   - target_platform: ["facebook"]
+
+2. delo_ua: 2 articles  
+   - Language: uk
+   - needs_translation: False
+   - target_platform: ["facebook"]
+
+3. horeca_ukraina: 2 articles
+   - Language: uk
+   - needs_translation: False
+   - target_platform: ["facebook"]
+
+Save to ContentQueue with status="scraped"
+
+Output: Show 6 article IDs, titles, content lengths, verify all have clean formatting
+
+=== STEP 2: TRANSLATE 2 ENGLISH ARTICLES ===
+TranslationService.translate_pending_task()
+- Filter: needs_translation=True, status="scraped"
+- Translate Just Drinks articles to Ukrainian
+- Update status="translated"
+
+Output: Show EN title → UK title for both articles
+
+=== STEP 3: GENERATE 6 IMAGES ===
+ImageGenerator.generate_images_task()
+- Filter: status="translated" OR (needs_translation=False AND status="scraped")
+- Generate DALL-E 1024x1024 for all 6
+- Save: attached_assets/generated_images/dalle_[hash].png
+- Store: image_url + local_image_path
+- Update status="pending_approval"
+
+Output: Show 6 article IDs with image paths
+
+=== STEP 4: SEND TO TELEGRAM ===
+TelegramNotifier.send_for_approval()
+- All 6 articles with images
+- Message format: Image + title + content (300 chars) + [Approve][Reject]
+- Store telegram_message_id
+
+Output: "Sent 6 notifications to Telegram"
+
+=== STEP 5: PAUSE FOR USER APPROVAL ===
+Wait for user to approve articles in Telegram
+Do NOT proceed to Step 6
+
+Output: "Check Telegram and approve articles. Reply when ready."
+
+=== STEP 6: POST TO FACEBOOK ===
+(Execute only after user confirmation)
+
+FacebookPoster.post_to_facebook()
+- Filter: status="approved", target_platform="facebook"
+- Post each with local image path
+- Update: status="posted", posted_at, facebook_post_url
+
+Output: Show post URLs for each article posted
+
+=== FINAL VERIFICATION ===
+Report:
+- Articles scraped: 6
+- English translated: 2
+- Ukrainian (no translation): 4
+- Images generated: 6
+- Telegram sent: 6
+- User approved: [X]
+- Posted to Facebook: [X]
+- Facebook URLs: [list]
+
+Verify all content has:
+- Clean titles (no metadata)
+- Proper paragraphs (no chaotic breaks)
+- Full content (not truncated)
+- Images displayed correctly

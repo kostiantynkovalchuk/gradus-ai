@@ -1,0 +1,167 @@
+
+🏗️ Architect Analysis Prompt
+🏗️ ARCHITECT ANALYSIS REQUIRED - Priority 2 Not Executing After 2 Deploys
+
+## CRITICAL ISSUE
+Priority 2 image fallback is NOT executing in production despite being deployed twice.
+
+EVIDENCE:
+Logs show:
+WARNING: ⚠️  Local image path not found: /app/backend/attached_assets/...
+WARNING: ⚠️  [Priority 4] Trying DALL-E URL (may be expired)
+ERROR: Facebook error code 324: Missing or invalid image file
+
+Notice: It jumps from "local path not found" DIRECTLY to "Priority 4" - completely skipping Priority 2!
+
+WORKING CODE (verified in Replit):
+- facebook_poster.py lines 80-88 has Priority 2 logic
+- scheduler.py line 512 passes 'article_id': article.id
+- APP_URL environment variable is set
+
+CRITICAL CLUES:
+1. Images work perfectly for website posts (both dashboard and Telegram approvals)
+2. /api/images/serve/{id} endpoint is functioning (images display on website)
+3. Only Facebook posting fails with missing images
+4. Priority 2 logic exists in code but NEVER executes
+
+## ARCHITECTURAL INVESTIGATION
+
+Trace the COMPLETE flow from approval to Facebook posting:
+
+### 1. Approval Flow Analysis
+
+**When article 197 is approved from dashboard:**
+
+Find in main.py:
+```python
+@app.post("/api/content/{content_id}/approve")
+async def approve_content(content_id: int, ...):
+    # What does this do?
+    # Does it call facebook_poster directly?
+    # Or does it go through scheduler?
+    # Show me the COMPLETE code path
+```
+
+**Critical questions:**
+- Does it call `facebook_poster.post_to_facebook()`?
+- What parameters are passed?
+- Is `article_id` in those parameters?
+- Show me the EXACT function call
+
+### 2. Facebook Poster Method Signature
+
+Show me the COMPLETE `post_to_facebook()` method:
+```python
+def post_to_facebook(self, content_data: Dict) -> Dict:
+    # FIRST LINE - does it extract article_id?
+    article_id = content_data.get('article_id')  # ← IS THIS LINE PRESENT?
+    
+    # Show me ALL priority logic
+    # Show me EXACTLY how article_id is used
+```
+
+**Critical check:**
+- Does the method EXTRACT article_id from content_data?
+- Or does it expect article_id as a separate parameter?
+- Is there a mismatch between what's passed and what's expected?
+
+### 3. Method Signature Mismatch?
+
+Compare these:
+
+**Scheduler passes:**
+```python
+post_data = {
+    'article_id': article.id,  # ← Passed IN dict
+    'translated_title': ...,
+}
+facebook_poster.post_to_facebook(post_data)
+```
+
+**Facebook poster expects:**
+```python
+def post_to_facebook(self, content_data: Dict):
+    # Does it extract article_id?
+    article_id = ???  # ← Where does this come from?
+```
+
+**Possible issue:**
+- article_id is IN the dict but never EXTRACTED
+- Priority 2 checks `if article_id:` but article_id is undefined
+- Python treats undefined as None, skips Priority 2
+
+### 4. Check Alternative Code Paths
+
+Could there be MULTIPLE posting methods?
+
+Search for:
+- `def post_to_facebook`
+- `def post_with_image`
+- `def post_to_page`
+- Any other Facebook posting methods
+
+**Show me ALL methods** that could be called when approving content.
+
+### 5. Git Verification
+
+Run in terminal:
+```bash
+cd backend/services
+git log --oneline -5  # Show recent commits
+git diff HEAD~2 facebook_poster.py  # Show what changed in last 2 commits
+```
+
+Verify:
+- Are the changes actually in the git history?
+- Did the deploy include the Priority 2 code?
+- Could there be a .gitignore issue?
+
+### 6. Runtime Code Check
+
+Add temporary debug logging to facebook_poster.py:
+```python
+def post_to_facebook(self, content_data: Dict) -> Dict:
+    logger.critical(f"🔍 DEBUG: content_data keys = {content_data.keys()}")
+    logger.critical(f"🔍 DEBUG: article_id in dict = {'article_id' in content_data}")
+    
+    article_id = content_data.get('article_id')
+    logger.critical(f"🔍 DEBUG: extracted article_id = {article_id}")
+    
+    # Then continue with priority logic
+```
+
+Deploy this and approve another article - the logs will show:
+- Is article_id in the dict?
+- Is it being extracted?
+- What value does it have?
+
+## DIAGNOSIS CHECKLIST
+
+Please verify and report:
+
+- [ ] Show EXACT code path from /api/content/{id}/approve to facebook_poster
+- [ ] Show COMPLETE post_to_facebook() method signature
+- [ ] Verify article_id is extracted from content_data dict
+- [ ] Check if there are multiple Facebook posting methods
+- [ ] Verify Priority 2 code is in git history
+- [ ] Add debug logging to see what's happening at runtime
+- [ ] Check if there's an exception being silently caught
+
+## EXPECTED ROOT CAUSE
+
+Most likely one of:
+1. article_id passed in dict but never extracted
+2. Method signature mismatch (expects separate param, not in dict)
+3. Exception in Priority 2 logic that's caught and skipped
+4. Code deployed to wrong branch/service
+5. Old code cached somewhere
+
+## SUCCESS CRITERIA
+
+After fix, logs should show:
+INFO: Content 197 approved
+INFO: ✅ [Priority 2] Using public image URL: https://gradus-ai.onrender.com/api/images/serve/197
+INFO: Facebook API response: {'id': '...'}
+INFO: Posted to Facebook successfully
+
+Please investigate and identify the EXACT point where Priority 2 logic is being skipped.

@@ -1,0 +1,120 @@
+Create a new file: backend/services/hunt_robotaua_scraper.py
+
+This scraper searches Robota.ua's CV database via their GraphQL API at https://dracula.robota.ua 
+to find candidates matching a vacancy.
+
+=== CONFIRMED API SCHEMA (from live introspection) ===
+
+Query 1 — recommendedProfResumes:
+  Args: vacancyTitle (String!), vacancyDescription (String), cityId (Int), resumeType (enum: ALL, SUITABLE, VIEWED)
+  Returns: { total: Int, items: [{ id, name, speciality, age, cityName, salary, experienceText }] }
+
+Query 2 — employerResume(id: ID!):
+  Returns full CV: title, contacts { phones, email }, experiences, skills, personal, salary, cityName, age
+  NOTE: contacts may be hidden without CVDB subscription — handle gracefully
+
+Query 3 — cvdbRegions (no args):
+  Returns: [{ id, name }] — 27 Ukrainian cities with IDs
+
+Query 4 — cvdbRubrics (no args):
+  Returns: [{ id, name }] — 30 job categories
+
+=== IMPLEMENTATION ===
+
+1. Auth: Use ROBOTAUA_JWT env variable. Headers:
+   {
+     "Authorization": f"Bearer {jwt_token}",
+     "Content-Type": "application/json",
+     "x-alliance-locale": "uk_UA"
+   }
+
+2. City mapping: On first call, fetch cvdbRegions and cache in memory. 
+   Build a mapping: city_name_lower → city_id.
+   Handle Ukrainian city name variations: 
+   "Дніпро" / "Днепр" / "Днiпро" → same ID
+   "Київ" / "Киев" → same ID
+   etc.
+
+3. Main function signature:
+   async def search_robotaua(vacancy: dict, depth_days: int = 60) -> list[dict]
+   
+   vacancy dict has: "position", "city", "keywords", "salary_max", "requirements"
+
+4. Search flow:
+   a. Resolve city name → cityId using cached regions
+   b. Call recommendedProfResumes with:
+      - vacancyTitle = vacancy["position"]
+      - vacancyDescription = vacancy.get("requirements", "") + " " + " ".join(vacancy.get("keywords", []))
+      - cityId = resolved city ID (or omit if city not found)
+      - resumeType = ALL
+   c. For each result (up to 20), try employerResume(id) to get full details
+   d. If contacts are hidden/empty, still return the candidate with profile_url link
+   e. Apply date filtering: only return candidates active within depth_days
+      (use any date field available — experienceText last date, or fallback to accepting all)
+
+5. Return format — MUST match existing candidate dict structure for scorer:
+   {
+     "source": "robota.ua",
+     "profile_url": f"https://robota.ua/candidates/{resume_id}",
+     "full_name": name from API,
+     "current_role": speciality,
+     "age": age (int or None),
+     "city": cityName,
+     "salary_expectation": salary (int or None),
+     "salary_expectation_usd": converted if UAH (use USD_TO_UAH_RATE env),
+     "salary_expectation_uah": salary if UAH,
+     "contact": first phone or email or "Деталі на Robota.ua",
+     "email": email or "",
+     "experience_years": parsed from experienceText or None,
+     "skills": comma-separated skills string,
+     "education": education string or "",
+     "raw_text": concatenated text from all available fields (max 3000 chars) — 
+                 this is what the scorer reads, so include: role, experience, skills, education, city, salary,
+     "message_date": ISO datetime string if available,
+     "last_active": date string if available,
+   }
+
+6. Error handling:
+   - JWT expired/invalid → log warning, return []
+   - GraphQL errors → log, return []
+   - Individual resume fetch fails → skip that candidate, continue
+   - Network timeout (10s) → return []
+   - NEVER crash the pipeline
+
+7. Rate limiting:
+   - 1 second delay between employerResume calls
+   - Max 20 resumes per search
+
+8. Logging:
+   - Log: total found, how many fetched, how many had contacts
+   - Log JWT expiry warning if response contains auth error
+
+=== INTEGRATE INTO hunt_service.py ===
+
+In run_hunt(), add robota.ua as a third parallel source in asyncio.gather:
+
+Currently:
+  tg_results, workua_results = await asyncio.gather(
+      scrape_telegram_channels(...),
+      search_workua(...)
+  )
+
+Change to:
+  tg_results, workua_results, robotaua_results = await asyncio.gather(
+      scrape_telegram_channels(...),
+      search_workua(...),
+      search_robotaua(vacancy_data, depth_days=search_depth)
+  )
+  all_candidates = tg_results + workua_results + robotaua_results
+
+The fallback logic (60d → 180d → 365d) should pass the same depth_days to all three scrapers.
+
+=== DO NOT ===
+- Do not modify the scorer or Claude prompts
+- Do not modify the card formatter (beyond what was already planned for fallback labels)
+- Do not hardcode the JWT token — always read from env
+- Do not call employerResume if recommendedProfResumes returns 0 results
+
+=== TEST ===
+After implementing, run the test script that already exists at backend/test_robotaua_cv_search.py 
+to verify the GraphQL queries work with our JWT token. Report results.

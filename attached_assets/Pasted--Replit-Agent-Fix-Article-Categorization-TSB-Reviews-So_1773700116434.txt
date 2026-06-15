@@ -1,0 +1,90 @@
+# Replit Agent: Fix Article Categorization — TSB Reviews Source Should Map to "reviews" Category
+
+## Problem
+
+Articles from "The Spirits Business Reviews" source are being categorized as "news" instead of "reviews". This source was specifically added to populate the reviews section on gradusmedia.org, but the categorizer only looks at title/content keywords and ignores the source name.
+
+## Fix 1: Add source parameter to categorize_article()
+
+File: `backend/services/categorization.py`
+
+1. Change the function signature to accept an optional `source` parameter:
+```python
+def categorize_article(title: str, content: str, source: str = None) -> str:
+```
+
+2. Add a source-based override at the top of the function body, BEFORE the keyword scoring logic, right after the docstring:
+```python
+    # Source-based category override
+    SOURCE_CATEGORY_MAP = {
+        "The Spirits Business Reviews": "reviews",
+    }
+    if source and source in SOURCE_CATEGORY_MAP:
+        return SOURCE_CATEGORY_MAP[source]
+```
+
+This way any article from TSB Reviews is immediately categorized as "reviews" without hitting keyword scoring or Claude API.
+
+## Fix 2: Pass source to categorize_article() in the approval handler
+
+File: `backend/services/telegram_webhook.py`
+
+Find the call to `categorize_article` (around line 101). It currently looks like:
+```python
+article.category = categorize_article(
+    article.translated_title or article.source_title,
+    (article.translated_text or article.original_text or "")[:2000]
+)
+```
+
+Add `source=article.source`:
+```python
+article.category = categorize_article(
+    article.translated_title or article.source_title,
+    (article.translated_text or article.original_text or "")[:2000],
+    source=article.source
+)
+```
+
+## Fix 3: Pass source in ALL other callers
+
+Search the entire backend for other calls to categorize_article:
+```bash
+grep -rn "categorize_article" backend/ --include="*.py"
+```
+
+For EVERY call found, add `source=article.source` (or whatever the source variable is named in that context). This includes files like:
+- `backend/services/scheduler.py` (if it calls categorize_article)
+- `backend/scripts/categorize_articles.py` (if it exists)
+- Any other file that imports and calls categorize_article
+
+## Fix 4: Fix existing misclassified articles in production database
+
+Run this against the production Neon database (use `NEON_DATABASE_URL`):
+```python
+import os, psycopg2
+conn = psycopg2.connect(os.getenv('NEON_DATABASE_URL') or os.getenv('DATABASE_URL'))
+cur = conn.cursor()
+cur.execute("""
+    UPDATE content_queue SET category = 'reviews' 
+    WHERE source = 'The Spirits Business Reviews' AND category != 'reviews'
+    RETURNING id, translated_title
+""")
+for r in cur.fetchall():
+    print(f'Fixed ID:{r[0]} → reviews | {r[1][:60] if r[1] else "NULL"}')
+conn.commit()
+conn.close()
+```
+
+## Verification
+
+1. Check that categorize_article function signature now includes `source: str = None`
+2. Check that SOURCE_CATEGORY_MAP override is the FIRST logic in the function
+3. Check that ALL callers of categorize_article pass the source parameter
+4. Run: `SELECT id, category, source FROM content_queue WHERE source = 'The Spirits Business Reviews'` — all should show `category = 'reviews'`
+
+## DO NOT CHANGE
+
+- Do not modify any other categorization keywords or scoring logic
+- Do not change the database schema
+- Do not modify scheduler timing or Telegram webhook handling

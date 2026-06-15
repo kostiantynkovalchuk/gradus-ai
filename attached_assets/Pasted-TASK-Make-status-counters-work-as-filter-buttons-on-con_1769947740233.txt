@@ -1,0 +1,382 @@
+TASK: Make status counters work as filter buttons on /content and /articles pages
+
+CURRENT BEHAVIOR:
+Pages show status counts:
+- Pending: 35
+- Approved: 65  
+- Posted: 78
+- Rejected: 81
+
+But they are just display elements - NOT interactive.
+
+REQUIRED BEHAVIOR:
+When user clicks on a status card (e.g., "Approved: 65"):
+1. Highlight that card as active/selected
+2. Filter articles list to show ONLY approved articles
+3. Other status cards remain visible but inactive
+4. Click same card again → deselect, show all articles
+5. Click different card → switch filter to that status
+
+=============================================================================
+IMPLEMENTATION GUIDE
+=============================================================================
+
+PAGES TO UPDATE:
+1. /content (ContentApproval.jsx or similar)
+2. /articles (Articles.jsx or ArticlesList.jsx or similar)
+
+STEP 1: ADD STATE FOR ACTIVE FILTER
+--------------
+```tsx
+import { useState } from 'react';
+
+function ContentApproval() {
+  // Add filter state
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  // null = show all, 'pending' = show pending only, etc.
+  
+  // ... existing code
+}
+```
+
+STEP 2: MAKE STATUS CARDS CLICKABLE
+--------------
+
+Find the status cards rendering code (likely looks like):
+```tsx
+// BEFORE (not clickable):
+<div className="status-card">
+  <h3>Pending</h3>
+  <p>{pendingCount}</p>
+</div>
+```
+
+Update to:
+```tsx
+// AFTER (clickable):
+<div 
+  className={`status-card ${activeFilter === 'pending' ? 'active' : ''}`}
+  onClick={() => handleFilterClick('pending')}
+  style={{ cursor: 'pointer' }}
+>
+  <h3>Pending</h3>
+  <p>{pendingCount}</p>
+</div>
+
+<div 
+  className={`status-card ${activeFilter === 'approved' ? 'active' : ''}`}
+  onClick={() => handleFilterClick('approved')}
+  style={{ cursor: 'pointer' }}
+>
+  <h3>Approved</h3>
+  <p>{approvedCount}</p>
+</div>
+
+<div 
+  className={`status-card ${activeFilter === 'posted' ? 'active' : ''}`}
+  onClick={() => handleFilterClick('posted')}
+  style={{ cursor: 'pointer' }}
+>
+  <h3>Posted</h3>
+  <p>{postedCount}</p>
+</div>
+
+<div 
+  className={`status-card ${activeFilter === 'rejected' ? 'active' : ''}`}
+  onClick={() => handleFilterClick('rejected')}
+  style={{ cursor: 'pointer' }}
+>
+  <h3>Rejected</h3>
+  <p>{rejectedCount}</p>
+</div>
+```
+
+STEP 3: ADD FILTER CLICK HANDLER
+--------------
+```tsx
+const handleFilterClick = (status: string) => {
+  // Toggle: if clicking active filter, deselect it
+  if (activeFilter === status) {
+    setActiveFilter(null); // Show all
+  } else {
+    setActiveFilter(status); // Show only this status
+  }
+};
+```
+
+STEP 4: FILTER ARTICLES BASED ON ACTIVE FILTER
+--------------
+
+Find where articles are displayed, likely:
+```tsx
+// BEFORE:
+{articles.map(article => (
+  <ArticleCard key={article.id} article={article} />
+))}
+```
+
+Update to:
+```tsx
+// AFTER:
+{filteredArticles.map(article => (
+  <ArticleCard key={article.id} article={article} />
+))}
+```
+
+Add filtering logic:
+```tsx
+// Filter articles based on active filter
+const filteredArticles = activeFilter 
+  ? articles.filter(article => article.status === activeFilter)
+  : articles; // If no filter, show all
+```
+
+STEP 5: ADD VISUAL FEEDBACK FOR ACTIVE FILTER
+--------------
+
+Add CSS for active state:
+```css
+.status-card {
+  padding: 16px;
+  border-radius: 8px;
+  background: #f5f5f5;
+  transition: all 0.2s;
+}
+
+.status-card:hover {
+  background: #e0e0e0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.status-card.active {
+  background: #2563eb; /* Blue background when active */
+  color: white;
+  border: 2px solid #1e40af;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.status-card.active h3,
+.status-card.active p {
+  color: white;
+}
+```
+
+STEP 6: ADD "SHOW ALL" INDICATOR
+--------------
+
+Optionally add a visual indicator when no filter is active:
+```tsx
+{!activeFilter && (
+  <div className="filter-info">
+    Showing all articles (click status to filter)
+  </div>
+)}
+
+{activeFilter && (
+  <div className="filter-info">
+    Showing {activeFilter} articles only
+    <button onClick={() => setActiveFilter(null)}>Clear filter</button>
+  </div>
+)}
+```
+
+STEP 7: MAINTAIN FILTER ACROSS ACTIONS
+--------------
+
+When user approves/rejects article, maintain current filter:
+```tsx
+const handleApprove = async (articleId) => {
+  await approveArticle(articleId);
+  await refreshArticles(); // Refresh data
+  // activeFilter state persists, so filtered view remains
+};
+```
+
+=============================================================================
+COMPLETE EXAMPLE - ContentApproval.jsx
+=============================================================================
+```tsx
+import { useState, useEffect } from 'react';
+
+function ContentApproval() {
+  const [articles, setArticles] = useState([]);
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  
+  // Fetch articles
+  useEffect(() => {
+    fetchArticles();
+  }, []);
+  
+  // Calculate status counts
+  const pendingCount = articles.filter(a => a.status === 'pending').length;
+  const approvedCount = articles.filter(a => a.status === 'approved').length;
+  const postedCount = articles.filter(a => a.status === 'posted').length;
+  const rejectedCount = articles.filter(a => a.status === 'rejected').length;
+  
+  // Filter articles based on active filter
+  const filteredArticles = activeFilter
+    ? articles.filter(article => article.status === activeFilter)
+    : articles;
+  
+  // Toggle filter
+  const handleFilterClick = (status: string) => {
+    setActiveFilter(activeFilter === status ? null : status);
+  };
+  
+  return (
+    <div className="content-approval">
+      {/* Status Cards - Now Clickable */}
+      <div className="status-cards">
+        <div 
+          className={`status-card ${activeFilter === 'pending' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('pending')}
+        >
+          <h3>Pending</h3>
+          <p>{pendingCount}</p>
+        </div>
+        
+        <div 
+          className={`status-card ${activeFilter === 'approved' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('approved')}
+        >
+          <h3>Approved</h3>
+          <p>{approvedCount}</p>
+        </div>
+        
+        <div 
+          className={`status-card ${activeFilter === 'posted' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('posted')}
+        >
+          <h3>Posted</h3>
+          <p>{postedCount}</p>
+        </div>
+        
+        <div 
+          className={`status-card ${activeFilter === 'rejected' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('rejected')}
+        >
+          <h3>Rejected</h3>
+          <p>{rejectedCount}</p>
+        </div>
+      </div>
+      
+      {/* Filter Status Indicator */}
+      {activeFilter && (
+        <div className="filter-active-banner">
+          Showing {activeFilter} articles ({filteredArticles.length})
+          <button onClick={() => setActiveFilter(null)}>Show All</button>
+        </div>
+      )}
+      
+      {/* Articles List - Filtered */}
+      <div className="articles-list">
+        {filteredArticles.map(article => (
+          <ArticleCard key={article.id} article={article} />
+        ))}
+        
+        {filteredArticles.length === 0 && (
+          <div className="no-articles">
+            No {activeFilter} articles found
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+=============================================================================
+TAILWIND CSS VERSION (if using Tailwind)
+=============================================================================
+```tsx
+<div 
+  className={`
+    p-4 rounded-lg cursor-pointer transition-all
+    ${activeFilter === 'pending' 
+      ? 'bg-blue-600 text-white shadow-lg' 
+      : 'bg-gray-100 hover:bg-gray-200 hover:shadow-md'
+    }
+  `}
+  onClick={() => handleFilterClick('pending')}
+>
+  <h3 className="text-sm font-medium">Pending</h3>
+  <p className="text-2xl font-bold">{pendingCount}</p>
+</div>
+```
+
+=============================================================================
+UX ENHANCEMENTS (OPTIONAL)
+=============================================================================
+
+ENHANCEMENT 1: Smooth Animation
+```css
+.articles-list {
+  transition: all 0.3s ease-in-out;
+}
+```
+
+ENHANCEMENT 2: Keyboard Support
+```tsx
+<div
+  tabIndex={0}
+  onKeyPress={(e) => e.key === 'Enter' && handleFilterClick('pending')}
+  onClick={() => handleFilterClick('pending')}
+>
+```
+
+ENHANCEMENT 3: Show Count in Filter Banner
+```tsx
+{activeFilter && (
+  <div className="filter-banner">
+    Showing {filteredArticles.length} of {articles.length} articles
+    (filtered by: {activeFilter})
+  </div>
+)}
+```
+
+ENHANCEMENT 4: URL Query Params (maintain filter on page refresh)
+```tsx
+import { useSearchParams } from 'react-router-dom';
+
+const [searchParams, setSearchParams] = useSearchParams();
+const [activeFilter, setActiveFilter] = useState(searchParams.get('status') || null);
+
+const handleFilterClick = (status: string) => {
+  const newFilter = activeFilter === status ? null : status;
+  setActiveFilter(newFilter);
+  
+  if (newFilter) {
+    setSearchParams({ status: newFilter });
+  } else {
+    setSearchParams({});
+  }
+};
+```
+
+=============================================================================
+TESTING CHECKLIST
+=============================================================================
+
+After implementation, test:
+□ Click "Pending" → Shows only pending articles
+□ Click "Pending" again → Shows all articles (deselect)
+□ Click "Approved" → Shows only approved articles
+□ Status card highlights when active (blue background)
+□ Filtered articles count displays correctly
+□ Empty state shows when no articles match filter
+□ Filter persists when approving/rejecting articles
+□ Hover effect on status cards works
+□ Works on both /content and /articles pages
+
+=============================================================================
+DELIVERABLES
+=============================================================================
+
+1. Both /content and /articles pages have clickable status filters
+2. Active filter visually highlighted
+3. Articles list updates in real-time based on filter
+4. Toggle behavior works (click again to deselect)
+5. Smooth transitions and hover effects
+
+BEGIN IMPLEMENTATION.

@@ -1,0 +1,63 @@
+🔧 Промпт для Replit - Розділення моделей
+ЗАДАЧА: Розділити моделі Claude для Telegram та Website
+
+КОНТЕКСТ:
+- Telegram (внутрішні співробітники) → Haiku 4.5 (економія 75%)
+- Website (потенційні клієнти) → Sonnet 4.5 (якість української)
+- Зараз обидва канали використовують один endpoint chat_with_avatars()
+
+КРОКИ:
+
+1. ОНОВИТИ config/models.py
+   Переконайся що є дві моделі:
+```python
+   CLAUDE_MODEL_TELEGRAM = "claude-haiku-4-5-20251001"  # Telegram/internal
+   CLAUDE_MODEL_WEBSITE = "claude-sonnet-4-5-20250929"  # Website/clients
+```
+
+2. ДОДАТИ параметр source в ChatRequest
+   Файл: backend/routes/chat_endpoints.py
+   
+   Знайди клас ChatRequest та додай:
+```python
+   source: Optional[str] = Field(default="website", description="Source of request: telegram or website")
+```
+
+3. ЛОГІКА ВИБОРУ МОДЕЛІ в chat_with_avatars()
+   В тій же функції chat_with_avatars(), знайди де викликається Claude API
+   
+   Додай ПЕРЕД викликом Claude:
+```python
+   # Select model based on source
+   from config.models import CLAUDE_MODEL_TELEGRAM, CLAUDE_MODEL_WEBSITE
+   
+   model_to_use = CLAUDE_MODEL_TELEGRAM if request.source == "telegram" else CLAUDE_MODEL_WEBSITE
+   
+   # Log для моніторингу
+   logger.info(f"Using model {model_to_use} for source: {request.source}")
+```
+
+4. ОНОВИТИ telegram webhook
+   Файл: backend/routes/telegram_webhook.py
+   
+   Знайди де викликається chat_with_avatars() і переконайся що передається source="telegram":
+```python
+   request = ChatRequest(
+       message=user_message,
+       avatar=avatar_name,
+       source="telegram",  # ← додай цей параметр
+       user_id=str(chat_id)
+   )
+```
+
+5. WEBSITE за замовчуванням
+   Website запити автоматично використають source="website" (default value)
+
+ПЕРЕВІРКА:
+- Покажи мені зміни у всіх файлах
+- Переконайся що логування додано для моніторингу
+- Backend має перезапуститись без помилок
+
+Після цього:
+- Telegram використовуватиме Haiku (дешево, достатньо для співробітників)
+- Website використовуватиме Sonnet (якісна українська для клієнтів)

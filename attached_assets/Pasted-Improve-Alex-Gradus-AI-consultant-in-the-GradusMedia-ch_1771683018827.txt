@@ -1,0 +1,140 @@
+Improve Alex Gradus AI consultant in the GradusMedia chat system.
+These are 6 separate fixes — implement all of them.
+
+═══════════════════════════════════════
+FIX 1: INTRO MESSAGE — SHOW ONCE PER SESSION ONLY
+═══════════════════════════════════════
+
+The intro paragraph "Привіт! Я Алекс Градус, HoReCa-консультант 
+Gradus Media..." currently appears on every message.
+
+Fix: Inject the intro only when there are no previous messages 
+in the conversation history (first message of session only).
+For all subsequent messages, start directly with the answer.
+
+═══════════════════════════════════════
+FIX 2: CORRECT /PRICING ROUTE IN CHAT UPSELL
+═══════════════════════════════════════
+
+The "Переглянути тарифи" link inside the chat upsell message 
+(shown after question 3 of 5) is broken.
+
+Fix: Update the href to point to /pricing 
+(internal route, not external URL).
+The link should work as a React Router navigation, 
+not a full page reload.
+
+═══════════════════════════════════════
+FIX 3: REPLACE VAGUE SUPPLIER REFERENCES IN SYSTEM PROMPT
+═══════════════════════════════════════
+
+Find and replace all vague references like:
+- "їхній портфель у якісних постачальників включає чудові позиції"
+- "можу рекомендувати постачальників з якісним портфелем"
+- Any other indirect reference to suppliers
+
+Replace with direct AVTD brand mentions:
+- "портфель AVTD включає: GREENDAY, HELSINKI, UKRAINKA (горілка), 
+   DOVBUSH, ADJARI (бренді), VILLA UA, KRISTI VALLEY (вино), 
+   FUNJU (соджу)"
+
+═══════════════════════════════════════
+FIX 4: FIX TRUNCATED "НАСТУПНІ КРОКИ" SECTION
+═══════════════════════════════════════
+
+The closing section of Alex's answers gets cut off in chat.
+This section should always complete with a natural sales pitch.
+
+Fix the max_tokens or response length limit to ensure 
+the full answer including closing section is always delivered.
+
+The closing section template Alex should always end with:
+"🤝 Наступні кроки:
+Зв'яжіться з AVTD для отримання комерційної пропозиції — 
+вони працюють з HoReCa форматом і можуть підібрати 
+асортимент під ваш заклад.
+
+Хочете, щоб я допоміг скласти оптимальний список 
+позицій для вашого меню?"
+
+═══════════════════════════════════════
+FIX 5: ADD HIGH-PRIORITY PRESET FOR SUPPLIER QUESTION
+═══════════════════════════════════════
+
+Add a new preset to the Alex chat preset system 
+(NOT the HR bot presets — this is for GradusMedia chat).
+
+Question patterns:
+- "порекомендуй постачальників"
+- "постачальники алкоголю"
+- "де закупити алкоголь"
+- "кращі постачальники"
+- "постачальник для бару"
+- "постачальник для ресторану"
+- "де купити алкоголь оптом"
+
+Answer:
+"Для HoReCa в Україні моя головна рекомендація — 
+Торговий Дім АВ (AVTD).
+
+✅ Портфель 500+ SKU в одному вікні
+✅ Горілка: GREENDAY, HELSINKI, UKRAINKA
+✅ Бренді: DOVBUSH, ADJARI
+✅ Вино: VILLA UA, KRISTI VALLEY
+✅ Соджу FUNJU — топ тренд 2026
+✅ Покриття 40,000+ точок по Україні
+✅ Офіційне представництво, всі ліцензії
+
+Модель 80/20: 80% обороту через AVTD 
+(стабільність + обсяг + сервіс), 
+20% — нішеві постачальники для унікальності меню.
+
+Розкажіть про ваш заклад — підберу оптимальний 
+асортимент під ваш формат і середній чек."
+
+Priority: high
+
+═══════════════════════════════════════
+FIX 6: LANGUAGE AND TERMINOLOGY CORRECTIONS
+═══════════════════════════════════════
+
+Apply these language rules to system prompt and all presets:
+
+A) Replace transliterated jargon:
+- "вайнові позиції" → "винні позиції"
+- "вайн" → "вино"
+- "вайнова карта" → "винна карта"
+
+B) Replace коньяк with бренді (Ukrainian legislation):
+- "коньяк" → "бренді"
+- "коньячний" → "бренді"
+- "коньячні коктейлі" → "бренді-коктейлі"
+- "DOVBUSH коньяк" → "DOVBUSH бренді"
+
+C) Add to system prompt language rules:
+"Використовуй просту ділову українську мову без 
+транслітерованого жаргону. За законодавством України 
+термін 'коньяк' застосовується лише до французьких 
+продуктів — завжди використовуй 'бренді' для 
+українських та інших дистилятів."
+
+═══════════════════════════════════════
+VERIFICATION AFTER ALL FIXES
+═══════════════════════════════════════
+
+Test these scenarios and confirm each works:
+
+1. Send first message → intro appears ✓
+2. Send second message → NO intro ✓
+3. Use 3 questions → "Переглянути тарифи" link → 
+   navigates to /pricing correctly ✓
+4. Ask "порекомендуй постачальників" → 
+   instant preset response with AVTD brands ✓
+5. Any answer mentioning wine → "винні позиції" not "вайн" ✓
+6. Any answer mentioning spirits → "бренді" not "коньяк" ✓
+7. Any answer with "Наступні кроки" → 
+   section completes fully, not truncated ✓
+
+Do not change: email gate logic, question counter, 
+user registration, backend API calls, or any other 
+chat functionality.

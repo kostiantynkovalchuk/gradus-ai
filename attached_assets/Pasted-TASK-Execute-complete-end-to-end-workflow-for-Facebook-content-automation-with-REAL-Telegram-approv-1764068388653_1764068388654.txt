@@ -1,0 +1,82 @@
+TASK: Execute complete end-to-end workflow for Facebook content automation with REAL Telegram approval
+
+GOAL: Full system test from scraping to Facebook posting - user will approve articles via Telegram buttons
+
+WORKFLOW STEPS:
+
+=== STEP 1: SCRAPE FACEBOOK SOURCES ===
+- Import ScraperManager from backend/services/scrapers/scraper_manager
+- Scrape from these 3 sources:
+  * just_drinks (English, needs translation)
+  * delo_ua (Ukrainian, no translation)
+  * horeca_ukraina (Ukrainian, no translation)
+- Limit: 2 articles per source (total 6 articles)
+- Save to ContentQueue with:
+  * target_platform = ["facebook"]
+  * status = "scraped"
+  * language = "en" or "uk"
+  * needs_translation = True/False
+- Show me the article IDs and titles created
+
+=== STEP 2: TRANSLATE ENGLISH ARTICLES ===
+- Import TranslationService from backend/services/translation_service
+- Find articles with needs_translation = True AND status = "scraped"
+- Translate to Ukrainian using Claude API
+- Update articles with:
+  * translated_title
+  * translated_text
+  * status = "translated"
+- Show me translation results (original vs translated titles)
+
+=== STEP 3: GENERATE IMAGES & SEND TO TELEGRAM ===
+- Import ImageGenerator from backend/services/image_generator
+- For each translated/Ukrainian article:
+  * Generate DALL-E image based on translated title + content
+  * Save image to attached_assets/generated_images/
+  * Update article with:
+    - image_url (DALL-E URL)
+    - local_image_path (saved file path)
+    - status = "pending_approval"
+  * IMMEDIATELY send Telegram notification with:
+    - Image (from local_image_path)
+    - Translated title
+    - Translated content (first 200 chars)
+    - Inline buttons: ✅ Approve | ❌ Reject
+  * Store telegram_message_id in article metadata
+- Show me confirmation of Telegram messages sent with article IDs
+
+=== STEP 4: WAIT FOR USER APPROVAL ===
+- PAUSE HERE
+- User will check Telegram and click ✅ Approve buttons
+- Show me the current article statuses
+- Explain: "Now check your Telegram and approve the articles you like. When ready, I'll proceed to posting."
+
+=== STEP 5: POST APPROVED ARTICLES TO FACEBOOK ===
+(Wait for user confirmation before executing this step)
+- Import FacebookPoster from backend/services/facebook_poster
+- Find articles with status = "approved" AND target_platform contains "facebook"
+- For each approved article:
+  * Post to Facebook with image and translated content
+  * Update article with:
+    - status = "posted"
+    - posted_at = current timestamp
+    - facebook_post_url in extra_metadata
+- Show me the Facebook post URLs
+
+=== VERIFICATION ===
+After posting, show me:
+1. Total articles scraped: X
+2. Total articles translated: X
+3. Total images generated: X
+4. Total Telegram notifications sent: X
+5. Total articles approved by user: X
+6. Total articles posted to Facebook: X
+7. Facebook post URLs for verification
+
+IMPORTANT NOTES:
+- DO NOT simulate approval - wait for real Telegram button clicks
+- After Step 3, STOP and wait for user to approve in Telegram
+- Only execute Step 5 after user confirms approvals are done
+- Handle errors gracefully and show detailed error messages
+- Use absolute file paths for images
+- Verify Facebook credentials are loaded before posting

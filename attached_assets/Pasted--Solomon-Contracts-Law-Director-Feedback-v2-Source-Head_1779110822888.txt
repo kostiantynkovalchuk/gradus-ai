@@ -1,0 +1,433 @@
+# Solomon Contracts — Law Director Feedback v2
+
+**Source:** Head of Law review of Lvivholod engagement (April 30, 2026).
+**Status doc this builds on:** Solomon Contracts — Project Status v2 (April 27, 2026).
+**Branch:** `feat/law-director-v2`. Single PR per workstream — do not combine.
+
+## Background (read before touching anything)
+
+The law director reviewed Solomon's output on the Lvivholod supply contract and returned three structural complaints:
+
+1. **Протокол розбіжностей format is wrong.** The DOCX that gets sent to the counterparty currently has 5 columns and embeds internal-review artifacts (Правова підстава, AI markers). The counterparty-facing document must be a clean negotiation table: ordinal / counterparty's edition / our edition / agreed edition. Internal artifacts stay in the legal opinion (правовий висновок), not in the протокол.
+
+2. **Knowledge base contains unauthorized sources.** The director's approved list does not include Господарський кодекс України (ГК). Several findings in the Lvivholod output cite ст. 231, 232, 233, 268 ГК. Those citations must not appear. Possible causes: ГК chunks are in the Pinecone corpus; or model priors leak ГК references through the analyzer without retrieval. Audit must distinguish which.
+
+3. **Editions of laws are not actualized.** Citations should pin to the current edition of each law on zakon.rada.gov.ua. Currently no edition tracking exists; the corpus was chunked once at ingestion and never re-validated. The director wants citations to read like `Ст. 658-1 ЦК України (ред. від 25.05.2026)` and a daily job to detect when an edition flips.
+
+**What is NOT in scope and must not change:**
+
+- Analyzer prompt logic for findings beyond what's stated in Workstream C.
+- The legal opinion (правовий висновок) DOCX builder — keep it rich.
+- Court search (SOLOMON v1) — only the contract module is in scope.
+- Any of the parked items (court search ↔ contract links, INCOTERMS primary text, buyer profiles, Phase 3 protocol re-analysis).
+- Pinecone index move or namespace rename. We're working inside `solomon-contracts-corpus`.
+
+## Phase 0 — Pre-flight audit (no code changes; output a report)
+
+**Goal:** before any destructive change, produce a written audit Konstantin can show the law director. Save the audit output to `backend/audits/law_director_v2_preflight_{YYYYMMDD}.md` and commit it.
+
+The audit must answer four questions explicitly:
+
+### 0.1 — Which laws are in the corpus?
+
+Run against Pinecone namespace `solomon-contracts-corpus`. Aggregate by `source_url` (or whatever metadata key holds the canonical law URL — inspect a sample chunk first to confirm). Output:
+
+| source_url | law_name | chunk_count | first_ingested_at | edition_date_in_metadata |
+|---|---|---|---|---|
+| ... | ... | ... | ... | ... |
+
+The status doc says "15 Ukrainian laws (1028 chunks, articles whitelisted on the three big codes)". Enumerate all 15. Flag which of the three codes are the "big" ones.
+
+### 0.2 — Is ГК (Господарський кодекс) in the corpus?
+
+Specifically: does any chunk in `solomon-contracts-corpus` have `source_url` matching `zakon.rada.gov.ua/laws/show/436-15` (ГК document number)? Count chunks. If yes, this is the smoking gun and the chunks must be removed in Workstream B.
+
+### 0.3 — Where do ГК citations originate?
+
+Query `solcon_findings` for the Lvivholod engagement (or whichever engagement ID surfaces ГК citations — Konstantin can confirm). For each finding citing ГК, capture:
+
+- `finding_id`
+- `legal_basis` field (the citation text)
+- `grounding_status`
+- Any associated retrieved chunks (if the analyzer logs retrieval — check whether retrieval traces are persisted; if not, note that and recommend logging them in Workstream C)
+
+If `grounding_status` is anything other than `retrieved` (i.e. the model is producing ГК citations without a Pinecone hit), we have a *prompt leakage* problem in addition to the corpus problem. Both must be addressed.
+
+### 0.4 — What's the protocol DOCX currently emitting?
+
+Locate the builder function. Likely in `backend/solomon/contracts/` somewhere — grep for "Узгоджена редакція" or "Протокол DOCX". Capture the column definitions, widths, and the function signature. Report whether the column order in the code matches the status doc's claim (`Пункт договору / Редакція Покупця / Редакція Постачальника / Правова підстава / Узгоджена редакція`).
+
+**Stop here and wait for sign-off before proceeding to Workstream B.** Workstream A can proceed in parallel — it's independent.
+
+---
+
+## Workstream A — Protocol DOCX column drop
+
+**Status:** safe to ship immediately. No data layer changes. No model behavior changes.
+
+### A.1 Locate the builder
+
+Grep the backend for the protocol DOCX generator. The status doc references endpoint `POST /api/contracts/engagements/{eid}/documents/{did}/protocol`. The builder is whatever that route calls. Likely `backend/solomon/contracts/protocol_builder.py` or similar — confirm path before editing.
+
+### A.2 Change column structure from 5 → 4
+
+**Current (from status doc):** `Пункт договору / Редакція Покупця / Редакція Постачальника / Правова підстава / Узгоджена редакція`.
+
+**Target:** `№ / Редакція {counterparty_role} / Редакція {avtd_role} / Узгоджена редакція`.
+
+Specifications:
+
+- **Column 1 (`№`)**: ordinal counter starting from 1, narrow width (~5–7% of table width, roughly 0.5–0.7cm in DOCX). The column currently labeled "Пункт договору" should be REPURPOSED into an ordinal column. The clause reference (e.g. "п.13.5") moves to the top of column 2 above the verbatim text, as a bold prefix — see reference document `protocol_4.pages` for the exact treatment.
+- **Column 2 header** (`~35%` width): dynamic — `Редакція Покупця` if AVTD is supplier, `Редакція Постачальника` if AVTD is buyer.
+- **Column 3 header** (`~35%` width): dynamic — opposite of column 2. `Редакція Постачальника` if AVTD is supplier, `Редакція Покупця` if AVTD is buyer.
+- **Column 4** (`~25%` width): header `Узгоджена редакція`, body empty. Width must be sufficient that a 2–3 sentence clause fits without overflow.
+- **DROP** the Правова підстава column entirely. It does not appear in the counterparty-facing document. (It stays in `solcon_findings.legal_basis` and renders in the правовий висновок DOCX. Do not remove the column from the data model.)
+
+### A.3 Header block above the table
+
+Pull `protocol_4.pages` open (already extracted to `/tmp/pages_extract/` during preflight if needed; otherwise re-extract from the uploaded sample). The header block reads:
+
+```
+ПРОТОКОЛ РОЗБІЖНОСТЕЙ
+до Договору поставки з {counterparty_name}
+документ: {source_filename}
+Справа: {engagement_name}
+AVTD виступає {Постачальником | Покупцем}.
+```
+
+`AVTD виступає` line resolves from `engagements.avtd_role` (see A.4).
+
+### A.4 `avtd_role` field on engagements
+
+If the `engagements` table does not already have an `avtd_role` column, add one in **migration 049**:
+
+```sql
+ALTER TABLE solcon_engagements
+ADD COLUMN avtd_role VARCHAR(16)
+  CHECK (avtd_role IN ('supplier', 'buyer'));
+```
+
+Backfill: existing engagements default to `supplier` (AVTD's overwhelming default position — it's a distributor selling INTO retail). Make the dropdown to set this visible on the engagement creation form. The protocol DOCX export must refuse to generate (with a clear error: "Set AVTD role on engagement before exporting protocol") if `avtd_role IS NULL`.
+
+### A.5 Strip AI markers from columns 2 and 3
+
+Status doc says this is already done for column 3 (supplier column) via "AI tag stripped from supplier column (kept in UI/risk note); supplier text trimmed to first 2 paragraphs, hard-capped at 800 chars." Confirm both columns 2 and 3 in the new layout pass through this scrubber. The string `[AI пропозиція — потребує перевірки юриста]` (and any English variants in the DB) must not appear in either column.
+
+### A.6 Filename of generated DOCX
+
+Status doc says: "Protocol DOCX filename includes Cyrillic source document name via RFC 5987 encoding." Keep that. The format should be: `Протокол розбіжностей — {source_filename}.docx`.
+
+### A.7 Acceptance criteria — Workstream A
+
+- [ ] Re-run protocol export on the Lvivholod engagement. Output has exactly 4 columns, in the order above.
+- [ ] Header reads correctly with `avtd_role='supplier'` → "AVTD виступає Постачальником."
+- [ ] Toggle the engagement to `avtd_role='buyer'`, re-export. Header reads "AVTD виступає Покупцем." Columns 2 and 3 swap labels accordingly. Column data does not move — same finding text in same columns; only header labels change.
+- [ ] Visual match against `protocol_4.pages` reference: column 1 narrow, column 4 wide enough for a paragraph, no Правова підстава column anywhere.
+- [ ] AI marker text absent from columns 2 and 3 in the rendered DOCX.
+- [ ] Internal правовий висновок DOCX export still includes Правова підстава and AI markers (no regression on the internal artifact).
+
+---
+
+## Workstream B — Approved KB registry + corpus cleanup
+
+**Status:** blocked on Phase 0 audit sign-off. Konstantin must confirm the approved list with the law director before chunks are removed.
+
+### B.1 New table: `solomon_kb_sources`
+
+Migration 050:
+
+```sql
+CREATE TABLE solomon_kb_sources (
+  id            SERIAL PRIMARY KEY,
+  law_code      VARCHAR(32)  NOT NULL UNIQUE,   -- e.g. "435-IV", "2755-VI"
+  law_name      VARCHAR(256) NOT NULL,          -- e.g. "Цивільний кодекс України"
+  canonical_url VARCHAR(512) NOT NULL,          -- e.g. "https://zakon.rada.gov.ua/laws/show/435-15"
+  current_edition_date  DATE,                   -- e.g. 2026-05-25
+  current_edition_basis VARCHAR(32),            -- e.g. "4824-IX"
+  last_verified_at      TIMESTAMPTZ,
+  approved_by           VARCHAR(128),           -- law director name
+  approved_at           TIMESTAMPTZ NOT NULL,
+  notes                 TEXT,
+  CONSTRAINT chk_canonical_url_no_edition_suffix
+    CHECK (canonical_url !~ '/ed[0-9]{8}')      -- canonical URLs never include /edYYYYMMDD
+);
+
+CREATE INDEX idx_solomon_kb_sources_law_code ON solomon_kb_sources(law_code);
+```
+
+`canonical_url` invariant: must be the bare `zakon.rada.gov.ua/laws/show/{document_number}` form. The `/edYYYYMMDD` suffix is stripped at insert time. The CHECK constraint enforces this.
+
+### B.2 Seed the registry
+
+Insert one row per law the law director approves. Konstantin gets this list from the law director before this migration runs. The seed migration body is just `INSERT INTO solomon_kb_sources ...` with no defaults — do NOT pre-populate with current corpus contents. The registry is the trust root; if a law isn't in it explicitly, it's not approved.
+
+### B.3 Pinecone metadata schema for kb_sources linkage
+
+Every chunk in `solomon-contracts-corpus` must carry metadata field `kb_source_id` (integer FK to `solomon_kb_sources.id`). Inspect current metadata schema. If chunks don't have this field, write a one-shot script `backend/scripts/backfill_kb_source_ids.py` that:
+
+1. Reads each chunk's existing `source_url`
+2. Looks up the matching `solomon_kb_sources` row
+3. Updates the chunk with the resolved `kb_source_id`
+4. **If no match**: writes the chunk's vector ID and source URL to `backend/audits/orphan_chunks_{YYYYMMDD}.csv` — these are the chunks that need to be deleted.
+
+Do NOT auto-delete orphan chunks. The CSV is reviewed by Konstantin → confirmed with law director → manual deletion via a second script `backend/scripts/delete_orphan_chunks.py` that takes the CSV as input and deletes by vector ID.
+
+### B.4 Ingestion contract
+
+Any future law ingestion goes through a single entry point: `backend/solomon/contracts/kb_ingest.py::ingest_law(law_code)`. It must:
+
+1. Look up the law in `solomon_kb_sources`. If absent → raise. No ingestion of unregistered laws.
+2. Fetch the canonical URL.
+3. Detect the "Це не поточна редакція" warning (see Workstream D — share that helper).
+4. Follow the "Перейти до поточної" link if present.
+5. Parse `current_edition_date` and `current_edition_basis` from the header. Update `solomon_kb_sources`.
+6. Chunk + embed + upsert to Pinecone with `kb_source_id` in metadata.
+
+The previous ad-hoc ingestion code (if any exists) is deprecated. Mark it `@deprecated` with a docstring pointing at the new function. Do not delete it in this PR — Konstantin removes it after one stable week.
+
+### B.5 Acceptance criteria — Workstream B
+
+- [ ] Migration 050 applied; `solomon_kb_sources` exists with the law director's approved laws seeded.
+- [ ] Backfill script run; `orphan_chunks_{date}.csv` produced and reviewed.
+- [ ] After orphan deletion: every chunk in `solomon-contracts-corpus` resolves to a `kb_source_id` in `solomon_kb_sources`. Verify with a Pinecone metadata sample query.
+- [ ] Specifically: zero chunks remain with `source_url` matching `zakon.rada.gov.ua/laws/show/436-15` (ГК) unless the law director explicitly approved ГК (in which case it appears in `solomon_kb_sources` and chunks remain).
+- [ ] `kb_ingest.ingest_law("nonexistent-law-code")` raises clearly.
+
+---
+
+## Workstream C — Haiku post-citation filter
+
+**Status:** depends on Workstream B (needs the registry to validate against). Pattern mirrors the existing court-search scorer (migration 048, `solomon_scorer_log`).
+
+### C.1 The problem this solves
+
+The analyzer (Sonnet 4.6, per status doc) generates `legal_basis` strings on each finding. Two failure modes:
+
+1. **Retrieved citation but to an unapproved law**: chunk for ГК exists in Pinecone, gets retrieved, model cites it. Fix: remove the chunks (Workstream B). After B, this mode is impossible.
+2. **Citation produced from model priors**: the model writes "Ст. 232 ГК України" without retrieval support, because it remembers the law from training. Fix: post-generation filter.
+
+### C.2 New table: `solcon_citation_filter_log`
+
+Migration 051:
+
+```sql
+CREATE TABLE solcon_citation_filter_log (
+  id              SERIAL PRIMARY KEY,
+  finding_id      INTEGER REFERENCES solcon_findings(id) ON DELETE CASCADE,
+  original_basis  TEXT NOT NULL,
+  filtered_basis  TEXT,                       -- NULL if all citations dropped
+  dropped_citations JSONB NOT NULL,            -- array of {citation_text, reason}
+  filter_model    VARCHAR(32) NOT NULL,        -- "claude-haiku-4-5-20251001"
+  filter_cost_usd NUMERIC(10, 6),
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_solcon_citation_filter_log_finding ON solcon_citation_filter_log(finding_id);
+```
+
+### C.3 The filter pass
+
+After Sonnet generates a finding, before persisting `legal_basis`, send the citation list through Haiku with this contract:
+
+**Input to Haiku:**
+- The candidate `legal_basis` text (may contain multiple citations separated by `·` per current format)
+- The approved law list: `SELECT law_code, law_name FROM solomon_kb_sources`
+
+**Haiku prompt skeleton** (Ukrainian-aware, structured JSON output):
+
+```
+Ти — фільтр посилань на нормативні акти. Тобі надано:
+1) Список цитат із юридичної знахідки
+2) Список затверджених джерел знань
+
+Поверни JSON: {
+  "citations": [
+    { "original": "Ст. 232 ГК України — ...", "approved": false, "law_code": null, "reason": "Господарський кодекс відсутній у затверджених джерелах" },
+    { "original": "Ст. 658-1 ЦК України — ...", "approved": true, "law_code": "435-IV", "reason": null }
+  ]
+}
+
+Ніяких пояснень поза JSON. Тільки факт відповідності закону зі списку.
+```
+
+Cost target: <$0.005 per filtering call. Use Haiku 4.5 (`claude-haiku-4-5-20251001`) per the handover doc's model strategy.
+
+### C.4 Behavior when all citations are dropped
+
+If Haiku flags every citation in a finding as unapproved:
+
+1. Set the finding's `legal_basis` to `NULL`.
+2. Set `grounding_status` to `out_of_approved_kb` (new enum value — see C.5).
+3. The UI already renders `⚠ Альтернатива не обґрунтована — правова база не знайдена` when `legal_basis` is absent or grounding is insufficient (visible on two findings in the current Lvivholod output). Confirm the new `out_of_approved_kb` value triggers this same rendering path. If it doesn't, extend the UI conditional.
+
+### C.5 Extend `grounding_status` CHECK
+
+Migration 052:
+
+```sql
+ALTER TABLE solcon_findings
+DROP CONSTRAINT IF EXISTS chk_grounding_status;
+
+ALTER TABLE solcon_findings
+ADD CONSTRAINT chk_grounding_status CHECK (
+  grounding_status IN (
+    'retrieved',
+    'incoterms_2020_summary',
+    'awaiting_incoterms_primary_source',
+    'out_of_approved_kb',           -- NEW
+    'no_basis_found'                -- preserve existing values; confirm by inspecting current table before writing migration
+  )
+);
+```
+
+**IMPORTANT:** before writing this migration, query the current CHECK constraint to capture ALL existing allowed values. Do not drop any. The migration adds `out_of_approved_kb` to whatever set is already there.
+
+### C.6 Failure modes of the filter itself
+
+Mirror the court-search scorer's safeguards (status doc, line "Two safeguards: scorer crashes return reyestr's original order; if scorer excludes everything, best-scored candidates returned anyway"):
+
+- **Filter call fails / times out / returns invalid JSON**: log the failure, persist the finding with original `legal_basis` unchanged but set a flag `citation_filter_failed=true` on `solcon_findings` (new boolean column, default false — include in migration 052). UI shows a small ⚠ icon on findings where filter failed. Konstantin sees them in dashboard and can retry.
+- **Filter wants to drop everything but original basis had >2 citations**: don't auto-drop everything silently. Persist with `grounding_status='out_of_approved_kb'` AND flag for manual review.
+
+### C.7 Acceptance criteria — Workstream C
+
+- [ ] Re-run analysis on Lvivholod engagement after Workstreams B + C are deployed.
+- [ ] Zero findings cite ГК in `legal_basis`.
+- [ ] Findings that previously cited only ГК now show `legal_basis IS NULL` with `grounding_status='out_of_approved_kb'` and the UI fallback message.
+- [ ] `solcon_citation_filter_log` has one row per finding analyzed, with non-empty `dropped_citations` for the affected findings.
+- [ ] Filter cost per engagement < $0.20 (target <$0.10 — should be well under since most findings have ≤3 citations).
+- [ ] Forcing a filter call to fail (mock the API) preserves the original behavior with `citation_filter_failed=true` flag set. No findings lost.
+
+---
+
+## Workstream D — Edition actualization
+
+**Status:** extends Workstream B's registry. Should ship together with B if possible; separable if not.
+
+### D.1 At ingestion time
+
+Already covered in B.4 — `kb_ingest.ingest_law()` parses the header and persists edition info. Reproducing here for completeness:
+
+1. Strip `/edYYYYMMDD` from any URL before storage. Enforced by the CHECK constraint in B.1.
+2. Fetch the canonical URL.
+3. Detect warning text `Це не поточна редакція документу` on the page (regex or BS4 selector — inspect a sample page from zakon.rada to confirm the markup).
+4. If warning present, find the "Перейти до поточної" link, follow it, repeat from step 3 until no warning (or hard limit 3 hops to prevent loops).
+5. Parse the header: `Документ {law_code}, наступна редакція — Редакція від {DD.MM.YYYY}, підстава - {basis_code}`. Regex roughly: `Редакція від (\d{2}\.\d{2}\.\d{4}), підстава - (\S+)`.
+6. Persist `current_edition_date` and `current_edition_basis` to `solomon_kb_sources`. Set `last_verified_at = NOW()`.
+
+### D.2 Re-validation job
+
+A daily cron in the existing Render scheduler (handover doc mentions schedulers exist — check `backend/schedulers/` or wherever the LinkedIn weekly digest job lives, follow that pattern).
+
+`backend/jobs/kb_edition_check.py`:
+
+```python
+def run_edition_check():
+    for source in solomon_kb_sources.all():
+        new_date, new_basis = fetch_current_edition(source.canonical_url)
+        if new_date != source.current_edition_date:
+            # Edition flipped. Two actions:
+            log_edition_flip(source, new_date, new_basis)
+            send_telegram_notification(  # to law director group
+                f"⚠ Зміна редакції: {source.law_name} "
+                f"— нова редакція від {new_date} (підстава {new_basis}). "
+                f"Потрібен повторний імпорт у Pinecone."
+            )
+            # DO NOT auto-reingest. Reingestion changes the corpus
+            # the law director approved. Wait for explicit approval.
+        source.last_verified_at = now()
+        source.save()
+```
+
+**Cron frequency:** daily at 03:00 Kyiv time. Cheap; the page is small; no rate limit risk against zakon.rada at one request per law per day.
+
+### D.3 Citation rendering with edition
+
+The analyzer (or a post-processor) should append edition info to every citation in `legal_basis`. Format: `Ст. 658-1 ЦК України (ред. від 25.05.2026)`.
+
+Two implementation options:
+
+- **Option 1 (cleaner):** Do this in the citation filter from Workstream C. Haiku's output already resolves citations to `law_code` — join to `solomon_kb_sources.current_edition_date` and inject the suffix.
+- **Option 2 (simpler):** A regex post-processor that finds law-code patterns (`ЦК України`, `ПК України`, etc.) and appends edition. Less robust.
+
+Recommend Option 1 — the join is trivial and the Haiku call is already running.
+
+### D.4 Future-edition awareness (from the law director's screenshot)
+
+The zakon.rada page also shows: `Остання подія — Редакція, відбудеться пізніше, підстава - {basis}`. This is a scheduled future edition. The ingestion parser should also capture this as `next_edition_basis` and `next_edition_date_estimated` (date may be missing — accept NULL).
+
+Migration 052 (combined with the grounding_status extension):
+
+```sql
+ALTER TABLE solomon_kb_sources
+ADD COLUMN next_edition_basis VARCHAR(32),
+ADD COLUMN next_edition_date_estimated DATE;
+```
+
+The daily cron logs to Telegram when `next_edition_basis` first appears or changes value.
+
+### D.5 Acceptance criteria — Workstream D
+
+- [ ] Ingest a known law (e.g. ЦК, `435-IV`). `solomon_kb_sources.current_edition_date` populated with the date from the page header.
+- [ ] Pass the URL `zakon.rada.gov.ua/laws/show/435-15/ed20250101` (deliberately outdated) to `ingest_law()`. The function detects the "Це не поточна редакція" warning, follows to current, and stores the current edition — not the 2025-01-01 stale one.
+- [ ] Citation in a generated finding reads: `Ст. 658-1 ЦК України (ред. від {actual current date})`.
+- [ ] Manual trigger of the cron job with a forced edition-date mismatch fires the Telegram notification.
+- [ ] No auto-reingestion runs without manual approval.
+
+---
+
+## Migration summary
+
+| Migration | Workstream | Purpose |
+|---|---|---|
+| 049 | A | `avtd_role` on `solcon_engagements` |
+| 050 | B | `solomon_kb_sources` table |
+| 051 | C | `solcon_citation_filter_log` table |
+| 052 | C + D | Extend `grounding_status` enum; add `next_edition_*` columns; `citation_filter_failed` flag |
+
+Per the handover doc convention: migrations live in `backend/db_migrations.py`, tracked in `schema_migrations`. Use SQLAlchemy not asyncpg. Run on production Neon URL.
+
+## API surface
+
+New / changed endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| PATCH | `/api/contracts/engagements/{eid}` | Set `avtd_role` (Workstream A) |
+| GET | `/api/contracts/kb-sources` | List approved sources (Workstream B) — feeds an admin UI later |
+| POST | `/api/contracts/kb-sources/{id}/reingest` | Manual reingest after edition flip (Workstream D) |
+| GET | `/api/contracts/findings/{id}/citation-trace` | Returns the filter log entry for a finding (Workstream C, debug aid) |
+
+Existing endpoint `POST /api/contracts/engagements/{eid}/documents/{did}/protocol` returns 4-column DOCX after Workstream A.
+
+## UI changes
+
+Backend-served UI (the `/law` routes — confirm this lives in the same repo; if it's in the separate `gradusmedia.org` Replit project flag this and stop):
+
+- Engagement creation form: `avtd_role` dropdown (Постачальник / Покупець), required.
+- Engagement workspace: small badge near the header showing `AVTD виступає {role}`. Editable inline.
+- Finding card: when `grounding_status='out_of_approved_kb'`, render the existing ⚠ fallback. When `citation_filter_failed=true`, render a separate small icon with a tooltip "Фільтр посилань не відпрацював — натисніть для повторного запуску" and a manual retry action.
+
+## Sequencing
+
+Ship workstreams in this order, one PR each:
+
+1. **A** (protocol DOCX) — fastest, smallest, safe. Ship within 1 day.
+2. **Phase 0 audit** — report out to Konstantin → law director. Wait for approved law list.
+3. **B** (KB registry + orphan cleanup) — only after approved list received.
+4. **C** (citation filter) — after B is merged and corpus is clean.
+5. **D** (edition actualization) — bundled with C if possible.
+
+Do not skip Phase 0. The orphan cleanup is destructive against Pinecone and must be reviewed before execution.
+
+## Out of scope — do not touch
+
+- Court search (SOLOMON v1) module. Migration 048 (`solomon_scorer_log`) is the inspiration pattern for Workstream C but the court-search code itself is not changed.
+- Legal opinion (правовий висновок) DOCX builder. It keeps everything Workstream A removes from the протокол.
+- Analyzer prompt for finding generation beyond what's stated in C.3. Severity, category, AI-proposal text — all unchanged.
+- Pinecone index settings (dimensions, region, plan).
+- Authentication, payments, anything outside the `/law` contract module.
+
+## Definition of done
+
+All four acceptance-criteria sections above pass on the Lvivholod engagement re-run. Konstantin shows the new протокол DOCX, the new правовий висновок (unchanged), and a sample finding with `legal_basis` reading `Ст. 658-1 ЦК України (ред. від 25.05.2026)` to the law director, and the law director signs off.

@@ -1,0 +1,119 @@
+Fix batch_ingest_websites.py to add inline Pinecone ingestion using existing rag_utils functions.
+
+CONTEXT:
+We already have scraped and enriched content. We just need to chunk it, create embeddings, and upload to Pinecone. The existing ingest_website() function does scraping which we don't need.
+
+UPDATE backend/scripts/batch_ingest_websites.py:
+
+LINE 13 - Fix imports:
+```python
+# OLD:
+from services.rag_service import add_documents_to_rag
+
+# NEW:
+from services.rag_utils import chunk_text, get_embedding
+from pinecone import Pinecone
+```
+
+ADD new ingestion function after imports (around line 15):
+```python
+def ingest_scraped_content_to_pinecone(content: str, metadata: dict):
+    """
+    Ingest pre-scraped and enriched content to Pinecone.
+    Content is already scraped and enriched with Best Brands rebrand.
+    """
+    
+    # Initialize Pinecone
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index = pc.Index(os.getenv("PINECONE_INDEX_NAME"))
+    
+    # Chunk the content (using rag_utils function)
+    chunks = chunk_text(content, chunk_size=500, overlap=50)
+    
+    print(f"   📦 Created {len(chunks)} chunks")
+    
+    # Prepare vectors for upload
+    vectors_to_upsert = []
+    
+    for i, chunk in enumerate(chunks):
+        try:
+            # Get embedding (using rag_utils function)
+            embedding = get_embedding(chunk)
+            
+            # Create unique vector ID
+            timestamp = datetime.now().timestamp()
+            vector_id = f"{metadata['brand']}_{metadata['category']}_{i}_{int(timestamp)}"
+            
+            # Create vector with metadata
+            vector = {
+                "id": vector_id,
+                "values": embedding,
+                "metadata": {
+                    **metadata,
+                    "text": chunk,
+                    "chunk_index": i
+                }
+            }
+            vectors_to_upsert.append(vector)
+            
+        except Exception as e:
+            print(f"   ⚠️ Error creating embedding for chunk {i}: {e}")
+            continue
+    
+    # Upload to Pinecone in batches
+    if vectors_to_upsert:
+        batch_size = 100
+        for i in range(0, len(vectors_to_upsert), batch_size):
+            batch = vectors_to_upsert[i:i+batch_size]
+            index.upsert(
+                vectors=batch,
+                namespace="company_knowledge"
+            )
+        
+        print(f"   📤 Uploaded {len(vectors_to_upsert)} vectors to Pinecone")
+    else:
+        print(f"   ⚠️ No vectors to upload")
+```
+
+UPDATE ingest_to_rag function (find it and replace):
+```python
+def ingest_to_rag(scraped_data):
+    """Ingest all scraped and enriched data to Pinecone"""
+    print("\n📤 Ingesting to RAG...")
+    
+    success_count = 0
+    total_chunks = 0
+    
+    for item in scraped_data:
+        try:
+            print(f"\n🔄 Processing {item['metadata']['brand']}...")
+            
+            # Use our inline ingestion function
+            ingest_scraped_content_to_pinecone(
+                content=item["content"],
+                metadata=item["metadata"]
+            )
+            
+            print(f"✅ Ingested {item['metadata']['brand']}")
+            success_count += 1
+            
+        except Exception as e:
+            print(f"❌ Error ingesting {item['metadata']['brand']}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"\n📊 Successfully ingested {success_count}/{len(scraped_data)} brands")
+```
+
+WHAT THIS DOES:
+- Uses chunk_text() from rag_utils to split content
+- Uses get_embedding() from rag_utils to create embeddings
+- Uploads directly to Pinecone with proper metadata
+- Handles errors gracefully
+- Shows progress for each brand
+
+After fixing, the script will:
+1. Delete old data ✅
+2. Scrape 11 websites with click-through ✅
+3. Enrich with Best Brands rebrand ✅
+4. Chunk, embed, and upload to Pinecone ✅

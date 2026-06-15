@@ -1,0 +1,135 @@
+Add language field and update database schema to support Ukrainian sources:
+
+📋 TASK: Add language detection to ContentQueue model and update translation logic
+
+STEP 1: UPDATE backend/models.py
+
+Add these fields to ContentQueue class:
+```python
+class ContentQueue(Base):
+    __tablename__ = "content_queue"
+    
+    # ... existing fields ...
+    
+    # NEW: Language support
+    language = Column(String, default='en')  # 'en', 'uk', 'ru', etc.
+    needs_translation = Column(Boolean, default=True)  # False for Ukrainian sources
+    
+    # ... rest of existing fields ...
+```
+
+STEP 2: CREATE migration script
+
+Create backend/migrations/add_language_support.py:
+```python
+"""
+Add language support to ContentQueue
+Run once to update existing database
+"""
+
+from database import SessionLocal, engine
+from sqlalchemy import text
+
+def migrate():
+    """Add language and needs_translation columns"""
+    
+    db = SessionLocal()
+    
+    try:
+        # Add language column
+        db.execute(text("""
+            ALTER TABLE content_queue 
+            ADD COLUMN IF NOT EXISTS language VARCHAR DEFAULT 'en'
+        """))
+        
+        # Add needs_translation column
+        db.execute(text("""
+            ALTER TABLE content_queue 
+            ADD COLUMN IF NOT EXISTS needs_translation BOOLEAN DEFAULT TRUE
+        """))
+        
+        db.commit()
+        print("✅ Migration completed successfully")
+        
+    except Exception as e:
+        print(f"❌ Migration failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+if __name__ == "__main__":
+    migrate()
+```
+
+STEP 3: RUN migration
+```bash
+cd backend
+python migrations/add_language_support.py
+```
+
+STEP 4: UPDATE backend/services/translation_service.py
+
+Modify translate_pending_task to skip Ukrainian content:
+```python
+def translate_pending_task(self):
+    """
+    Translate pending articles
+    SKIP articles that don't need translation (Ukrainian sources)
+    """
+    logger.info("🤖 [SCHEDULER] Translating pending articles...")
+    
+    try:
+        from models import ContentQueue
+        
+        db = self._get_db_session()
+        
+        # Get articles that NEED translation
+        articles = db.query(ContentQueue).filter(
+            ContentQueue.status == 'draft',
+            ContentQueue.needs_translation == True,  # ← ONLY translate these
+            ContentQueue.translated_text.is_(None)
+        ).limit(5).all()
+        
+        if not articles:
+            logger.info("No articles need translation")
+            db.close()
+            return
+        
+        # ... rest of translation logic unchanged ...
+```
+
+STEP 5: UPDATE backend/services/image_generator.py
+
+Modify to handle Ukrainian content:
+```python
+def generate_images_task(self):
+    """
+    Generate images for articles (both translated and Ukrainian)
+    """
+    logger.info("🤖 [SCHEDULER] Generating images...")
+    
+    try:
+        from models import ContentQueue
+        
+        db = self._get_db_session()
+        
+        # Get articles ready for images (either translated OR Ukrainian)
+        articles = db.query(ContentQueue).filter(
+            ContentQueue.status.in_(['draft', 'pending_approval']),
+            ContentQueue.image_url.is_(None),
+            or_(
+                ContentQueue.needs_translation == False,  # Ukrainian - ready
+                ContentQueue.translated_text.isnot(None)   # Translated - ready
+            )
+        ).limit(3).all()
+        
+        # ... rest of image generation logic ...
+```
+
+Verify:
+1. Migration runs successfully
+2. New columns added to database
+3. Translation service skips Ukrainian content
+4. Image generation works for both languages
+
+Please implement language support system!

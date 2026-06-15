@@ -1,0 +1,163 @@
+# BUG FIX: Photo Collection Flow — Photos Sent During AWAITING_STORE_NAME Are Silently Ignored
+
+## Bug Description
+
+When the agent starts a new report, the bot asks "Напиши назву торгової точки" (write the store name). The agent then sends **photos instead of a text name**. The bot does NOT respond — no "📸 Фото 1/5 отримано", no error, nothing. The photos are silently dropped.
+
+**Expected behavior:**
+The bot should either:
+- (Option A — recommended) Accept the photo as implicit "start collecting", use a placeholder store name like "Без назви" or auto-extract from context, then respond with "📸 Фото 1/5 отримано. Надішли ще або натисни Готово."
+- (Option B) Reply with a reminder: "⚠️ Спочатку напиши назву торгової точки, потім надсилай фото."
+
+**What actually happens:**
+Complete silence. No bot response. Photos lost. See screenshot — two photos sent after "Новий звіт" prompt, zero bot replies.
+
+## Root Cause Analysis
+
+The ConversationHandler likely has states like:
+
+```
+AWAITING_STORE_NAME → COLLECTING_PHOTOS → ANALYZING
+```
+
+When the bot is in `AWAITING_STORE_NAME` state and receives a **photo** (not text), the handler has no matching entry for `MessageHandler(filters.PHOTO)` in that state, so `python-telegram-bot` silently ignores the update.
+
+## Evidence from Render Logs
+
+Looking at successful reports (#31-#34), each shows:
+```
+getFile → photo downloaded
+sendMessage → confirmation  
+POST api.anthropic.com → analysis
+Stored 1 photos for report #XX
+sendMessage → report
+```
+
+But the failed interaction shows NO `getFile` call at all — the photo never gets processed because the handler doesn't catch it in `AWAITING_STORE_NAME` state.
+
+## Required Fix
+
+### In `bot.py` — ConversationHandler states:
+
+**Add a photo handler to the `AWAITING_STORE_NAME` state** that gracefully handles photos arriving before the store name:
+
+```python
+# Option A (recommended): Accept photo, use placeholder name, move to COLLECTING_PHOTOS
+
+async def handle_photo_before_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo sent when bot is still waiting for store name."""
+    # Use placeholder store name
+    context.user_data['store_name'] = "Без назви"
+    context.user_data['photos'] = []
+    
+    # Process this photo as the first photo
+    photo = update.message.photo[-1]  # highest resolution
+    file = await context.bot.get_file(photo.file_id)
+    photo_bytes = await file.download_as_bytearray()
+    context.user_data['photos'].append(bytes(photo_bytes))
+    
+    count = len(context.user_data['photos'])
+    await update.message.reply_text(
+        f"📸 Фото {count}/5 отримано. Надішли ще або натисни Готово."
+    )
+    
+    return COLLECTING_PHOTOS  # transition to photo collection state
+```
+
+**Register it in the ConversationHandler:**
+
+```python
+conv_handler = ConversationHandler(
+    entry_points=[...],
+    states={
+        AWAITING_STORE_NAME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_store_name),
+            # NEW: handle photos arriving before store name
+            MessageHandler(filters.PHOTO, handle_photo_before_name),
+        ],
+        COLLECTING_PHOTOS: [
+            MessageHandler(filters.PHOTO, handle_photo),
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND, 
+                handle_done_or_comment  # handles "Готово" and text comments
+            ),
+        ],
+        # ...
+    },
+    fallbacks=[...],
+)
+```
+
+### Additional edge cases to handle:
+
+1. **Multiple photos sent rapidly (burst):** Telegram sometimes sends photos as separate updates in quick succession. Each should increment the counter and respond:
+   - "📸 Фото 1/5 отримано. Надішли ще або натисни Готово."
+   - "📸 Фото 2/5 отримано. Надішли ще або натисни Готово."
+
+2. **Photo sent as a document (file attachment):** Some users send photos as files, not as compressed photos. Add handler for `filters.Document.IMAGE`:
+   ```python
+   MessageHandler(filters.Document.IMAGE, handle_photo_as_document),
+   ```
+
+3. **6th photo rejection:** If the agent sends more than 5 photos:
+   ```python
+   if len(context.user_data['photos']) >= 5:
+       await update.message.reply_text(
+           "⚠️ Максимум 5 фото. Натисни Готово для аналізу."
+       )
+       return COLLECTING_PHOTOS
+   ```
+
+4. **"Готово" button not working:** Looking at the screenshot, the bot shows persistent keyboard buttons ("📸 Новий звіт", "📊 Моя статистика"). Make sure the "✅ Готово" button appears as a ReplyKeyboard when in COLLECTING_PHOTOS state:
+   ```python
+   gotovo_keyboard = ReplyKeyboardMarkup(
+       [["✅ Готово"]], 
+       resize_keyboard=True, 
+       one_time_keyboard=True
+   )
+   await update.message.reply_text(
+       f"📸 Фото {count}/5 отримано. Надішли ще або натисни Готово.",
+       reply_markup=gotovo_keyboard
+   )
+   ```
+
+## Also Check: Is `Stored 1 photos` Correct?
+
+The logs show `Stored 1 photos for report #31` through `#34` — always exactly 1 photo per report. Even for reports where the agent should have sent multiple photos. This suggests the multi-photo collection might not be buffering properly even when photos ARE received in the correct state. Verify that:
+
+1. `context.user_data['photos']` is a list that accumulates
+2. ALL photos in the list are sent to Claude Vision (not just the last one)
+3. ALL photos in the list are saved to `report_photos` table (not just the last one)
+
+```python
+# When "Готово" is pressed — verify ALL photos are processed
+async def handle_done(update, context):
+    photos = context.user_data.get('photos', [])
+    if not photos:
+        await update.message.reply_text("⚠️ Додай хоча б одне фото!")
+        return COLLECTING_PHOTOS
+    
+    # Send ALL photos to Claude Vision in one call
+    vision_result = await analyze_photos(photos)  # must accept list
+    
+    # Store ALL photos in DB
+    report_id = await create_report(...)
+    for i, photo_bytes in enumerate(photos):
+        await store_photo(report_id, i + 1, photo_bytes)
+    
+    # Log should show: "Stored {len(photos)} photos for report #XX"
+    logger.info(f"Stored {len(photos)} photos for report #{report_id}")
+```
+
+## Test Checklist
+
+After the fix, verify these scenarios:
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | Send photo while bot asks for store name | "📸 Фото 1/5 отримано..." (uses placeholder name) |
+| 2 | Send 3 photos then "Готово" | Each photo gets confirmation, report analyzes all 3 |
+| 3 | Send 6 photos | 5th accepted, 6th rejected with "Максимум 5" |
+| 4 | Send "Готово" with 0 photos | "⚠️ Додай хоча б одне фото!" |
+| 5 | Send photo as document/file | Treated same as compressed photo |
+| 6 | Logs show correct count | "Stored 3 photos for report #XX" (not always 1) |

@@ -1,0 +1,335 @@
+CRITICAL URGENCY: Unsplash attribution missing on ALL platforms - investigate and fix immediately
+
+PROBLEM:
+User reports Unsplash attribution is NOT displaying anywhere:
+- ❌ gradusmedia.org (public website)
+- ❌ Facebook posts
+- ❌ LinkedIn posts (assumed)
+- ❌ Admin dashboard /content
+
+This violates Unsplash API Terms Section 9 and risks API access revocation.
+
+=============================================================================
+PHASE 1: INVESTIGATION - Find Root Cause
+=============================================================================
+
+STEP 1: CHECK DATABASE
+Run these queries to verify attribution data exists:
+```sql
+-- Check if attribution fields are populated
+SELECT 
+  id,
+  title,
+  image_url,
+  image_photographer,
+  image_credit,
+  image_credit_url
+FROM articles 
+WHERE image_url IS NOT NULL 
+LIMIT 5;
+```
+
+Question: Are image_photographer, image_credit, image_credit_url NULL or populated?
+- If NULL → Data never saved (backend issue)
+- If populated → Frontend not displaying (rendering issue)
+
+STEP 2: CHECK BACKEND API RESPONSES
+Test the API endpoint that frontend uses:
+```bash
+# Check what data the API returns
+curl https://gradus-ai.onrender.com/api/articles | jq '.[:3]'
+```
+
+Question: Does the JSON response include these fields?
+- image_photographer
+- image_credit  
+- image_credit_url
+
+If missing → API serializer not including fields
+
+STEP 3: CHECK FRONTEND CODE (gradusmedia.org)
+Find the article display component:
+- Location: gradusmedia-frontend repo
+- Files: Article.tsx, ArticleDetail.tsx, or similar
+- Look for: Where article.image_url is rendered
+
+Question: Is there code to display attribution?
+Search for: "image_photographer", "image_credit", "Photo by"
+
+If not found → Attribution code was never added
+If found → CSS hiding it or conditional logic preventing display
+
+STEP 4: CHECK SOCIAL MEDIA POSTING CODE
+Files: facebook_poster.py, linkedin_poster.py
+
+Look for: Where post text is constructed
+Search for: "image_credit", "Photo by"
+
+Question: Is image_credit being added to post_text?
+```python
+# Should look like:
+post_text = f"{article.title}\n\n{article.summary}\n\n{article.image_credit}"
+```
+
+STEP 5: CHECK ADMIN DASHBOARD
+File: Admin frontend (Content.tsx or similar)
+
+Look for: Where article images are displayed in /content
+Question: Is attribution rendering code present?
+
+=============================================================================
+PHASE 2: FIXES - Based on Investigation Results
+=============================================================================
+
+FIX 1: DATABASE MIGRATION (if fields don't exist)
+```sql
+-- Add attribution columns if missing
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_photographer VARCHAR(255);
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_credit VARCHAR(500);
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_credit_url VARCHAR(500);
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS unsplash_image_id VARCHAR(100);
+```
+
+FIX 2: BACKEND - Ensure Data is Saved
+
+File: backend/services/unsplash_service.py
+
+When fetching images, ensure ALL fields are saved:
+```python
+await db.execute(
+    """
+    UPDATE articles SET
+        image_url = :url,
+        image_photographer = :photographer,
+        image_credit = :credit,
+        image_credit_url = :credit_url,
+        unsplash_image_id = :unsplash_id
+    WHERE id = :id
+    """,
+    {
+        "url": img['urls']['regular'],
+        "photographer": img['user']['name'],
+        "credit": f"Photo by {img['user']['name']} on Unsplash",
+        "credit_url": img['user']['links']['html'],
+        "unsplash_id": img['id'],
+        "id": article_id
+    }
+)
+```
+
+FIX 3: BACKEND API - Include Attribution in Response
+
+File: backend/routes/articles.py or wherever article serializer is
+
+Ensure API response includes:
+```python
+def serialize_article(article):
+    return {
+        "id": article.id,
+        "title": article.title,
+        # ... other fields ...
+        "image_url": article.image_url,
+        "image_photographer": article.image_photographer,  # REQUIRED
+        "image_credit": article.image_credit,              # REQUIRED
+        "image_credit_url": article.image_credit_url,      # REQUIRED
+    }
+```
+
+FIX 4: GRADUSMEDIA.ORG FRONTEND - Display Attribution
+
+File: gradusmedia-frontend (Article display component)
+
+Add attribution below every article image:
+```tsx
+{article.imageUrl && (
+  <>
+    <img 
+      src={article.imageUrl} 
+      alt={article.title}
+      className="article-image"
+    />
+    
+    {article.imagePhotographer && (
+      <div className="image-attribution">
+        <p>
+          📷 Photo by{' '}
+          <a 
+            href={article.imageCreditUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {article.imagePhotographer}
+          </a>
+          {' '}on{' '}
+          <a 
+            href="https://unsplash.com"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Unsplash
+          </a>
+        </p>
+      </div>
+    )}
+  </>
+)}
+```
+
+CSS for attribution:
+```css
+.image-attribution {
+  margin-top: 8px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.image-attribution p {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+  margin: 0;
+}
+
+.image-attribution a {
+  color: #111;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.image-attribution a:hover {
+  text-decoration: underline;
+  opacity: 0.8;
+}
+```
+
+FIX 5: FACEBOOK POSTING - Add Attribution to Caption
+
+File: backend/services/facebook_poster.py
+
+Update format_post_text() function:
+```python
+def format_post_text(article):
+    text = f"{article.title}\n\n"
+    
+    if article.summary:
+        text += f"{article.summary}\n\n"
+    
+    text += f"Читати повністю: {article.url}\n\n"
+    
+    # CRITICAL: Add image attribution
+    if article.image_credit:
+        text += f"{article.image_credit}\n\n"
+    
+    text += "#GradusMedia #HoReCa #Алкоголь"
+    
+    return text
+```
+
+FIX 6: LINKEDIN POSTING - Add Attribution to Caption
+
+File: backend/services/linkedin_poster.py
+
+Same fix as Facebook:
+```python
+def format_post_text(article):
+    # ... existing code ...
+    
+    # CRITICAL: Add image attribution
+    if article.image_credit:
+        text += f"\n\n{article.image_credit}"
+    
+    return text
+```
+
+FIX 7: ADMIN DASHBOARD - Display Attribution
+
+File: Admin frontend /content page (Content.tsx or ArticleCard.tsx)
+
+Add attribution wherever images are shown:
+```tsx
+{article.imageUrl && (
+  <div className="article-image-container">
+    <img src={article.imageUrl} alt={article.title} />
+    
+    {article.imagePhotographer && (
+      <div className="admin-attribution">
+        📷 Photo by{' '}
+        <a href={article.imageCreditUrl} target="_blank" rel="noopener">
+          {article.imagePhotographer}
+        </a>
+        {' '}on{' '}
+        <a href="https://unsplash.com" target="_blank" rel="noopener">
+          Unsplash
+        </a>
+      </div>
+    )}
+  </div>
+)}
+```
+
+=============================================================================
+PHASE 3: VERIFICATION & TESTING
+=============================================================================
+
+After implementing fixes, verify:
+
+TEST 1: Database Check
+```sql
+SELECT image_photographer, image_credit FROM articles WHERE image_url IS NOT NULL LIMIT 3;
+```
+Expected: All fields populated (not NULL)
+
+TEST 2: API Response Check
+```bash
+curl https://gradus-ai.onrender.com/api/articles | jq '.[0] | {imagePhotographer, imageCredit}'
+```
+Expected: Fields present in JSON
+
+TEST 3: gradusmedia.org
+- Visit any article page
+- Image should display
+- Attribution should appear below: "📷 Photo by [Name] on Unsplash"
+- Both links clickable and open in new tab
+
+TEST 4: Facebook (next post)
+- Wait for next scheduled post (6:00 PM)
+- Check post caption includes: "Photo by [Name] on Unsplash"
+
+TEST 5: LinkedIn (next post)
+- Wait for next scheduled post (Monday 9:00 AM)
+- Check post includes attribution
+
+TEST 6: Admin Dashboard
+- Visit https://gradus-ai.onrender.com/content
+- Articles with images show attribution below
+
+=============================================================================
+CRITICAL PRIORITY FIXES
+=============================================================================
+
+IMMEDIATE (Deploy within 1 hour):
+1. Fix Facebook/LinkedIn posting (add image_credit to post text)
+2. Fix gradusmedia.org frontend (display attribution)
+3. Verify database has attribution data
+
+HIGH PRIORITY (Deploy today):
+4. Fix admin dashboard attribution display
+5. Ensure API returns attribution fields
+
+VERIFICATION:
+6. Test all platforms after deployment
+7. Manually post one Facebook test to verify attribution shows
+
+=============================================================================
+DELIVERABLES
+=============================================================================
+
+Provide report with:
+1. Root cause identified (where attribution was missing)
+2. All fixes implemented (list files changed)
+3. Test results (screenshots of attribution displaying)
+4. Confirmation that ALL platforms now show attribution
+
+This is URGENT - Unsplash API compliance is at risk.
+
+BEGIN INVESTIGATION AND FIXES IMMEDIATELY.

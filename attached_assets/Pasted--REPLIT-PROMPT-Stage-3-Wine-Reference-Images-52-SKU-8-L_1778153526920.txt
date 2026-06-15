@@ -1,0 +1,234 @@
+# REPLIT PROMPT: Stage 3 — Wine Reference Images (52 SKU → 8 Lineups)
+
+## Context
+
+Alex Photo Report has 16 reference images. Wine detection has 42% average deviation. Adding wine product reference images as lineups will significantly improve recognition. 52 SKU → 8 lineup files.
+
+## Step 1: Upload product photos AS-IS
+
+Upload all 52 product photos to `backend/photo_report/references/temp/` with their ORIGINAL filenames. Do NOT rename them. The script maps them automatically.
+
+## Step 2: Run auto-mapping lineup creation script
+
+```python
+from PIL import Image
+import os
+
+TEMP_DIR = 'backend/photo_report/references/temp'
+REFS_DIR = 'backend/photo_report/references'
+TARGET_H = 1200
+MAX_W = 2400
+SPACING = 20
+
+# =====================================================
+# MAPPING: original filenames → lineup groups
+# Case-insensitive matching, any extension (.png/.jpg)
+# =====================================================
+LINEUP_GROUPS = {
+    'villaua_classic_white.jpg': [
+        'Villa_UA__RIESLING',
+        'Villa_UA_blanc_de_blanc',
+        'Villa_UA_chardonnay',
+        'Villa_UA_muscat_berbarro',
+        'Villa_UA_muscat_marbel',
+        'Villa_UA_muscat_riviera_2',
+        'Villa_UA_PICCOLO',
+        'Villa_UA_traminer_blanc',
+    ],
+    'villaua_classic_red.jpg': [
+        'Villa_UA_bastardo',
+        'Villa_UA_cabernet',
+        'Villa_UA_merlot',
+        'Villa_UA_Negro_del_Mare',
+        'Villa_UA_Pinot_Noir',
+        'Villa_UA_Saperavi',
+        'Villa_UA_shato_baron',
+        'Villa_UA_shato_le_grand',
+        'Villa_UA_Shevalie_rouge',
+    ],
+    'villaua_art.jpg': [
+        'Villa_UA_BOSCONELI',
+        'Villa_UA_MUSCAT',
+        'Villa_UA_PINOT_GRIGIO',
+        'Villa_UA_PORTOFINO',
+        'Villa_UA_SANJOVEZE',
+        'Villa_UA_SHATO_ORLANDO',
+    ],
+    'villaua_avtorskaya.jpg': [
+        'Villa_UA_cabernet_pinot_noir',
+        'Villa_UA_chardonnay_sauvignon',
+        'Villa_UA_muscat_traminer',
+        'Villa_UA_piano rose',
+        'Villa_UA_PINOT_NOIR MERLOT',
+    ],
+    'villaua_fruit_frizzante.jpg': [
+        'Villa_UA_cherry',
+        'Villa_UA_mango_',
+        'Villa_UA_peach',
+        'Frizzante Light_rose',
+        'Frizzante Light_white',
+    ],
+    'villaua_sparkling.jpg': [
+        'Villa_UA_Bellini',
+        'Villa_UA_Brut',
+        'Villa_UA_Grand Cuvee',
+        'Villa_UA_Muscat',
+        'Villa_UA_Pina Colada_',
+        'Villa_UA_Rose',
+        'Villa_UA_Salute Asti',
+        'Villa_UA_Semisweet',
+    ],
+    'kosher_lineup.jpg': [
+        'agada',
+        'CABERNET',
+        'CHARDONNAY',
+        'emet',
+        'saperavi',
+    ],
+    'kristivalley_lineup.jpg': [
+        'chateau clemont',
+        'luberon',
+        'saint_thouri',
+        'sharon_blanc',
+        'vivien_rouge',
+    ],
+}
+
+
+def find_file(name):
+    """Find file by name in temp dir, case-insensitive, any extension."""
+    # Try exact match first
+    for ext in ['.png', '.jpg', '.jpeg', '.PNG', '.JPG']:
+        path = os.path.join(TEMP_DIR, name + ext)
+        if os.path.exists(path):
+            return path
+    # Fallback: case-insensitive scan
+    name_lower = name.lower()
+    for f in os.listdir(TEMP_DIR):
+        base = os.path.splitext(f)[0]
+        if base.lower() == name_lower:
+            return os.path.join(TEMP_DIR, f)
+    return None
+
+
+def create_lineup(file_names, output_name):
+    """Load images by name, combine into single lineup image."""
+    print(f"\n=== Creating {output_name} ({len(file_names)} SKU) ===")
+    
+    imgs = []
+    for name in file_names:
+        path = find_file(name)
+        if path:
+            try:
+                img = Image.open(path)
+                imgs.append(img)
+                print(f"  OK {name}")
+            except Exception as e:
+                print(f"  ERROR {name}: {e}")
+        else:
+            print(f"  NOT FOUND: {name}")
+    
+    if not imgs:
+        print(f"  SKIPPED — no images found")
+        return
+    
+    # Resize all to same height
+    resized = []
+    for img in imgs:
+        ratio = TARGET_H / img.height
+        resized.append(img.resize((int(img.width * ratio), TARGET_H), Image.LANCZOS))
+    
+    # Combine horizontally
+    total_w = sum(i.width for i in resized) + SPACING * (len(resized) - 1)
+    lineup = Image.new('RGB', (total_w, TARGET_H), (255, 255, 255))
+    x = 0
+    for img in resized:
+        lineup.paste(img, (x, 0))
+        x += img.width + SPACING
+    
+    # Resize if too wide
+    if lineup.width > MAX_W:
+        ratio = MAX_W / lineup.width
+        lineup = lineup.resize((MAX_W, int(lineup.height * ratio)), Image.LANCZOS)
+    
+    out_path = os.path.join(REFS_DIR, output_name)
+    lineup.save(out_path, format="JPEG", quality=85)
+    size_kb = os.path.getsize(out_path) // 1024
+    print(f"  SAVED: {output_name} ({lineup.size[0]}x{lineup.size[1]}, {size_kb}KB)")
+
+
+# === CHECK FILES ===
+print("=== Checking temp directory ===")
+if not os.path.exists(TEMP_DIR):
+    print(f"ERROR: {TEMP_DIR} does not exist!")
+    exit(1)
+
+temp_files = os.listdir(TEMP_DIR)
+print(f"Found {len(temp_files)} files in temp/")
+
+# === CREATE ALL LINEUPS ===
+for output_name, file_names in LINEUP_GROUPS.items():
+    create_lineup(file_names, output_name)
+
+# === CLEANUP ===
+print("\n=== Cleaning up ===")
+for f in os.listdir(TEMP_DIR):
+    path = os.path.join(TEMP_DIR, f)
+    if os.path.isfile(path):
+        os.remove(path)
+if os.path.exists(TEMP_DIR) and not os.listdir(TEMP_DIR):
+    os.rmdir(TEMP_DIR)
+print("Temp cleaned")
+
+# === VERIFY ===
+print("\n=== Final reference images ===")
+all_refs = sorted(f for f in os.listdir(REFS_DIR) if f.endswith('.jpg'))
+print(f"Total: {len(all_refs)}")
+for f in all_refs:
+    size_kb = os.path.getsize(os.path.join(REFS_DIR, f)) // 1024
+    print(f"  {f} ({size_kb}KB)")
+```
+
+## Step 3: Add labels to `references.py`
+
+Add these 8 entries to `REFERENCE_LABELS`:
+
+```python
+# WINE references
+"villaua_classic_white": "VILLA UA CLASSIC — WHITE WINES (8 SKU). AVTD flagship wine brand. KEY IDENTIFIER: MEDALLION/COIN on every label. Standard 750ml bottles, pale green/straw color. Includes: Riesling, Blanc de Blanc, Chardonnay, Muscat Berbarro, Muscat Marbel, Muscat Riviera, Piccolo, Traminer Blanc. WARNING: Villa Krim is NOT Villa UA — it is a competitor!",
+
+"villaua_classic_red": "VILLA UA CLASSIC — RED and ROSE WINES (9 SKU). Same AVTD brand, same medallion. Dark bottles (red) and pink bottles (rose). Includes: Bastardo, Cabernet, Merlot, Negro del Mare, Pinot Noir, Saperavi, Shato Baron, Shato Le Grand, Shevalie Rouge.",
+
+"villaua_art": "VILLA UA ART COLLECTION — 6 wine SKUs. Premium line with artistic label designs. Includes: Bosconeli, Muscat, Pinot Grigio, Portofino, Sanjoveze, Shato Orlando. Same Villa UA medallion but distinctive art labels. AVTD brand.",
+
+"villaua_avtorskaya": "VILLA UA AVTORSKAYA (Authors) COLLECTION — 5 wine SKUs. Blend wines with two grape varieties. Includes: Cabernet Pinot Noir, Chardonnay Sauvignon, Muscat Traminer, Piano Rose, Pinot Noir Merlot. AVTD brand.",
+
+"villaua_fruit_frizzante": "VILLA UA FRUIT WINE + FRIZZANTE — 5 SKUs. Fruit wines: Cherry (red), Mango (yellow), Peach (orange). Frizzante: Light Rose, Light White — light sparkling in slim bottles. ALL are AVTD brands.",
+
+"villaua_sparkling": "VILLA UA SPARKLING — 8 SKUs. Dark CHAMPAGNE-SHAPED bottles with FOIL on neck. Same Villa UA medallion on champagne bottle. Includes: Bellini, Brut, Grand Cuvee, Muscat, Pina Colada, Rose, Salute Asti, Semisweet. On SEPARATE shelf from still wine. Do NOT confuse with still Villa UA — sparkling has champagne bottle shape! AVTD brand.",
+
+"kosher_lineup": "KOSHER — 5 wine SKUs. AVTD kosher wine brand. Includes: Agada, Cabernet, Chardonnay, Emet, Saperavi. The ONLY kosher wines in Ukraine. Look for kosher certification on label. AVTD brand.",
+
+"kristivalley_lineup": "KRISTI VALLEY — 5 wine SKUs. AVTD wine brand with French-style names. Includes: Chateau Clemont, Luberon, Saint Thouri, Sharon Blanc, Vivien Rouge. Text 'KRISTI VALLEY' on label. AVTD brand.",
+```
+
+## Step 4: Update module docstring
+
+```
+Vodka: 3 lineups (GreenDay, Helsinki, Ukrainka)
+Cognac: 3 lineups (ADJARI, Dovbush, Jean Jack)
+Wine: 8 lineups (Villa UA Classic White, Classic Red, Art, Avtorskaya, Fruit+Frizzante, Sparkling, Kosher, Kristi Valley)
+Shelf: 10 ideal shelf photos
+Total: 24 reference images
+```
+
+## Step 5: Verify
+
+```
+Loaded 24 reference images (14 product lineups, 10 shelf)
+```
+
+## Summary
+
+52 SKU → 8 lineup files. No manual renaming — script maps original filenames automatically.
+Total: 16 + 8 = 24 references. Cost: +$0.04/report for wine coverage.

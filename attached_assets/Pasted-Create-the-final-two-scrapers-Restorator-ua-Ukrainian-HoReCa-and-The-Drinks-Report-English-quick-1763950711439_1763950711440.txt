@@ -1,0 +1,422 @@
+Create the final two scrapers: Restorator.ua (Ukrainian HoReCa) and The Drinks Report (English quick news):
+
+📋 TASK: Build the last two scrapers to complete the 6-source system
+
+CREATE backend/services/scrapers/restorator_ua_scraper.py:
+```python
+import requests
+from bs4 import BeautifulSoup
+import logging
+from typing import List
+from datetime import datetime
+from .base_scraper import BaseScraper, ArticlePayload
+
+logger = logging.getLogger(__name__)
+
+class RestoratorUaScraper(BaseScraper):
+    """
+    Scraper for Restorator.ua (HoReCa industry)
+    Ukrainian language - no translation needed
+    Restaurant and bar industry focus
+    """
+    
+    def __init__(self):
+        self.base_url = "https://restorator.ua"
+        self.posts_url = "https://restorator.ua/post/"
+        self.user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    
+    def get_source_name(self) -> str:
+        return "Restorator.ua"
+    
+    def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
+        """Scrape articles from Restorator.ua"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(self.posts_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = []
+            
+            # Find posts - Restorator may use various structures
+            article_elements = soup.select('.post-item, article, .news-item, .card, .item')[:limit]
+            
+            logger.info(f"Found {len(article_elements)} article elements on Restorator.ua")
+            
+            for element in article_elements:
+                try:
+                    article = self._parse_article_card(element)
+                    
+                    if article:
+                        full_content = self._fetch_article_content(article.url)
+                        
+                        if full_content:
+                            article.content = full_content
+                            articles.append(article)
+                            logger.info(f"✅ Scraped: {article.title[:50]}...")
+                        else:
+                            logger.warning(f"No content for: {article.url}")
+                            
+                except Exception as e:
+                    logger.error(f"Error parsing Restorator article: {e}")
+                    continue
+            
+            logger.info(f"✅ Scraped {len(articles)} from Restorator.ua")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"❌ Restorator.ua scraping failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+    
+    def _parse_article_card(self, element) -> ArticlePayload:
+        """Parse article card"""
+        
+        # Find title
+        title_elem = element.select_one('h2, h3, .title, .post-title, .card-title')
+        if not title_elem:
+            return None
+        
+        title = title_elem.get_text(strip=True)
+        
+        # Find link
+        link_elem = element.select_one('a')
+        if not link_elem:
+            return None
+        
+        url = link_elem.get('href')
+        if not url.startswith('http'):
+            url = f"{self.base_url}{url}"
+        
+        # Find image (optional)
+        img_elem = element.select_one('img')
+        image_url = None
+        if img_elem:
+            image_url = img_elem.get('src') or img_elem.get('data-src')
+            if image_url and not image_url.startswith('http'):
+                image_url = f"{self.base_url}{image_url}"
+        
+        # Find date (optional)
+        date_elem = element.select_one('.date, time, .published')
+        published_date = date_elem.get_text(strip=True) if date_elem else None
+        
+        return ArticlePayload(
+            title=title,
+            content="",
+            url=url,
+            source=self.get_source_name(),
+            language='uk',  # Ukrainian
+            needs_translation=False,
+            author=None,
+            published_date=published_date,
+            image_url=image_url
+        )
+    
+    def _fetch_article_content(self, url: str) -> str:
+        """Fetch content"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find content
+            content_elem = soup.select_one('.post-content, article, .content, .entry-content, .article-body')
+            
+            if not content_elem:
+                logger.warning(f"No content found for: {url}")
+                return None
+            
+            # Clean
+            for unwanted in content_elem.select('script, style, .ads, nav, footer'):
+                unwanted.decompose()
+            
+            content = content_elem.get_text(separator='\n', strip=True)
+            content = self._clean_text(content)
+            
+            if len(content) < 100:
+                return None
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error fetching Restorator content: {e}")
+            return None
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean text"""
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        text = '\n\n'.join(lines)
+        text = text.replace('\xa0', ' ')
+        text = text.replace('\u200b', '')
+        
+        # Remove short lines
+        lines = text.split('\n\n')
+        lines = [line for line in lines if len(line) > 15]
+        return '\n\n'.join(lines)
+```
+
+CREATE backend/services/scrapers/drinks_report_scraper.py:
+```python
+import requests
+from bs4 import BeautifulSoup
+import logging
+from typing import List
+from datetime import datetime
+from .base_scraper import BaseScraper, ArticlePayload
+
+logger = logging.getLogger(__name__)
+
+class DrinksReportScraper(BaseScraper):
+    """
+    Scraper for The Drinks Report
+    English language - needs translation
+    Quick news bites and industry updates
+    """
+    
+    def __init__(self):
+        self.base_url = "https://www.thedrinksreport.com"
+        self.news_url = "https://www.thedrinksreport.com/news/"
+        self.user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    
+    def get_source_name(self) -> str:
+        return "The Drinks Report"
+    
+    def scrape_articles(self, limit: int = 5) -> List[ArticlePayload]:
+        """Scrape articles"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(self.news_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = []
+            
+            # Find articles
+            article_elements = soup.select('article, .post, .news-item, .article-card')[:limit]
+            
+            logger.info(f"Found {len(article_elements)} article elements on Drinks Report")
+            
+            for element in article_elements:
+                try:
+                    article = self._parse_article_card(element)
+                    
+                    if article:
+                        full_content = self._fetch_article_content(article.url)
+                        
+                        if full_content:
+                            article.content = full_content
+                            articles.append(article)
+                            logger.info(f"✅ Scraped: {article.title[:50]}...")
+                        else:
+                            logger.warning(f"No content for: {article.url}")
+                            
+                except Exception as e:
+                    logger.error(f"Error parsing Drinks Report article: {e}")
+                    continue
+            
+            logger.info(f"✅ Scraped {len(articles)} from Drinks Report")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"❌ Drinks Report scraping failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+    
+    def _parse_article_card(self, element) -> ArticlePayload:
+        """Parse card"""
+        
+        # Find title
+        title_elem = element.select_one('h2, h3, .title, .headline')
+        if not title_elem:
+            return None
+        
+        title = title_elem.get_text(strip=True)
+        
+        # Find link
+        link_elem = element.select_one('a')
+        if not link_elem:
+            return None
+        
+        url = link_elem.get('href')
+        if not url.startswith('http'):
+            url = f"{self.base_url}{url}"
+        
+        # Find image (optional)
+        img_elem = element.select_one('img')
+        image_url = None
+        if img_elem:
+            image_url = img_elem.get('src') or img_elem.get('data-src')
+            if image_url and not image_url.startswith('http'):
+                image_url = f"{self.base_url}{image_url}"
+        
+        # Find date (optional)
+        date_elem = element.select_one('.date, time, .published')
+        published_date = None
+        if date_elem:
+            published_date = date_elem.get_text(strip=True)
+            if not published_date and date_elem.has_attr('datetime'):
+                published_date = date_elem['datetime']
+        
+        return ArticlePayload(
+            title=title,
+            content="",
+            url=url,
+            source=self.get_source_name(),
+            language='en',  # English
+            needs_translation=True,
+            author=None,
+            published_date=published_date,
+            image_url=image_url
+        )
+    
+    def _fetch_article_content(self, url: str) -> str:
+        """Fetch content"""
+        
+        try:
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find content
+            content_elem = soup.select_one('.article-body, .entry-content, .post-content, article .content')
+            
+            if not content_elem:
+                content_elem = soup.select_one('article')
+            
+            if not content_elem:
+                logger.warning(f"No content found for: {url}")
+                return None
+            
+            # Clean
+            for unwanted in content_elem.select('script, style, .ads, .social-share, nav, footer'):
+                unwanted.decompose()
+            
+            content = content_elem.get_text(separator='\n', strip=True)
+            content = self._clean_text(content)
+            
+            if len(content) < 100:
+                return None
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error fetching Drinks Report content: {e}")
+            return None
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean text"""
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        text = '\n\n'.join(lines)
+        text = text.replace('\xa0', ' ')
+        text = text.replace('\u200b', '')
+        
+        # Remove short lines
+        lines = text.split('\n\n')
+        lines = [line for line in lines if len(line) > 15]
+        return '\n\n'.join(lines)
+```
+
+UPDATE backend/services/scrapers/scraper_manager.py:
+
+Add both scrapers to the registry:
+```python
+from .restorator_ua_scraper import RestoratorUaScraper
+from .drinks_report_scraper import DrinksReportScraper
+
+class ScraperManager:
+    
+    def __init__(self):
+        self.scrapers = {
+            'the_spirits_business': SpiritsBusinessScraper(),
+            'delo_ua': DeloUaScraper(),
+            'minfin_ua': MinFinUaScraper(),
+            'just_drinks': JustDrinksScraper(),
+            'restorator_ua': RestoratorUaScraper(),  # ← ADD THIS
+            'the_drinks_report': DrinksReportScraper(),  # ← ADD THIS
+        }
+        
+        logger.info(f"✅ ScraperManager initialized with {len(self.scrapers)} sources")
+```
+
+UPDATE backend/services/multi_source_scraper.py:
+
+Complete the sources configuration:
+```python
+class MultiSourceScraper:
+    
+    def __init__(self):
+        self.sources = {
+            'linkedin': [
+                'the_spirits_business',
+                'delo_ua',
+                'minfin_ua'
+            ],
+            'facebook': [
+                'just_drinks',
+                'restorator_ua',  # ← ADD THIS
+                'the_drinks_report'  # ← ADD THIS
+            ]
+        }
+        
+        logger.info("✅ Multi-source scraper configured:")
+        logger.info(f"   LinkedIn: {', '.join(self.sources['linkedin'])}")
+        logger.info(f"   Facebook: {', '.join(self.sources['facebook'])}")
+```
+
+Test both scrapers:
+```bash
+cd backend
+
+# Test Restorator.ua
+python -c "
+from services.scrapers.restorator_ua_scraper import RestoratorUaScraper
+scraper = RestoratorUaScraper()
+articles = scraper.scrape_articles(limit=2)
+print(f'✅ Restorator.ua: {len(articles)} articles')
+for a in articles:
+    print(f'   {a.title[:50]}... [UK]')
+"
+
+# Test The Drinks Report
+python -c "
+from services.scrapers.drinks_report_scraper import DrinksReportScraper
+scraper = DrinksReportScraper()
+articles = scraper.scrape_articles(limit=2)
+print(f'✅ Drinks Report: {len(articles)} articles')
+for a in articles:
+    print(f'   {a.title[:50]}... [EN]')
+"
+
+# Verify all 6 scrapers
+python -c "
+from services.scrapers.scraper_manager import ScraperManager
+manager = ScraperManager()
+print(f'✅ Total scrapers: {len(manager.scrapers)}')
+for name in manager.scrapers.keys():
+    print(f'   - {name}')
+"
+```
+
+FINAL SYSTEM CHECK:
+After implementation, verify complete source coverage:
+
+LinkedIn (3x/week Mon/Wed/Fri 9am):
+✅ The Spirits Business (EN → UK)
+✅ Delo.ua (UK native)
+✅ MinFin.ua (UK native)
+
+Facebook (Daily 6pm):
+✅ Just Drinks (EN → UK)
+✅ Restorator.ua (UK native)
+✅ The Drinks Report (EN → UK)
+
+Please implement the final two scrapers to complete the 6-source system!

@@ -1,0 +1,98 @@
+# Check User Identity for telegram_id=296249724
+
+## OBJECTIVE
+Query the database to identify who telegram_id=296249724 is and compare with telegram_id=441389791 (known to be Konstantin Kovalchuk).
+
+## TASK
+
+Connect to the PostgreSQL database and run this query:
+```sql
+SELECT 
+    telegram_id,
+    full_name,
+    phone,
+    position,
+    department,
+    access_level,
+    verification_method,
+    is_active,
+    created_at,
+    updated_at
+FROM hr_users
+WHERE telegram_id IN (296249724, 441389791)
+ORDER BY telegram_id;
+```
+
+## CONTEXT
+
+Logs show telegram_id=296249724 is associated with "Konstantin Kovalchuk" but the user (actual Konstantin) didn't send that message. We need to determine:
+
+1. Is this a different person with the same name?
+2. What phone number is associated with this account?
+3. When was this account created?
+4. What verification method was used?
+
+## DATABASE CONNECTION
+
+The database connection string is in the environment variable `DATABASE_URL`.
+
+Use Python with psycopg2 or SQLAlchemy to connect and execute the query.
+
+## EXPECTED OUTPUT
+
+Return the results in a clear table format showing:
+- Both telegram IDs side by side
+- Their full names
+- Phone numbers (will reveal if they're different people)
+- Positions
+- When accounts were created
+
+## IMPLEMENTATION
+```python
+import os
+import psycopg2
+from tabulate import tabulate
+
+# Get database URL from environment
+database_url = os.getenv("DATABASE_URL")
+
+# Connect and query
+conn = psycopg2.connect(database_url)
+cursor = conn.cursor()
+
+query = """
+SELECT 
+    telegram_id,
+    full_name,
+    phone,
+    position,
+    department,
+    access_level,
+    verification_method,
+    is_active,
+    created_at,
+    updated_at
+FROM hr_users
+WHERE telegram_id IN (296249724, 441389791)
+ORDER BY telegram_id;
+"""
+
+cursor.execute(query)
+results = cursor.fetchall()
+
+# Get column names
+columns = [desc[0] for desc in cursor.description]
+
+# Print results
+print(tabulate(results, headers=columns, tablefmt='grid'))
+
+cursor.close()
+conn.close()
+```
+
+## SUCCESS CRITERIA
+
+✅ Query executes successfully
+✅ Returns 2 rows (both telegram IDs)
+✅ Shows clear differences in phone numbers or names
+✅ Reveals when each account was created

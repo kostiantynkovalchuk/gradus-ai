@@ -1,0 +1,204 @@
+📄 File 1: Update backend/services/rag_utils.py
+Add this function at the END of the file (after all existing functions):
+pythonasync def ingest_article(article, index):
+    """
+    Ingest a scraped article into Pinecone for RAG knowledge
+    
+    Args:
+        article: ContentQueue database object with title, content, category, etc.
+        index: Pinecone index instance
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Skip if no content
+        if not article.content or len(article.content.strip()) < 100:
+            logger.warning(f"Article #{article.id} too short, skipping ingestion")
+            return False
+        
+        # Create rich searchable text
+        article_text = f"""TITLE: {article.title}
+
+CATEGORY: {article.category or 'Industry News'}
+
+SUMMARY: {article.excerpt or article.content[:500]}
+
+FULL CONTENT:
+{article.content}
+
+SOURCE: {article.source}
+SOURCE URL: {article.source_url or 'N/A'}
+PUBLISHED: {article.published_at}
+LANGUAGE: {article.language or 'uk'}
+
+This is a news article published by Gradus Media, covering trends, news, and insights in the alcohol and HoReCa industry."""
+        
+        # Get embedding from OpenAI
+        embedding = get_embedding(article_text)
+        
+        # Create vector with rich metadata
+        from datetime import datetime
+        vector = {
+            "id": f"article_{article.id}_{int(datetime.now().timestamp())}",
+            "values": embedding,
+            "metadata": {
+                "text": article_text[:1000],  # First 1000 chars for display
+                "article_id": str(article.id),
+                "title": article.title[:200],
+                "category": article.category or "general",
+                "source": article.source[:100] if article.source else "Unknown",
+                "source_url": article.source_url[:200] if article.source_url else "",
+                "published_at": str(article.published_at),
+                "language": article.language or "uk",
+                "content_type": "news_article",
+                "is_gradus_content": True,
+                "gradus_media_url": f"https://gradusmedia.org/article/{article.id}",
+                "created_at": datetime.now().isoformat()
+            }
+        }
+        
+        # Upload to Pinecone
+        index.upsert(vectors=[vector], namespace="company_knowledge")
+        
+        logger.info(f"✅ Article ingested: #{article.id} '{article.title[:50]}...'")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to ingest article #{article.id}: {e}", exc_info=True)
+        return False
+
+
+async def ingest_existing_articles(db_session, index, limit: int = 50):
+    """
+    Ingest existing approved articles from database
+    
+    Use this to backfill Pinecone with already-published articles
+    
+    Args:
+        db_session: SQLAlchemy session
+        index: Pinecone index
+        limit: Max articles to ingest (default 50, prevents overload)
+    """
+    from models.content import ContentQueue
+    
+    try:
+        # Get recently approved articles
+        articles = db_session.query(ContentQueue).filter(
+            ContentQueue.status == 'posted'
+        ).order_by(
+            ContentQueue.published_at.desc()
+        ).limit(limit).all()
+        
+        logger.info(f"📚 Starting backfill: {len(articles)} articles")
+        
+        success_count = 0
+        for article in articles:
+            result = await ingest_article(article, index)
+            if result:
+                success_count += 1
+        
+        logger.info(f"✅ Backfill complete: {success_count}/{len(articles)} articles ingested")
+        return {
+            "total": len(articles),
+            "success": success_count,
+            "failed": len(articles) - success_count
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Backfill failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+📄 File 2: Update backend/services/telegram_webhook.py
+Find the _approve_content function (around line 60-100).
+Find this section where Facebook posting happens:
+python# Around line 90-95, after the Facebook post succeeds:
+if post_result['status'] == 'posted':
+    article.status = 'posted'
+    article.posted_at = datetime.utcnow()
+Add this RIGHT AFTER the Facebook success block:
+python            if post_result['status'] == 'posted':
+                article.status = 'posted'
+                article.posted_at = datetime.utcnow()
+                
+                # NEW: Ingest to Pinecone for Maya's knowledge base
+                try:
+                    from routes.chat_endpoints import chat_index, PINECONE_AVAILABLE
+                    from services.rag_utils import ingest_article
+                    import asyncio
+                    
+                    if PINECONE_AVAILABLE and chat_index:
+                        # Run async ingestion
+                        loop = asyncio.get_event_loop()
+                        ingestion_result = loop.run_until_complete(
+                            ingest_article(article, chat_index)
+                        )
+                        
+                        if ingestion_result:
+                            logger.info(f"📚 Article #{article.id} added to Maya's knowledge")
+                        else:
+                            logger.warning(f"⚠️ Article ingestion failed for #{article.id}")
+                    else:
+                        logger.debug("Pinecone not available, skipping article ingestion")
+                        
+                except Exception as e:
+                    logger.warning(f"Could not ingest article to RAG: {e}")
+                    # Don't fail the approval if RAG ingestion fails
+
+📄 File 3: Create Backfill Script backend/scripts/backfill_articles_to_pinecone.py
+Create new file:
+python"""
+Backfill existing articles into Pinecone
+Run once to add all your 160+ existing articles to Maya's knowledge base
+"""
+
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from models import get_db
+from services.rag_utils import ingest_existing_articles
+import asyncio
+from pinecone import Pinecone
+
+async def main():
+    """Backfill all existing articles"""
+    
+    print("🚀 Starting article backfill to Pinecone...")
+    print("=" * 60)
+    
+    # Connect to Pinecone
+    pinecone_key = os.getenv("PINECONE_API_KEY")
+    if not pinecone_key:
+        print("❌ PINECONE_API_KEY not set!")
+        return
+    
+    pc = Pinecone(api_key=pinecone_key)
+    index_name = os.getenv("PINECONE_INDEX_NAME", "gradus-media")
+    index = pc.Index(index_name)
+    
+    print(f"✅ Connected to Pinecone index: {index_name}")
+    
+    # Get database session
+    db = next(get_db())
+    
+    # Backfill (start with 50 most recent, can increase later)
+    print("\n📚 Ingesting most recent 50 articles...\n")
+    
+    result = await ingest_existing_articles(db, index, limit=50)
+    
+    print("\n" + "=" * 60)
+    print("📊 BACKFILL RESULTS:")
+    print(f"   Total articles processed: {result.get('total', 0)}")
+    print(f"   Successfully ingested: {result.get('success', 0)}")
+    print(f"   Failed: {result.get('failed', 0)}")
+    
+    if result.get('error'):
+        print(f"   ❌ Error: {result['error']}")
+    else:
+        print("\n✅ Backfill complete! Maya now knows your articles!")
+    
+    print("=" * 60)
+
+if __name__ == "__main__":
+    asyncio.run(main())

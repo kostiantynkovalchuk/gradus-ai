@@ -1,0 +1,56 @@
+Maya Hunt dashboard — remove ROI + investigate Robota.ua data.
+
+=== TASK 1: Remove ALL ROI/efficiency elements from Maya Hunt tab ===
+
+In hr_admin.py HTML, find the Maya Hunt section and DELETE:
+
+a) Green ROI banner (Зекономлено, Годин збережено, Найнято, 
+   Вакансій оброблено, Вартість найму Maya, Вартість традиційно)
+b) "Методологія розрахунку ROI" expandable section
+c) "Порівняння з традиційним рекрутингом" table
+d) Any JS functions that calculate/render ROI metrics
+
+Also remove the API endpoint or data fetching for ROI if it exists
+(likely in /hr/api/hunt-analytics).
+
+Keep ONLY the raw operational data on the Maya Hunt tab.
+
+=== TASK 2: Investigate Robota.ua data pipeline ===
+
+Maya Hunt fetches salary analytics from Robota.ua GraphQL API.
+I need to understand what data we have and whether it still works.
+
+1. Show me the Robota.ua integration code:
+   cat backend/services/robotaua_salary.py
+   cat backend/services/robotaua_auth.py
+
+2. Check current auth status:
+   - Is ROBOTAUA_JWT set? 
+   - When does it expire?
+   - Does the auto-login work?
+   Run: grep -n "robotaua\|robota" backend/services/scheduler.py
+
+3. Check what data is in the DB:
+   Run these SQL queries and report results:
+
+   SELECT COUNT(*) FROM hunt_salary_data;
+   
+   SELECT position, data_type, salary_median_uah, salary_median_usd, sample_count, created_at 
+   FROM hunt_salary_data 
+   ORDER BY created_at DESC 
+   LIMIT 10;
+
+   SELECT DISTINCT position FROM hunt_salary_data ORDER BY position;
+
+4. Make a test API call to Robota.ua:
+   - Find the GraphQL endpoint URL in the code (dracula.robota.ua or similar)
+   - Show me the exact query being sent
+   - Try to execute it and report the response (success/error/auth failure)
+
+5. Check the last time salary data was fetched:
+   SELECT MAX(created_at) FROM hunt_salary_data;
+
+6. What Hunt features are currently operational?
+   Show me the hunt_service.py main flow — what works and what's broken.
+
+Report everything. Don't change the Robota.ua code — just investigate.

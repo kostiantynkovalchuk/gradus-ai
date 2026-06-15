@@ -1,0 +1,81 @@
+## 🤖 **REPLIT AGENT PROMPT:**
+```
+Increase RAG retrieval parameters to return more context chunks for better responses.
+
+ISSUE:
+retrieve_context() only returns top_k=3 chunks by default, which is insufficient for comprehensive answers about wine brands. Maya has 275 vectors but only sees 3 chunks per query, missing most relevant information.
+
+FIX in backend/services/rag_utils.py:
+
+Update the retrieve_context function (around line 175):
+
+Change line:
+```python
+async def retrieve_context(query: str, index, top_k: int = 3) -> Tuple[str, List[str]]:
+```
+
+To:
+```python
+async def retrieve_context(query: str, index, top_k: int = 15) -> Tuple[str, List[str]]:
+```
+
+Also update the score threshold (around line 190):
+
+Change line:
+```python
+if match.score > 0.45:
+```
+
+To:
+```python
+if match.score > 0.40:
+```
+
+And fix the source construction (around line 193) - use 'source' not 'url':
+
+Change line:
+```python
+source = f"{metadata.get('company', 'Unknown')} ({metadata.get('url', '')})"
+```
+
+To:
+```python
+source = f"{metadata.get('company', 'Unknown')} ({metadata.get('source', '')})"
+```
+
+WHY THIS FIXES IT:
+- top_k=15 gives Maya 5x more context (was 3, now 15 chunks)
+- Score 0.40 threshold captures more relevant results
+- More chunks = better chance of finding all wine brands
+- Villa has 76 chunks total - Maya needs more than 3 to see full portfolio
+
+After this fix, Maya will see comprehensive context including all wine brands when answering queries!
+```
+
+---
+
+## ⏰ **After Fix - Expected Behavior:**
+
+**Query:** "Какие бренды вин есть в Best Brands?"
+
+**Maya will retrieve:**
+- ✅ 15 chunks instead of 3
+- ✅ Multiple Villa product chunks
+- ✅ Kristi Valley wine info
+- ✅ Didi Lari wine info
+- ✅ All wine brands visible!
+
+**Response will be:**
+```
+В портфеле Best Brands представлены следующие винные бренды:
+
+🍷 VILLA - украинские вина с коллекциями:
+- Classic collection
+- Author's collection  
+- ART collection
+- Champagne collection
+
+🍷 Kristi Valley - французские вина
+🍷 Didi Lari - грузинские вина
+🍷 Wineviaggio - итальянские вина
+🍷 Adjari - грузинские вина и коньяк

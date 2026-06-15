@@ -1,0 +1,70 @@
+Set up monitoring and final verification for Best Brands video feature
+
+## Task 1: Add Logging
+
+Update `backend/services/bestbrands_video.py` to add comprehensive logging:
+````python
+import logging
+logger = logging.getLogger(__name__)
+
+# In detect_bestbrands_trigger:
+logger.info(f"Trigger detection for message: {message_text[:50]}...")
+if triggered:
+    logger.info("✅ Best Brands trigger detected")
+
+# In send_bestbrands_video:
+logger.info(f"Attempting to send video to chat_id: {chat_id}")
+if file_id_cached:
+    logger.info(f"Using cached file_id: {file_id[:20]}...")
+else:
+    logger.info("First upload - will cache file_id")
+
+# On success/failure:
+logger.info(f"✅ Video sent successfully to {chat_id}")
+logger.error(f"❌ Video send failed: {error}")
+````
+
+## Task 2: Create Monitoring Dashboard Query
+
+Provide SQL queries to monitor feature usage:
+````sql
+-- Check if file_id is cached
+SELECT * FROM media_files WHERE media_type = 'bestbrands_video';
+
+-- Count video sends (if you log them)
+-- Add usage tracking if needed
+````
+
+## Task 3: Manual Test Checklist
+
+After deployment, test these scenarios manually in Telegram:
+
+**Test 1: Company Questions (should send video)**
+- [ ] Send: "розкажи про best brands"
+- [ ] Verify: Video received inline in Telegram
+- [ ] Verify: Caption shows source citation only
+
+**Test 2: Identity Questions (should NOT send video)**
+- [ ] Send: "хто ви"
+- [ ] Verify: Maya responds with personality intro (RAG response)
+- [ ] Verify: NO video sent
+
+**Test 3: Website Unaffected**
+- [ ] Go to gradusmedia.org chat
+- [ ] Send: "розкажи про best brands"
+- [ ] Verify: Normal text response (NOT video)
+
+**Test 4: Code-switching**
+- [ ] Send: "що таке best brands"
+- [ ] Verify: Video received
+
+**Test 5: False Positives**
+- [ ] Send: "what are best practices for cocktails"
+- [ ] Verify: Normal response (NOT video)
+
+**Test 6: Caching**
+- [ ] Send trigger again
+- [ ] Verify: Video sends instantly (uses cached file_id)
+- [ ] Check logs for "Using cached file_id" message
+
+Document results and any issues found.
