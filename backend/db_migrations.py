@@ -1568,6 +1568,119 @@ MIGRATIONS = [
             "UPDATE solcon_engagements SET is_hidden = true WHERE id BETWEEN 1 AND 23",
         ]
     },
+    {
+        "version": "064_sara_init",
+        "statements": [
+            # --- 1. sara_state: one row per user (Felix). Level unknown until calibrated (NULLs OK). ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_state (
+                tg_user_id            BIGINT PRIMARY KEY,
+                cefr_band             TEXT,
+                cefr_rolling          REAL,
+                streak_days           INTEGER NOT NULL DEFAULT 0,
+                last_practice_date    DATE,
+                last_session_summary  TEXT,
+                profile               JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+                CONSTRAINT chk_sara_state_cefr
+                    CHECK (cefr_band IN ('A1','A2','B1','B2','C1','C2'))
+            )
+            """,
+
+            # --- 2. sara_sessions: 25-min-active / 30-min-idle bounded. No hard FK to state
+            #        (avoids insert-ordering fragility; tg_user_id is just indexed). ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_sessions (
+                id                BIGSERIAL PRIMARY KEY,
+                tg_user_id        BIGINT NOT NULL,
+                started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_activity_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                ended_at          TIMESTAMPTZ,
+                status            TEXT NOT NULL DEFAULT 'active',
+                theme             TEXT,
+                message_count     INTEGER NOT NULL DEFAULT 0,
+                CONSTRAINT chk_sara_sessions_status
+                    CHECK (status IN ('active','closed'))
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_sara_sessions_user_status ON sara_sessions (tg_user_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_sara_sessions_activity ON sara_sessions (last_activity_at)",
+
+            # --- 3. sara_turns: per-exchange transcript + hidden assessment JSON (the keystone). ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_turns (
+                id                BIGSERIAL PRIMARY KEY,
+                session_id        BIGINT NOT NULL REFERENCES sara_sessions(id),
+                user_text         TEXT,
+                sara_text         TEXT,
+                assessment        JSONB,
+                reply_word_count  INTEGER,
+                created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_sara_turns_session ON sara_turns (session_id)",
+
+            # --- 4. sara_errors: flattened per-turn so support trigger is a cheap COUNT. ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_errors (
+                id          BIGSERIAL PRIMARY KEY,
+                turn_id     BIGINT REFERENCES sara_turns(id),
+                session_id  BIGINT NOT NULL REFERENCES sara_sessions(id),
+                error_type  TEXT NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_sara_errors_session_type ON sara_errors (session_id, error_type)",
+
+            # --- 5. sara_beats: emotional lines. MVP TTS's script_text at runtime (tg_file_id NULL).
+            #        V1 fills tg_file_id with a pre-rendered video, resend by id. ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_beats (
+                id           BIGSERIAL PRIMARY KEY,
+                scenario     TEXT NOT NULL,
+                script_text  TEXT NOT NULL,
+                tg_file_id   TEXT,
+                last_sent_at TIMESTAMPTZ,
+                CONSTRAINT chk_sara_beats_scenario
+                    CHECK (scenario IN ('greeting','encouragement','support','farewell'))
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_sara_beats_scenario ON sara_beats (scenario)",
+
+            # --- 6. sara_config: tunable thresholds as data (no redeploy to retune). ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_config (
+                key    TEXT PRIMARY KEY,
+                value  TEXT NOT NULL
+            )
+            """,
+
+            # --- 7. sara_inbound_updates: Telegram update_id dedup (idempotency guard). ---
+            """
+            CREATE TABLE IF NOT EXISTS sara_inbound_updates (
+                update_id    BIGINT PRIMARY KEY,
+                received_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+
+            # --- Seed config (starting values from spec; tune later in-place) ---
+            "INSERT INTO sara_config (key, value) VALUES ('session_active_minutes','25') ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO sara_config (key, value) VALUES ('session_idle_minutes','30') ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO sara_config (key, value) VALUES ('streak_milestones','3,7') ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO sara_config (key, value) VALUES ('longer_than_usual_multiplier','1.5') ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO sara_config (key, value) VALUES ('repeated_error_threshold','3') ON CONFLICT (key) DO NOTHING",
+
+            # --- Seed starter beat lines (placeholder content — refine later). ---
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('greeting','Hi, Felix! How are you today?') ON CONFLICT DO NOTHING",
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('greeting','Good to see you, Felix. Ready for a little English?') ON CONFLICT DO NOTHING",
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('encouragement','Good job!') ON CONFLICT DO NOTHING",
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('encouragement','Nicely done — that was great.') ON CONFLICT DO NOTHING",
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('support','No worries, you are doing great. Let us try once more.') ON CONFLICT DO NOTHING",
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('support','That is a tricky one. Take your time.') ON CONFLICT DO NOTHING",
+            "INSERT INTO sara_beats (scenario, script_text) VALUES ('farewell','Great chat today, Felix. See you next time!') ON CONFLICT DO NOTHING",
+        ],
+    },
 ]
 
 

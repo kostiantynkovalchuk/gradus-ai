@@ -1,0 +1,193 @@
+# Step 1 — Migration `064_sara_init` (schema only, isolated)
+
+**Goal:** create Sara's seven tables in one append-only migration. **No application code, no routes, no other bot touched.** Pure additive schema.
+
+> Implementation prompt (audit is done). Does exactly one thing. Do NOT bundle any webhook/route/service code with it.
+
+---
+
+## Guardrails (Rules.rtf)
+- **Append-only.** Add ONE new dict to the END of the `MIGRATIONS` list in `backend/db_migrations.py`. Do NOT edit, renumber, or reorder any existing migration.
+- **Number is `064_sara_init`.** Live DB is at 063; 064 is the next clean number (052 double-used, 055 skipped — irrelevant here, just don't reuse them).
+- **Do NOT touch `run_migrations()`** or the runner logic. Only append data to the list.
+- **CHECK constraints** on every enum-like column (house style — VARCHAR/TEXT + CHECK IN, never native ENUM).
+- **Idempotent statements** (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`) so a partial re-run is safe.
+- This migration creates **no rows for Felix** — his `sara_state` row is created later by onboarding code. It DOES seed `sara_config` (thresholds) and a starter set of `sara_beats` lines.
+
+---
+
+## The change
+
+Append this dict to the end of the `MIGRATIONS` list in `backend/db_migrations.py`, matching the existing `{"version": ..., "statements": [...]}` shape:
+
+```python
+{
+    "version": "064_sara_init",
+    "statements": [
+        # --- 1. sara_state: one row per user (Felix). Level unknown until calibrated (NULLs OK). ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_state (
+            tg_user_id            BIGINT PRIMARY KEY,
+            cefr_band             TEXT,
+            cefr_rolling          REAL,
+            streak_days           INTEGER NOT NULL DEFAULT 0,
+            last_practice_date    DATE,
+            last_session_summary  TEXT,
+            profile               JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT chk_sara_state_cefr
+                CHECK (cefr_band IN ('A1','A2','B1','B2','C1','C2'))
+        )
+        """,
+
+        # --- 2. sara_sessions: 25-min-active / 30-min-idle bounded. No hard FK to state
+        #        (avoids insert-ordering fragility; tg_user_id is just indexed). ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_sessions (
+            id                BIGSERIAL PRIMARY KEY,
+            tg_user_id        BIGINT NOT NULL,
+            started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_activity_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+            ended_at          TIMESTAMPTZ,
+            status            TEXT NOT NULL DEFAULT 'active',
+            theme             TEXT,
+            message_count     INTEGER NOT NULL DEFAULT 0,
+            CONSTRAINT chk_sara_sessions_status
+                CHECK (status IN ('active','closed'))
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sara_sessions_user_status ON sara_sessions (tg_user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_sara_sessions_activity ON sara_sessions (last_activity_at)",
+
+        # --- 3. sara_turns: per-exchange transcript + hidden assessment JSON (the keystone). ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_turns (
+            id                BIGSERIAL PRIMARY KEY,
+            session_id        BIGINT NOT NULL REFERENCES sara_sessions(id),
+            user_text         TEXT,
+            sara_text         TEXT,
+            assessment        JSONB,
+            reply_word_count  INTEGER,
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sara_turns_session ON sara_turns (session_id)",
+
+        # --- 4. sara_errors: flattened per-turn so support trigger is a cheap COUNT. ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_errors (
+            id          BIGSERIAL PRIMARY KEY,
+            turn_id     BIGINT REFERENCES sara_turns(id),
+            session_id  BIGINT NOT NULL REFERENCES sara_sessions(id),
+            error_type  TEXT NOT NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sara_errors_session_type ON sara_errors (session_id, error_type)",
+
+        # --- 5. sara_beats: emotional lines. MVP TTS's script_text at runtime (tg_file_id NULL).
+        #        V1 fills tg_file_id with a pre-rendered video, resend by id. ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_beats (
+            id           BIGSERIAL PRIMARY KEY,
+            scenario     TEXT NOT NULL,
+            script_text  TEXT NOT NULL,
+            tg_file_id   TEXT,
+            last_sent_at TIMESTAMPTZ,
+            CONSTRAINT chk_sara_beats_scenario
+                CHECK (scenario IN ('greeting','encouragement','support','farewell'))
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sara_beats_scenario ON sara_beats (scenario)",
+
+        # --- 6. sara_config: tunable thresholds as data (no redeploy to retune). ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_config (
+            key    TEXT PRIMARY KEY,
+            value  TEXT NOT NULL
+        )
+        """,
+
+        # --- 7. sara_inbound_updates: Telegram update_id dedup (idempotency guard). ---
+        """
+        CREATE TABLE IF NOT EXISTS sara_inbound_updates (
+            update_id    BIGINT PRIMARY KEY,
+            received_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+
+        # --- Seed config (starting values from spec; tune later in-place) ---
+        "INSERT INTO sara_config (key, value) VALUES ('session_active_minutes','25') ON CONFLICT (key) DO NOTHING",
+        "INSERT INTO sara_config (key, value) VALUES ('session_idle_minutes','30') ON CONFLICT (key) DO NOTHING",
+        "INSERT INTO sara_config (key, value) VALUES ('streak_milestones','3,7') ON CONFLICT (key) DO NOTHING",
+        "INSERT INTO sara_config (key, value) VALUES ('longer_than_usual_multiplier','1.5') ON CONFLICT (key) DO NOTHING",
+        "INSERT INTO sara_config (key, value) VALUES ('repeated_error_threshold','3') ON CONFLICT (key) DO NOTHING",
+
+        # --- Seed a small starter set of beat lines (PLACEHOLDER content — refine later).
+        #     English, short, warm. Felix's name baked in for greeting/support. ---
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('greeting','Hi, Felix! How are you today?') ON CONFLICT DO NOTHING",
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('greeting','Good to see you, Felix. Ready for a little English?') ON CONFLICT DO NOTHING",
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('encouragement','Good job!') ON CONFLICT DO NOTHING",
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('encouragement','Nicely done — that was great.') ON CONFLICT DO NOTHING",
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('support','No worries, you are doing great. Let us try once more.') ON CONFLICT DO NOTHING",
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('support','That is a tricky one. Take your time.') ON CONFLICT DO NOTHING",
+        "INSERT INTO sara_beats (scenario, script_text) VALUES ('farewell','Great chat today, Felix. See you next time!') ON CONFLICT DO NOTHING",
+    ],
+},
+```
+
+> Note: `ON CONFLICT DO NOTHING` on the beat seeds has no unique key to conflict on, so it's effectively a plain insert that won't error — but it keeps the statement shape uniform. If the runner re-applies (it won't, since version-gated), duplicates are harmless placeholder rows. If you prefer strict idempotency on beats, add a UNIQUE(scenario, script_text) constraint to the table and the ON CONFLICT will bite. Optional.
+
+---
+
+## Deploy
+
+```bash
+git add backend/db_migrations.py
+git commit -m "feat(sara): migration 064_sara_init — create Sara tables"
+git push origin main
+```
+
+`run_migrations()` runs on startup, sees `064_sara_init` is not in `schema_migrations`, applies it once. (Restarts the service — same five-bot consideration as Step 0, but this is additive schema, zero risk to existing tables.)
+
+---
+
+## Verify
+
+1. **Migration recorded:**
+   ```sql
+   SELECT version, applied_at FROM schema_migrations WHERE version = '064_sara_init';
+   ```
+   Expect exactly one row.
+2. **Seven tables exist:**
+   ```sql
+   SELECT table_name FROM information_schema.tables
+   WHERE table_name LIKE 'sara_%' ORDER BY table_name;
+   ```
+   Expect: `sara_beats, sara_config, sara_errors, sara_inbound_updates, sara_sessions, sara_state, sara_turns`.
+3. **CHECK constraints present:**
+   ```sql
+   SELECT conname FROM pg_constraint WHERE conname LIKE 'chk_sara_%';
+   ```
+   Expect: `chk_sara_state_cefr, chk_sara_sessions_status, chk_sara_beats_scenario`.
+4. **Config seeded:**
+   ```sql
+   SELECT key, value FROM sara_config ORDER BY key;
+   ```
+   Expect the five threshold rows.
+5. **Existing migrations untouched:** confirm `git diff` shows only an *addition* to `db_migrations.py` (no edits to prior entries, no runner changes).
+6. **Five bots still respond** after the restart (Maya HR + Solomon at minimum).
+
+---
+
+## Definition of done
+- [ ] `064_sara_init` in `schema_migrations` (one row)
+- [ ] All seven `sara_*` tables exist
+- [ ] Three CHECK constraints present
+- [ ] `sara_config` has the five seed rows
+- [ ] `git diff` shows pure addition — no existing migration or runner edited
+- [ ] Maya HR + Solomon respond after restart
+- [ ] No application code in this commit (schema only)
+
+Once done, the next isolated step is **`sara_webhook.py`** — own route file, dedup via `sara_inbound_updates`, immediate ack, background hand-off. No brain yet.
