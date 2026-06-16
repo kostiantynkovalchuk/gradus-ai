@@ -1,0 +1,167 @@
+# Step 2 — sara_webhook.py (plumbing only, no brain)
+
+**Goal:** prove the skeleton. A Telegram update arrives → deduped → acked fast → handed to a background task that just **logs** it. No STT, no Claude, no TTS.
+
+> Implementation prompt. Three additive edits: one new file + two small additions to `main.py`. Test by messaging your own bot.
+> **Do NOT commit this prompt file.** If it lands in `attached_assets/`, leave it untracked or remove it with a single-file `git rm` — never touch the folder wholesale.
+
+---
+
+## Edit 1 — NEW FILE: `backend/routes/sara_webhook.py`
+
+```python
+"""
+Sara — Telegram webhook (Step 2: plumbing only, no brain).
+
+Pattern note: structured like alex_avtd_webhook.py (bare router, full-path
+decorator, request.json + immediate ack) BUT uses the ack-first +
+asyncio.create_task background split from telegram_webhook.py's hunt handler —
+because Sara's real processing (STT -> Claude -> TTS) will be too slow to run
+inside the webhook response.
+
+For now process_update only:
+  1. dedups the Telegram update_id (idempotency guard, per Rules.rtf)
+  2. logs what arrived
+No STT, no Claude, no TTS yet.
+"""
+import os
+import asyncio
+import logging
+import psycopg2
+from fastapi import APIRouter, Request
+
+logger = logging.getLogger(__name__)
+
+sara_router = APIRouter()
+
+SARA_BOT_TOKEN = os.getenv("SARA_BOT_TOKEN", "")
+DB_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
+
+
+async def process_update(update: dict):
+    """Background worker. Runs AFTER Telegram has already been acked."""
+    update_id = update.get("update_id")
+
+    # --- Idempotency guard: insert update_id first; skip if already seen ---
+    if update_id is not None and DB_URL:
+        try:
+            with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO sara_inbound_updates (update_id) "
+                    "VALUES (%s) ON CONFLICT (update_id) DO NOTHING",
+                    (update_id,),
+                )
+                conn.commit()
+                if cur.rowcount == 0:
+                    # row already existed -> Telegram retry or double-tap
+                    logger.info(f"🔁 Sara: duplicate update {update_id} ignored")
+                    return
+        except Exception as e:
+            # On DB error, proceed rather than drop the user's message.
+            # (A rare double-process is better than silent message loss.)
+            logger.error(f"Sara dedup check failed for update {update_id}: {e}")
+
+    # --- For now: just log what arrived. No processing yet. ---
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat_id = msg.get("chat", {}).get("id")
+    has_text = bool(msg.get("text"))
+    has_voice = bool(msg.get("voice"))
+    logger.info(
+        f"📩 Sara update {update_id}: chat={chat_id} "
+        f"text={has_text} voice={has_voice}"
+    )
+
+
+@sara_router.post("/webhook/sara")
+async def sara_webhook(request: Request):
+    # Guard: if token not set, silently ack (don't error Telegram)
+    if not SARA_BOT_TOKEN:
+        return {"ok": True}
+    try:
+        update = await request.json()
+    except Exception:
+        return {"ok": True}            # ack even on a malformed body
+
+    # Fire-and-forget: hand off to background, ack Telegram immediately
+    asyncio.create_task(process_update(update))
+    return {"ok": True}
+```
+
+---
+
+## Edit 2 — `backend/main.py`: mount the router (after line 428)
+
+Immediately AFTER the last `app.include_router(alex_avtd_router)` line, add:
+
+```python
+from routes.sara_webhook import sara_router
+app.include_router(sara_router)
+```
+
+## Edit 3 — `backend/main.py`: register the webhook in lifespan (after the Alex AVTD stanza, ~line 220)
+
+Modeled exactly on the Alex AVTD stanza. Add after it:
+
+```python
+        sara_token = os.environ.get("SARA_BOT_TOKEN")
+        if sara_token and RENDER_URL:
+            try:
+                import httpx
+                async with httpx.AsyncClient() as hclient:
+                    resp = await hclient.post(
+                        f"https://api.telegram.org/bot{sara_token}/setWebhook",
+                        json={"url": f"{RENDER_URL}/webhook/sara"}
+                    )
+                    logger.info(f"💬 Sara webhook: {resp.json()}")
+            except Exception as e:
+                logger.error(f"Sara webhook setup failed: {e}")
+        else:
+            logger.info("Sara: SARA_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
+```
+
+> `RENDER_URL` is already defined once near line 164 — reuse it, do not redefine.
+
+---
+
+## Deploy
+
+```bash
+git add backend/routes/sara_webhook.py backend/main.py
+git commit -m "feat(sara): webhook plumbing — dedup, ack, background log (no brain yet)"
+git push origin main
+```
+
+**After pushing, immediately check the commit is isolated:**
+```bash
+git show --stat HEAD
+```
+Expect ONLY `backend/routes/sara_webhook.py` and `backend/main.py`. If the prompt doc rode along, remove it with a single-file `git rm` and re-push.
+
+---
+
+## Verify
+
+1. **Startup log** — after deploy, look for the registration line:
+   `💬 Sara webhook: {... "ok": true ...}`
+2. **Send the bot a text message** from your own Telegram → log shows:
+   `📩 Sara update <id>: chat=<your id> text=True voice=False`
+3. **Send a voice note** → log shows `text=False voice=True`.
+4. **Dedup works** — the table fills:
+   ```sql
+   SELECT count(*) FROM sara_inbound_updates;
+   ```
+   Count rises by one per message. (Telegram retries on slow ack would show the `🔁 duplicate ... ignored` log line — fine to see during testing.)
+5. **Five bots still respond** after the restart (Maya HR + Solomon at least).
+
+---
+
+## Definition of done
+- [ ] Startup log shows Sara webhook registered with `ok: true`
+- [ ] Text message logs `📩 Sara update ... text=True`
+- [ ] Voice note logs `voice=True`
+- [ ] `sara_inbound_updates` row count rises per message
+- [ ] `git show --stat HEAD` shows only the two intended files
+- [ ] Maya HR + Solomon still respond
+- [ ] No STT/Claude/TTS yet (that's the next step)
+
+Once done: the bot "hears" you and proves the plumbing. Next isolated step is the **echo loop** — wire ElevenLabs STT in and TTS out so Sara repeats back what you said (still no brain), proving the voice pipeline end to end.

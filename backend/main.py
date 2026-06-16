@@ -219,6 +219,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Alex AVTD: TELEGRAM_ALEX_AVTD_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
+    sara_token = os.environ.get("SARA_BOT_TOKEN")
+    if sara_token and RENDER_URL:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as hclient:
+                resp = await hclient.post(
+                    f"https://api.telegram.org/bot{sara_token}/setWebhook",
+                    json={"url": f"{RENDER_URL}/webhook/sara"}
+                )
+                logger.info(f"💬 Sara webhook: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Sara webhook setup failed: {e}")
+    else:
+        logger.info("Sara: SARA_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
+
     # GradusMediaBot (content approval + notifications) → /api/telegram/webhook/gradus
     main_tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if main_tg_token and RENDER_URL and not os.environ.get("GRADUSMEDIA_PAUSED"):
@@ -426,6 +441,8 @@ app.include_router(photo_report_router)
 app.include_router(alex_tg_router)
 from routes.alex_avtd_webhook import alex_avtd_router
 app.include_router(alex_avtd_router)
+from routes.sara_webhook import sara_router
+app.include_router(sara_router)
 
 class ChatRequest(BaseModel):
     message: str
