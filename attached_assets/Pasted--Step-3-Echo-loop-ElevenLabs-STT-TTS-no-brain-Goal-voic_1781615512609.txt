@@ -1,3 +1,22 @@
+# Step 3 — Echo loop (ElevenLabs STT + TTS, no brain)
+
+**Goal:** voice note in → Sara transcribes it → speaks the SAME words back in Clarice's voice → `sendVoice`. Proves the full voice pipeline. **No Claude yet** — she just echoes you.
+
+> Implementation prompt. Two files: replace `backend/routes/sara_webhook.py`, add one line to `requirements.txt`.
+> **Do NOT commit this prompt doc.** If it lands in `attached_assets/`, leave it or single-file `git rm` it — never the folder.
+
+---
+
+## Edit 1 — `backend/requirements.txt`: add the SDK
+
+Add this line (audit-confirmed not present; latest is 2.53.0):
+```
+elevenlabs==2.53.0
+```
+
+## Edit 2 — REPLACE `backend/routes/sara_webhook.py` with:
+
+```python
 """
 Sara — Telegram webhook + echo loop (Step 3).
 
@@ -174,3 +193,42 @@ async def sara_webhook(request: Request):
         return {"ok": True}
     asyncio.create_task(process_update(update))
     return {"ok": True}
+```
+
+---
+
+## Deploy
+
+```bash
+git add backend/routes/sara_webhook.py backend/requirements.txt
+git commit -m "feat(sara): echo loop — ElevenLabs STT->TTS voice round-trip (no brain)"
+git push origin main
+```
+
+After pushing: `git show --stat HEAD` → expect ONLY `backend/routes/sara_webhook.py` and `backend/requirements.txt`. The build will `pip install elevenlabs==2.53.0` — watch the Render build log for it.
+
+---
+
+## Verify
+1. **Build green** — Render log shows `elevenlabs==2.53.0` installing, build succeeds.
+2. **Startup** — Sara webhook still registers (`💬 Sara webhook: ok: True`).
+3. **Send a voice note** (English, e.g. "Hello Sara, how are you") → within a few seconds Sara replies with a **voice message** saying the same words back in Clarice's voice. Logs show:
+   `🗣️ Sara STT: 'Hello Sara, how are you'` then `🔊 Sara echoed <N> bytes`.
+4. **Send a Russian voice note** ("Привет, как дела") → echoes back in Russian (multilingual voice). Confirms both languages round-trip.
+5. **Send a text message** → get the "Send me a voice message…" nudge (echo loop is voice-only for now).
+6. **Five bots unaffected** — Maya HR + Solomon still respond (this is the real test of the asyncio.to_thread choice — they should stay responsive even while Sara is mid-transcription).
+
+---
+
+## Definition of done
+- [ ] Build installs `elevenlabs` and goes green
+- [ ] Voice note → Sara voice-replies the same words in Clarice's voice
+- [ ] Works in both English and Russian
+- [ ] STT transcript + echoed-bytes log lines appear
+- [ ] Text message gets the voice-only nudge
+- [ ] Maya HR + Solomon stay responsive
+- [ ] `git show --stat HEAD` shows only the two intended files
+
+If the `sendVoice` shows up as a file instead of a playable voice bubble, or audio is silent: that's the OGG/Opus container question — tell me what you see and we adjust the ffmpeg flags (this is the one spot the audit was uncertain about).
+
+Next step after this: wire the brain — replace "echo the transcript" with "send transcript to Claude (dual-output: reply + JSON assessment), speak the reply." That's where Sara starts actually teaching.
