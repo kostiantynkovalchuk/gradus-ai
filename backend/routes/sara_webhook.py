@@ -47,6 +47,7 @@ def _transcribe(ogg_bytes: bytes) -> str:
     result = _eleven.speech_to_text.convert(
         model_id="scribe_v1",
         file=ogg_bytes,
+        tag_audio_events=False,
     )
     return (result.text or "").strip()
 
