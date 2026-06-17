@@ -33,9 +33,9 @@ except ImportError:
 from anthropic import Anthropic
 
 try:
-    from services.ai_models import SONNET
+    from services.ai_models import SONNET, HAIKU
 except ImportError:
-    from ai_models import SONNET
+    from ai_models import SONNET, HAIKU
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +194,41 @@ def _snap_band(rolling: float, current_band):
 
 # ---------- blocking helpers (run via asyncio.to_thread) ----------
 
+def _get_config_int(cur, key: str, default: int) -> int:
+    cur.execute("SELECT value FROM sara_config WHERE key=%s", (key,))
+    r = cur.fetchone()
+    if r and r[0] is not None:
+        try:
+            return int(r[0])
+        except (ValueError, TypeError):
+            return default
+    return default
+
+
+def _recap(turns: list) -> str:
+    """One-sentence recap of a closed session, for next-time continuity. Haiku. Blocking."""
+    convo = "\n".join(f"Learner: {u}\nSara: {s}" for (u, s) in turns if (u or s))
+    if not convo.strip():
+        return ""
+    try:
+        c = _get_anthropic()
+        response = c.messages.create(
+            model=HAIKU,
+            max_tokens=120,
+            system=(
+                "Summarize this English tutoring conversation in ONE short sentence "
+                "(max ~18 words), as a note to the tutor for next time — what the learner "
+                "talked about and practised. Example: 'Talked about his work trip and "
+                "practised past tense.' Return ONLY the sentence, no preamble."
+            ),
+            messages=[{"role": "user", "content": convo[:4000]}],
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        logger.error(f"Sara recap failed: {e}")
+        return ""   # recap is best-effort; never block the session on it
+
+
 def _transcribe(ogg_bytes: bytes) -> str:
     result = _eleven.speech_to_text.convert(
         model_id="scribe_v1",
@@ -225,19 +260,36 @@ def _synthesize_to_ogg(text: str) -> bytes:
 
 
 def _prepare(tg_user_id: int):
-    """Get-or-create an active session and load recent history. Blocking."""
+    """Resolve the current session (expiring + recapping a stale one if needed),
+    load recent history, and read the level. Blocking."""
+    recap_turns = None
     with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+        idle_min = _get_config_int(cur, "session_idle_minutes", 30)
+
         cur.execute(
-            "SELECT id FROM sara_sessions WHERE tg_user_id=%s AND status='active' "
+            "SELECT id, (last_activity_at < now() - (%s * interval '1 minute')) AS is_idle "
+            "FROM sara_sessions WHERE tg_user_id=%s AND status='active' "
             "ORDER BY id DESC LIMIT 1",
-            (tg_user_id,),
+            (idle_min, tg_user_id),
         )
         row = cur.fetchone()
-        if row:
-            session_id = row[0]
+
+        if row and not row[1]:
+            session_id = row[0]                       # active and fresh → continue
         else:
+            if row and row[1]:                        # active but idle → close + recap
+                stale_id = row[0]
+                cur.execute(
+                    "UPDATE sara_sessions SET status='closed', ended_at=now() WHERE id=%s",
+                    (stale_id,),
+                )
+                cur.execute(
+                    "SELECT user_text, sara_text FROM sara_turns WHERE session_id=%s ORDER BY id",
+                    (stale_id,),
+                )
+                recap_turns = cur.fetchall()
             cur.execute(
-                "INSERT INTO sara_sessions (tg_user_id, status) VALUES (%s, 'active') RETURNING id",
+                "INSERT INTO sara_sessions (tg_user_id, status) VALUES (%s,'active') RETURNING id",
                 (tg_user_id,),
             )
             session_id = cur.fetchone()[0]
@@ -254,11 +306,29 @@ def _prepare(tg_user_id: int):
         conn.commit()
 
     history = []
-    for user_text, sara_text in reversed(rows):   # oldest first
+    for user_text, sara_text in reversed(rows):
         if user_text:
             history.append({"role": "user", "content": user_text})
         if sara_text:
             history.append({"role": "assistant", "content": sara_text})
+
+    # Recap the just-closed session (Haiku) and store it. Best-effort, outside the
+    # first connection so we don't hold a DB conn across the LLM call.
+    if recap_turns:
+        summary = _recap(recap_turns)
+        if summary:
+            with psycopg2.connect(DB_URL) as conn2, conn2.cursor() as cur2:
+                cur2.execute(
+                    "INSERT INTO sara_state (tg_user_id, last_session_summary, updated_at) "
+                    "VALUES (%s, %s, now()) "
+                    "ON CONFLICT (tg_user_id) DO UPDATE "
+                    "SET last_session_summary=EXCLUDED.last_session_summary, updated_at=now()",
+                    (tg_user_id, summary),
+                )
+                conn2.commit()
+            logger.info(f"📒 Sara session recap stored for {tg_user_id}: {summary!r}")
+
+    logger.info(f"🗂️ Sara session {session_id} (history turns: {len(rows)})")
     return session_id, history, cefr_band
 
 

@@ -1,0 +1,189 @@
+# Step 7 — Session lifecycle (lazy idle expiry + recap)
+
+**Goal:** replace the dumb get-or-create-session with real sessions. On each message, if the active session has been idle > 30 min (or none exists), close the stale one, generate a one-line recap of it (Haiku) into `sara_state.last_session_summary`, and open a fresh session. The recap is *stored* here; *speaking* it ("welcome back, Felix, last time we…") is Step 8.
+
+> Implementation prompt. One file: edit `backend/routes/sara_webhook.py`. No schema/requirements change (audit confirmed all columns + config exist; `anthropic` already installed).
+> **Before editing:** confirm `_prepare` and the `SONNET` import are in the 5b/6 state shown in the audit. If different, stop and report.
+> **Do NOT commit this prompt doc.**
+
+---
+
+## Design (confirmed)
+- **Model A — lazy expiry.** All logic runs in `_prepare` on the inbound webhook. No scheduler.
+- **Idle-only threshold for MVP:** `session_idle_minutes` (30) from `sara_config`. The `session_active_minutes` (25) max-age cap is deferred — one threshold is simpler to reason about and test.
+- **Recap:** when a stale session is closed, summarize its turns with a cheap **Haiku** call (1 sentence) → store in `sara_state.last_session_summary`. Surfaced as a spoken beat in Step 8, not here.
+- New session → no turns yet → empty history → Sara starts the conversation fresh (the recap, not the transcript, is what carries continuity later).
+- `_persist` is UNCHANGED — it still bumps `last_activity_at` and `message_count` on the active session, which is exactly the idle clock.
+
+Schema facts (audit): `sara_sessions` has `started_at, last_activity_at, ended_at, status('active'|'closed'), message_count`. Recap home = `sara_state.last_session_summary TEXT` (exists, nothing writes it yet). `sara_config` values are TEXT — cast to int.
+
+---
+
+## Change 1 — import HAIKU (extend the existing SONNET import)
+
+```python
+try:
+    from services.ai_models import SONNET, HAIKU
+except ImportError:
+    from ai_models import SONNET, HAIKU
+```
+
+## Change 2 — add config reader + recap helper (near the other blocking helpers)
+
+```python
+def _get_config_int(cur, key: str, default: int) -> int:
+    cur.execute("SELECT value FROM sara_config WHERE key=%s", (key,))
+    r = cur.fetchone()
+    if r and r[0] is not None:
+        try:
+            return int(r[0])
+        except (ValueError, TypeError):
+            return default
+    return default
+
+
+def _recap(turns: list) -> str:
+    """One-sentence recap of a closed session, for next-time continuity. Haiku. Blocking."""
+    convo = "\n".join(f"Learner: {u}\nSara: {s}" for (u, s) in turns if (u or s))
+    if not convo.strip():
+        return ""
+    try:
+        c = _get_anthropic()
+        response = c.messages.create(
+            model=HAIKU,
+            max_tokens=120,
+            system=(
+                "Summarize this English tutoring conversation in ONE short sentence "
+                "(max ~18 words), as a note to the tutor for next time — what the learner "
+                "talked about and practised. Example: 'Talked about his work trip and "
+                "practised past tense.' Return ONLY the sentence, no preamble."
+            ),
+            messages=[{"role": "user", "content": convo[:4000]}],
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        logger.error(f"Sara recap failed: {e}")
+        return ""   # recap is best-effort; never block the session on it
+```
+
+## Change 3 — replace `_prepare` with lifecycle-aware version
+
+```python
+def _prepare(tg_user_id: int):
+    """Resolve the current session (expiring + recapping a stale one if needed),
+    load recent history, and read the level. Blocking."""
+    recap_turns = None
+    with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+        idle_min = _get_config_int(cur, "session_idle_minutes", 30)
+
+        cur.execute(
+            "SELECT id, (last_activity_at < now() - (%s * interval '1 minute')) AS is_idle "
+            "FROM sara_sessions WHERE tg_user_id=%s AND status='active' "
+            "ORDER BY id DESC LIMIT 1",
+            (idle_min, tg_user_id),
+        )
+        row = cur.fetchone()
+
+        if row and not row[1]:
+            session_id = row[0]                       # active and fresh → continue
+        else:
+            if row and row[1]:                        # active but idle → close + recap
+                stale_id = row[0]
+                cur.execute(
+                    "UPDATE sara_sessions SET status='closed', ended_at=now() WHERE id=%s",
+                    (stale_id,),
+                )
+                cur.execute(
+                    "SELECT user_text, sara_text FROM sara_turns WHERE session_id=%s ORDER BY id",
+                    (stale_id,),
+                )
+                recap_turns = cur.fetchall()
+            cur.execute(
+                "INSERT INTO sara_sessions (tg_user_id, status) VALUES (%s,'active') RETURNING id",
+                (tg_user_id,),
+            )
+            session_id = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT user_text, sara_text FROM sara_turns WHERE session_id=%s "
+            "ORDER BY id DESC LIMIT 6",
+            (session_id,),
+        )
+        rows = cur.fetchall()
+        cur.execute("SELECT cefr_band FROM sara_state WHERE tg_user_id=%s", (tg_user_id,))
+        state_row = cur.fetchone()
+        cefr_band = state_row[0] if state_row else None
+        conn.commit()
+
+    history = []
+    for user_text, sara_text in reversed(rows):
+        if user_text:
+            history.append({"role": "user", "content": user_text})
+        if sara_text:
+            history.append({"role": "assistant", "content": sara_text})
+
+    # Recap the just-closed session (Haiku) and store it. Best-effort, outside the
+    # first connection so we don't hold a DB conn across the LLM call.
+    if recap_turns:
+        summary = _recap(recap_turns)
+        if summary:
+            with psycopg2.connect(DB_URL) as conn2, conn2.cursor() as cur2:
+                cur2.execute(
+                    "INSERT INTO sara_state (tg_user_id, last_session_summary, updated_at) "
+                    "VALUES (%s, %s, now()) "
+                    "ON CONFLICT (tg_user_id) DO UPDATE "
+                    "SET last_session_summary=EXCLUDED.last_session_summary, updated_at=now()",
+                    (tg_user_id, summary),
+                )
+                conn2.commit()
+            logger.info(f"📒 Sara session recap stored for {tg_user_id}: {summary!r}")
+
+    logger.info(f"🗂️ Sara session {session_id} (history turns: {len(rows)})")
+    return session_id, history, cefr_band
+```
+
+> `_persist`, `_think`, `_build_system_prompt`, the prompt, STT/TTS/dedup/ack — all UNCHANGED.
+
+---
+
+## Deploy
+```bash
+git add backend/routes/sara_webhook.py
+git commit -m "feat(sara): session lifecycle — idle expiry, close+recap stale session, fresh session"
+git push origin main
+```
+`git show --stat HEAD` → only `backend/routes/sara_webhook.py`.
+
+## Verify (use a timestamp trick — don't wait 30 real minutes)
+1. **Startup clean**, no ImportError (the HAIKU import is the new risk).
+2. **Continuation works** — send 2 voice notes a few seconds apart. Same `session_id` in logs both times (`🗂️ Sara session N`), history carries between them. No new session.
+3. **Force expiry:** find the active session and age it past idle:
+   ```sql
+   SELECT id FROM sara_sessions WHERE tg_user_id=441389791 AND status='active' ORDER BY id DESC LIMIT 1;
+   UPDATE sara_sessions SET last_activity_at = now() - interval '40 minutes'
+     WHERE id = <that id>;
+   ```
+   Now send a voice note. Expect in logs: `📒 Sara session recap stored ...` then `🗂️ Sara session <new id>` (a DIFFERENT id), with `history turns: 0`.
+4. **Check the DB:**
+   ```sql
+   SELECT id, status, started_at, ended_at, message_count FROM sara_sessions
+     WHERE tg_user_id=441389791 ORDER BY id DESC LIMIT 3;
+   SELECT last_session_summary FROM sara_state WHERE tg_user_id=441389791;
+   ```
+   Old session: `status='closed'`, `ended_at` set. New session: `status='active'`, fresh. `last_session_summary` = a one-line recap of the old conversation.
+5. **Fresh session starts clean** — after expiry, Sara's reply does NOT reference the old conversation in-context (history was empty). The recap is stored but not yet spoken (that's Step 8).
+6. **Maya HR + Solomon** unaffected.
+
+## Definition of done
+- [ ] No ImportError (HAIKU resolves)
+- [ ] Messages within 30 min stay one session; a >30-min gap opens a new one
+- [ ] Stale session → `status='closed'` + `ended_at` set
+- [ ] `last_session_summary` populated with a sensible one-line recap
+- [ ] New session has empty history (Sara starts fresh)
+- [ ] Maya + Solomon fine
+- [ ] `git show --stat HEAD` shows only the one file
+
+## Notes
+- The Haiku recap adds ~1s, but ONLY on a comeback turn (when a session just expired) — not every turn. Acceptable; that turn already runs a multi-second pipeline.
+- `session_active_minutes` (25) is intentionally unused for MVP (idle-only). Add the max-age cap later if long single sessions need splitting.
+- Step 8 will READ `last_session_summary` to speak a "welcome back, Felix" beat, then likely clear it after use.
