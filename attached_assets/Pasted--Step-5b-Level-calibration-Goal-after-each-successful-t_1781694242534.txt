@@ -1,0 +1,142 @@
+# Step 5b — Level calibration
+
+**Goal:** after each successful turn, fold the turn's `cefr_estimate` into a smoothed rolling level on `sara_state`, and snap a stable committed band. Sara's *behavior does not change yet* — this only makes her *know* the level. Step 6 (per-CEFR prompting) is what will read it.
+
+> Implementation prompt. One file: edit `backend/routes/sara_webhook.py`. Schema is already ready (audit confirmed) — **no migration, no requirements change.**
+> **Do NOT commit this prompt doc.**
+
+---
+
+## Design (confirmed)
+- **Incremental EWA** smoothing: `new_rolling = 0.2 × estimate_num + 0.8 × old_rolling`. Reads the stored rolling from `sara_state` — does NOT re-query past turns. (This is why the old `{}` rows can't skew anything: we never look back. We simply skip the update when a turn has no `cefr_estimate`.)
+- **Hysteresis** on the committed band so it doesn't flicker at boundaries: only move the band when rolling crosses the midpoint by a margin (0.3).
+- **Runs inside `_persist`**, same connection as the turn insert — one DB trip.
+- Writes only the six exact strings the CHECK allows (`A1`…`C2`).
+
+`sara_state` (per audit): `tg_user_id` PK, `cefr_band` TEXT CHECK in (A1..C2), `cefr_rolling` REAL, `updated_at` (manual bump). Nothing reads/writes it today — Sara is first writer.
+
+---
+
+## Change 1 — add calibration constants + helper (module level, near the other helpers)
+
+```python
+# ---------- CEFR level calibration ----------
+_CEFR_TO_NUM = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
+_NUM_TO_CEFR = {v: k for k, v in _CEFR_TO_NUM.items()}
+EWA_ALPHA = 0.2          # weight on the newest estimate (slow-moving level)
+BAND_HYSTERESIS = 0.3    # dead-zone around band boundaries to prevent flicker
+
+
+def _snap_band(rolling: float, current_band):
+    """Snap a rolling float to a CEFR band, with hysteresis so the committed
+    band only changes when rolling clearly crosses a boundary."""
+    target_num = max(1, min(6, round(rolling)))
+    if current_band is None:
+        return _NUM_TO_CEFR[target_num]          # first calibration: accept directly
+    current_num = _CEFR_TO_NUM.get(current_band, target_num)
+    if target_num == current_num:
+        return current_band
+    boundary = (current_num + target_num) / 2.0
+    if target_num > current_num and rolling >= boundary + BAND_HYSTERESIS:
+        return _NUM_TO_CEFR[target_num]
+    if target_num < current_num and rolling <= boundary - BAND_HYSTERESIS:
+        return _NUM_TO_CEFR[target_num]
+    return current_band                          # inside dead zone — hold steady
+```
+
+## Change 2 — `_persist` takes `tg_user_id` and updates `sara_state`
+
+Replace `_persist` with:
+
+```python
+def _persist(session_id: int, tg_user_id: int, transcript: str, reply: str, assessment: dict):
+    """Log the turn, bump session activity, and recalibrate the rolling level.
+    Blocking — runs via asyncio.to_thread."""
+    with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO sara_turns (session_id, user_text, sara_text, assessment, reply_word_count) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (session_id, transcript, reply, json.dumps(assessment), len(reply.split())),
+        )
+        cur.execute(
+            "UPDATE sara_sessions SET last_activity_at=now(), message_count=message_count+1 "
+            "WHERE id=%s",
+            (session_id,),
+        )
+
+        # --- level calibration (incremental EWA + hysteresis) ---
+        estimate = (assessment or {}).get("cefr_estimate")
+        if estimate in _CEFR_TO_NUM:                       # skip turns with no/invalid estimate
+            cur.execute(
+                "SELECT cefr_rolling, cefr_band FROM sara_state WHERE tg_user_id=%s",
+                (tg_user_id,),
+            )
+            row = cur.fetchone()
+            new_num = _CEFR_TO_NUM[estimate]
+            if row and row[0] is not None:
+                old_rolling, old_band = row[0], row[1]
+                new_rolling = EWA_ALPHA * new_num + (1 - EWA_ALPHA) * old_rolling
+            else:
+                old_band = row[1] if row else None
+                new_rolling = float(new_num)               # seed on first estimate
+            new_band = _snap_band(new_rolling, old_band)
+            cur.execute(
+                "INSERT INTO sara_state (tg_user_id, cefr_band, cefr_rolling, updated_at) "
+                "VALUES (%s, %s, %s, now()) "
+                "ON CONFLICT (tg_user_id) DO UPDATE "
+                "SET cefr_band=EXCLUDED.cefr_band, cefr_rolling=EXCLUDED.cefr_rolling, updated_at=now()",
+                (tg_user_id, new_band, round(new_rolling, 3)),
+            )
+            logger.info(
+                f"📊 Sara level: user={tg_user_id} rolling={new_rolling:.2f} "
+                f"band={new_band} (turn estimate {estimate})"
+            )
+        conn.commit()
+```
+
+## Change 3 — pass `chat_id` as `tg_user_id` at the call site in `handle_voice`
+
+```python
+        if ok:
+            await asyncio.to_thread(_persist, session_id, chat_id, transcript, reply, assessment)
+            logger.info(f"📝 Sara turn persisted (session {session_id})")
+        else:
+            logger.info("Sara: fallback turn NOT persisted (avoids history poisoning)")
+```
+
+> Only `_persist`'s signature/body, the new helper+constants, and that one call line change. STT/TTS/Claude/dedup/`_prepare`/prompt all unchanged from 5a.
+
+---
+
+## Deploy
+```bash
+git add backend/routes/sara_webhook.py
+git commit -m "feat(sara): CEFR level calibration — incremental EWA + hysteresis into sara_state"
+git push origin main
+```
+`git show --stat HEAD` → only `backend/routes/sara_webhook.py`.
+
+## Verify
+1. **Startup clean**, no ImportError.
+2. **Send several voice notes** (mix easy + a couple with errors). After each successful turn the log shows:
+   `📊 Sara level: user=441389791 rolling=2.00 band=A2 (turn estimate A2)` — rolling nudging over turns.
+3. **Check state:**
+   ```sql
+   SELECT tg_user_id, cefr_band, cefr_rolling, updated_at FROM sara_state;
+   ```
+   One row for Felix, a sensible band, `cefr_rolling` a float that moves slowly.
+4. **Hysteresis holds** — one odd turn (e.g. a stray B1 among A2s) should NOT immediately flip the band; rolling edges toward it but the band stays until it clearly crosses.
+5. **Empty-estimate turns skip** — if a fallback ever sneaks an empty assessment through, no `📊` line and no state write (the `if estimate in _CEFR_TO_NUM` guard).
+6. **Replies unchanged** — Sara still talks exactly as before. This step is silent to the learner.
+7. **Maya HR + Solomon** unaffected.
+
+## Definition of done
+- [ ] `sara_state` gets one row for the user, populated after the first valid turn
+- [ ] `cefr_rolling` moves smoothly; `cefr_band` is stable (no per-turn flicker)
+- [ ] Turns with no `cefr_estimate` don't write state
+- [ ] Sara's spoken behavior is identical to 5a (nothing reads the band yet)
+- [ ] Maya + Solomon fine
+- [ ] `git show --stat HEAD` shows only the one file
+
+## Note
+Nothing reads `cefr_band` yet — that's **Step 6 (per-CEFR prompting)**, which uses it to scale Sara's English and Russian scaffolding to Felix's level. Land 5b, watch the band settle on something that feels right for him over a handful of turns, THEN let it drive behavior in 6.

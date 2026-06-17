@@ -130,6 +130,30 @@ def safe_parse_json(text: str) -> dict:
             return {}
 
 
+# ---------- CEFR level calibration ----------
+_CEFR_TO_NUM = {"A1": 1, "A2": 2, "B1": 3, "B2": 4, "C1": 5, "C2": 6}
+_NUM_TO_CEFR = {v: k for k, v in _CEFR_TO_NUM.items()}
+EWA_ALPHA = 0.2          # weight on the newest estimate (slow-moving level)
+BAND_HYSTERESIS = 0.3    # dead-zone around band boundaries to prevent flicker
+
+
+def _snap_band(rolling: float, current_band):
+    """Snap a rolling float to a CEFR band, with hysteresis so the committed
+    band only changes when rolling clearly crosses a boundary."""
+    target_num = max(1, min(6, round(rolling)))
+    if current_band is None:
+        return _NUM_TO_CEFR[target_num]          # first calibration: accept directly
+    current_num = _CEFR_TO_NUM.get(current_band, target_num)
+    if target_num == current_num:
+        return current_band
+    boundary = (current_num + target_num) / 2.0
+    if target_num > current_num and rolling >= boundary + BAND_HYSTERESIS:
+        return _NUM_TO_CEFR[target_num]
+    if target_num < current_num and rolling <= boundary - BAND_HYSTERESIS:
+        return _NUM_TO_CEFR[target_num]
+    return current_band                          # inside dead zone — hold steady
+
+
 # ---------- blocking helpers (run via asyncio.to_thread) ----------
 
 def _transcribe(ogg_bytes: bytes) -> str:
@@ -217,8 +241,9 @@ def _think(transcript: str, history: list):
     return reply, assessment, True
 
 
-def _persist(session_id: int, transcript: str, reply: str, assessment: dict):
-    """Log the turn + bump session activity. Blocking."""
+def _persist(session_id: int, tg_user_id: int, transcript: str, reply: str, assessment: dict):
+    """Log the turn, bump session activity, and recalibrate the rolling level.
+    Blocking — runs via asyncio.to_thread."""
     with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO sara_turns (session_id, user_text, sara_text, assessment, reply_word_count) "
@@ -230,6 +255,34 @@ def _persist(session_id: int, transcript: str, reply: str, assessment: dict):
             "WHERE id=%s",
             (session_id,),
         )
+
+        # --- level calibration (incremental EWA + hysteresis) ---
+        estimate = (assessment or {}).get("cefr_estimate")
+        if estimate in _CEFR_TO_NUM:                       # skip turns with no/invalid estimate
+            cur.execute(
+                "SELECT cefr_rolling, cefr_band FROM sara_state WHERE tg_user_id=%s",
+                (tg_user_id,),
+            )
+            row = cur.fetchone()
+            new_num = _CEFR_TO_NUM[estimate]
+            if row and row[0] is not None:
+                old_rolling, old_band = row[0], row[1]
+                new_rolling = EWA_ALPHA * new_num + (1 - EWA_ALPHA) * old_rolling
+            else:
+                old_band = row[1] if row else None
+                new_rolling = float(new_num)               # seed on first estimate
+            new_band = _snap_band(new_rolling, old_band)
+            cur.execute(
+                "INSERT INTO sara_state (tg_user_id, cefr_band, cefr_rolling, updated_at) "
+                "VALUES (%s, %s, %s, now()) "
+                "ON CONFLICT (tg_user_id) DO UPDATE "
+                "SET cefr_band=EXCLUDED.cefr_band, cefr_rolling=EXCLUDED.cefr_rolling, updated_at=now()",
+                (tg_user_id, new_band, round(new_rolling, 3)),
+            )
+            logger.info(
+                f"📊 Sara level: user={tg_user_id} rolling={new_rolling:.2f} "
+                f"band={new_band} (turn estimate {estimate})"
+            )
         conn.commit()
 
 
@@ -281,7 +334,7 @@ async def handle_voice(chat_id: int, file_id: str):
         await _send_voice(chat_id, ogg_out)
 
         if ok:
-            await asyncio.to_thread(_persist, session_id, transcript, reply, assessment)
+            await asyncio.to_thread(_persist, session_id, chat_id, transcript, reply, assessment)
             logger.info(f"📝 Sara turn persisted (session {session_id})")
         else:
             logger.info("Sara: fallback turn NOT persisted (avoids history poisoning)")
