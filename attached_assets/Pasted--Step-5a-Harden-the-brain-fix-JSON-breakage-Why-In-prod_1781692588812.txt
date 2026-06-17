@@ -1,0 +1,147 @@
+# Step 5a — Harden the brain (fix JSON breakage)
+
+**Why:** In production Sara started returning plain conversational text instead of the required JSON wrapper — triggered when the conversation went meta/Russian — so every reply fell back to "Sorry, could you say that again?" and logged empty assessments. This step makes the JSON contract robust and stops bad turns from poisoning history. **Must ship before calibration** (calibration reads `cefr_estimate`, which the broken turns left empty).
+
+> Implementation prompt. One file: edit `backend/routes/sara_webhook.py`. Two changes only — (A) replace `SARA_SYSTEM_PROMPT`, (B) make `_think` signal fallbacks so `handle_voice` can skip persisting them. No schema/requirements change.
+> **Do NOT commit this prompt doc.**
+
+---
+
+## Root cause (for context)
+1. The JSON-only rule sat only at the END of a warm persona prompt → when asked a personal/meta question (esp. in Russian), Claude slipped into plain-text "just answer" mode.
+2. **History poisoning:** once a turn failed, we persisted `sara_text = "Sorry, could you say that again?"`. The next turn loaded that as history, reinforcing "I reply in plain text here" → cascade. That's why turns 6–9 all failed, even back in English.
+
+## Behavior decision baked in: (a)
+Sara replies in **English**. Russian is brief **scaffolding only** when the learner is stuck — never the conversation language. On a Russian/meta question, she answers briefly in English and gently steers back to English. (Still all inside the JSON `reply` field.)
+
+---
+
+## Change A — replace `SARA_SYSTEM_PROMPT` with:
+
+```python
+SARA_SYSTEM_PROMPT = """\
+OUTPUT CONTRACT (highest priority, overrides everything below):
+You MUST return exactly ONE raw JSON object and nothing else — no markdown, no
+code fences, no text before or after. This is true for EVERY message without
+exception: even if the learner asks you a personal question, asks about you,
+asks whether you speak Russian, writes to you in Russian, or says something
+off-topic — your ENTIRE response is still one JSON object, and your spoken
+words go INSIDE the "reply" field. Never reply in plain text. Never break the
+JSON wrapper for any reason.
+
+The JSON shape is exactly:
+{
+  "reply": "<your short spoken reply to the learner>",
+  "assessment": {
+    "cefr_estimate": "A1|A2|B1|B2|C1|C2",
+    "communicative_success": true,
+    "errors": [
+      {"type": "short label", "original": "what they said", "correction": "corrected form"}
+    ]
+  }
+}
+
+WHO YOU ARE:
+You are Sara, a warm, friendly personal English tutor having a spoken
+conversation with one adult learner. Keep "reply" SHORT — 1 to 3 sentences —
+because it is read aloud as a voice message. Be warm and encouraging, never
+clinical or wordy.
+
+LANGUAGE RULE:
+Always speak English in "reply". The learner is a Russian speaker; you may use
+a few Russian words ONLY as brief scaffolding when they are clearly stuck. If
+they speak Russian to you or ask whether you speak Russian, answer briefly in
+English and gently steer them back to practising English. Do not hold the
+conversation in Russian.
+
+TEACHING:
+When the learner makes an English mistake, gently RECAST: naturally use the
+correct form in your own reply instead of lecturing or listing errors.
+Acknowledge what they said first, then keep the conversation going with a
+light follow-up question. Log every correction in assessment.errors (empty
+list if none). "assessment" is internal and never shown to the learner.
+
+EXAMPLE (note: Russian question still returns JSON, reply is English):
+Learner: "А по-русски ты хорошо говоришь?"
+You:
+{"reply": "I understand a little Russian, but let's keep practising English together! Tell me — what did you do this weekend?", "assessment": {"cefr_estimate": "A2", "communicative_success": true, "errors": []}}
+
+EXAMPLE (English with an error, recast):
+Learner: "Yesterday I go to work at six."
+You:
+{"reply": "Wow, you went to work at six? That's early! Do you always start so early?", "assessment": {"cefr_estimate": "A2", "communicative_success": true, "errors": [{"type": "past tense", "original": "I go to work", "correction": "I went to work"}]}}"""
+```
+
+## Change B — `_think` signals fallback; `handle_voice` skips persisting it
+
+**B1.** In `_think`, change the no-reply branch to return a fallback flag. Replace the body's tail so it returns a 3-tuple `(reply, assessment, ok)`:
+
+```python
+def _think(transcript: str, history: list):
+    """Claude dual-output: returns (reply_text, assessment_dict, ok). Blocking."""
+    c = _get_anthropic()
+    messages = list(history) + [{"role": "user", "content": transcript}]
+    response = c.messages.create(
+        model=SONNET,
+        max_tokens=1024,
+        system=SARA_SYSTEM_PROMPT,
+        messages=messages,
+    )
+    raw = response.content[0].text.strip()
+    data = safe_parse_json(raw)
+    reply = (data.get("reply") or "").strip()
+    assessment = data.get("assessment") or {}
+    if not reply:
+        logger.error(f"Sara _think: no reply parsed from: {raw[:200]!r}")
+        return "Hmm, one moment — could you say that again?", {}, False
+    return reply, assessment, True
+```
+
+**B2.** In `handle_voice`, unpack the 3-tuple and only persist when `ok`:
+
+```python
+        session_id, history = await asyncio.to_thread(_prepare, chat_id)
+        reply, assessment, ok = await asyncio.to_thread(_think, transcript, history)
+        logger.info(f"💭 Sara reply: {reply!r} | ok={ok} | assessment: {assessment}")
+
+        ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
+        await _send_voice(chat_id, ogg_out)
+
+        if ok:
+            await asyncio.to_thread(_persist, session_id, transcript, reply, assessment)
+            logger.info(f"📝 Sara turn persisted (session {session_id})")
+        else:
+            logger.info("Sara: fallback turn NOT persisted (avoids history poisoning)")
+```
+
+> Only those two spots change. Everything else (STT, TTS, dedup, ack, session get-or-create, `_persist`, `_prepare`) stays exactly as in Step 4. `safe_parse_json` unchanged.
+
+---
+
+## Deploy
+```bash
+git add backend/routes/sara_webhook.py
+git commit -m "fix(sara): harden JSON contract (lead+example), don't persist fallback turns"
+git push origin main
+```
+`git show --stat HEAD` → only `backend/routes/sara_webhook.py`.
+
+## Verify
+1. **Startup clean** — `💬 Sara webhook: ok: True`, no ImportError.
+2. **The exact thing that broke** — send a Russian/meta voice note ("А по-русски ты хорошо разговариваешь?"). Sara should now reply (in English, steering back) with **valid JSON** → logs show `ok=True` and a real reply, NOT the fallback.
+3. **English with an error** still recasts correctly, `ok=True`, assessment has the error.
+4. **No poisoning** — after any hiccup, the next normal turn works (because the fallback wasn't persisted). Logs: `fallback turn NOT persisted` only on genuine parse failures, and they should be rare now.
+5. **DB clean** — new `sara_turns` rows all have non-empty assessment with a `cefr_estimate`; no more `{}` rows being written.
+6. **Maya HR + Solomon** unaffected.
+
+## Definition of done
+- [ ] Russian/meta voice note → valid JSON reply in English (the bug is gone)
+- [ ] `ok=True` on normal turns; fallbacks rare and NOT persisted
+- [ ] New turns log real `cefr_estimate` (clean data for calibration)
+- [ ] Maya + Solomon fine
+- [ ] `git show --stat HEAD` shows only the one file
+
+After this ships clean → **Step 5b: level calibration** (read recent `cefr_estimate`, smooth into `sara_state.cefr_rolling`, snap to `cefr_band`). Schema already supports it — no migration.
+
+## Note on existing poisoned rows
+Turns 6–9 (the `{}` ones) are already in the DB. They're harmless for replies, but calibration in 5b should filter to assessments that actually contain a `cefr_estimate` (skip empty `{}`). We'll bake that filter into 5b so the old bad rows don't skew the level. No need to delete them.

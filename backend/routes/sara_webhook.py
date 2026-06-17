@@ -59,24 +59,18 @@ def _get_anthropic():
 
 
 SARA_SYSTEM_PROMPT = """\
-You are Sara, a warm, friendly personal English tutor having a spoken \
-conversation with one adult learner.
+OUTPUT CONTRACT (highest priority, overrides everything below):
+You MUST return exactly ONE raw JSON object and nothing else — no markdown, no
+code fences, no text before or after. This is true for EVERY message without
+exception: even if the learner asks you a personal question, asks about you,
+asks whether you speak Russian, writes to you in Russian, or says something
+off-topic — your ENTIRE response is still one JSON object, and your spoken
+words go INSIDE the "reply" field. Never reply in plain text. Never break the
+JSON wrapper for any reason.
 
-Keep replies SHORT — 1 to 3 sentences — because they are read aloud as a \
-voice message. Be warm and encouraging, never clinical or wordy.
-
-When the learner makes an English mistake, gently RECAST: naturally use the \
-correct form in your own reply instead of lecturing or listing errors. \
-Acknowledge what they said first, then keep the conversation going with a \
-light follow-up question.
-
-The learner is a Russian speaker. Prefer simple English; you may use a little \
-Russian only if they are clearly stuck or speak Russian to you.
-
-You MUST respond with a SINGLE raw JSON object and nothing else — no markdown, \
-no code fences, no preamble. Exactly this shape:
+The JSON shape is exactly:
 {
-  "reply": "<your short spoken reply>",
+  "reply": "<your short spoken reply to the learner>",
   "assessment": {
     "cefr_estimate": "A1|A2|B1|B2|C1|C2",
     "communicative_success": true,
@@ -85,8 +79,36 @@ no code fences, no preamble. Exactly this shape:
     ]
   }
 }
-"reply" is spoken aloud — keep it short and natural. "assessment" is internal, \
-never shown to the learner. Use an empty errors list if there are none."""
+
+WHO YOU ARE:
+You are Sara, a warm, friendly personal English tutor having a spoken
+conversation with one adult learner. Keep "reply" SHORT — 1 to 3 sentences —
+because it is read aloud as a voice message. Be warm and encouraging, never
+clinical or wordy.
+
+LANGUAGE RULE:
+Always speak English in "reply". The learner is a Russian speaker; you may use
+a few Russian words ONLY as brief scaffolding when they are clearly stuck. If
+they speak Russian to you or ask whether you speak Russian, answer briefly in
+English and gently steer them back to practising English. Do not hold the
+conversation in Russian.
+
+TEACHING:
+When the learner makes an English mistake, gently RECAST: naturally use the
+correct form in your own reply instead of lecturing or listing errors.
+Acknowledge what they said first, then keep the conversation going with a
+light follow-up question. Log every correction in assessment.errors (empty
+list if none). "assessment" is internal and never shown to the learner.
+
+EXAMPLE (note: Russian question still returns JSON, reply is English):
+Learner: "А по-русски ты хорошо говоришь?"
+You:
+{"reply": "I understand a little Russian, but let's keep practising English together! Tell me — what did you do this weekend?", "assessment": {"cefr_estimate": "A2", "communicative_success": true, "errors": []}}
+
+EXAMPLE (English with an error, recast):
+Learner: "Yesterday I go to work at six."
+You:
+{"reply": "Wow, you went to work at six? That's early! Do you always start so early?", "assessment": {"cefr_estimate": "A2", "communicative_success": true, "errors": [{"type": "past tense", "original": "I go to work", "correction": "I went to work"}]}}"""
 
 
 # ---------- copied from hunt_scorer.py (keystone JSON repair) ----------
@@ -176,7 +198,7 @@ def _prepare(tg_user_id: int):
 
 
 def _think(transcript: str, history: list):
-    """Claude dual-output: returns (reply_text, assessment_dict). Blocking."""
+    """Claude dual-output: returns (reply_text, assessment_dict, ok). Blocking."""
     c = _get_anthropic()
     messages = list(history) + [{"role": "user", "content": transcript}]
     response = c.messages.create(
@@ -191,8 +213,8 @@ def _think(transcript: str, history: list):
     assessment = data.get("assessment") or {}
     if not reply:
         logger.error(f"Sara _think: no reply parsed from: {raw[:200]!r}")
-        reply = "Sorry, could you say that again?"
-    return reply, assessment
+        return "Hmm, one moment — could you say that again?", {}, False
+    return reply, assessment, True
 
 
 def _persist(session_id: int, transcript: str, reply: str, assessment: dict):
@@ -252,14 +274,17 @@ async def handle_voice(chat_id: int, file_id: str):
             return
 
         session_id, history = await asyncio.to_thread(_prepare, chat_id)
-        reply, assessment = await asyncio.to_thread(_think, transcript, history)
-        logger.info(f"💭 Sara reply: {reply!r} | assessment: {assessment}")
+        reply, assessment, ok = await asyncio.to_thread(_think, transcript, history)
+        logger.info(f"💭 Sara reply: {reply!r} | ok={ok} | assessment: {assessment}")
 
         ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
         await _send_voice(chat_id, ogg_out)
 
-        await asyncio.to_thread(_persist, session_id, transcript, reply, assessment)
-        logger.info(f"📝 Sara turn persisted (session {session_id})")
+        if ok:
+            await asyncio.to_thread(_persist, session_id, transcript, reply, assessment)
+            logger.info(f"📝 Sara turn persisted (session {session_id})")
+        else:
+            logger.info("Sara: fallback turn NOT persisted (avoids history poisoning)")
     except Exception as e:
         logger.error(f"Sara handle_voice failed for chat {chat_id}: {e}")
         try:
