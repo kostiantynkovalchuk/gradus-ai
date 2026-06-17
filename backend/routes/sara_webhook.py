@@ -58,7 +58,7 @@ def _get_anthropic():
     return _anthropic
 
 
-SARA_SYSTEM_PROMPT = """\
+SARA_SYSTEM_PROMPT_BASE = """\
 OUTPUT CONTRACT (highest priority, overrides everything below):
 You MUST return exactly ONE raw JSON object and nothing else — no markdown, no
 code fences, no text before or after. This is true for EVERY message without
@@ -87,11 +87,11 @@ because it is read aloud as a voice message. Be warm and encouraging, never
 clinical or wordy.
 
 LANGUAGE RULE:
-Always speak English in "reply". The learner is a Russian speaker; you may use
-a few Russian words ONLY as brief scaffolding when they are clearly stuck. If
-they speak Russian to you or ask whether you speak Russian, answer briefly in
-English and gently steer them back to practising English. Do not hold the
-conversation in Russian.
+Always speak English in "reply". The learner is a Russian speaker. How much
+Russian scaffolding to use is governed by the LEARNER LEVEL block at the very
+end of this prompt — follow it. If they speak Russian to you or ask whether you
+speak Russian, answer briefly in English and gently steer them back to
+practising English; never hold the conversation in Russian.
 
 TEACHING:
 When the learner makes an English mistake, gently RECAST: naturally use the
@@ -109,6 +109,44 @@ EXAMPLE (English with an error, recast):
 Learner: "Yesterday I go to work at six."
 You:
 {"reply": "Wow, you went to work at six? That's early! Do you always start so early?", "assessment": {"cefr_estimate": "A2", "communicative_success": true, "errors": [{"type": "past tense", "original": "I go to work", "correction": "I went to work"}]}}"""
+
+
+_LEVEL_BLOCK_A = (
+    "LEARNER LEVEL: Beginner (A1-A2).\n"
+    "Use very simple, short English sentences and common everyday words — one "
+    "idea per sentence. When you introduce or correct a harder word, you may add "
+    "a brief Russian gloss in parentheses so they understand. Be extra warm and "
+    "encouraging; celebrate small wins."
+)
+_LEVEL_BLOCK_B = (
+    "LEARNER LEVEL: Intermediate (B1-B2).\n"
+    "Speak natural, clear English. Use Russian only rarely — at most a single "
+    "word in parentheses for a genuinely hard term. Gently stretch them with "
+    "slightly richer vocabulary and open follow-up questions."
+)
+_LEVEL_BLOCK_C = (
+    "LEARNER LEVEL: Advanced (C1-C2).\n"
+    "Speak fluent, natural English with full richness — idioms, nuance, varied "
+    "structure. Do NOT use Russian at all. Treat them as a near-native "
+    "conversation partner and invite precision and subtlety."
+)
+_LEVEL_BLOCK_DEFAULT = (
+    "LEARNER LEVEL: Not yet known.\n"
+    "Keep your English simple and clear for now. Offer a brief Russian word only "
+    "if they seem confused. You will learn their level as you talk — adapt "
+    "naturally."
+)
+
+_LEVEL_BLOCKS = {
+    "A1": _LEVEL_BLOCK_A, "A2": _LEVEL_BLOCK_A,
+    "B1": _LEVEL_BLOCK_B, "B2": _LEVEL_BLOCK_B,
+    "C1": _LEVEL_BLOCK_C, "C2": _LEVEL_BLOCK_C,
+}
+
+
+def _build_system_prompt(cefr_band) -> str:
+    block = _LEVEL_BLOCKS.get(cefr_band, _LEVEL_BLOCK_DEFAULT)
+    return SARA_SYSTEM_PROMPT_BASE + "\n\n" + block
 
 
 # ---------- copied from hunt_scorer.py (keystone JSON repair) ----------
@@ -210,6 +248,9 @@ def _prepare(tg_user_id: int):
             (session_id,),
         )
         rows = cur.fetchall()
+        cur.execute("SELECT cefr_band FROM sara_state WHERE tg_user_id=%s", (tg_user_id,))
+        state_row = cur.fetchone()
+        cefr_band = state_row[0] if state_row else None
         conn.commit()
 
     history = []
@@ -218,17 +259,17 @@ def _prepare(tg_user_id: int):
             history.append({"role": "user", "content": user_text})
         if sara_text:
             history.append({"role": "assistant", "content": sara_text})
-    return session_id, history
+    return session_id, history, cefr_band
 
 
-def _think(transcript: str, history: list):
+def _think(transcript: str, history: list, cefr_band):
     """Claude dual-output: returns (reply_text, assessment_dict, ok). Blocking."""
     c = _get_anthropic()
     messages = list(history) + [{"role": "user", "content": transcript}]
     response = c.messages.create(
         model=SONNET,
         max_tokens=1024,
-        system=SARA_SYSTEM_PROMPT,
+        system=_build_system_prompt(cefr_band),
         messages=messages,
     )
     raw = response.content[0].text.strip()
@@ -326,9 +367,9 @@ async def handle_voice(chat_id: int, file_id: str):
             await _send_text(chat_id, "Sorry, I couldn't hear that — try again?")
             return
 
-        session_id, history = await asyncio.to_thread(_prepare, chat_id)
-        reply, assessment, ok = await asyncio.to_thread(_think, transcript, history)
-        logger.info(f"💭 Sara reply: {reply!r} | ok={ok} | assessment: {assessment}")
+        session_id, history, cefr_band = await asyncio.to_thread(_prepare, chat_id)
+        reply, assessment, ok = await asyncio.to_thread(_think, transcript, history, cefr_band)
+        logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | ok={ok} | assessment: {assessment}")
 
         ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
         await _send_voice(chat_id, ogg_out)

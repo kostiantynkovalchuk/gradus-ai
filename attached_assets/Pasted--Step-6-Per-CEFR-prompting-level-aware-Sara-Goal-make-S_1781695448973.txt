@@ -1,0 +1,168 @@
+# Step 6 — Per-CEFR prompting (level-aware Sara)
+
+**Goal:** make Sara's language adapt to the learner's calibrated level. Read `cefr_band` (written by 5b), inject a level-specific scaffolding block into the system prompt. This is where the "Russian-only L1 ladder, scaled by CEFR" methodology becomes real behavior.
+
+> Implementation prompt. One file: edit `backend/routes/sara_webhook.py`. No schema/requirements change.
+> **Before editing:** confirm in-file that `_prepare(tg_user_id)` currently returns `(session_id, history)` and `_think(transcript, history)` builds from `SARA_SYSTEM_PROMPT`. The edits below assume the 5a/5b state. If they differ, stop and report.
+> **Do NOT commit this prompt doc.**
+
+---
+
+## Design (confirmed)
+- **3 grouped tiers + default:**
+  - **A1/A2** — beginner: very simple short English, brief Russian glosses allowed, extra encouragement.
+  - **B1/B2** — intermediate: natural clear English, Russian only rarely for a genuinely hard word, gentle stretch.
+  - **C1/C2** — advanced: full fluent English, idioms/nuance, **no Russian**.
+  - **Uncalibrated (NULL band, e.g. turn 1)** — adaptive: simple clear English, a little Russian only if they seem lost; level is learned as they talk.
+- The level block is appended at the END of the prompt; the OUTPUT CONTRACT stays at the TOP (unchanged, still highest priority — JSON discipline is not affected).
+- Band is read in `_prepare` (same connection as session/history) and passed to `_think`.
+
+---
+
+## Change 1 — `SARA_SYSTEM_PROMPT` → `SARA_SYSTEM_PROMPT_BASE`, defer the language rule
+
+Rename the constant to `SARA_SYSTEM_PROMPT_BASE` and replace ONLY its `LANGUAGE RULE` paragraph with this (everything else in the prompt — OUTPUT CONTRACT, WHO YOU ARE, TEACHING, both EXAMPLES — stays exactly as in 5a):
+
+```
+LANGUAGE RULE:
+Always speak English in "reply". The learner is a Russian speaker. How much
+Russian scaffolding to use is governed by the LEARNER LEVEL block at the very
+end of this prompt — follow it. If they speak Russian to you or ask whether you
+speak Russian, answer briefly in English and gently steer them back to
+practising English; never hold the conversation in Russian.
+```
+
+## Change 2 — add level blocks + builder (right after the base prompt constant)
+
+```python
+_LEVEL_BLOCK_A = (
+    "LEARNER LEVEL: Beginner (A1-A2).\n"
+    "Use very simple, short English sentences and common everyday words — one "
+    "idea per sentence. When you introduce or correct a harder word, you may add "
+    "a brief Russian gloss in parentheses so they understand. Be extra warm and "
+    "encouraging; celebrate small wins."
+)
+_LEVEL_BLOCK_B = (
+    "LEARNER LEVEL: Intermediate (B1-B2).\n"
+    "Speak natural, clear English. Use Russian only rarely — at most a single "
+    "word in parentheses for a genuinely hard term. Gently stretch them with "
+    "slightly richer vocabulary and open follow-up questions."
+)
+_LEVEL_BLOCK_C = (
+    "LEARNER LEVEL: Advanced (C1-C2).\n"
+    "Speak fluent, natural English with full richness — idioms, nuance, varied "
+    "structure. Do NOT use Russian at all. Treat them as a near-native "
+    "conversation partner and invite precision and subtlety."
+)
+_LEVEL_BLOCK_DEFAULT = (
+    "LEARNER LEVEL: Not yet known.\n"
+    "Keep your English simple and clear for now. Offer a brief Russian word only "
+    "if they seem confused. You will learn their level as you talk — adapt "
+    "naturally."
+)
+
+_LEVEL_BLOCKS = {
+    "A1": _LEVEL_BLOCK_A, "A2": _LEVEL_BLOCK_A,
+    "B1": _LEVEL_BLOCK_B, "B2": _LEVEL_BLOCK_B,
+    "C1": _LEVEL_BLOCK_C, "C2": _LEVEL_BLOCK_C,
+}
+
+
+def _build_system_prompt(cefr_band) -> str:
+    block = _LEVEL_BLOCKS.get(cefr_band, _LEVEL_BLOCK_DEFAULT)
+    return SARA_SYSTEM_PROMPT_BASE + "\n\n" + block
+```
+
+## Change 3 — `_prepare` also reads the band, returns a 3-tuple
+
+In `_prepare`, after loading the history rows (still inside the `with` block, before `conn.commit()`), add the band read; then return it. Add right after the `rows = cur.fetchall()` line:
+
+```python
+        cur.execute("SELECT cefr_band FROM sara_state WHERE tg_user_id=%s", (tg_user_id,))
+        state_row = cur.fetchone()
+        cefr_band = state_row[0] if state_row else None
+        conn.commit()
+```
+
+And change the return line:
+
+```python
+    return session_id, history, cefr_band
+```
+
+## Change 4 — `_think` takes the band, builds the prompt dynamically
+
+```python
+def _think(transcript: str, history: list, cefr_band):
+    """Claude dual-output: returns (reply_text, assessment_dict, ok). Blocking."""
+    c = _get_anthropic()
+    messages = list(history) + [{"role": "user", "content": transcript}]
+    response = c.messages.create(
+        model=SONNET,
+        max_tokens=1024,
+        system=_build_system_prompt(cefr_band),
+        messages=messages,
+    )
+    raw = response.content[0].text.strip()
+    data = safe_parse_json(raw)
+    reply = (data.get("reply") or "").strip()
+    assessment = data.get("assessment") or {}
+    if not reply:
+        logger.error(f"Sara _think: no reply parsed from: {raw[:200]!r}")
+        return "Hmm, one moment — could you say that again?", {}, False
+    return reply, assessment, True
+```
+
+## Change 5 — `handle_voice` unpacks the band and passes it through
+
+```python
+        session_id, history, cefr_band = await asyncio.to_thread(_prepare, chat_id)
+        reply, assessment, ok = await asyncio.to_thread(_think, transcript, history, cefr_band)
+        logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | ok={ok} | assessment: {assessment}")
+```
+
+> Only these five spots change. STT/TTS/dedup/ack/`_persist`/calibration all unchanged.
+
+---
+
+## Deploy
+```bash
+git add backend/routes/sara_webhook.py
+git commit -m "feat(sara): per-CEFR prompting — level-aware scaffolding from sara_state.cefr_band"
+git push origin main
+```
+`git show --stat HEAD` → only `backend/routes/sara_webhook.py`.
+
+## Verify (band is currently B1 — force the others by SQL to test each tier)
+1. **Startup clean**, no ImportError. Log line now shows `level=...`.
+2. **B1 (current) — baseline:** send a voice note. Sara speaks natural clear English, minimal/no Russian. Log: `level=B1`.
+3. **Force A-tier:**
+   ```sql
+   UPDATE sara_state SET cefr_band='A1', cefr_rolling=1.0 WHERE tg_user_id=441389791;
+   ```
+   Send a voice note (the read happens in `_prepare`, so the manual band applies to this turn). Expect **simpler English, shorter sentences, occasional Russian gloss in parentheses**, very encouraging. Log: `level=A1`.
+4. **Force C-tier:**
+   ```sql
+   UPDATE sara_state SET cefr_band='C1', cefr_rolling=5.0 WHERE tg_user_id=441389791;
+   ```
+   Send a voice note. Expect **richer, fluent English, no Russian at all**. Log: `level=C1`.
+5. **Restore / let it re-settle:**
+   ```sql
+   UPDATE sara_state SET cefr_band='B1', cefr_rolling=3.0 WHERE tg_user_id=441389791;
+   ```
+   (Calibration will keep adjusting from here normally.)
+6. **JSON contract still holds** at every tier — `ok=True`, valid JSON, no fallback. (The C-tier "richer language" must NOT break the JSON wrapper or blow past the short-reply length — watch for that.)
+7. **Maya HR + Solomon** unaffected.
+
+## Definition of done
+- [ ] No ImportError; `level=` in logs
+- [ ] A-tier audibly simpler + Russian glosses; C-tier richer + zero Russian; B-tier in between
+- [ ] JSON contract holds at all tiers (no fallback, replies stay short)
+- [ ] Setting band by SQL changes the next reply's style (proves `_prepare` read → `_think` injection works)
+- [ ] Maya + Solomon fine
+- [ ] `git show --stat HEAD` shows only the one file
+
+## Notes
+- Manually setting the band + a matching `cefr_rolling` is the clean way to test tiers (talking your way down from B1 to A1 would take many turns at α=0.2). Setting rolling to match prevents the next turn's hysteresis from snapping it back.
+- The DEFAULT (uncalibrated) block only shows for a brand-new user with no `sara_state` row — you already have a row, so to see it you'd delete the row or test a fresh user. Low priority.
+- After this: recast→explicit escalation on repeat errors · deterministic voice beats · real 25/30 session lifecycle · then the whitelist before Felix gets the link.
