@@ -1,0 +1,211 @@
+# Step 8 — Voice beats (welcome-back + streak, addressing Felix)
+
+**Goal:** the warmth layer. Two deterministic, rule-fired beats woven into Sara's single reply, addressing the learner as **Felix**:
+- **Welcome-back** — first message of a NEW session that followed a gap, when a recap exists → opens by welcoming him back and referencing last time.
+- **Streak** — when `streak_days` hits a milestone (3 or 7) → a brief celebration.
+
+Both are **runtime prompt instructions** prepended into the one reply (not separate voice messages, not `sara_beats` table rows — the table has no `welcome_back`/`streak` scenario and the welcome-back is inherently dynamic). No migration.
+
+> Implementation prompt. One file: edit `backend/routes/sara_webhook.py`. No schema/requirements change.
+> **Before editing:** confirm `_prepare` returns `(session_id, history, cefr_band)`, `_think(transcript, history, cefr_band)`, and `_persist(session_id, tg_user_id, ...)` are in the Step 7 state. If different, stop and report.
+> **Do NOT commit this prompt doc.**
+
+---
+
+## What changes & why
+1. **Streak-keeping** (NEW plumbing — nothing maintains it today): in `_persist`, update `sara_state.streak_days` + `last_practice_date` based on the date gap. Prerequisite for the streak beat.
+2. **Beat decision** in `_prepare`: it already knows if a new session was opened (it does the expiry) and reads `sara_state`. Compute a `beat_instruction` string and return it.
+3. **Inject** the beat into the prompt for that one turn via `_think` → `_build_system_prompt`.
+4. **Clear the recap** after a welcome-back fires, so it only triggers on the FIRST message of the new session, not every message.
+
+---
+
+## Change 1 — streak-keeping in `_persist`
+
+`_persist` already upserts `sara_state` during calibration. Add streak maintenance. Replace the calibration upsert's column list so it ALSO sets streak fields — but streak logic depends on the PRIOR `last_practice_date`, so read it first. Insert this block inside `_persist`, right AFTER the `sara_turns` INSERT and the `sara_sessions` UPDATE, BEFORE the calibration block:
+
+```python
+        # --- streak maintenance ---
+        cur.execute(
+            "SELECT last_practice_date, streak_days FROM sara_state WHERE tg_user_id=%s",
+            (tg_user_id,),
+        )
+        srow = cur.fetchone()
+        today_q = "current_date"
+        if srow and srow[0] is not None:
+            last_date, streak = srow[0], (srow[1] or 0)
+            cur.execute("SELECT (current_date - %s)", (last_date,))
+            gap_days = cur.fetchone()[0]
+            if gap_days == 0:
+                new_streak = streak                  # already practised today
+            elif gap_days == 1:
+                new_streak = streak + 1              # consecutive day
+            else:
+                new_streak = 1                       # gap broke the streak
+        else:
+            new_streak = 1                           # first ever practice
+        cur.execute(
+            "INSERT INTO sara_state (tg_user_id, streak_days, last_practice_date, updated_at) "
+            "VALUES (%s, %s, current_date, now()) "
+            "ON CONFLICT (tg_user_id) DO UPDATE "
+            "SET streak_days=EXCLUDED.streak_days, last_practice_date=current_date, updated_at=now()",
+            (tg_user_id, new_streak),
+        )
+```
+
+> This and the existing calibration upsert both touch `sara_state` — both use `ON CONFLICT DO UPDATE` on disjoint columns, so they compose safely in the same transaction.
+
+## Change 2 — `_prepare` computes a beat instruction, returns it
+
+In `_prepare`: track whether a NEW session was opened, and after reading state, build a beat instruction. Two edits inside `_prepare`:
+
+**2a.** Add a flag where the session is resolved — set `opened_new = False` initially, `opened_new = True` in BOTH branches that `INSERT ... sara_sessions` (the idle-close branch and the no-session branch).
+
+**2b.** After reading `cefr_band`, also read streak + recap and build the instruction (still inside the `with`, before `conn.commit()`):
+
+```python
+        cur.execute(
+            "SELECT cefr_band, streak_days, last_session_summary "
+            "FROM sara_state WHERE tg_user_id=%s",
+            (tg_user_id,),
+        )
+        state_row = cur.fetchone()
+        cefr_band = state_row[0] if state_row else None
+        streak_days = (state_row[1] if state_row else 0) or 0
+        last_summary = state_row[2] if state_row else None
+
+        beat_instruction = ""
+        # Welcome-back: only on the first message of a NEW session, and only if we have a recap.
+        if opened_new and last_summary:
+            beat_instruction = (
+                f"BEAT (open with this, warmly, then continue naturally): Welcome Felix back by name "
+                f"and briefly reference last time before your normal reply. Last session summary: "
+                f"\"{last_summary}\". Keep it to one short welcoming clause — do not recap in detail."
+            )
+            # clear the recap so it only fires once (this message), not every turn
+            cur.execute(
+                "UPDATE sara_state SET last_session_summary=NULL, updated_at=now() WHERE tg_user_id=%s",
+                (tg_user_id,),
+            )
+        # Streak milestone: fires when streak hits a configured milestone.
+        elif streak_days in _streak_milestones(cur):
+            beat_instruction = (
+                f"BEAT (work this into your reply, warmly): Congratulate Felix by name — this is day "
+                f"{streak_days} in a row practising. One short celebratory clause, then continue normally."
+            )
+
+        conn.commit()
+```
+
+And add the milestones reader near `_get_config_int`:
+
+```python
+def _streak_milestones(cur) -> set:
+    cur.execute("SELECT value FROM sara_config WHERE key='streak_milestones'")
+    r = cur.fetchone()
+    if r and r[0]:
+        out = set()
+        for part in str(r[0]).split(","):
+            part = part.strip()
+            if part.isdigit():
+                out.add(int(part))
+        return out
+    return {3, 7}
+```
+
+**2c.** Change `_prepare`'s return to include the instruction:
+```python
+    return session_id, history, cefr_band, beat_instruction
+```
+
+## Change 3 — `_think` accepts + injects the beat
+
+```python
+def _think(transcript: str, history: list, cefr_band, beat_instruction: str = ""):
+    c = _get_anthropic()
+    messages = list(history) + [{"role": "user", "content": transcript}]
+    system = _build_system_prompt(cefr_band)
+    if beat_instruction:
+        system = system + "\n\n" + beat_instruction
+    response = c.messages.create(
+        model=SONNET,
+        max_tokens=1024,
+        system=system,
+        messages=messages,
+    )
+    raw = response.content[0].text.strip()
+    data = safe_parse_json(raw)
+    reply = (data.get("reply") or "").strip()
+    assessment = data.get("assessment") or {}
+    if not reply:
+        logger.error(f"Sara _think: no reply parsed from: {raw[:200]!r}")
+        return "Hmm, one moment — could you say that again?", {}, False
+    return reply, assessment, True
+```
+
+> The beat instruction is appended AFTER the level block but the OUTPUT CONTRACT still leads the prompt — JSON discipline unaffected. The beat goes inside the `reply` field like everything else.
+
+## Change 4 — `handle_voice` unpacks + passes the beat
+
+```python
+        session_id, history, cefr_band, beat_instruction = await asyncio.to_thread(_prepare, chat_id)
+        reply, assessment, ok = await asyncio.to_thread(
+            _think, transcript, history, cefr_band, beat_instruction
+        )
+        logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | beat={bool(beat_instruction)} | ok={ok}")
+```
+
+> `_persist` call, STT/TTS/dedup/ack, prompt base, calibration — otherwise unchanged.
+
+---
+
+## Deploy
+```bash
+git add backend/routes/sara_webhook.py
+git commit -m "feat(sara): welcome-back + streak voice beats (Felix), streak-keeping in _persist"
+git push origin main
+```
+`git show --stat HEAD` → only `backend/routes/sara_webhook.py`.
+
+## Verify
+1. **Startup clean**, no ImportError.
+2. **Welcome-back** — force an expiry like Step 7 (age `last_activity_at` back 40 min), make sure `last_session_summary` is populated (send a couple of turns first, then expire). Send a voice note → Sara should **open by welcoming Felix back and referencing last time**, then continue. Log: `beat=True`. Then:
+   ```sql
+   SELECT last_session_summary FROM sara_state WHERE tg_user_id=441389791;  -- should now be NULL
+   ```
+3. **Welcome-back fires ONCE** — send a SECOND voice note immediately. No welcome-back this time (recap cleared, same session). Log: `beat=False`.
+4. **Streak** — force a milestone:
+   ```sql
+   UPDATE sara_state SET streak_days=2, last_practice_date=current_date - 1 WHERE tg_user_id=441389791;
+   ```
+   Send a voice note → `_persist` bumps streak to 3 (yesterday→today = consecutive)… but note the beat is decided in `_prepare` which runs BEFORE `_persist`, so to TEST the streak beat firing at 3, set it so `_prepare` already sees 3:
+   ```sql
+   UPDATE sara_state SET streak_days=3, last_practice_date=current_date WHERE tg_user_id=441389791;
+   ```
+   Send a voice note → Sara congratulates Felix on day 3. Log: `beat=True`. (last_practice_date=today means _persist leaves streak at 3.)
+5. **Streak-keeping math** — verify the increment/reset:
+   ```sql
+   -- consecutive day: set yesterday, send a note, expect streak+1
+   UPDATE sara_state SET last_practice_date=current_date - 1, streak_days=5 WHERE tg_user_id=441389791;
+   -- after a voice note: SELECT streak_days  → 6
+   -- broken streak: set 3 days ago, send a note, expect reset to 1
+   UPDATE sara_state SET last_practice_date=current_date - 3, streak_days=5 WHERE tg_user_id=441389791;
+   -- after a voice note: SELECT streak_days  → 1
+   ```
+6. **JSON contract holds** with a beat active — `ok=True`, valid JSON, reply still short. (Beats are the new thing that could tempt a longer/looser reply — watch it.)
+7. **Maya HR + Solomon** unaffected.
+
+## Definition of done
+- [ ] No ImportError
+- [ ] Welcome-back fires on first message after a gap, references last time, names Felix; recap then NULL
+- [ ] Welcome-back does NOT repeat on the next message
+- [ ] Streak beat fires at a milestone, names Felix
+- [ ] streak_days increments on consecutive days, holds same-day, resets after a gap
+- [ ] JSON contract holds with a beat active
+- [ ] Maya + Solomon fine
+- [ ] `git show --stat HEAD` shows only the one file
+
+## Notes
+- Beat decided in `_prepare` (before `_persist`), so streak beat tests must set the streak value `_prepare` will SEE (see step 4).
+- `greeting`/`encouragement`/`support`/`farewell` seeded `sara_beats` rows + `last_sent_at` rotation + the `tg_file_id` pre-rendered audio path remain DEFERRED (V1). MVP beats are runtime-synthesised.
+- After this: Step 9 (error escalation), then the go-live gate (whitelist + key ceiling + Neon rotation) → Felix.

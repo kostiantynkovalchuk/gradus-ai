@@ -205,6 +205,19 @@ def _get_config_int(cur, key: str, default: int) -> int:
     return default
 
 
+def _streak_milestones(cur) -> set:
+    cur.execute("SELECT value FROM sara_config WHERE key='streak_milestones'")
+    r = cur.fetchone()
+    if r and r[0]:
+        out = set()
+        for part in str(r[0]).split(","):
+            part = part.strip()
+            if part.isdigit():
+                out.add(int(part))
+        return out
+    return {3, 7}
+
+
 def _recap(turns: list) -> str:
     """One-sentence recap of a closed session, for next-time continuity. Haiku. Blocking."""
     convo = "\n".join(f"Learner: {u}\nSara: {s}" for (u, s) in turns if (u or s))
@@ -263,6 +276,7 @@ def _prepare(tg_user_id: int):
     """Resolve the current session (expiring + recapping a stale one if needed),
     load recent history, and read the level. Blocking."""
     recap_turns = None
+    opened_new = False
     with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
         idle_min = _get_config_int(cur, "session_idle_minutes", 30)
 
@@ -293,6 +307,7 @@ def _prepare(tg_user_id: int):
                 (tg_user_id,),
             )
             session_id = cur.fetchone()[0]
+            opened_new = True
 
         cur.execute(
             "SELECT user_text, sara_text FROM sara_turns WHERE session_id=%s "
@@ -300,9 +315,33 @@ def _prepare(tg_user_id: int):
             (session_id,),
         )
         rows = cur.fetchall()
-        cur.execute("SELECT cefr_band FROM sara_state WHERE tg_user_id=%s", (tg_user_id,))
+        cur.execute(
+            "SELECT cefr_band, streak_days, last_session_summary "
+            "FROM sara_state WHERE tg_user_id=%s",
+            (tg_user_id,),
+        )
         state_row = cur.fetchone()
         cefr_band = state_row[0] if state_row else None
+        streak_days = (state_row[1] if state_row else 0) or 0
+        last_summary = state_row[2] if state_row else None
+
+        beat_instruction = ""
+        if opened_new and last_summary:
+            beat_instruction = (
+                f"BEAT (open with this, warmly, then continue naturally): Welcome Felix back by name "
+                f"and briefly reference last time before your normal reply. Last session summary: "
+                f"\"{last_summary}\". Keep it to one short welcoming clause — do not recap in detail."
+            )
+            cur.execute(
+                "UPDATE sara_state SET last_session_summary=NULL, updated_at=now() WHERE tg_user_id=%s",
+                (tg_user_id,),
+            )
+        elif streak_days in _streak_milestones(cur):
+            beat_instruction = (
+                f"BEAT (work this into your reply, warmly): Congratulate Felix by name — this is day "
+                f"{streak_days} in a row practising. One short celebratory clause, then continue normally."
+            )
+
         conn.commit()
 
     history = []
@@ -329,17 +368,20 @@ def _prepare(tg_user_id: int):
             logger.info(f"📒 Sara session recap stored for {tg_user_id}: {summary!r}")
 
     logger.info(f"🗂️ Sara session {session_id} (history turns: {len(rows)})")
-    return session_id, history, cefr_band
+    return session_id, history, cefr_band, beat_instruction
 
 
-def _think(transcript: str, history: list, cefr_band):
+def _think(transcript: str, history: list, cefr_band, beat_instruction: str = ""):
     """Claude dual-output: returns (reply_text, assessment_dict, ok). Blocking."""
     c = _get_anthropic()
     messages = list(history) + [{"role": "user", "content": transcript}]
+    system = _build_system_prompt(cefr_band)
+    if beat_instruction:
+        system = system + "\n\n" + beat_instruction
     response = c.messages.create(
         model=SONNET,
         max_tokens=1024,
-        system=_build_system_prompt(cefr_band),
+        system=system,
         messages=messages,
     )
     raw = response.content[0].text.strip()
@@ -365,6 +407,32 @@ def _persist(session_id: int, tg_user_id: int, transcript: str, reply: str, asse
             "UPDATE sara_sessions SET last_activity_at=now(), message_count=message_count+1 "
             "WHERE id=%s",
             (session_id,),
+        )
+
+        # --- streak maintenance ---
+        cur.execute(
+            "SELECT last_practice_date, streak_days FROM sara_state WHERE tg_user_id=%s",
+            (tg_user_id,),
+        )
+        srow = cur.fetchone()
+        if srow and srow[0] is not None:
+            last_date, streak = srow[0], (srow[1] or 0)
+            cur.execute("SELECT (current_date - %s)", (last_date,))
+            gap_days = cur.fetchone()[0]
+            if gap_days == 0:
+                new_streak = streak                  # already practised today
+            elif gap_days == 1:
+                new_streak = streak + 1              # consecutive day
+            else:
+                new_streak = 1                       # gap broke the streak
+        else:
+            new_streak = 1                           # first ever practice
+        cur.execute(
+            "INSERT INTO sara_state (tg_user_id, streak_days, last_practice_date, updated_at) "
+            "VALUES (%s, %s, current_date, now()) "
+            "ON CONFLICT (tg_user_id) DO UPDATE "
+            "SET streak_days=EXCLUDED.streak_days, last_practice_date=current_date, updated_at=now()",
+            (tg_user_id, new_streak),
         )
 
         # --- level calibration (incremental EWA + hysteresis) ---
@@ -437,9 +505,11 @@ async def handle_voice(chat_id: int, file_id: str):
             await _send_text(chat_id, "Sorry, I couldn't hear that — try again?")
             return
 
-        session_id, history, cefr_band = await asyncio.to_thread(_prepare, chat_id)
-        reply, assessment, ok = await asyncio.to_thread(_think, transcript, history, cefr_band)
-        logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | ok={ok} | assessment: {assessment}")
+        session_id, history, cefr_band, beat_instruction = await asyncio.to_thread(_prepare, chat_id)
+        reply, assessment, ok = await asyncio.to_thread(
+            _think, transcript, history, cefr_band, beat_instruction
+        )
+        logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | beat={bool(beat_instruction)} | ok={ok}")
 
         ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
         await _send_voice(chat_id, ogg_out)
