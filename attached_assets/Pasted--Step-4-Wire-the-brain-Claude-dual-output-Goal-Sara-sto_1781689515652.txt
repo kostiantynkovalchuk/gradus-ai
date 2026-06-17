@@ -1,3 +1,26 @@
+# Step 4 — Wire the brain (Claude dual-output)
+
+**Goal:** Sara stops echoing and starts replying. Voice in → STT → **Claude (reply + hidden JSON assessment)** → speak the *reply* in Clarice's voice → persist the turn to `sara_turns`. Short-term memory via last ~6 turns.
+
+> Implementation prompt. One file: replace `backend/routes/sara_webhook.py`. No requirements change (`anthropic` already installed).
+> **Do NOT commit this prompt doc.** Single-file `git rm` if it lands in `attached_assets/`.
+
+---
+
+## Scope decisions baked in (agreed)
+- Model: **SONNET** (`claude-sonnet-4-6`) — Sara is client-facing; cost is trivial at one user.
+- **Minimal-first:** good warm tutor prompt + small assessment JSON + short history + persist. **Deferred to later steps:** per-CEFR prompts, Russian ladder, level adaptation, beats, full session lifecycle (25/30).
+- `safe_parse_json` **copied** into Sara's file (not imported from hunt_scorer).
+- Text messages stay the voice-only nudge this step (routing text through the brain is an easy later add).
+
+## Dependency note (why a tiny bit of session logic appears)
+`sara_turns.session_id` is `NOT NULL` with an FK to `sara_sessions` — so we cannot write a turn without a session row. This step therefore includes a **deliberately dumb get-or-create-session** (one active session per chat, reused). It is NOT the 25/30 lifecycle (that's deferred) — just enough to have a valid `session_id` to attach turns to.
+
+---
+
+## REPLACE `backend/routes/sara_webhook.py` with:
+
+```python
 """
 Sara — Telegram webhook + brain (Step 4).
 
@@ -32,6 +55,9 @@ except ImportError:
 
 from anthropic import Anthropic
 
+# Import SONNET the same way other backend modules import from ai_models.
+# (Audit showed ai_models.py at backend/services/ai_models.py with SONNET="claude-sonnet-4-6".
+#  Match the existing import path used elsewhere; grep if unsure.)
 try:
     from services.ai_models import SONNET
 except ImportError:
@@ -309,3 +335,39 @@ async def sara_webhook(request: Request):
         return {"ok": True}
     asyncio.create_task(process_update(update))
     return {"ok": True}
+```
+
+> **One thing for the Agent to verify before committing:** the `from services.ai_models import SONNET` line — confirm the exact import path matches how other backend modules import from `ai_models.py` (grep an existing importer). The try/except fallback covers the two likely paths, but a wrong path = ImportError at startup, which would take the whole service down. Verify it resolves.
+
+---
+
+## Deploy
+```bash
+git add backend/routes/sara_webhook.py
+git commit -m "feat(sara): wire Claude brain — reply + JSON assessment, persist turns"
+git push origin main
+```
+`git show --stat HEAD` → only `backend/routes/sara_webhook.py`.
+
+## Verify
+1. **Build green; startup clean** — `💬 Sara webhook: ok: True`, and crucially **no ImportError** (the ai_models import is the risk).
+2. **Send an English voice note** ("Hi Sara, I go to work yesterday") → Sara voice-replies something natural and SHORT that gently recasts ("Oh, you **went** to work yesterday? How was it?"). Logs show `🗣️ Sara heard`, `💭 Sara reply ... assessment {...}`, `📝 turn persisted`.
+3. **Continue the conversation** — send a 2nd, 3rd voice note. Sara should remember context (history works).
+4. **Russian voice note** → she responds appropriately (simple English or light Russian).
+5. **Check the DB:**
+   ```sql
+   SELECT id, user_text, sara_text, assessment, reply_word_count FROM sara_turns ORDER BY id DESC LIMIT 5;
+   SELECT id, tg_user_id, status, message_count FROM sara_sessions;
+   ```
+   Turns logged with assessment JSON; one active session, message_count rising.
+6. **Other bots** (Maya HR, Solomon) stay responsive.
+
+## Definition of done
+- [ ] No ImportError on startup (ai_models import resolves)
+- [ ] Voice note → short, natural, recast reply in Clarice's voice
+- [ ] Multi-turn memory works (she remembers earlier in the chat)
+- [ ] `sara_turns` rows have reply + assessment JSON; `sara_sessions` has an active row
+- [ ] Maya HR + Solomon unaffected
+- [ ] `git show --stat HEAD` shows only the one file
+
+Next steps after this: per-CEFR system prompts + Russian ladder · level calibration from the assessments now being logged · recast→explicit escalation on repeat errors · deterministic voice beats · the real 25/30 session lifecycle.
