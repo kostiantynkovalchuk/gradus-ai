@@ -1,0 +1,34 @@
+AUDIT ONLY — read and report, change nothing. Two AVTD employees can't log into the
+INTERNAL Alex AVTD field-agent bot (NOT the public Alex Gradus bar bot). Both get "не
+находит в сотрудниках / такого сотрудника нет":
+  • Мандыбура Максим Юрьевич — 380960151253 — ПП Хмельницкий
+  • Коваль Валентин Игорович — ПП Хмельницкий — (mobile was edited in Blitz)
+Both ARE present and active in Maya's hr_users (verified via SED). So the question is
+why Alex AVTD rejects them. Identify Alex AVTD's auth path and the exact table to
+check. This is the AVTD platform — no Solomon. Quote evidence.
+
+1. ALEX AVTD ENTRY POINT: locate the internal Alex AVTD field-agent bot's webhook/
+   handler and its bot token env var (distinct from @alexgradus_bot public bot and
+   from Maya's TELEGRAM_MAYA_BOT_TOKEN). Quote where it's registered.
+2. AUTH PATH: quote the auth/verification code for Alex AVTD. What does it check a
+   user against?
+   - The live SED API (POST api-sed.tdav.net.ua/api/employees) — same as Maya?
+   - hr_employee_phone_cache (the Blitz-seeded directory)?
+   - hr_users?
+   - Its OWN table / whitelist?
+   Quote the exact lookup + table/endpoint. Does it SHARE Maya's auth backend or have
+   a separate one?
+3. THE ERROR: find what emits "не находит в сотрудниках / такого сотрудника немає" in
+   Alex AVTD. Quote the failing condition — is it "phone not in SED", "phone not in
+   cache", "no row in table X", or "is_active=false"?
+4. PHONE NORMALIZATION: how does Alex AVTD normalize the phone before lookup (0… /
+   380… / +380…)? If it differs from how the number is stored, that alone causes "not
+   found". Quote it.
+5. DIVERGENCE FROM MAYA: since both users pass Maya's SED auth, what could make Alex
+   AVTD reject them that Maya doesn't? (different table, different normalization,
+   region filter, an Alex-specific whitelist, a stricter active check, a cache Alex
+   reads that Maya doesn't). List the candidate causes from the code.
+6. WHICH TABLE TO QUERY: tell me the EXACT table + columns to check whether these two
+   are present/correct FOR ALEX AVTD specifically. If Alex shares Maya's SED/cache,
+   say so (then the issue is normalization or an Alex-specific gate, not absence).
+Report only. Then I write the query against the table Alex AVTD actually uses.
