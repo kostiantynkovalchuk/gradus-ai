@@ -45,6 +45,8 @@ sara_router = APIRouter()
 SARA_BOT_TOKEN = os.getenv("SARA_BOT_TOKEN", "")
 DB_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
 ELEVEN_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
+ELEVEN_TTS_MODEL = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_v3")
+ELEVEN_STT_MODEL = os.getenv("ELEVENLABS_STT_MODEL", "scribe_v1")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{SARA_BOT_TOKEN}"
 TELEGRAM_FILE_API = f"https://api.telegram.org/file/bot{SARA_BOT_TOKEN}"
@@ -320,7 +322,7 @@ def _recap(turns: list) -> str:
 
 def _transcribe(ogg_bytes: bytes) -> str:
     result = _eleven.speech_to_text.convert(
-        model_id="scribe_v1",
+        model_id=ELEVEN_STT_MODEL,
         file=ogg_bytes,
         tag_audio_events=False,
     )
@@ -331,7 +333,7 @@ def _synthesize_to_ogg(text: str) -> bytes:
     audio_gen = _eleven.text_to_speech.convert(
         ELEVEN_VOICE_ID,
         text=text,
-        model_id="eleven_multilingual_v2",
+        model_id=ELEVEN_TTS_MODEL,
         output_format="opus_48000_128",
     )
     raw = b"".join(audio_gen)

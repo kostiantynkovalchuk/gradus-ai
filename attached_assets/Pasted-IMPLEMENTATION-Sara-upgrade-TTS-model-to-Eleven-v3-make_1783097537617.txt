@@ -1,0 +1,39 @@
+IMPLEMENTATION — Sara: upgrade TTS model to Eleven v3 + make it env-configurable
+Context: The current TTS model is hardcoded as "eleven_multilingual_v2" (line ~259 in _synthesize_to_ogg). Team decision: upgrade to eleven_v3 for the async Telegram bot (better expressiveness, intonation, quality). The model string must become env-configurable (not another hardcoded literal), because Felix's future real-time product will likely need eleven_flash_v2_5 for latency — and the Maya transition should be config-only, not code changes.
+Rules: Read the file first (Rule #2). Wrap gracefully (Rule #3). Post-edit grep (Rule #5).
+
+Step 1 — Read first (mandatory).
+Open backend/routes/sara_webhook.py and read:
+
+_synthesize_to_ogg() (~lines 255–273) — locate the model_id="eleven_multilingual_v2" literal at ~line 259.
+_transcribe() (~lines 246–252) — locate the model_id="scribe_v1" literal at ~line 248.
+The existing env-var pattern for the voice: ELEVEN_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "") (~line 46).
+
+Confirm locations before editing.
+
+Step 2 — Add env-configurable model constants.
+Near the existing ELEVEN_VOICE_ID line (~line 46), add:
+pythonELEVEN_TTS_MODEL = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_v3")
+ELEVEN_STT_MODEL = os.getenv("ELEVENLABS_STT_MODEL", "scribe_v1")
+Defaults: eleven_v3 for TTS (the upgrade), scribe_v1 for STT (unchanged, but now configurable for future upgrades).
+
+Step 3 — Replace the hardcoded literals.
+In _synthesize_to_ogg(): replace model_id="eleven_multilingual_v2" with model_id=ELEVEN_TTS_MODEL.
+In _transcribe(): replace model_id="scribe_v1" with model_id=ELEVEN_STT_MODEL.
+That's two single-line changes.
+
+Step 4 — Verify output format compatibility.
+The current call uses output_format="opus_48000_128". Verify that eleven_v3 supports this output format. If the ElevenLabs SDK raises an error on the format with v3, the safe fallback is "mp3_44100_128" — but check first, don't change pre-emptively. If you're unsure, leave the format as-is and we'll catch any error in testing.
+
+Step 5 — Post-deploy check (Rule #5).
+bashgrep -r "eleven_multilingual_v2\|eleven_v3\|scribe_v1" backend/ --include="*.py"
+Confirm the old hardcoded literals are gone from sara_webhook.py and no other file is affected.
+bashgrep -r "from.*sara_webhook" backend/ --include="*.py"
+Confirm only the expected router registration in main.py.
+
+What NOT to do:
+
+Do NOT change _think(), the Claude prompt, the scaffolding, or the text-send logic.
+Do NOT change the voice ID — only the model.
+Do NOT add migrations or DB changes.
+Do NOT hardcode "eleven_v3" in the function body — use the env-configurable constant.
