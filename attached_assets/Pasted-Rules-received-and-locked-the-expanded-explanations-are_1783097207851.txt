@@ -1,0 +1,99 @@
+Rules received and locked — the expanded explanations are clearer, especially #3 (the "returning 200 while the user sees nothing" failure mode) and #7 (the admin_hr vs hr_admin lesson). These are the operating contract for every prompt I write.
+Implementation #1 confirmed working. Moving to Implementation #2 — English-only scaffolding for the employee product fork. This is the one where we introduce the split: Sara (Felix, Russian) vs Maya-embedded (employees, English-only), from the same codebase.
+
+
+IMPLEMENTATION — Sara: product fork — English-only mode for the employee bot
+Context: Sara serves two audiences from one codebase: Felix (keeps Russian scaffolding, A2 learner) and AVTD employees (English-only immersion, to be embedded in Maya). We need a config-driven switch that controls whether Russian scaffolding appears in Sara's replies. Default stays Russian (Felix) — English-only activates per-bot or per-config.
+Rules: Read the file first (Rule #2). No silent failures (Rule #3). Post-edit grep (Rule #5). No migration edits (Rule #6).
+
+Step 1 — Read first (mandatory).
+Open backend/routes/sara_webhook.py and read:
+
+SARA_SYSTEM_PROMPT_BASE (starts ~line 61, ends ~line 111) — specifically the LANGUAGE RULE section (~lines 89–94) and the worked example (~lines 103–106, which is in Russian).
+_LEVEL_BLOCK_A, _LEVEL_BLOCK_B, _LEVEL_BLOCK_C, _LEVEL_BLOCK_DEFAULT (~lines 114–139).
+_LEVEL_BLOCKS dict (~lines 141–145).
+_build_system_prompt(cefr_band) (~lines 148–150).
+
+Confirm locations before editing.
+
+Step 2 — Add English-only level blocks.
+After the existing _LEVEL_BLOCK_DEFAULT (~line 139), add a parallel set of English-only blocks:
+python# --- English-only blocks (employee / Maya product) ---
+
+_LEVEL_BLOCK_A_EN = """
+LEARNER LEVEL: A1–A2 (beginner)
+Use simple, short sentences. Speak slowly and clearly.
+If they seem confused, rephrase in simpler English — do NOT use any language other than English.
+Give encouraging feedback on every attempt.
+"""
+
+_LEVEL_BLOCK_B_EN = """
+LEARNER LEVEL: B1–B2 (intermediate)
+Speak naturally but clearly. Use everyday vocabulary.
+All communication in English only — no translations, no glosses in other languages.
+"""
+
+_LEVEL_BLOCK_C_EN = """
+LEARNER LEVEL: C1–C2 (advanced)
+Speak naturally, use rich vocabulary, idioms, and nuance.
+English only — no other languages under any circumstances.
+"""
+
+_LEVEL_BLOCK_DEFAULT_EN = """
+LEARNER LEVEL: unknown — assess from their first message.
+Start with clear, simple English. Adjust up as you gauge their level.
+All communication in English only.
+"""
+
+_LEVEL_BLOCKS_EN = {
+    "A1": _LEVEL_BLOCK_A_EN, "A2": _LEVEL_BLOCK_A_EN,
+    "B1": _LEVEL_BLOCK_B_EN, "B2": _LEVEL_BLOCK_B_EN,
+    "C1": _LEVEL_BLOCK_C_EN, "C2": _LEVEL_BLOCK_C_EN,
+}
+
+Step 3 — Add an English-only base prompt variant.
+The existing SARA_SYSTEM_PROMPT_BASE has two Russian-specific elements that must change for the English-only product:
+
+The LANGUAGE RULE section (~lines 89–94) referencing "Russian speaker" and "Russian scaffolding."
+The worked example (~lines 103–106) which is a Russian-language learner question.
+
+Do NOT edit SARA_SYSTEM_PROMPT_BASE itself — Felix still uses it. Instead, create a variant:
+pythonSARA_SYSTEM_PROMPT_BASE_EN = SARA_SYSTEM_PROMPT_BASE
+Then use str.replace() to swap out the two Russian-specific sections. Specifically:
+
+Replace the LANGUAGE RULE block content (the part about "Russian speaker" and "Russian scaffolding") with: "The learner may speak any first language. Respond ONLY in English — no translations, glosses, or words in any other language. If the learner writes in another language, respond in English and gently encourage them to try in English."
+Replace the Russian worked example with an equivalent English-only example (an English learner question with an English-only reply).
+
+Read the exact text of both sections in the file before writing the replacements — do not work from memory or from this prompt's paraphrase. The str.replace must match the exact original text character-for-character.
+
+Step 4 — Add a config switch and modify _build_system_prompt.
+Add an env var for the mode:
+pythonSARA_LANGUAGE_MODE = os.getenv("SARA_LANGUAGE_MODE", "russian")  # "russian" or "english_only"
+Modify _build_system_prompt(cefr_band) to select the right base + blocks:
+pythondef _build_system_prompt(cefr_band: str) -> str:
+    if SARA_LANGUAGE_MODE == "english_only":
+        base = SARA_SYSTEM_PROMPT_BASE_EN
+        block = _LEVEL_BLOCKS_EN.get(cefr_band, _LEVEL_BLOCK_DEFAULT_EN)
+    else:
+        base = SARA_SYSTEM_PROMPT_BASE
+        block = _LEVEL_BLOCKS.get(cefr_band, _LEVEL_BLOCK_DEFAULT)
+    return base + "\n\n" + block
+Default is "russian" — Felix's bot runs unchanged without setting anything. The employee/Maya bot sets SARA_LANGUAGE_MODE=english_only in its environment.
+
+Step 5 — Post-deploy check (Rule #5).
+bashgrep -r "from.*sara_webhook" backend/ --include="*.py"
+grep -r "import sara_webhook" backend/ --include="*.py"
+grep -r "_build_system_prompt\|SARA_SYSTEM_PROMPT_BASE" backend/ --include="*.py"
+Confirm:
+
+Only the expected router registration in main.py imports from sara_webhook.
+_build_system_prompt and SARA_SYSTEM_PROMPT_BASE are only referenced within sara_webhook.py itself.
+
+
+What NOT to do:
+
+Do NOT edit SARA_SYSTEM_PROMPT_BASE — Felix uses it as-is.
+Do NOT change _think(), the TTS model, the voice, or the text-send logic.
+Do NOT add migrations or DB changes — this is a prompt/config change only.
+Do NOT duplicate sara_webhook.py into a second file for the employee product — one codebase, config-driven fork.
+Do NOT hardcode the mode — it must be env-configurable so the same deploy serves both products.

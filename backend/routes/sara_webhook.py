@@ -146,9 +146,83 @@ _LEVEL_BLOCKS = {
 }
 
 
+# --- English-only blocks (employee / Maya product) ---
+
+_LEVEL_BLOCK_A_EN = """
+LEARNER LEVEL: A1–A2 (beginner)
+Use simple, short sentences. Speak slowly and clearly.
+If they seem confused, rephrase in simpler English — do NOT use any language other than English.
+Give encouraging feedback on every attempt.
+"""
+
+_LEVEL_BLOCK_B_EN = """
+LEARNER LEVEL: B1–B2 (intermediate)
+Speak naturally but clearly. Use everyday vocabulary.
+All communication in English only — no translations, no glosses in other languages.
+"""
+
+_LEVEL_BLOCK_C_EN = """
+LEARNER LEVEL: C1–C2 (advanced)
+Speak naturally, use rich vocabulary, idioms, and nuance.
+English only — no other languages under any circumstances.
+"""
+
+_LEVEL_BLOCK_DEFAULT_EN = """
+LEARNER LEVEL: unknown — assess from their first message.
+Start with clear, simple English. Adjust up as you gauge their level.
+All communication in English only.
+"""
+
+_LEVEL_BLOCKS_EN = {
+    "A1": _LEVEL_BLOCK_A_EN, "A2": _LEVEL_BLOCK_A_EN,
+    "B1": _LEVEL_BLOCK_B_EN, "B2": _LEVEL_BLOCK_B_EN,
+    "C1": _LEVEL_BLOCK_C_EN, "C2": _LEVEL_BLOCK_C_EN,
+}
+
+
+SARA_SYSTEM_PROMPT_BASE_EN = SARA_SYSTEM_PROMPT_BASE.replace(
+    (
+        "LANGUAGE RULE:\n"
+        "Always speak English in \"reply\". The learner is a Russian speaker. How much\n"
+        "Russian scaffolding to use is governed by the LEARNER LEVEL block at the very\n"
+        "end of this prompt — follow it. If they speak Russian to you or ask whether you\n"
+        "speak Russian, answer briefly in English and gently steer them back to\n"
+        "practising English; never hold the conversation in Russian."
+    ),
+    (
+        "LANGUAGE RULE:\n"
+        "The learner may speak any first language. Respond ONLY in English — no\n"
+        "translations, glosses, or words in any other language. If the learner writes\n"
+        "in another language, respond in English and gently encourage them to try in\n"
+        "English."
+    ),
+).replace(
+    (
+        "EXAMPLE (note: Russian question still returns JSON, reply is English):\n"
+        "Learner: \"А по-русски ты хорошо говоришь?\"\n"
+        "You:\n"
+        "{\"reply\": \"I understand a little Russian, but let's keep practising English together! Tell me — what did you do this weekend?\", \"assessment\": {\"cefr_estimate\": \"A2\", \"communicative_success\": true, \"errors\": []}}"
+    ),
+    (
+        "EXAMPLE (learner writes in another language, reply is English-only):\n"
+        "Learner: \"Can we talk in my language sometimes?\"\n"
+        "You:\n"
+        "{\"reply\": \"Let's keep practising in English together — you're doing great! Tell me, what did you do this weekend?\", \"assessment\": {\"cefr_estimate\": \"A2\", \"communicative_success\": true, \"errors\": []}}"
+    ),
+)
+
+
+SARA_LANGUAGE_MODE = os.getenv("SARA_LANGUAGE_MODE", "russian")  # "russian" or "english_only"
+
+
 def _build_system_prompt(cefr_band) -> str:
-    block = _LEVEL_BLOCKS.get(cefr_band, _LEVEL_BLOCK_DEFAULT)
-    return SARA_SYSTEM_PROMPT_BASE + "\n\n" + block
+    if SARA_LANGUAGE_MODE == "english_only":
+        base = SARA_SYSTEM_PROMPT_BASE_EN
+        block = _LEVEL_BLOCKS_EN.get(cefr_band, _LEVEL_BLOCK_DEFAULT_EN)
+    else:
+        base = SARA_SYSTEM_PROMPT_BASE
+        block = _LEVEL_BLOCKS.get(cefr_band, _LEVEL_BLOCK_DEFAULT)
+    return base + "\n\n" + block
 
 
 # ---------- copied from hunt_scorer.py (keystone JSON repair) ----------
