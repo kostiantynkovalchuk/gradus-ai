@@ -1,0 +1,59 @@
+IMPLEMENTATION — Sara: send parallel text message with bolded corrections alongside voice note
+Context: Sara currently sends only a voice note reply. The user never sees the English text. We need to send a text message alongside (or just before) the voice note, with any corrected words bolded so the learner can read along and see what was fixed.
+Rules in force: read the file before editing (Rule #2). Wrap the new text-send in try/except so a failure there never blocks the voice note (Rule #3). After the change, confirm no other file imports from sara_webhook.py (Rule #5 — the audit already showed zero imports, but re-verify with a quick grep).
+
+Step 1 — Read first (mandatory).
+Open backend/routes/sara_webhook.py and read the handle_voice() function (starts ~line 490). Locate:
+
+Line ~390: reply = (data.get("reply") or "").strip() — this is sara_text, the spoken reply.
+Line ~391: the assessment dict extraction — this contains assessment["errors"], a list of {"type": "...", "original": "...", "correction": "..."} objects.
+Lines ~515–516: where _send_voice(chat_id, ogg_out) sends the voice note.
+
+Also read the _send_voice() helper to understand how it calls the Telegram API (so you match the same chat_id / token / error-handling pattern for the text send).
+Confirm these locations before writing anything. If line numbers have drifted, use the function/variable names to find them.
+
+Step 2 — Build the correction-bolded text.
+Write a small helper function _format_reply_with_corrections(reply: str, errors: list) -> str that:
+
+Takes the raw reply string and the errors list from the assessment.
+For each error, finds the correction text within reply (case-insensitive match) and wraps it in Telegram bold markers (*correction* for MarkdownV2, or <b>correction</b> for HTML parse mode — use HTML parse mode, it's more forgiving with special characters).
+If no errors or no corrections match in the text, returns reply unchanged (no bold, still useful as plain text).
+Does not crash if errors is None, empty, or malformed — return reply as-is in any edge case.
+
+Place this helper near the other helper functions (e.g. after _send_voice).
+
+Step 3 — Send the text message just BEFORE the voice note.
+In handle_voice(), after reply and assessment are extracted but before the _synthesize_to_ogg / _send_voice calls, add:
+python# --- parallel text with bolded corrections ---
+try:
+    errors = (data.get("assessment") or {}).get("errors") or []
+    display_text = _format_reply_with_corrections(reply, errors)
+    if display_text:
+        await _send_text(chat_id, display_text)
+except Exception:
+    logging.getLogger("sara").warning("text-alongside failed, continuing with voice", exc_info=True)
+The try/except is critical (Rule #3): if the text send fails for any reason (formatting, Telegram rate limit, network), the voice note must still go through. The text is an enhancement, not a gate.
+
+Step 4 — Write the _send_text helper.
+Model it on _send_voice (same token, same chat_id, same httpx pattern), but call the Telegram sendMessage endpoint instead of sendVoice:
+POST https://api.telegram.org/bot{token}/sendMessage
+{
+  "chat_id": chat_id,
+  "text": display_text,
+  "parse_mode": "HTML"
+}
+Use async + httpx.AsyncClient (same pattern as the existing Telegram calls in this file). Wrap in try/except, log on failure, never raise.
+
+Step 5 — Post-deploy check (Rule #5).
+After the edit, run:
+bashgrep -r "from.*sara_webhook" backend/ --include="*.py"
+grep -r "import sara_webhook" backend/ --include="*.py"
+Confirm zero results (no other file imports from this module). Report the results.
+
+What NOT to do:
+
+Do NOT change the voice note flow — it must work exactly as before.
+Do NOT change _think(), the Claude prompt, or the assessment logic.
+Do NOT change the TTS model or voice ID.
+Do NOT add any new migrations or DB changes — this is a pure send-side change.
+Do NOT send the text as a voice-note caption (Telegram captions on voice notes are limited and awkward) — send it as a separate message arriving just before the voice note.

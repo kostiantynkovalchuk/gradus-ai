@@ -15,6 +15,7 @@ asyncio.to_thread so the shared event loop (other bots) stays responsive.
 """
 import os
 import re
+import html
 import json
 import asyncio
 import logging
@@ -482,9 +483,47 @@ async def _send_voice(chat_id: int, ogg_bytes: bytes):
         await hc.post(f"{TELEGRAM_API}/sendVoice", data={"chat_id": chat_id}, files=files)
 
 
-async def _send_text(chat_id: int, text: str):
+async def _send_text(chat_id: int, text: str, parse_mode: str = None):
     async with httpx.AsyncClient(timeout=30) as hc:
-        await hc.post(f"{TELEGRAM_API}/sendMessage", data={"chat_id": chat_id, "text": text})
+        payload = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        await hc.post(f"{TELEGRAM_API}/sendMessage", data=payload)
+
+
+def _format_reply_with_corrections(reply: str, errors: list) -> str:
+    """Build an HTML-formatted version of `reply` with corrected words/phrases
+    bolded, for a parallel text message alongside the voice note. Never raises
+    — any problem just falls back to the plain (HTML-escaped) reply text."""
+    try:
+        if not reply:
+            return reply
+        escaped = html.escape(reply)
+        if not errors:
+            return escaped
+
+        corrections = []
+        for e in errors:
+            if isinstance(e, dict):
+                corr = (e.get("correction") or "").strip()
+                if corr:
+                    corrections.append(corr)
+
+        if not corrections:
+            return escaped
+
+        # Longest-first so a longer correction isn't shadowed by a shorter
+        # substring match (e.g. "went to work" before "went").
+        for corr in sorted(set(corrections), key=len, reverse=True):
+            escaped_corr = html.escape(corr)
+            if not escaped_corr:
+                continue
+            pattern = re.compile(re.escape(escaped_corr), re.IGNORECASE)
+            escaped = pattern.sub(lambda m: f"<b>{m.group(0)}</b>", escaped, count=1)
+
+        return escaped
+    except Exception:
+        return reply
 
 
 async def _chat_action(chat_id: int, action: str):
@@ -511,6 +550,15 @@ async def handle_voice(chat_id: int, file_id: str):
             _think, transcript, history, cefr_band, beat_instruction
         )
         logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | beat={bool(beat_instruction)} | ok={ok}")
+
+        # --- parallel text with bolded corrections (best-effort; never blocks voice) ---
+        try:
+            errors = (assessment or {}).get("errors") or []
+            display_text = _format_reply_with_corrections(reply, errors)
+            if display_text:
+                await _send_text(chat_id, display_text, parse_mode="HTML")
+        except Exception:
+            logger.warning("Sara text-alongside failed, continuing with voice", exc_info=True)
 
         ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
         await _send_voice(chat_id, ogg_out)
