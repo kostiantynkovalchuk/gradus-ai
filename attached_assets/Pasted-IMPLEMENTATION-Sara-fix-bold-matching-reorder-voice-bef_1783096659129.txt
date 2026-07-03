@@ -1,0 +1,78 @@
+IMPLEMENTATION — Sara: fix bold matching + reorder voice-before-text
+Context: Two fixes to the parallel-text feature shipped in the last deploy. (1) Bold matching is too literal — it tries to match the full correction string as a substring of Sara's reply, but Sara rephrases (e.g. correction "I bought magnets" doesn't match "You bought a great gift"). Fix: bold only the changed words (the diff between original and correction). (2) Text currently arrives before the voice note; it should arrive after (voice-first = hear it, then read it).
+Rules: Read the file first (Rule #2). Keep try/except on the text path (Rule #3). Post-edit grep for imports (Rule #5).
+
+Step 1 — Read first.
+Open backend/routes/sara_webhook.py. Locate _format_reply_with_corrections() and the text-send block in handle_voice(). Confirm their positions before editing.
+
+Step 2 — Rewrite _format_reply_with_corrections(reply, errors).
+Replace the current full-string matching logic with word-diff matching:
+pythondef _format_reply_with_corrections(reply: str, errors: list) -> str:
+    """Bold the corrected words in Sara's reply.
+    
+    Strategy: for each error, find words present in `correction` 
+    but absent from `original` (the actual fix). Bold those 
+    individual words wherever they appear in the reply.
+    """
+    if not reply:
+        return ""
+    if not errors:
+        return html_escape(reply)
+    try:
+        # Collect the changed words across all errors
+        bold_words = set()
+        for err in errors:
+            orig = (err.get("original") or "").lower().split()
+            corr = (err.get("correction") or "").lower().split()
+            orig_set = set(orig)
+            # Words in correction that aren't in original = the actual fixes
+            for w in corr:
+                if w not in orig_set and len(w) > 1:
+                    bold_words.add(w)
+        if not bold_words:
+            return html_escape(reply)
+        # Build the result: bold matching words (case-insensitive)
+        escaped = html_escape(reply)
+        for word in sorted(bold_words, key=len, reverse=True):
+            import re as _re
+            pattern = _re.compile(
+                r'(?<![&\w])(' + _re.escape(html_escape(word)) + r')(?!\w)',
+                _re.IGNORECASE
+            )
+            escaped = pattern.sub(r'<b>\1</b>', escaped)
+        return escaped
+    except Exception:
+        return html_escape(reply)
+Key behaviors:
+
+Compares original vs correction word sets — words in correction but not in original are the fixes (e.g. original "buy" → correction "bought" → bold word is "bought").
+Skips single-character words (articles, etc.) to avoid noisy bolding.
+Case-insensitive match against Sara's reply, so "Bought" at start of sentence still bolds.
+Word-boundary aware (won't bold "ought" inside "bought").
+Falls back to plain escaped text on any error.
+Move the import re to the top of the file if not already there (it likely is — check).
+
+
+Step 3 — Reorder: voice first, text second.
+In handle_voice(), move the entire try/except text-send block to after the _send_voice() call, not before it. The flow should be:
+
+ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
+await _send_voice(chat_id, ogg_out)
+Then the try/except text-send block
+
+This way Felix hears Sara first (ear training), then sees the text as a readable reference with corrections bolded. Voice is primary; text is the review.
+
+Step 4 — Post-deploy check (Rule #5).
+bashgrep -r "from.*sara_webhook" backend/ --include="*.py"
+grep -r "import sara_webhook" backend/ --include="*.py"
+Confirm only the expected router registration in main.py.
+
+What NOT to do:
+
+Do NOT change _think(), the Claude prompt, or the assessment contract.
+Do NOT change the TTS model or voice.
+Do NOT add migrations or DB changes.
+Do NOT remove the try/except wrapper on the text-send — voice must never be blocked by a text failure.
+
+
+

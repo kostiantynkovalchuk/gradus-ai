@@ -492,38 +492,42 @@ async def _send_text(chat_id: int, text: str, parse_mode: str = None):
 
 
 def _format_reply_with_corrections(reply: str, errors: list) -> str:
-    """Build an HTML-formatted version of `reply` with corrected words/phrases
-    bolded, for a parallel text message alongside the voice note. Never raises
-    — any problem just falls back to the plain (HTML-escaped) reply text."""
+    """Bold the corrected words in Sara's reply.
+
+    Strategy: for each error, find words present in `correction` but absent
+    from `original` (the actual fix). Bold those individual words wherever
+    they appear in the reply. Never raises — any problem just falls back to
+    the plain (HTML-escaped) reply text."""
+    if not reply:
+        return reply
+    if not errors:
+        return html.escape(reply)
     try:
-        if not reply:
-            return reply
-        escaped = html.escape(reply)
-        if not errors:
-            return escaped
-
-        corrections = []
-        for e in errors:
-            if isinstance(e, dict):
-                corr = (e.get("correction") or "").strip()
-                if corr:
-                    corrections.append(corr)
-
-        if not corrections:
-            return escaped
-
-        # Longest-first so a longer correction isn't shadowed by a shorter
-        # substring match (e.g. "went to work" before "went").
-        for corr in sorted(set(corrections), key=len, reverse=True):
-            escaped_corr = html.escape(corr)
-            if not escaped_corr:
+        # Collect the changed words across all errors
+        bold_words = set()
+        for err in errors:
+            if not isinstance(err, dict):
                 continue
-            pattern = re.compile(re.escape(escaped_corr), re.IGNORECASE)
-            escaped = pattern.sub(lambda m: f"<b>{m.group(0)}</b>", escaped, count=1)
-
+            orig = (err.get("original") or "").lower().split()
+            corr = (err.get("correction") or "").lower().split()
+            orig_set = set(orig)
+            # Words in correction that aren't in original = the actual fixes
+            for w in corr:
+                if w not in orig_set and len(w) > 1:
+                    bold_words.add(w)
+        if not bold_words:
+            return html.escape(reply)
+        # Build the result: bold matching words (case-insensitive)
+        escaped = html.escape(reply)
+        for word in sorted(bold_words, key=len, reverse=True):
+            pattern = re.compile(
+                r'(?<![&\w])(' + re.escape(html.escape(word)) + r')(?!\w)',
+                re.IGNORECASE
+            )
+            escaped = pattern.sub(r'<b>\1</b>', escaped)
         return escaped
     except Exception:
-        return reply
+        return html.escape(reply)
 
 
 async def _chat_action(chat_id: int, action: str):
@@ -551,6 +555,9 @@ async def handle_voice(chat_id: int, file_id: str):
         )
         logger.info(f"💭 Sara reply: {reply!r} | level={cefr_band} | beat={bool(beat_instruction)} | ok={ok}")
 
+        ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
+        await _send_voice(chat_id, ogg_out)
+
         # --- parallel text with bolded corrections (best-effort; never blocks voice) ---
         try:
             errors = (assessment or {}).get("errors") or []
@@ -559,9 +566,6 @@ async def handle_voice(chat_id: int, file_id: str):
                 await _send_text(chat_id, display_text, parse_mode="HTML")
         except Exception:
             logger.warning("Sara text-alongside failed, continuing with voice", exc_info=True)
-
-        ogg_out = await asyncio.to_thread(_synthesize_to_ogg, reply)
-        await _send_voice(chat_id, ogg_out)
 
         if ok:
             await asyncio.to_thread(_persist, session_id, chat_id, transcript, reply, assessment)
