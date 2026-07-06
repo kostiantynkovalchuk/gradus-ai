@@ -6,6 +6,41 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "065_legacy_enum_check_constraints",
+        "statements": [
+            """DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'chk_hunt_candidates_hr_decision'
+              ) THEN
+                ALTER TABLE hunt_candidates
+                  ADD CONSTRAINT chk_hunt_candidates_hr_decision
+                  CHECK (hr_decision IN ('pending','approved','rejected','saved','hired'));
+              END IF;
+            END $$""",
+            """DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'chk_hr_broadcast_log_status'
+              ) THEN
+                ALTER TABLE hr_broadcast_log
+                  ADD CONSTRAINT chk_hr_broadcast_log_status
+                  CHECK (status IN ('pending','sending','cancelled','completed','recalled'));
+              END IF;
+            END $$""",
+            """DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'chk_hunt_sources_channel_type'
+              ) THEN
+                ALTER TABLE hunt_sources
+                  ADD CONSTRAINT chk_hunt_sources_channel_type
+                  CHECK (channel_type IN ('scan','post','both'));
+              END IF;
+            END $$""",
+        ],
+    },
+    {
         "version": "062_solcon_analysis_status",
         "statements": [
             """ALTER TABLE solcon_documents

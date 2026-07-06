@@ -33,6 +33,12 @@ all of them.**
 | Photo Report | `/webhook/photo-report` | `PHOTO_REPORT_BOT_TOKEN` |
 | SOLOMON | `/law/telegram/webhook` | `SOLOMON_BOT_TOKEN` |
 
+**Maya Hunt is parked (July 2026).** Do not refactor, extend, or "improve"
+hunt_* code, hunt_ tables, or the Telethon scraper unless Hunt is
+reactivated or the change is required by a live feature sharing the same
+file. Section 4's Telethon rule remains binding for anyone who ever
+reactivates it.
+
 ---
 
 ## 2. Non-negotiable workflow rules
@@ -70,10 +76,10 @@ all of them.**
   entries exist (e.g. `052_avtd_role_default_notnull`, `057`, `058`) — do not
   copy their style.
 - **CHECK constraints on every enum-like column in new tables** (pattern:
-  Sara's `chk_sara_*`). Going-forward rule. Known legacy columns WITHOUT
-  constraints — do not assume the DB rejects typos here:
-  `hunt_candidates.hr_decision`, `hunt_sources.channel_type`,
-  `hr_broadcast_log.status`.
+  Sara's `chk_sara_*`). Going-forward rule. `hunt_candidates.hr_decision`,
+  `hunt_sources.channel_type`, and `hr_broadcast_log.status` are no longer
+  exceptions — all three now have `chk_<table>_<column>` constraints
+  (migration `065_legacy_enum_check_constraints`).
 - **DB access pattern is per-module, not per-layer.** Existing modules:
   raw psycopg2 with explicit close — `broadcast_service`, `survey_service`,
   `solomon_contracts/db`; SQLAlchemy ORM — `scheduler`, request routes;
@@ -201,10 +207,14 @@ all of them.**
 ## 10. Known gaps register (fix candidates — do not silently rely on these)
 
 1. Maya HR / Alex Gradus / Alex AVTD: no inbound update dedup.
-2. `hunt_candidates.hr_decision`, `hunt_sources.channel_type`,
-   `hr_broadcast_log.status` — no CHECK constraints.
-3. Duplicate `052` migration prefix (both applied; harmless at PK level;
+2. Duplicate `052` migration prefix (both applied; harmless at PK level;
    never reason "by number").
+3. `telegram_webhook.py` ~400-405 — unwrapped `httpx` POST (broadcast-group
+   content-type-unsupported path).
+4. `telegram_webhook.py:429` — `asyncio.create_task(_handle_hunt_vacancy(...))`
+   fire-and-forget; task failures are invisible (no done-callback / exception
+   logging). (Maya Hunt path — feature parked; fix only if Hunt reactivates
+   or the file is touched for other reasons.)
 
 When any of these areas is touched for other reasons, closing the adjacent
 gap in the same change is preferred over preserving it. Removing an item from
