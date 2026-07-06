@@ -388,6 +388,31 @@ async def alex_avtd_webhook(request: Request):
     except Exception:
         return {"ok": True}
 
+    update_id = update.get("update_id")
+    if update_id is not None:
+        # Fail-open by design: a dedup-table failure must never block
+        # real user traffic (mirrors sara_webhook.py's process_update).
+        # Uses its own short-lived session so the dedup check does not
+        # couple to the request session's lifecycle.
+        dedup_db: Session = next(get_db())
+        try:
+            result = dedup_db.execute(
+                _sa_text(
+                    "INSERT INTO telegram_inbound_updates (bot_source, update_id) "
+                    "VALUES ('alex_avtd', :update_id) ON CONFLICT DO NOTHING"
+                ),
+                {"update_id": update_id},
+            )
+            dedup_db.commit()
+            if result.rowcount == 0:
+                logger.info(f"🔁 Alex AVTD: duplicate update {update_id} ignored")
+                return {"ok": True}
+        except Exception as e:
+            logger.error(f"Alex AVTD dedup check failed for update {update_id}: {e}")
+            dedup_db.rollback()
+        finally:
+            dedup_db.close()
+
     db: Session = next(get_db())
 
     try:

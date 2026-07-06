@@ -337,6 +337,27 @@ async def alex_gradus_webhook(request: Request):
     try:
         app = await _get_alex_app()
         data = await request.json()
+
+        update_id = data.get("update_id")
+        if update_id is not None:
+            # Fail-open by design: a dedup-table failure must never block
+            # real user traffic (mirrors sara_webhook.py's process_update).
+            # No PTB persistence is configured (create_alex_gradus_app has
+            # no .persistence(...) call), so PTB does not dedup this itself.
+            try:
+                with _conn() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO telegram_inbound_updates (bot_source, update_id) "
+                        "VALUES ('alex_gradus', %s) ON CONFLICT DO NOTHING",
+                        (update_id,),
+                    )
+                    conn.commit()
+                    if cur.rowcount == 0:
+                        logger.info(f"🔁 Alex Gradus: duplicate update {update_id} ignored")
+                        return {"ok": True}
+            except Exception as e:
+                logger.error(f"Alex Gradus dedup check failed for update {update_id}: {e}")
+
         update = Update.de_json(data, app.bot)
         await app.process_update(update)
         return {"ok": True}

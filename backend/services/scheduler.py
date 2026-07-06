@@ -458,6 +458,41 @@ class ContentScheduler:
                 db.close()
             
         except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Cleanup task failed: {e}")
+
+    def cleanup_telegram_inbound_dedup_task(self):
+        """
+        Task: Clean up old rows from the Telegram inbound update dedup tables
+        (telegram_inbound_updates + sara_inbound_updates). 48h is generous
+        headroom over Telegram's retry window (minutes).
+        Runs at: 03:15 AM daily
+        """
+        logger.info("🤖 [SCHEDULER] Starting Telegram inbound dedup cleanup task...")
+
+        try:
+            from sqlalchemy import text as _sa_text
+
+            db = self._get_db_session()
+            try:
+                r1 = db.execute(
+                    _sa_text(
+                        "DELETE FROM telegram_inbound_updates WHERE received_at < now() - interval '48 hours'"
+                    )
+                )
+                r2 = db.execute(
+                    _sa_text(
+                        "DELETE FROM sara_inbound_updates WHERE received_at < now() - interval '48 hours'"
+                    )
+                )
+                db.commit()
+                logger.info(
+                    f"✅ [SCHEDULER] Dedup cleanup: {r1.rowcount} telegram_inbound_updates, "
+                    f"{r2.rowcount} sara_inbound_updates removed"
+                )
+            finally:
+                db.close()
+            
+        except Exception as e:
             logger.error(f"❌ [SCHEDULER] Cleanup failed: {e}")
     
     def _process_channel_queue_task(self):
@@ -1361,6 +1396,15 @@ class ContentScheduler:
             replace_existing=True
         )
         
+        # Telegram inbound dedup cleanup: Daily at 3:15 AM
+        self.scheduler.add_job(
+            self.cleanup_telegram_inbound_dedup_task,
+            CronTrigger(hour=3, minute=15),
+            id='cleanup_telegram_inbound_dedup',
+            name='Cleanup Telegram inbound dedup tables',
+            replace_existing=True
+        )
+        
         # Subscription expiry: Daily at 4:00 AM
         self.scheduler.add_job(
             self.check_expired_subscriptions_task,
@@ -1582,6 +1626,7 @@ class ContentScheduler:
         logger.info("🔧 MAINTENANCE:")
         logger.info("   • API monitoring: Daily 8:00 AM")
         logger.info("   • Cleanup: Daily 3:00 AM")
+        logger.info("   • Telegram inbound dedup cleanup: Daily 3:15 AM")
         logger.info("   • Subscription expiry: Daily 4:00 AM")
         logger.info("   • Knowledge gap detection: Daily 7:00 AM")
         logger.info("   • Alex candidate aggregation: Daily 3:30 AM")

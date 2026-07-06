@@ -92,6 +92,11 @@ reactivates it.
 - Table prefixes by product (complete list): `hr_`, `hunt_`, `maya_`, `alex_`,
   `photo_`, `pulse_`, `sara_`, `solomon_`, `solcon_`, `linkedin_`, `video_`.
   New products get a new prefix.
+- Two Telegram inbound dedup tables coexist by design (append-only rule
+  forbids merging them): `telegram_inbound_updates` (shared, composite PK
+  `bot_source, update_id` — Maya/Alex Gradus/Alex AVTD) and
+  `sara_inbound_updates` (Sara's own). Both are retained by the daily
+  `cleanup_telegram_inbound_dedup` scheduler job.
 
 ---
 
@@ -105,10 +110,13 @@ reactivates it.
   closing this gap is the preferred fix over preserving it.
 - **Idempotency for any handler with side effects.** Telegram retries
   unanswered webhooks; users double-tap. Patterns in the codebase:
-  inbound dedup table (`sara_inbound_updates`, `ON CONFLICT DO NOTHING`) and
-  atomic transitions (`UPDATE ... WHERE status='pending' RETURNING ...`,
-  see `solomon_contracts/router.py:107`). **KNOWN GAP: Maya HR, Alex Gradus,
-  and Alex AVTD webhooks have no update-id dedup.** New handlers must have it.
+  inbound dedup tables (`ON CONFLICT DO NOTHING`) and atomic transitions
+  (`UPDATE ... WHERE status='pending' RETURNING ...`, see
+  `solomon_contracts/router.py:107`). Maya, Alex Gradus, and Alex AVTD dedup
+  on the shared `telegram_inbound_updates` table (composite PK
+  `bot_source, update_id`); Sara keeps her own `sara_inbound_updates`. Both
+  tables are pruned by the daily `cleanup_telegram_inbound_dedup` scheduler
+  job (48h retention). New handlers must dedup the same way.
 - **User-facing flows never crash silently:** wrap sends and keyboard
   rendering in try/except with a plain-text fallback (reference:
   `telegram_webhook.py:~508-524`). **KNOWN GAP:**
@@ -175,6 +183,12 @@ reactivates it.
 - Court-registry (reyestr) **data fetches** go through the Replit proxy
   (`court-search-agent.replit.app`) — Render/AWS IPs are blocked. Direct
   `reyestr.court.gov.ua` URLs are permitted only as user-facing link buttons.
+- **KNOWN LIMITATION (July 2026):** reyestr deployed an anti-automation
+  captcha on search; SOLOMON court search (Судова практика) is broken
+  upstream — not a code bug (proxy returns 200, backend healthy,
+  Solomon Contracts worker unaffected). Fix path: authenticated
+  "Повний доступ" reyestr account, session held by the Replit proxy.
+  Do not debug the proxy or backend for this.
 
 ## 8. Post-deploy verification checklist
 
@@ -206,12 +220,9 @@ reactivates it.
 
 ## 10. Known gaps register (fix candidates — do not silently rely on these)
 
-1. Maya HR / Alex Gradus / Alex AVTD: no inbound update dedup.
-2. Duplicate `052` migration prefix (both applied; harmless at PK level;
+1. Duplicate `052` migration prefix (both applied; harmless at PK level;
    never reason "by number").
-3. `telegram_webhook.py` ~400-405 — unwrapped `httpx` POST (broadcast-group
-   content-type-unsupported path).
-4. `telegram_webhook.py:429` — `asyncio.create_task(_handle_hunt_vacancy(...))`
+2. `telegram_webhook.py:429` — `asyncio.create_task(_handle_hunt_vacancy(...))`
    fire-and-forget; task failures are invisible (no done-callback / exception
    logging). (Maya Hunt path — feature parked; fix only if Hunt reactivates
    or the file is touched for other reasons.)

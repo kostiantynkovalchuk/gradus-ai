@@ -1,0 +1,184 @@
+# IMPLEMENTATION — Known Gaps Phase 3 (dedup, register item 1)
+
+> Paste to the Replit agent as-is. The design consult is done and signed
+> off (Option A, shared table). Per CLAUDE.md rule 2.2, READ each target
+> file before editing — the consult's line numbers may have drifted.
+> Precondition: Phase 2 (migration 065) is deployed.
+
+Two commits. Commit 1 = dedup + retention. Commit 2 = the unwrapped httpx
+POST. Plus CLAUDE.md updates folded into commit 1. Do NOT touch
+telegram_webhook.py:429 (parked Hunt task). Do NOT migrate Sara's existing
+table (append-only rule).
+
+---
+
+## Step 0 — Migration number (mandatory, CLAUDE.md rule 2.3)
+
+I will paste you the result of:
+
+```sql
+SELECT version, applied_at FROM schema_migrations ORDER BY applied_at DESC LIMIT 10;
+```
+
+Number strictly above the true max. Do NOT assume 066 — read the query
+result. Name shape: `0NN_telegram_inbound_dedup`.
+
+---
+
+## Step 1 — PTB pre-check (mandatory, before any code)
+
+The consult flagged that Alex Gradus delegates to python-telegram-bot's
+`Application.process_update`, which MAY already track update_ids at its
+version. Before adding a dedup insert there:
+
+1. Report the `python-telegram-bot` version from `requirements.txt`.
+2. Read `alex_tg_webhook.py` around `_get_alex_app()` / Application setup
+   and report whether any persistence or update-tracking is configured.
+3. If PTB already dedups at this config, SAY SO and skip the Alex Gradus
+   insertion — report that instead of adding a redundant guard. If it
+   does not (default PTB does not persist across the stateless per-request
+   `process_update` call used here), proceed.
+
+---
+
+## Step 2 — The migration (shared table)
+
+Append ONE entry to `MIGRATIONS` in `backend/db_migrations.py`. Idempotent:
+
+```sql
+CREATE TABLE IF NOT EXISTS telegram_inbound_updates (
+    bot_source   VARCHAR(32)  NOT NULL,
+    update_id    BIGINT       NOT NULL,
+    received_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (bot_source, update_id)
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_inbound_received_at
+    ON telegram_inbound_updates (received_at);
+```
+
+The `received_at` index exists so the retention delete (Step 4) is a range
+scan, not a full-table scan. `bot_source` values: `'maya'`, `'alex_gradus'`,
+`'alex_avtd'` (string constants, one per module).
+
+Note: Sara keeps her own `sara_inbound_updates` — two dedup table shapes
+coexist by design; the append-only rule forbids migrating Sara's. This is
+documented, not a defect.
+
+---
+
+## Step 3 — Insertion points (three modules, per-module DB pattern)
+
+The dedup LOGIC is identical everywhere (insert `(bot_source, update_id)`
+with ON CONFLICT DO NOTHING; if no row inserted → duplicate → early return).
+The WIRING differs per module — CLAUDE.md section 3 forbids introducing a
+second DB pattern into a module. Do NOT write one shared helper.
+
+**Two carried-forward design decisions (from sign-off), apply at all three sites:**
+- **Fail-open:** if the dedup insert itself raises, log and CONTINUE
+  processing the update (mirror Sara's `sara_webhook.py` behavior). A
+  dedup-table failure must never block real user traffic. Put a one-line
+  comment at each site stating this is intentional.
+- Insert BEFORE any side effect or business-logic DB session.
+
+**3a — Maya** (`telegram_webhook.py`, inside `_process_webhook_update`,
+immediately after `data = await request.json()`, ~line 307):
+SQLAlchemy pattern — the function already receives `db: Session` as a param.
+Use `db.execute(text(...))` + `db.commit()`, check `result.rowcount`.
+
+**3b — Alex AVTD** (`alex_avtd_webhook.py`, immediately after
+`update = await request.json()`, ~line 387, BEFORE `db = next(get_db())`):
+SQLAlchemy pattern, but per sign-off do NOT reuse the request's session —
+the dedup check runs on its OWN short-lived session opened first, so the
+guard doesn't couple to the request session lifecycle. Do the one-line
+reorder if needed; do not reorder business logic.
+
+**3c — Alex Gradus** (`alex_tg_webhook.py`, after `data = await request.json()`,
+before `Update.de_json`, ~line 339) — ONLY IF Step 1 showed PTB doesn't
+already dedup: raw psycopg2 pattern (`psycopg2.connect(DB_URL)`, the
+module's existing style at ~line 76).
+
+Extract `update_id = data.get("update_id")` (Alex AVTD: `update.get(...)`).
+If it's `None`, skip the dedup check and process normally (don't crash on
+malformed updates).
+
+---
+
+## Step 4 — Retention job
+
+In `services/scheduler.py`, add ONE daily job matching the existing
+`cleanup_old_content_task` pattern (UTC CronTrigger, no timezone kwarg —
+CLAUDE.md section 6). It deletes from BOTH dedup tables:
+
+```sql
+DELETE FROM telegram_inbound_updates WHERE received_at < now() - interval '48 hours';
+DELETE FROM sara_inbound_updates     WHERE received_at < now() - interval '48 hours';
+```
+
+48h is generous headroom over Telegram's retry window (minutes). This folds
+in the Sara-table-grows-forever gap the consult found — closing the adjacent
+gap per rule 2.5. Match `scheduler.py`'s existing DB pattern (SQLAlchemy).
+
+---
+
+## Step 5 — CLAUDE.md (in commit 1)
+
+1. Section 10 register: remove the dedup item (item 1). Renumber.
+2. Section 3: add a one-liner noting `telegram_inbound_updates`
+   (shared, composite PK) and `sara_inbound_updates` (Sara's own) are the
+   two dedup tables, both retained by the daily scheduler job.
+3. Section 7, next to the reyestr bullet, add the SOLOMON parked note:
+
+   ```
+   - **KNOWN LIMITATION (July 2026):** reyestr deployed an anti-automation
+     captcha on search; SOLOMON court search (Судова практика) is broken
+     upstream — not a code bug (proxy returns 200, backend healthy,
+     Solomon Contracts worker unaffected). Fix path: authenticated
+     "Повний доступ" reyestr account, session held by the Replit proxy.
+     Do not debug the proxy or backend for this.
+   ```
+
+---
+
+## Commit 2 — unwrapped httpx POST (register item 2)
+
+Separate commit, kept small for a clean diff. `telegram_webhook.py`
+~400-405, the broadcast-group "unsupported content type" branch: wrap the
+`_httpx.AsyncClient().post(...)` in try/except with `logger.exception`.
+No fallback message needed (it's already an error-notification send) —
+just prevent an unhandled raise. Then remove register item 2 from CLAUDE.md
+section 10 and renumber.
+
+---
+
+## Commit messages
+
+Commit 1:
+```
+feat: migration 0NN — shared telegram_inbound_updates dedup + retention
+
+- Maya / Alex Gradus / Alex AVTD: update_id dedup at earliest insertion point, fail-open
+- shared table (bot_source, update_id) composite PK; per-module DB wiring (no shared helper)
+- daily retention job (48h) covering new table + sara_inbound_updates (closes adjacent Sara gap)
+- CLAUDE.md: register item removed; SOLOMON reyestr-captcha limitation documented (section 7)
+```
+
+Commit 2:
+```
+fix: wrap unwrapped httpx POST in broadcast-group branch (register item 2)
+```
+
+---
+
+## Verification (report each, CLAUDE.md section 8)
+
+- [ ] Step 0 query result + Step 1 PTB finding in your report
+- [ ] Render deploy green; startup log shows migration 0NN applied
+- [ ] `SELECT version FROM schema_migrations WHERE version LIKE '0NN%';` → one row
+- [ ] Table + index exist (information_schema)
+- [ ] Dedup live test: replay the same update_id twice to one bot (or note
+      the log line `duplicate ... ignored`) — second is a no-op, no double reply
+- [ ] Maya HR + SOLOMON respond in Telegram (all seven bots restarted)
+- [ ] `git diff` commit 1: db_migrations.py, scheduler.py, telegram_webhook.py,
+      alex_avtd_webhook.py, (alex_tg_webhook.py if Step 1 required it), CLAUDE.md
+- [ ] db_migrations.py diff is pure addition
+- [ ] Which handlers import from each changed file, imports clean (rule 2.5)

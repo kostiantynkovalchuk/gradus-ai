@@ -305,7 +305,27 @@ async def _process_webhook_update(request: Request, db: Session):
     """Shared handler for /webhook/maya and legacy /webhook."""
     try:
         data = await request.json()
-        
+
+        update_id = data.get("update_id")
+        if update_id is not None:
+            # Fail-open by design: a dedup-table failure must never block
+            # real user traffic (mirrors sara_webhook.py's process_update).
+            try:
+                result = db.execute(
+                    text(
+                        "INSERT INTO telegram_inbound_updates (bot_source, update_id) "
+                        "VALUES ('maya', :update_id) ON CONFLICT DO NOTHING"
+                    ),
+                    {"update_id": update_id},
+                )
+                db.commit()
+                if result.rowcount == 0:
+                    logger.info(f"🔁 Maya: duplicate update {update_id} ignored")
+                    return {"ok": True}
+            except Exception as e:
+                logger.error(f"Maya dedup check failed for update {update_id}: {e}")
+                db.rollback()
+
         logger.info(f"📞 Telegram webhook: {list(data.keys())}")
         
         if "callback_query" in data:
@@ -397,12 +417,15 @@ async def _process_webhook_update(request: Request, db: Session):
                     content_type    = "poll"
                     content_preview = message["poll"]["question"][:100]
                 else:
-                    import httpx as _httpx
-                    async with _httpx.AsyncClient(timeout=10.0) as _c:
-                        await _c.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
-                            json={"chat_id": chat_id, "text": "⚠️ Цей тип контенту не підтримується для розсилки."},
-                        )
+                    try:
+                        import httpx as _httpx
+                        async with _httpx.AsyncClient(timeout=10.0) as _c:
+                            await _c.post(
+                                f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
+                                json={"chat_id": chat_id, "text": "⚠️ Цей тип контенту не підтримується для розсилки."},
+                            )
+                    except Exception:
+                        logger.exception("Failed to send unsupported-content-type notice")
                     return JSONResponse({"ok": True})
                 broadcast_id = await create_broadcast_log(
                     initiated_by=sender_id,

@@ -6,6 +6,19 @@ logger = logging.getLogger(__name__)
 
 MIGRATIONS = [
     {
+        "version": "066_telegram_inbound_dedup",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS telegram_inbound_updates (
+                bot_source   VARCHAR(32)  NOT NULL,
+                update_id    BIGINT       NOT NULL,
+                received_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                PRIMARY KEY (bot_source, update_id)
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_telegram_inbound_received_at
+               ON telegram_inbound_updates (received_at)""",
+        ],
+    },
+    {
         "version": "065_legacy_enum_check_constraints",
         "statements": [
             """DO $$
