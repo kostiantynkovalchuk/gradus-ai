@@ -5,6 +5,11 @@ Every claim below was verified against the actual code (audit: July 2026).
 `replit.md` holds the descriptive project overview and changelog; this file
 holds behavioral rules. When they conflict, this file wins for *how to work*,
 `replit.md` wins for *what exists* only if it is newer than this file.
+The Gradus AI platform handover document (April 2026) is historical
+context only — useful for stakeholder routing and product origins,
+but its current-state claims (migration numbers, repo structure,
+pending items) are stale; where it conflicts with this file or with
+the code, it is wrong.
 
 ---
 
