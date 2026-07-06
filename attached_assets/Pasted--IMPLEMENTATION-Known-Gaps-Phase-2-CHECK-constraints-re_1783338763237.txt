@@ -1,0 +1,133 @@
+# IMPLEMENTATION — Known Gaps Phase 2 (CHECK constraints, register item 2)
+
+> Paste to the Replit agent as-is. Precondition: Phase 1 commit is deployed
+> and verified (Maya + SOLOMON responding). Per CLAUDE.md rule 2.2, read
+> every file you touch or grep before finalizing anything.
+
+Scope: ONE new migration adding CHECK constraints to three legacy columns,
+plus the matching CLAUDE.md updates. One commit. No handler logic changes,
+no dedup tables (Phase 3), no edits to applied migrations.
+
+---
+
+## Step 0 — Migration number (mandatory, CLAUDE.md rule 2.3)
+
+I will run this in Neon and paste you the result before you write anything:
+
+```sql
+SELECT version, applied_at FROM schema_migrations
+ORDER BY applied_at DESC LIMIT 10;
+```
+
+Number the new migration strictly above the true maximum shown there.
+Do NOT number from the MIGRATIONS list in code.
+Expected name shape: `0NN_legacy_enum_check_constraints`.
+
+---
+
+## Step 1 — Enumerate write sites (mandatory, with hard stop)
+
+Production data was already checked (2026-07): all existing rows contain
+only `pending/approved/rejected` (hr_decision), `cancelled/completed`
+(broadcast status), `scan` (channel_type) — clean, no stray values, no
+NULLs. But data shows history, not capability. The constraint sets must
+cover every value THE CODE CAN WRITE.
+
+Grep the entire backend for every assignment/INSERT/UPDATE touching:
+- `hunt_candidates.hr_decision`
+- `hr_broadcast_log.status`
+- `hunt_sources.channel_type` (including any seed/insert scripts and the
+  hardcoded fallback in hunt_service.py)
+
+Quote each write site (file:line + the value written). Then reconcile
+against these baseline sets from the product docs:
+
+| Column | Baseline allowed set |
+|---|---|
+| `hunt_candidates.hr_decision` | `pending, approved, rejected, saved, hired` |
+| `hr_broadcast_log.status` | `pending, confirmed, cancelled, completed, recalled` |
+| `hunt_sources.channel_type` | `scan, post, both` |
+
+**HARD STOP:** If your grep finds ANY value written in code that is not in
+the baseline set (e.g. a transient `sending` status in broadcast_service),
+or a baseline value you cannot find a write site for — STOP after Step 1,
+report the full reconciliation table, and wait. Do not silently expand or
+shrink a set. A CHECK that misses a code-written value turns a working
+button into a production DB error.
+
+If the grep matches the baseline exactly, proceed.
+
+---
+
+## Step 2 — The migration
+
+Append ONE entry to `MIGRATIONS` in `backend/db_migrations.py`.
+Idempotent, per CLAUDE.md section 3 — use the pg_constraint guard pattern:
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_hunt_candidates_hr_decision'
+  ) THEN
+    ALTER TABLE hunt_candidates
+      ADD CONSTRAINT chk_hunt_candidates_hr_decision
+      CHECK (hr_decision IN ('pending','approved','rejected','saved','hired'));
+  END IF;
+END $$;
+```
+
+Same pattern for `chk_hr_broadcast_log_status` and
+`chk_hunt_sources_channel_type`, using the Step-1-confirmed sets.
+Naming follows the going-forward `chk_<table>_<column>` convention
+(Sara's pattern). NULL handling: CHECK passes NULLs by design — do not
+add NOT NULL in this migration; that is a separate decision.
+
+Tables are small (<200 rows each) and data is verified clean, so plain
+ADD CONSTRAINT (which validates existing rows) is safe — no NOT VALID
+staging needed.
+
+---
+
+## Step 3 — CLAUDE.md updates (same commit)
+
+1. Section 10 register: remove the CHECK-constraints item (evidence in
+   commit message). Renumber.
+2. Section 10 register: ADD two new items found during Phase 1 reading:
+   - `telegram_webhook.py` ~400-405 — unwrapped httpx POST
+     (broadcast-group content-type-unsupported path).
+   - `telegram_webhook.py:429` — `asyncio.create_task(_handle_hunt_vacancy(...))`
+     fire-and-forget; task failures are invisible (no done-callback /
+     exception logging).
+3. Section 3: update the CHECK-constraints bullet — the three legacy
+   columns are no longer exceptions; the rule now holds for these tables.
+   Keep the going-forward rule itself.
+
+---
+
+## Commit message
+
+```
+feat: migration 0NN — CHECK constraints on legacy enum columns (closes register item)
+
+- hunt_candidates.hr_decision, hr_broadcast_log.status, hunt_sources.channel_type
+- value sets enumerated from code write sites, reconciled against production data
+- CLAUDE.md: register item removed; two new gaps added (unwrapped httpx POST ~405, fire-and-forget create_task :429)
+```
+
+(replace 0NN with the real number from Step 0)
+
+---
+
+## Verification (report each)
+
+- [ ] Step 1 reconciliation table included in your report
+- [ ] Render deploy green; startup log shows the new migration applied
+- [ ] `SELECT version FROM schema_migrations WHERE version LIKE '0NN%';` → one row
+- [ ] `SELECT conname FROM pg_constraint WHERE conname LIKE 'chk_hunt%' OR conname LIKE 'chk_hr_broadcast%';` → three rows
+- [ ] Negative test in Neon (then rolled back / expected to fail):
+      `INSERT`/`UPDATE` with a typo value (e.g. `hr_decision='aproved'`)
+      must be REJECTED by the constraint
+- [ ] Maya HR + SOLOMON respond in Telegram (deploy restarted all bots)
+- [ ] `git diff` on `db_migrations.py` is pure addition; only
+      `db_migrations.py` + `CLAUDE.md` changed
