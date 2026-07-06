@@ -200,13 +200,10 @@ all of them.**
 
 ## 10. Known gaps register (fix candidates — do not silently rely on these)
 
-1. Maya HR webhook not auto-registered on startup.
-2. Maya HR / Alex Gradus / Alex AVTD: no inbound update dedup.
-3. `telegram_webhook.py:449` — unwrapped `process_telegram_message()` call.
-4. `remove_discontinued_products.py:67` — namespace-less Pinecone delete.
-5. `hunt_candidates.hr_decision`, `hunt_sources.channel_type`,
+1. Maya HR / Alex Gradus / Alex AVTD: no inbound update dedup.
+2. `hunt_candidates.hr_decision`, `hunt_sources.channel_type`,
    `hr_broadcast_log.status` — no CHECK constraints.
-6. Duplicate `052` migration prefix (both applied; harmless at PK level;
+3. Duplicate `052` migration prefix (both applied; harmless at PK level;
    never reason "by number").
 
 When any of these areas is touched for other reasons, closing the adjacent

@@ -219,6 +219,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Alex AVTD: TELEGRAM_ALEX_AVTD_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
 
+    maya_token = os.environ.get("TELEGRAM_MAYA_BOT_TOKEN")
+    if maya_token and RENDER_URL:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as hclient:
+                resp = await hclient.post(
+                    f"https://api.telegram.org/bot{maya_token}/setWebhook",
+                    json={"url": f"{RENDER_URL}/api/telegram/webhook/maya"}
+                )
+                logger.info(f"👩‍💼 Maya HR webhook: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Maya HR webhook setup failed: {e}")
+    else:
+        logger.info("Maya HR: TELEGRAM_MAYA_BOT_TOKEN or RENDER_EXTERNAL_URL not set, webhook skipped")
+
     sara_token = os.environ.get("SARA_BOT_TOKEN")
     if sara_token and RENDER_URL:
         try:

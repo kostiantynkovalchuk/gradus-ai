@@ -446,7 +446,17 @@ async def _process_webhook_update(request: Request, db: Session):
 
             logger.info(f"💬 Message from user: {text[:50]}")
             
-            await process_telegram_message(message)
+            try:
+                await process_telegram_message(message)
+            except Exception:
+                logger.exception("process_telegram_message failed")
+                try:
+                    await send_telegram_message(
+                        chat_id,
+                        "Вибачте, сталася технічна помилка. Спробуйте, будь ласка, ще раз за хвилину."
+                    )
+                except Exception:
+                    logger.exception("fallback send also failed")
             return {"ok": True}
         
         elif "my_chat_member" in data:

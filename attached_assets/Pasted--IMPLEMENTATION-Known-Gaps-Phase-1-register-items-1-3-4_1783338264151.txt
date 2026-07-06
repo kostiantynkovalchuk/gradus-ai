@@ -1,0 +1,133 @@
+# IMPLEMENTATION — Known Gaps Phase 1 (register items 1, 3, 4)
+
+> Paste to the Replit agent as-is. This is an implementation prompt; the
+> audit already happened (see CLAUDE.md section 10 — every claim below has
+> file:line evidence from the July 2026 audit). Per CLAUDE.md rule 2.2,
+> READ each target file before editing it — do not work from this prompt's
+> line numbers alone; they may have drifted.
+
+Scope: exactly three fixes + the matching CLAUDE.md register update.
+One commit. Nothing else changes. Do NOT touch migrations, do NOT add
+dedup tables (that is Phase 3), do NOT modify any other bot's handlers.
+
+---
+
+## Fix A — namespace-less Pinecone delete (register item 4)
+
+File: `backend/scripts/remove_discontinued_products.py` (~line 67)
+
+Current: `index.delete(ids=batch)` — no `namespace=`, so it targets the
+default namespace instead of `company_knowledge`.
+
+1. Read the whole script first. Report every Pinecone call in it
+   (query/fetch/delete/upsert) and whether each passes `namespace=`.
+2. Define once at module level: `NAMESPACE = "company_knowledge"`.
+3. Every Pinecone call in the script must pass `namespace=NAMESPACE`.
+4. Immediately before any delete call, add:
+   `assert NAMESPACE == "company_knowledge"` (same guard pattern as
+   `solomon_contracts/corpus.py`).
+
+No behavior change intended other than correct namespace targeting.
+
+---
+
+## Fix B — unwrapped process_telegram_message (register item 3)
+
+File: `backend/routes/telegram_webhook.py` (~line 449)
+
+Current: the Maya HR message path calls `process_telegram_message(message)`
+with no try/except — an AI/RAG failure returns 200 to Telegram while the
+user gets silence (the exact failure mode CLAUDE.md rule 4.4 forbids).
+
+1. Read the surrounding handler to find how `chat_id` is derived from the
+   incoming update, and confirm `send_telegram_message()` (or the existing
+   plain-send helper used at ~508-524) is importable/callable at this point.
+2. Wrap the call:
+
+   ```python
+   try:
+       await process_telegram_message(message)
+   except Exception:
+       logger.exception("process_telegram_message failed")  # full traceback
+       try:
+           await send_telegram_message(
+               chat_id,
+               "Вибачте, сталася технічна помилка. Спробуйте, будь ласка, ще раз за хвилину."
+           )
+       except Exception:
+           logger.exception("fallback send also failed")
+   ```
+
+3. The success path must be byte-identical in behavior. The fallback send
+   is plain text — no keyboard, no markdown (markdown parse errors are
+   their own failure class).
+4. Report any OTHER unwrapped user-facing calls you notice in the same
+   file while reading — report only, do not fix them in this commit.
+
+---
+
+## Fix C — Maya HR webhook auto-registration (register item 1)
+
+File: `backend/main.py` lifespan block (~lines 164-253)
+
+Six bots auto-register via setWebhook on startup; Maya HR does not.
+
+**Pre-check before writing code (mandatory):**
+1. Confirm from `routes/telegram_webhook.py` that BOTH mounted paths —
+   `/api/telegram/webhook/maya` (~line 250) and legacy
+   `/api/telegram/webhook` (~line 295) — route to the SAME handler logic
+   for Maya. Quote the two route decorators + handler names.
+2. Run in the shell (read-only) and paste the result:
+   ```python
+   python3 -c "
+   import os, requests
+   t = os.environ['TELEGRAM_MAYA_BOT_TOKEN']
+   print(requests.get(f'https://api.telegram.org/bot{t}/getWebhookInfo').json())
+   "
+   ```
+   Report Maya's CURRENT webhook URL, pending_update_count, and last_error.
+
+**Then implement:**
+3. Add a Maya registration block to the lifespan, copying the exact
+   pattern used for the other six bots (same env-var guard, same base-URL
+   construction from `RENDER_EXTERNAL_URL`, same logging style).
+4. Target URL: register to `/api/telegram/webhook/maya` ONLY IF step 1
+   confirmed both paths are equivalent. If they are NOT equivalent, STOP —
+   register to whichever path getWebhookInfo showed as currently active,
+   and flag the discrepancy in your report instead of choosing.
+5. Wrap in try/except like the other six blocks — a registration failure
+   must not prevent app startup.
+
+---
+
+## CLAUDE.md register update (same commit)
+
+Per the register's own rule, remove items 1, 3, 4 from section 10 and
+renumber the remaining items (dedup gap, CHECK constraints, 052 prefix
+become 1, 2, 3). Evidence goes in the commit message.
+
+Commit message:
+
+```
+fix: close known-gaps 1/3/4 — Maya webhook autoreg, wrapped process_telegram_message, Pinecone namespace
+
+- main.py lifespan: Maya HR setWebhook added (pattern of other 6 bots)
+- telegram_webhook.py:449: try/except + plain-text fallback around process_telegram_message
+- remove_discontinued_products.py:67: namespace="company_knowledge" + assert on all Pinecone calls
+- CLAUDE.md section 10: items 1, 3, 4 removed (evidence: the three files above)
+```
+
+---
+
+## Verification (report each, per CLAUDE.md section 8)
+
+- [ ] Render deploy green, no migration rows expected (none shipped)
+- [ ] `getWebhookInfo` for Maya post-deploy: URL is the registered path,
+      `last_error_message` empty
+- [ ] Send a real test message to Maya HR in Telegram — normal reply
+- [ ] SOLOMON responds in Telegram (all seven bots restarted)
+- [ ] No `Webhook error` lines or 404 floods in Render logs
+- [ ] `git diff` touches exactly four files: main.py, telegram_webhook.py,
+      remove_discontinued_products.py, CLAUDE.md
+- [ ] Report which other handlers import from telegram_webhook.py and
+      main.py and confirm clean imports (rule 2.5)

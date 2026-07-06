@@ -14,6 +14,8 @@ pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
 index = pc.Index(os.getenv('PINECONE_INDEX_NAME', 'gradus-media'))
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
+NAMESPACE = "company_knowledge"
+
 def get_embedding(text):
     response = openai_client.embeddings.create(
         model="text-embedding-3-small",
@@ -47,7 +49,8 @@ for term in search_terms:
     results = index.query(
         vector=query_embedding,
         top_k=50,
-        include_metadata=True
+        include_metadata=True,
+        namespace=NAMESPACE
     )
     
     for match in results.matches:
@@ -64,7 +67,8 @@ if all_ids_to_delete:
     batch_size = 100
     for i in range(0, len(ids_list), batch_size):
         batch = ids_list[i:i+batch_size]
-        index.delete(ids=batch)
+        assert NAMESPACE == "company_knowledge"
+        index.delete(ids=batch, namespace=NAMESPACE)
         print(f"  ✅ Deleted batch {i//batch_size + 1}: {len(batch)} entries")
     
     total_deleted = len(ids_list)
