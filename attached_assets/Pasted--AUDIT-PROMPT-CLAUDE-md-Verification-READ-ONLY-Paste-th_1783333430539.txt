@@ -1,0 +1,173 @@
+# AUDIT PROMPT — CLAUDE.md Verification (READ-ONLY)
+
+> Paste this to the Replit agent **as-is**. This is an **audit, not an implementation**.
+> Do NOT combine it with an implementation prompt. Do NOT write, edit, create,
+> or delete any file. Do NOT propose fixes or code.
+
+---
+
+## Your task
+
+We are about to create a `CLAUDE.md` file — persistent rules and facts about this
+codebase for AI assistants. Every claim below was derived from chat history and
+handover docs, which may be stale. Your job is to verify each claim against the
+**actual current code**, and mark it:
+
+- **CONFIRMED** — you opened the file(s) and the claim is accurate as written
+- **CORRECTED** — the claim is partially wrong; state what the code actually does
+- **NOT FOUND** — you searched and could not find evidence either way
+
+For every verdict, paste the evidence: file path + line numbers + the relevant
+lines (or the grep output). Never infer from filenames or memory. If a claim
+requires a DB query, write the exact SQL for me to run in Neon and mark the
+item **NEEDS DB QUERY** — do not guess.
+
+---
+
+## SECTION A — Migrations
+
+**A1.** Claim: migrations live as a flat Python list in `backend/db_migrations.py`
+(dict entries with version string + SQL statements), NOT as standalone files in
+`backend/migrations/*.sql`. Open `backend/db_migrations.py`, describe the actual
+structure, and check whether a `backend/migrations/` directory with `.sql` files
+also exists. If both exist, report which one the startup runner actually executes.
+
+**A2.** Claim: `run_migrations()` executes on app startup and skips versions
+already present in `schema_migrations`. Find the runner, quote the check, and
+report where it is called from (lifespan, main, etc.).
+
+**A3.** Claim: `schema_migrations` has columns `version` (varchar) and
+`applied_at`, with uniqueness on the full version string (so `052_a` and `052_b`
+can coexist). Confirm from the table-creation code or provide the
+`information_schema` SQL for me to run.
+
+**A4.** Report the highest migration version visible **in code** right now, and
+flag any numbering gaps or duplicate numeric prefixes you can see in the list
+(e.g., the known 052 collision — is the renumbered/guarded version present?).
+
+**A5.** Check the last ~10 migrations in the list: do they use idempotency
+patterns (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, `DO $$` guards)? Quote one
+good example and one migration that lacks guards, if any.
+
+## SECTION B — Database access patterns
+
+**B1.** Claim: request-path handlers use SQLAlchemy ORM, while async background
+tasks (`asyncio.create_task`, scheduler jobs) use raw psycopg2 with explicit
+connect/close. Grep for `create_task`, `psycopg2.connect`, `sessionmaker`.
+Report per area (hunt_service, broadcast_service, survey_service, scheduler,
+translation job, solomon) which pattern each actually uses. This claim came from
+a Maya Hunt incident — confirm it reflects current code, not just history.
+
+**B2.** Claim: the scheduled translation job commits per-article with a
+reconnect-and-retry-once on `psycopg2.OperationalError` / SSL drop (Neon).
+Find that job and quote the retry block, or correct.
+
+**B3.** Report the SQLAlchemy engine config: is `pool_pre_ping` set? `pool_recycle`?
+
+## SECTION C — Telegram / webhooks
+
+**C1.** List every Telegram webhook route currently mounted: path + bot + token
+env var. This defines the restart blast radius of a deploy — I need the real
+count and names (the draft says "five+ bots").
+
+**C2.** Claim: webhooks auto-register on startup (lifespan) so deploys self-heal;
+this was added after the `/webhook` 404 flood. Quote the registration block(s)
+and list which bots are covered and which (if any) are NOT auto-registered.
+
+**C3.** Claim: no production bot uses polling. Grep for `run_polling`,
+`getUpdates` in this repo and report any hits.
+
+**C4.** Idempotency: grep for atomic status transitions
+(`WHERE status = 'pending'` + `RETURNING`) and inbound-update dedup tables.
+Report which callback/broadcast handlers have double-execution guards and which
+user-facing handlers with side effects do NOT.
+
+**C5.** Claim: user-facing sends are wrapped in try/except with a text fallback
+(the "✅ Дякуємо, ви авторизовані!" pattern). Confirm where this exists
+(auth/contact-share at minimum) and list any user-facing handlers where a raised
+exception would result in silence.
+
+## SECTION D — Telethon privacy guard
+
+**D1.** Claim: Telethon event handlers filter by chat_id — hard guard
+`if chat_id > 0: return` plus an allowlist of group IDs — added after personal
+DMs leaked into the /hr dashboard. Open the Telethon handler(s)
+(hunt_tg_scraper or wherever `events.NewMessage` is registered) and quote the
+actual filtering. If the guard is missing or weaker than claimed, say so
+explicitly — this is a privacy item.
+
+## SECTION E — Pinecone / embeddings
+
+**E1.** Claim: single index `gradus-media`; Maya HR vectors in the default
+namespace; Solomon Contracts in `solomon-contracts-corpus` (and possibly
+`solomon-contracts-findings`); mutating functions assert the namespace. Grep for
+`namespace` in Pinecone-touching code and report every namespace string used,
+plus whether any write path can hit the default namespace unintentionally.
+
+**E2.** Claim: embedding model is `text-embedding-3-small` everywhere. Grep for
+`text-embedding` and report every model string found.
+
+## SECTION F — Scheduler / environment
+
+**F1.** Claim: no timezone strings remain in APScheduler triggers
+(`Europe/Kiev` / `Europe/Kyiv` removed; UTC with manual offsets). Grep the whole
+repo for both spellings and for `timezone=` in CronTrigger calls. Report hits.
+
+**F2.** Is `tzdata` in `requirements.txt`?
+
+**F3.** Is the Python version pinned for Render (runtime.txt, render.yaml,
+PYTHON_VERSION env reference in code, or .python-version)? Report what you find —
+Render once auto-installed 3.14.
+
+**F4.** Produce an inventory of env vars actually read in code
+(`os.environ` / `os.getenv` grep): the full list of names only, grouped by
+service/file. I will diff this against the documented list — do not include
+values.
+
+## SECTION G — Boundaries
+
+**G1.** Confirm there is no frontend (Vite/React) source in this repo — the
+frontend is a separate project. Report any `src/pages`, `.tsx`, `vite.config`
+hits that would contradict this.
+
+**G2.** Claim: all court-registry calls (reyestr) go through the Replit proxy
+(`court-search-agent.replit.app`), never direct from Render. Grep for
+`reyestr.court.gov.ua` and report whether any direct call exists.
+
+**G3.** List all table-name prefixes actually present in migration SQL
+(hunt_, hr_, solcon_, solomon_, sara_, pulse_, alex_, others?) so the CLAUDE.md
+prefix table is complete.
+
+## SECTION H — CHECK constraints
+
+**H1.** From the migration list, report which enum-like columns HAVE CHECK
+constraints and which known enum columns do NOT (at minimum check:
+`hr_users.access_level`, `hunt_candidates.hr_decision`,
+`hunt_sources.channel_type`, `hr_broadcast_log.status`, sara_* tables).
+The CLAUDE.md rule says "every enum column gets a CHECK" — I need to know the
+current compliance baseline, not just the rule.
+
+## SECTION I — CLAUDE.md placement
+
+**I1.** Report whether a `CLAUDE.md`, `AGENTS.md`, `.replit`-level instruction
+file, or `replit.md` already exists in the repo root, and what (if anything)
+currently instructs AI agents. If something exists, paste its contents.
+
+---
+
+## Report format (mandatory)
+
+For each item A1…I1:
+
+```
+### <ID> — <one-line claim>
+Verdict: CONFIRMED | CORRECTED | NOT FOUND | NEEDS DB QUERY
+Evidence: <file:lines + quoted code or grep output>
+Correction (if any): <what the code actually does>
+```
+
+End with a section titled **"Claims the draft missed"** — anything you noticed
+while reading that an AI assistant working here MUST know but that isn't covered
+above (max 10 items, one line each, with file references).
+
+Do NOT make any changes. Audit and report only.
