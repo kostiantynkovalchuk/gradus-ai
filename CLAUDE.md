@@ -152,9 +152,9 @@ all of them.**
   over hardcoded offsets for anything user-facing, since UTC-offset cron
   comments drift by one hour at DST changes.
 - Python version pinning: deployment is `runtime: docker` per `render.yaml`;
-  the pin (if any) lives in the `Dockerfile`. **Verify the `FROM python:X.Y`
-  base image before assuming a pinned version** — Render once auto-selected
-  Python 3.14 on a non-Docker service.
+  the pin (if any) lives in the `Dockerfile`. Pinned: Dockerfile line 1 is
+  `FROM python:3.11-slim`. If you change the base image, update this line
+  in the same commit.
 
 ---
 
@@ -208,7 +208,6 @@ all of them.**
    `hr_broadcast_log.status` — no CHECK constraints.
 6. Duplicate `052` migration prefix (both applied; harmless at PK level;
    never reason "by number").
-7. Dockerfile Python pin unverified.
 
 When any of these areas is touched for other reasons, closing the adjacent
 gap in the same change is preferred over preserving it. Removing an item from
