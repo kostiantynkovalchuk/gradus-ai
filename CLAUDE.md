@@ -119,10 +119,7 @@ reactivates it.
   job (48h retention). New handlers must dedup the same way.
 - **User-facing flows never crash silently:** wrap sends and keyboard
   rendering in try/except with a plain-text fallback (reference:
-  `telegram_webhook.py:~508-524`). **KNOWN GAP:**
-  `telegram_webhook.py:449` calls `process_telegram_message()` unwrapped —
-  an AI/RAG failure there produces the exact 200-OK-but-silent failure this
-  rule forbids.
+  `telegram_webhook.py:~508-524`).
 - One bot token per bot per environment. Never reuse a dev (Replit) token on
   Render — causes 409s and startup timeouts.
 - **Telethon (Maya Hunt) is pull-based only:** `iter_messages` over entities
