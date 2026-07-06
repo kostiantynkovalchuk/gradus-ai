@@ -102,3 +102,9 @@ id = "UWSr1jTDbcQMi-J-ZiGgB"
 uri = "file://solomon_handover.md"
 type = "text"
 title = "Solomon — Full Project Handover for Claude"
+
+[[outputs]]
+id = "uF8G9TzlPkgwbhTRBsoEl"
+uri = "file://CLAUDE.md"
+type = "text"
+title = "CLAUDE.md"
