@@ -1,0 +1,87 @@
+# DESIGN CONSULT — Webhook Update Dedup (register item 1) — READ-ONLY
+
+> Paste to the Replit agent as-is. This is a design consultation per
+> CLAUDE.md rule 2.4 (Claude proposes → you validate against the code →
+> then a separate implementation prompt goes out). Read and recommend
+> only. Do NOT write, edit, or create any file. Do NOT write a migration.
+
+---
+
+## The problem
+
+Maya HR, Alex Gradus, and Alex AVTD webhooks have no inbound update-id
+dedup (CLAUDE.md register item 1). Telegram retries any webhook that
+doesn't get a fast 200 — a slow RAG call means the same update can be
+processed twice: duplicate replies, duplicate side effects (broadcasts,
+auth flows).
+
+Scope boundary to keep in mind: update_id dedup solves TELEGRAM RETRIES
+(same update delivered twice). It does NOT solve USER DOUBLE-TAPS
+(two taps = two distinct update_ids) — that requires per-action atomic
+transitions and is out of scope here unless you spot a trivially cheap
+win while reading.
+
+## Two candidate designs — validate both against the actual code
+
+**Option A — one shared table:**
+`telegram_inbound_updates(bot_source VARCHAR, update_id BIGINT,
+received_at TIMESTAMP, PRIMARY KEY (bot_source, update_id))`
+Composite key is mandatory: update_id is only unique PER BOT TOKEN.
+One table, one cleanup job, one pattern for all future bots.
+
+**Option B — per-bot tables (Sara's existing pattern):**
+`maya_inbound_updates`, `alex_gradus_inbound_updates`,
+`alex_avtd_inbound_updates`, each mirroring `sara_inbound_updates`.
+Matches the table-prefix-per-product convention; three tables, three
+cleanup targets, but zero cross-product coupling.
+
+## Questions to answer from the code (quote file:line for each)
+
+1. **Sara's reference implementation.** Open `routes/sara_webhook.py`
+   (~line 665) and the `sara_inbound_updates` schema in migration 064.
+   Report: exactly where in the handler the dedup INSERT happens, how
+   the conflict result is checked (rowcount? RETURNING?), what happens
+   on duplicate (immediate 200?), and whether ANY retention/cleanup
+   exists for that table or it grows forever.
+
+2. **Maya's insertion point.** Both Maya paths route to
+   `_process_webhook_update(request, db)` (confirmed in Phase 1). Is
+   that shared function the correct single insertion point for Maya's
+   dedup — i.e., does it see the raw update (with update_id) before any
+   side effect fires, covering both message and callback_query updates?
+   Or do side effects happen earlier in the route handlers?
+
+3. **Alex Gradus / Alex AVTD insertion points.** Same question for
+   `alex_tg_webhook.py` (~335) and `alex_avtd_webhook.py` (~381): where
+   is the earliest point that sees update_id before side effects, and do
+   these handlers share any code path with Maya or with each other?
+
+4. **DB pattern per module.** Per CLAUDE.md section 3, dedup writes must
+   match each module's existing pattern. Report what each of the three
+   webhook modules currently uses (SQLAlchemy / psycopg2 / mixed) so the
+   dedup insert doesn't introduce a second pattern into any module.
+
+5. **Retention.** Whatever design you recommend: propose a concrete
+   retention approach (e.g., scheduler job deleting rows older than
+   48h — Telegram's retry window is far shorter). If Sara's table has no
+   cleanup, say whether the fix should cover Sara's table too.
+
+6. **Adjacent gap in the same file.** Register item 2 is the unwrapped
+   httpx POST in `telegram_webhook.py` ~400-405 (broadcast-group
+   content-type-unsupported path). Read it and say whether wrapping it
+   belongs in the same implementation commit as Maya's dedup (same-file,
+   register rule prefers closing adjacent gaps) or is safer as a
+   separate commit. NOTE: `telegram_webhook.py:429` (fire-and-forget
+   hunt task) is PARKED — do not include it in any recommendation.
+
+## Deliverable
+
+A recommendation: Option A or B (or a justified variant), the exact
+insertion point per bot, the retention approach, and the commit split
+(one commit or two). For each element, the file:line evidence that
+informed it. Flag anything about the options that the code makes
+awkward — e.g., if the three modules' DB patterns differ enough that a
+shared helper would violate the per-module rule.
+
+Do NOT implement anything. The implementation prompt comes after this
+report is reviewed.
