@@ -59,7 +59,7 @@ async def index(token: str = ""):
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok", "service": "sara-realtime"})
+    return JSONResponse({"status": "ok", "service": "sara-english"})
 
 
 @app.websocket("/ws/session")
