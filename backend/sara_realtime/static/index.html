@@ -48,9 +48,9 @@
 <div class="metrics-box" id="metricsBox" style="display:none">
   <div class="label">Last turn latency</div>
   <div class="metric"><span>STT commit</span><span class="val" id="mStt">—</span></div>
-  <div class="metric"><span>Claude first token</span><span class="val" id="mClaude">—</span></div>
-  <div class="metric"><span>First audio to browser</span><span class="val" id="mAudio">—</span></div>
-  <div class="metric"><span>Turn end</span><span class="val" id="mEnd">—</span></div>
+  <div class="metric"><span>Claude first token (Δ from commit)</span><span class="val" id="mClaude">—</span></div>
+  <div class="metric"><span>First audio to browser (Δ from commit)</span><span class="val" id="mAudio">—</span></div>
+  <div class="metric"><span>Turn end (Δ from commit)</span><span class="val" id="mEnd">—</span></div>
 </div>
 
 <script>
@@ -198,11 +198,11 @@ function disconnect() {
 }
 
 function showMetrics(m) {
-  const fmt = v => v !== null && v !== undefined ? v + " ms" : "—";
-  $("mStt").textContent   = fmt(m.t_stt_commit_ms);
-  $("mClaude").textContent = fmt(m.t_claude_first_token_ms);
-  $("mAudio").textContent  = fmt(m.t_first_audio_to_client_ms);
-  $("mEnd").textContent    = fmt(m.t_turn_end_ms);
+  const fmtDelta = v => v !== null && v !== undefined ? "+" + v + " ms" : "—";
+  $("mStt").textContent    = "0 ms (baseline)";
+  $("mClaude").textContent = fmtDelta(m.t_claude_first_token_ms);
+  $("mAudio").textContent  = fmtDelta(m.t_first_audio_to_client_ms);
+  $("mEnd").textContent    = fmtDelta(m.t_turn_end_ms);
   $("metricsBox").style.display = "block";
 }
 

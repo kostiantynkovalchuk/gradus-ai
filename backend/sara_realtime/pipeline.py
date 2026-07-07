@@ -21,7 +21,7 @@ from typing import Optional
 
 from anthropic import AsyncAnthropic
 
-from services.sara_prompts import _build_system_prompt, safe_parse_json
+from services.sara_prompts import _build_system_prompt
 
 from sara_realtime.eleven_ws import ScribeRealtimeSTT, tts_synthesize_chunked
 
@@ -34,6 +34,23 @@ PHASE1_CEFR_BAND = "A2"
 # Sentence-chunking thresholds
 SENTENCE_END_CHARS = frozenset(".!?…")
 CHUNK_CHAR_LIMIT = 60
+
+# ── Realtime output-format override ───────────────────────────────────────────
+# _build_system_prompt() tells Claude to return {"reply", "assessment"} JSON —
+# correct for the Telegram bot path (safe_parse_json extracts reply before TTS).
+# In realtime mode tokens stream directly to TTS, so Claude must output ONLY
+# what Sara says aloud: plain text, no JSON, no markdown, no assessment.
+# This suffix is appended to the composed prompt and overrides the JSON rule.
+# Do NOT modify services/sara_prompts.py — that file is shared with the live bot.
+REALTIME_SPEECH_SUFFIX = (
+    "CRITICAL — OUTPUT FORMAT FOR THIS SESSION:\n"
+    "Respond with ONLY what Sara says out loud. "
+    "Plain conversational English, no JSON wrapper, no code blocks, "
+    "no markdown, no assessment field, no metadata of any kind. "
+    "The assessment is handled by the server in a separate background call — "
+    "do not include it here. "
+    "Your entire response is read aloud to the learner word-for-word."
+)
 
 
 def _make_done_callback(label: str):
@@ -165,11 +182,15 @@ class SessionPipeline:
         await websocket.send_json({"type": "user_transcript", "text": transcript})
         logger.info("[Pipeline] VAD commit at +%dms: %r", t_stt_commit, transcript[:80])
 
+        # Reset timer baseline to STT-commit moment.
+        # All subsequent metrics (t_claude_first_token, t_first_audio, t_turn_end)
+        # are deltas from this point, not from turn start.
+        t0 = time.monotonic()
+
         # ── Brain + TTS overlap ───────────────────────────────────────────────
         t_claude_first_token: Optional[int] = None
         t_first_audio: Optional[int] = None
         full_reply_text = ""
-        full_reply_json = {}
 
         # Queue: sentence chunks flow from Claude streamer → TTS synthesizer
         tts_text_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
@@ -191,7 +212,7 @@ class SessionPipeline:
         tts_task.add_done_callback(_make_done_callback("tts_synthesize"))
 
         try:
-            system_prompt = _build_system_prompt(PHASE1_CEFR_BAND)
+            system_prompt = _build_system_prompt(PHASE1_CEFR_BAND) + "\n\n" + REALTIME_SPEECH_SUFFIX
             messages = self._build_messages(transcript)
 
             token_buffer = ""
@@ -225,9 +246,8 @@ class SessionPipeline:
             # Signal TTS end-of-turn
             await tts_text_queue.put(None)
 
-            # Parse the JSON reply from Claude's raw response
-            full_reply_json = safe_parse_json(raw_response)
-            full_reply_text = full_reply_json.get("reply", raw_response)
+            # Realtime mode: raw_response IS the spoken reply — no JSON parsing.
+            full_reply_text = raw_response
 
         except Exception as e:
             logger.exception("[Pipeline] Brain/TTS overlap error: %s", e)
@@ -251,16 +271,17 @@ class SessionPipeline:
         t_turn_end = ms()
 
         # ── Metrics ──────────────────────────────────────────────────────────
+        # All values are ms elapsed since STT commit (t0 was reset at that moment).
+        # t_stt_commit_ms is always 0 — it IS the baseline.
         metrics = {
-            "t_stt_commit_ms": t_stt_commit,
+            "t_stt_commit_ms": 0,
             "t_claude_first_token_ms": t_claude_first_token,
             "t_first_audio_to_client_ms": t_first_audio,
             "t_turn_end_ms": t_turn_end,
         }
         logger.info(
-            "SARA_RT_TURN t_stt_commit=%d t_claude_first_token=%s "
+            "SARA_RT_TURN t_stt_commit=0 t_claude_first_token=%s "
             "t_first_audio_to_client=%s t_turn_end=%d",
-            t_stt_commit,
             t_claude_first_token if t_claude_first_token is not None else "N/A",
             t_first_audio if t_first_audio is not None else "N/A",
             t_turn_end,
