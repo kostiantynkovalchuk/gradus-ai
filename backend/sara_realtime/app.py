@@ -15,6 +15,41 @@ Start command (from backend/ as CWD, matching monorepo import root):
 Does NOT call run_migrations() — migrations are owned by the main service.
 Does NOT register any Telegram webhook.
 Does NOT import backend/main.py or any route module.
+
+Session architecture: three long-lived coroutines per session.
+
+  [ws_session receive loop]
+    mic frame → gate at INGESTION:
+        turn_active.is_set() → discard + count (rate-logged)
+        else                 → audio_queue.put_nowait()
+    JSON control             → start | end_session
+
+  [stt_reader task] — owns the Scribe socket for the session lifetime
+    loop:
+      connect Scribe (same URL/params as before)
+      run two parallel sub-tasks:
+        stt_pump: audio_queue → stt.send_audio()
+        stt_recv: stt.receive_events() →
+            partial_transcript  → relay to browser
+            committed_transcript:
+                turn_active.is_set()? drop + DEBUG
+                empty/whitespace?     drop + DEBUG
+                else                  → transcript_queue.put()
+            error               → log ERROR
+      ConnectionClosedOK/Error from stt_recv: log WARNING, reconnect
+        backoff: 0.5 → 1 → 2 → 4 → 8s (max 5 consecutive attempts)
+        success: resets consecutive counter
+        attempt 5 failure: send {"type":"error"} to browser, end task
+      CancelledError: return (session teardown — do NOT reconnect)
+
+  [turn_loop task] — consumes transcripts, never touches the STT socket
+    transcript = await transcript_queue.get()   ← blocks; cannot spin
+    turn_active.set()
+    await pipeline.run_turn(websocket, transcript)
+    turn_active.clear()
+
+There is NO post-turn queue drain anywhere in this session. Mic gating
+happens at ingestion; committed-transcript gating happens in stt_recv. R10.
 """
 import asyncio
 import logging
@@ -25,6 +60,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from sara_realtime.pipeline import SessionPipeline
 from sara_realtime.eleven_ws import ScribeRealtimeSTT
@@ -37,6 +73,11 @@ VOICE_ID = os.getenv("SARA_RT_VOICE_ID") or os.getenv("ELEVENLABS_VOICE_ID", "")
 STT_MODEL = os.getenv("SARA_RT_STT_MODEL", "scribe_v2_realtime")
 TTS_MODEL = os.getenv("SARA_RT_TTS_MODEL", "eleven_flash_v2_5")
 
+# Maximum consecutive Scribe reconnect attempts before ending the session.
+STT_MAX_ATTEMPTS = 5
+# Exponential backoff schedule (seconds), one entry per attempt index.
+STT_BACKOFF_S = [0.5, 1.0, 2.0, 4.0, 8.0]
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Sara Real-Time Voice", docs_url=None, redoc_url=None)
@@ -48,6 +89,17 @@ def _check_token(token: str) -> bool:
     if not ACCESS_TOKEN:
         return True
     return token == ACCESS_TOKEN
+
+
+def _task_done_cb(label: str):
+    """Return an asyncio Task done-callback that logs unexpected exceptions."""
+    def _cb(task: asyncio.Task):
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.exception("[%s] task raised unexpectedly: %s", label, exc)
+    return _cb
 
 
 @app.get("/")
@@ -78,80 +130,88 @@ async def ws_session(websocket: WebSocket, token: str = ""):
         tts_model=TTS_MODEL,
     )
 
-    # audio_queue: binary PCM16 frames from the browser → STT leg
-    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    # ── Shared state ──────────────────────────────────────────────────────────
+    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=500)      # mic → stt_reader
+    transcript_queue: asyncio.Queue = asyncio.Queue(maxsize=10)  # stt_reader → turn_loop
+    turn_active = asyncio.Event()  # set while pipeline.run_turn is executing
 
-    # Half-duplex gate: set while run_turn is executing; mic frames are discarded.
-    # Phase 1 design — barge-in is a Phase 3 product decision.
-    turn_active = asyncio.Event()
-    # Mutable counter: frames discarded by the gate since the last turn end.
-    discarded_frames = [0]
+    # Ingestion-gate telemetry (rate-limited to once per 60s)
+    discarded_mic = [0]
+    last_gate_log = [time.monotonic()]  # R4 fix: real monotonic start, not 0.0
 
-    # One persistent STT connection per session (EL keeps context across turns)
-    stt_client = None
+    # ── Long-lived background tasks ───────────────────────────────────────────
+    reader_task = asyncio.create_task(
+        _stt_reader(audio_queue, transcript_queue, turn_active, websocket),
+        name="stt_reader",
+    )
+    reader_task.add_done_callback(_task_done_cb("stt_reader"))
+
+    loop_task = asyncio.create_task(
+        _turn_loop(websocket, pipeline, transcript_queue, turn_active),
+        name="turn_loop",
+    )
+    loop_task.add_done_callback(_task_done_cb("turn_loop"))
+
     session_started = False
 
     try:
-        async with ScribeRealtimeSTT(STT_MODEL) as stt:
-            stt_client = stt
+        while True:
+            try:
+                message = await websocket.receive()
+            except WebSocketDisconnect:
+                logger.info("[WS] Client disconnected")
+                break
 
-            while True:
-                try:
-                    message = await websocket.receive()
-                except WebSocketDisconnect:
-                    logger.info("[WS] Client disconnected")
-                    break
+            # ── Binary frame: PCM16 mic audio (ingestion gate) ────────────────
+            if "bytes" in message and message["bytes"]:
+                if session_started:
+                    if turn_active.is_set():
+                        # Half-duplex gate: discard while Sara is thinking/speaking.
+                        # Gating here at ingestion — no post-turn drain exists. R10.
+                        discarded_mic[0] += 1
+                        now = time.monotonic()
+                        if now - last_gate_log[0] >= 60.0:
+                            logger.info(
+                                "[WS] Gate: %d mic frames discarded in last 60s",
+                                discarded_mic[0],
+                            )
+                            discarded_mic[0] = 0
+                            last_gate_log[0] = now
+                    else:
+                        try:
+                            audio_queue.put_nowait(message["bytes"])
+                        except asyncio.QueueFull:
+                            logger.warning("[WS] Audio queue full — dropping frame")
+                continue
 
-                # Binary frame → PCM16 audio → audio_queue for STT
-                if "bytes" in message and message["bytes"]:
-                    if session_started:
-                        if turn_active.is_set():
-                            # Half-duplex: discard mic audio while Sara thinks/speaks.
-                            discarded_frames[0] += 1
-                        else:
-                            try:
-                                audio_queue.put_nowait(message["bytes"])
-                            except asyncio.QueueFull:
-                                logger.warning("[WS] Audio queue full — dropping frame")
-                    continue
+            # ── JSON control message ──────────────────────────────────────────
+            if "text" not in message or not message["text"]:
+                continue
 
-                # JSON control message
-                if "text" not in message or not message["text"]:
-                    continue
+            import json as _json
+            try:
+                cmd = _json.loads(message["text"])
+            except _json.JSONDecodeError:
+                logger.warning("[WS] Bad JSON from client: %s", message["text"][:100])
+                continue
 
-                import json as _json
-                try:
-                    cmd = _json.loads(message["text"])
-                except _json.JSONDecodeError:
-                    logger.warning("[WS] Bad JSON from client: %s", message["text"][:100])
-                    continue
+            msg_type = cmd.get("type", "")
 
-                msg_type = cmd.get("type", "")
+            if msg_type == "start":
+                session_started = True
+                logger.info("[WS] Session started, sample_rate=%s", cmd.get("sample_rate"))
 
-                if msg_type == "start":
-                    session_started = True
-                    logger.info("[WS] Session started, sample_rate=%s", cmd.get("sample_rate"))
-                    # Kick off the first turn — pipeline blocks until VAD commit + response done
-                    asyncio.create_task(
-                        _run_turn_loop(websocket, pipeline, audio_queue, stt_client,
-                                       turn_active, discarded_frames),
-                        name="turn_loop",
-                    )
+            elif msg_type == "end_session":
+                logger.info("[WS] Client requested end_session")
+                break
 
-                elif msg_type == "end_session":
-                    logger.info("[WS] Client requested end_session")
-                    break
-
-                else:
-                    logger.debug("[WS] Unknown command type: %s", msg_type)
+            else:
+                logger.debug("[WS] Unknown command type: %s", msg_type)
 
     except WebSocketDisconnect:
         logger.info("[WS] WebSocket disconnected during session")
     except Exception as e:
-        # Catches __aenter__ failures (bad API key → 403, network error) as well as
-        # mid-session errors.  Send a structured frame so the browser never sees a
-        # bare 1006, then close with code 1011 (internal error).
-        logger.exception("[WS] Session error (setup or runtime): %s", e)
+        logger.exception("[WS] Session error: %s", e)
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
@@ -161,72 +221,222 @@ async def ws_session(websocket: WebSocket, token: str = ""):
         except Exception:
             pass
     finally:
-        # Unblock any waiting drain task
-        try:
-            audio_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
-        logger.info("[WS] Session closed")
+        reader_task.cancel()
+        loop_task.cancel()
+        await asyncio.gather(reader_task, loop_task, return_exceptions=True)
+        logger.info("[WS] Session closed — all tasks cancelled")
 
 
-async def _run_turn_loop(
-    websocket,
-    pipeline: SessionPipeline,
+# ── STT reader task ───────────────────────────────────────────────────────────
+
+async def _stt_reader(
     audio_queue: asyncio.Queue,
-    stt_client,
+    transcript_queue: asyncio.Queue,
     turn_active: asyncio.Event,
-    discarded_frames: list,
+    websocket,
 ):
     """
-    Runs the turn loop: each VAD commit triggers one full pipeline turn.
-    After each turn: clears the half-duplex gate, drains stale audio queue,
-    logs discarded frame count, then loops back to listen for the next utterance.
-    Errors within a turn are surfaced as {"type": "error"} events; the loop continues.
-    This task runs for the lifetime of the session.
+    Owns the Scribe STT WebSocket for the session lifetime.
+
+    Connects Scribe, runs two parallel sub-tasks (pump + recv), and reconnects
+    with exponential backoff when the connection closes unexpectedly.
+
+    R9: ConnectionClosed is never swallowed — it propagates from receive_events()
+    through _stt_recv, surfaces here as an exception, and triggers a reconnect
+    or user-visible error. Deafness without a log line is forbidden.
     """
-    empty_commit_count = 0
-    last_warning_t = 0.0
+    consecutive = 0
 
     while True:
-        result = None
+        pump_task = None
+        recv_task = None
         try:
-            turn_active.set()
-            result = await pipeline.run_turn(websocket, audio_queue, stt_client)
-        except WebSocketDisconnect:
-            logger.info("[TurnLoop] WebSocket disconnected — exiting loop")
-            break
+            async with ScribeRealtimeSTT(STT_MODEL) as stt:
+                consecutive = 0
+                logger.info("[Scribe] Connected — consecutive failure counter reset")
+
+                pump_task = asyncio.create_task(
+                    _stt_pump(audio_queue, stt), name="stt_pump"
+                )
+                recv_task = asyncio.create_task(
+                    _stt_recv(stt, transcript_queue, turn_active, websocket),
+                    name="stt_recv",
+                )
+                pump_task.add_done_callback(_task_done_cb("stt_pump"))
+                recv_task.add_done_callback(_task_done_cb("stt_recv"))
+
+                try:
+                    # Block until either sub-task finishes (pump never finishes
+                    # normally; recv finishes when ConnectionClosed propagates).
+                    done, _ = await asyncio.wait(
+                        {pump_task, recv_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    # Always cancel both sub-tasks on any exit path.
+                    pump_task.cancel()
+                    recv_task.cancel()
+                    try:
+                        await asyncio.gather(pump_task, recv_task, return_exceptions=True)
+                    except asyncio.CancelledError:
+                        pass  # Outer cancellation during cleanup — acceptable
+
+                # Re-raise the first exception from a finished task.
+                # If recv_task raised ConnectionClosed*, it propagates here
+                # and lands in the except below → triggers reconnect.
+                for t in done:
+                    if not t.cancelled() and t.exception() is not None:
+                        raise t.exception()  # type: ignore[misc]
+
+                # recv_task ended without exception — unusual with the new looping
+                # receive_events (only if self._ws is None at entry). Reconnect anyway.
+                logger.warning("[Scribe] recv_task ended without exception — reconnecting")
+                # Fall through to next while True iteration (no exception = reconnect)
+
+        except asyncio.CancelledError:
+            # Session teardown — do NOT reconnect.
+            logger.info("[Scribe] Reader task cancelled — session teardown")
+            return
+
         except Exception as e:
-            logger.exception("[TurnLoop] Unhandled turn error: %s", e)
+            consecutive += 1
+            is_close = isinstance(e, (ConnectionClosedError, ConnectionClosedOK))
+            code = getattr(getattr(e, "rcvd", None), "code", "?") if is_close else None
+
+            if is_close:
+                logger.warning(
+                    "[Scribe] Connection closed (close_code=%s, consecutive=%d/%d)",
+                    code, consecutive, STT_MAX_ATTEMPTS,
+                )
+            else:
+                logger.exception(
+                    "[Scribe] Unexpected error (consecutive=%d/%d): %s",
+                    consecutive, STT_MAX_ATTEMPTS, e,
+                )
+
+            if consecutive > STT_MAX_ATTEMPTS:
+                logger.error(
+                    "[Scribe] %d consecutive failures — ending session", STT_MAX_ATTEMPTS
+                )
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "speech connection lost — please restart the session",
+                    })
+                except Exception:
+                    pass
+                return
+
+            # User-visible reconnect notice (rule 3 of CLAUDE.md: no invisible failure).
+            try:
+                await websocket.send_json({"type": "status", "message": "reconnecting speech..."})
+            except Exception:
+                return  # Browser also disconnected — stop trying
+
+            backoff = STT_BACKOFF_S[min(consecutive - 1, len(STT_BACKOFF_S) - 1)]
+            logger.info("[Scribe] Reconnecting in %.1fs...", backoff)
+            await asyncio.sleep(backoff)
+
+
+async def _stt_pump(audio_queue: asyncio.Queue, stt: ScribeRealtimeSTT):
+    """
+    Drain mic frames from audio_queue and forward to the Scribe STT socket.
+    Runs until cancelled (Scribe reconnect or session teardown).
+    """
+    while True:
+        chunk = await audio_queue.get()
+        if chunk:  # None or empty bytes are no-ops; skip silently
+            await stt.send_audio(chunk)
+
+
+async def _stt_recv(
+    stt: ScribeRealtimeSTT,
+    transcript_queue: asyncio.Queue,
+    turn_active: asyncio.Event,
+    websocket,
+):
+    """
+    Receive Scribe events and route them.
+
+    partial_transcript  → relay to browser as {"type":"partial_transcript"}
+    committed_transcript:
+        empty/whitespace → drop (DEBUG)
+        turn_active set  → drop — trailing tail or echo (DEBUG)
+        else             → transcript_queue.put() for turn_loop to consume
+    error               → log ERROR (terminal; function returns after yield)
+
+    ConnectionClosedError / ConnectionClosedOK propagate from receive_events()
+    through this function to _stt_reader, which handles reconnect. R9.
+    """
+    async for event in stt.receive_events():
+        if event["type"] == "partial":
+            try:
+                await websocket.send_json({
+                    "type": "partial_transcript",
+                    "text": event["text"],
+                })
+            except Exception:
+                pass
+
+        elif event["type"] == "final":
+            text = event.get("text", "").strip()
+            if not text:
+                logger.debug("[Scribe] Empty committed transcript — dropped")
+                continue
+            if turn_active.is_set():
+                logger.debug(
+                    "[Scribe] Committed transcript dropped (turn active): %r", text[:80]
+                )
+                continue
+            logger.info("[Scribe] Committed transcript → turn_loop: %r", text[:80])
+            await transcript_queue.put(text)
+
+        elif event["type"] == "error":
+            logger.error("[Scribe] Error event from Scribe: %s", event.get("message"))
+
+
+# ── Turn loop task ────────────────────────────────────────────────────────────
+
+async def _turn_loop(
+    websocket,
+    pipeline: SessionPipeline,
+    transcript_queue: asyncio.Queue,
+    turn_active: asyncio.Event,
+):
+    """
+    Consumes committed transcripts from transcript_queue and runs the brain+TTS
+    pipeline for each one.
+
+    Blocks on transcript_queue.get() — cannot spin. A broken STT socket produces
+    no transcripts, so this task is naturally idle until stt_reader reconnects and
+    the learner speaks again.
+
+    turn_active is set for the duration of each pipeline.run_turn call so that
+    both the ingestion gate (ws_session) and the committed-transcript gate
+    (stt_recv) discard stale audio and echo commits while Sara is responding.
+
+    R10: there is no post-turn drain. Gating is at ingestion only.
+    """
+    while True:
+        # Blocks here — CancelledError propagates on session teardown.
+        try:
+            transcript = await transcript_queue.get()
+        except asyncio.CancelledError:
+            logger.info("[TurnLoop] Cancelled while waiting for transcript — exiting")
+            return
+
+        turn_active.set()
+        try:
+            await pipeline.run_turn(websocket, transcript)
+        except asyncio.CancelledError:
+            logger.info("[TurnLoop] Cancelled during pipeline turn — exiting")
+            return
+        except Exception as e:
+            # run_turn is documented as never raising, but belt-and-suspenders.
+            logger.exception("[TurnLoop] Unexpected error in run_turn: %s", e)
             try:
                 await websocket.send_json({"type": "error", "message": str(e)})
             except Exception:
-                break
+                pass
         finally:
             turn_active.clear()
-            # Belt-and-braces: drain any frames that slipped into the queue
-            # before the gate set or during the stt_drain window.
-            drained = 0
-            while True:
-                try:
-                    audio_queue.get_nowait()
-                    drained += 1
-                except asyncio.QueueEmpty:
-                    break
-            gated = discarded_frames[0]
-            discarded_frames[0] = 0
-            logger.info(
-                "[Session] resumed listening — discarded %d stale frames (%d gated + %d drained)",
-                gated + drained, gated, drained,
-            )
-
-        if result is None:
-            empty_commit_count += 1
-            logger.debug("[TurnLoop] Turn returned None — continuing to next turn")
-            now = time.monotonic()
-            if now - last_warning_t >= 60.0 and empty_commit_count > 0:
-                logger.warning("[TurnLoop] %d empty commits in last 60s", empty_commit_count)
-                empty_commit_count = 0
-                last_warning_t = now
-            await asyncio.sleep(0.25)
-        else:
-            empty_commit_count = 0

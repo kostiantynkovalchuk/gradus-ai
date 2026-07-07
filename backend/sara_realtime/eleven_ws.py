@@ -105,7 +105,7 @@ class ScribeRealtimeSTT:
            "audio_base_64": "<base64>",
            "sample_rate": 16000}
 
-        commit_strategy=true (set at connect time) means VAD commits automatically;
+        commit_strategy=vad (set at connect time) means VAD commits automatically;
         no per-chunk "commit" field or end-of-stream message is needed.
         """
         if self._ws and pcm16_bytes:
@@ -125,56 +125,55 @@ class ScribeRealtimeSTT:
         Doc-confirmed server→client message_type values:
           session_started             → logged, not yielded
           partial_transcript          → yields {"type": "partial", "text": "..."}
-          committed_transcript        → yields {"type": "final",   "text": "..."}, then returns
+          committed_transcript        → yields {"type": "final", "text": "..."}, loops
           committed_transcript_with_timestamps → treated same as committed_transcript
-          scribeError                 → yields {"type": "error", "message": "..."}, then returns
+          scribeError                 → yields {"type": "error", "message": "..."}, returns
 
-        The generator returns (stops) after the first committed_transcript so the
-        pipeline knows the VAD turn is complete.
+        The generator loops indefinitely across VAD commits so one Scribe socket
+        serves the entire session lifetime.
+
+        RAISES ConnectionClosedError / ConnectionClosedOK on socket death — never
+        swallows them. The caller (_stt_recv → _stt_reader) handles reconnect logic.
+        R9 compliance: silent deafness via except-and-return is forbidden.
         """
         if not self._ws:
             return
-        try:
-            async for raw in self._ws:
-                if isinstance(raw, bytes):
-                    continue
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    logger.warning("[Scribe] Non-JSON frame: %s", raw[:200])
-                    continue
+        # ConnectionClosedError / ConnectionClosedOK are NOT caught here.
+        # They propagate to _stt_recv → _stt_reader which handles reconnect. R9.
+        async for raw in self._ws:
+            if isinstance(raw, bytes):
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("[Scribe] Non-JSON frame: %s", raw[:200])
+                continue
 
-                mt = msg.get("message_type", "")
+            mt = msg.get("message_type", "")
 
-                if mt == "session_started":
-                    logger.info(
-                        "[Scribe] Session started: id=%s config=%s",
-                        msg.get("session_id"), msg.get("config"),
-                    )
+            if mt == "session_started":
+                logger.info(
+                    "[Scribe] Session started: id=%s config=%s",
+                    msg.get("session_id"), msg.get("config"),
+                )
 
-                elif mt == "partial_transcript":
-                    text = msg.get("text", "").strip()
-                    if text:
-                        yield {"type": "partial", "text": text}
+            elif mt == "partial_transcript":
+                text = msg.get("text", "").strip()
+                if text:
+                    yield {"type": "partial", "text": text}
 
-                elif mt in ("committed_transcript", "committed_transcript_with_timestamps"):
-                    text = msg.get("text", "").strip()
-                    if text:
-                        yield {"type": "final", "text": text}
-                    return  # VAD commit = turn boundary; caller opens new receive loop
+            elif mt in ("committed_transcript", "committed_transcript_with_timestamps"):
+                text = msg.get("text", "").strip()
+                yield {"type": "final", "text": text}  # caller filters empty/gated
+                # No return — loop continues across multiple VAD commits. R10.
 
-                else:
-                    # Defensive catch-all: any message_type outside the known-good set
-                    # is treated as an error regardless of exact casing or naming.
-                    # (The docs list error schemas in camelCase but wire messages may
-                    # differ — we must not rely on matching a specific error string.)
-                    err = msg.get("message") or msg.get("error") or msg.get("text") or str(msg)
-                    logger.error("[Scribe] Unknown/error message_type=%r raw=%s", mt, str(msg)[:400])
-                    yield {"type": "error", "message": err}
-                    return
-
-        except (ConnectionClosedError, ConnectionClosedOK):
-            logger.info("[Scribe] STT WebSocket closed by server")
+            else:
+                # Defensive catch-all: any message_type outside the known-good set
+                # is treated as an error regardless of exact casing or naming.
+                err = msg.get("message") or msg.get("error") or msg.get("text") or str(msg)
+                logger.error("[Scribe] Unknown/error message_type=%r raw=%s", mt, str(msg)[:400])
+                yield {"type": "error", "message": err}
+                return  # scribeError is terminal; EL will not recover
 
 
 class FlashStreamingTTS:

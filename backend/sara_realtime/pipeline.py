@@ -23,7 +23,7 @@ from anthropic import AsyncAnthropic
 
 from services.sara_prompts import _LEVEL_BLOCKS, _LEVEL_BLOCK_DEFAULT
 
-from sara_realtime.eleven_ws import ScribeRealtimeSTT, tts_synthesize_chunked
+from sara_realtime.eleven_ws import tts_synthesize_chunked
 
 logger = logging.getLogger(__name__)
 
@@ -166,65 +166,27 @@ class SessionPipeline:
     async def run_turn(
         self,
         websocket,
-        audio_queue: asyncio.Queue,
-        stt_client: ScribeRealtimeSTT,
+        transcript: str,
     ) -> Optional[str]:
         """
-        Run one complete turn: STT → Claude → TTS.
+        Run one turn: Claude streaming → TTS.
 
-        Returns the Sara reply text (for history update), or None on failure.
+        The STT leg (Scribe socket, audio forwarding, VAD commit detection) is
+        owned by _stt_reader / _stt_recv in app.py. This method receives a
+        committed transcript string and handles only the Brain + TTS pipeline.
+
+        t0 is set at function entry, which is the moment the committed transcript
+        was pulled from transcript_queue — i.e. the VAD commit baseline. All
+        SARA_RT_TURN metrics are deltas from this point (t_stt_commit_ms = 0).
+
+        Returns the Sara reply text (for history), or None on brain/TTS error.
         Never raises — all errors surface as {"type": "error"} WS events.
-
-        websocket: FastAPI WebSocket (already accepted)
-        audio_queue: asyncio.Queue fed by the main receive loop with PCM16 bytes
-        stt_client: open ScribeRealtimeSTT (shared across turns for session)
         """
         t0 = time.monotonic()
         ms = lambda: int((time.monotonic() - t0) * 1000)
 
-        # ── STT leg ──────────────────────────────────────────────────────────
-        transcript = None
-        try:
-            # Drain audio_queue → STT WebSocket until VAD commit
-            stt_task = asyncio.create_task(
-                self._drain_audio_to_stt(audio_queue, stt_client),
-                name="stt_drain",
-            )
-            stt_task.add_done_callback(_make_done_callback("stt_drain"))
-
-            async for event in stt_client.receive_events():
-                if event["type"] == "partial":
-                    await websocket.send_json({
-                        "type": "partial_transcript",
-                        "text": event["text"],
-                    })
-                elif event["type"] == "final":
-                    transcript = event["text"]
-                    break
-
-            stt_task.cancel()
-            try:
-                await stt_task
-            except asyncio.CancelledError:
-                pass
-
-        except Exception as e:
-            logger.exception("[Pipeline] STT leg error: %s", e)
-            await self._send_error(websocket, f"STT error: {e}")
-            return None
-
-        if not transcript:
-            logger.debug("[Pipeline] STT committed empty transcript — skipping turn")
-            return None
-
-        t_stt_commit = ms()
         await websocket.send_json({"type": "user_transcript", "text": transcript})
-        logger.info("[Pipeline] VAD commit at +%dms: %r", t_stt_commit, transcript[:80])
-
-        # Reset timer baseline to STT-commit moment.
-        # All subsequent metrics (t_claude_first_token, t_first_audio, t_turn_end)
-        # are deltas from this point, not from turn start.
-        t0 = time.monotonic()
+        logger.info("[Pipeline] Turn start — transcript: %r", transcript[:80])
 
         # ── Brain + TTS overlap ───────────────────────────────────────────────
         t_claude_first_token: Optional[int] = None
@@ -338,14 +300,6 @@ class SessionPipeline:
             self._history = self._history[-(MAX_HISTORY_TURNS * 2):]
 
         return full_reply_text
-
-    async def _drain_audio_to_stt(self, audio_queue: asyncio.Queue, stt: ScribeRealtimeSTT):
-        """Continuously drain audio chunks from queue and forward to STT WS."""
-        while True:
-            chunk = await audio_queue.get()
-            if chunk is None:
-                break
-            await stt.send_audio(chunk)
 
     @staticmethod
     async def _send_error(websocket, message: str):
