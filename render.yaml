@@ -28,7 +28,7 @@ services:
     healthCheckPath: /health
 
   - type: web
-    name: sara-realtime
+    name: sara-english
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: starter
