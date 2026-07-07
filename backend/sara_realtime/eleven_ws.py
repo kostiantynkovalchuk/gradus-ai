@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 
+# Tunable VAD silence threshold in seconds (default 2.2s — longer than EL's
+# default ~1.5s to avoid mid-thought commits on natural pauses).
+# Override with SARA_RT_VAD_SILENCE_S env var without a redeploy.
+VAD_SILENCE_S = float(os.getenv("SARA_RT_VAD_SILENCE_S", "2.2"))
+
 EL_WSS_BASE = "wss://api.elevenlabs.io/v1"
 
 # STT: key in HEADER only — not in URL (403 if key appears in URL on v1/realtime)
@@ -41,6 +46,7 @@ STT_URL_TMPL = (
     EL_WSS_BASE
     + "/speech-to-text/realtime"
     + "?model_id={model}&audio_format=pcm_16000&commit_strategy=vad"
+    + "&vad_silence_threshold_secs={vad_s}"
 )
 
 # TTS: key in HEADER only — xi_api_key removed from query string
@@ -78,7 +84,8 @@ class ScribeRealtimeSTT:
         self._ws = None
 
     async def __aenter__(self):
-        url = STT_URL_TMPL.format(model=self._model)
+        url = STT_URL_TMPL.format(model=self._model, vad_s=VAD_SILENCE_S)
+        logger.info("[Scribe] Connecting: vad_silence_threshold_secs=%.1f", VAD_SILENCE_S)
         self._ws = await websockets.connect(
             url,
             additional_headers={"xi-api-key": ELEVENLABS_API_KEY},

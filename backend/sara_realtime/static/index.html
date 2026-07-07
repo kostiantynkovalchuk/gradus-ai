@@ -61,8 +61,12 @@ let ws = null;
 let audioCtx = null;
 let mediaStream = null;
 let processor = null;
-let audioQueue = [];   // ArrayBuffers of MP3 chunks
-let isPlaying = false;
+// Promise chain that serialises decode+schedule in ARRIVAL ORDER.
+// Each incoming chunk is appended to the tail of the chain so that
+// chunk N+1's decode never races ahead of chunk N's — even if N+1's
+// decodeAudioData call resolves faster (e.g. a short Russian gloss).
+let playChain = Promise.resolve();
+let pingInterval = null;
 
 const $ = id => document.getElementById(id);
 const setStatus = s => { $("status").textContent = s; };
@@ -92,8 +96,8 @@ async function enqueueAudio(arrayBuffer) {
     const src = audioCtx.createBufferSource();
     src.buffer = decoded;
     src.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    if (nextPlayAt < now) nextPlayAt = now;
+    // Guard against clock drift / long silence between turns.
+    nextPlayAt = Math.max(nextPlayAt, audioCtx.currentTime);
     src.start(nextPlayAt);
     nextPlayAt += decoded.duration;
   } catch (e) {
@@ -145,10 +149,20 @@ function connect() {
   ws.onopen = () => {
     setStatus("Connected — speak after pressing Start.");
     ws.send(JSON.stringify({ type: "start", sample_rate: 16000 }));
+    // Keepalive: Render's proxy drops idle WebSockets (throttled background
+    // tabs stop sending mic frames and look frozen). Send a ping every 20s
+    // so the session stays alive regardless of mic activity.
+    pingInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 20000);
   };
 
   ws.onclose = e => {
     setStatus(`Disconnected (code ${e.code}).`);
+    console.log("[WS] closed — code:", e.code, "reason:", e.reason || "(none)", "wasClean:", e.wasClean);
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (e.code === 4403) showError("Invalid access token.");
     stopMic();
     $("btnStart").style.display = "inline-block";
@@ -157,10 +171,18 @@ function connect() {
 
   ws.onerror = () => showError("WebSocket error. Check console.");
 
-  ws.onmessage = async e => {
+  ws.onmessage = e => {
     if (e.data instanceof ArrayBuffer) {
-      // Binary frame = MP3 audio chunk
-      if (e.data.byteLength > 0) await enqueueAudio(e.data.slice(0));
+      // Binary frame = MP3 audio chunk.
+      // Append to the promise chain rather than awaiting inline so that
+      // chunk N+1 can never steal a lower nextPlayAt slot from chunk N,
+      // even if N+1's decodeAudioData resolves faster (e.g. a short gloss).
+      if (e.data.byteLength > 0) {
+        const buf = e.data.slice(0);
+        playChain = playChain
+            .then(() => enqueueAudio(buf))
+            .catch(err => console.error("audio chunk failed:", err));
+      }
       return;
     }
     let msg;
@@ -175,7 +197,10 @@ function connect() {
         $("finalUser").textContent   = msg.text;
         $("partialSara").textContent = "";
         $("finalSara").textContent   = "";
+        // Reset both the scheduling clock and the promise chain so stale
+        // promises from a previous turn cannot delay new-turn audio.
         nextPlayAt = 0;
+        playChain = Promise.resolve();
         break;
       case "assistant_delta":
         $("partialSara").textContent += msg.text;

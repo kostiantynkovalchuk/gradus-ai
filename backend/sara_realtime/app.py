@@ -162,6 +162,15 @@ async def ws_session(websocket: WebSocket, token: str = ""):
                 logger.info("[WS] Client disconnected")
                 break
 
+            # ASGI sends {"type":"websocket.disconnect"} before raising
+            # WebSocketDisconnect; catch it here to avoid the
+            # "Cannot call receive once a disconnect message has been received"
+            # RuntimeError on page reload.
+            if message.get("type") == "websocket.disconnect":
+                code = message.get("code", "?")
+                logger.info("[WS] Client disconnected (ASGI, code=%s)", code)
+                break
+
             # ── Binary frame: PCM16 mic audio (ingestion gate) ────────────────
             if "bytes" in message and message["bytes"]:
                 if session_started:
@@ -200,6 +209,12 @@ async def ws_session(websocket: WebSocket, token: str = ""):
             if msg_type == "start":
                 session_started = True
                 logger.info("[WS] Session started, sample_rate=%s", cmd.get("sample_rate"))
+
+            elif msg_type == "ping":
+                try:
+                    await websocket.send_json({"type": "pong"})
+                except Exception:
+                    pass
 
             elif msg_type == "end_session":
                 logger.info("[WS] Client requested end_session")

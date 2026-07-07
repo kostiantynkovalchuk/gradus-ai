@@ -62,7 +62,7 @@ LANGUAGE RULE:
 Always speak English. The learner is a Russian speaker. You may give the
 Russian translation of a difficult English word in parentheses to help them
 understand — for example: to practise (тренироваться). Follow the learner
-level instructions at the end of this prompt. If the learner writes to you in
+level instructions at the end of this prompt. If the learner speaks to you in
 Russian, answer briefly in English and gently guide them back to practising
 English. Never hold the full conversation in Russian.
 
@@ -80,7 +80,7 @@ Learner: Yesterday I go to the market and buy many things.
 Sara: Oh, you went to the market! What did you buy? I love hearing about
 shopping trips.
 
-EXAMPLE — learner writes in Russian, you redirect warmly:
+EXAMPLE — learner speaks in Russian, you redirect warmly:
 Learner: A ty govorysh po-russki?
 Sara: I understand a little Russian, but let us keep practising English
 together — you are doing so well! Tell me, what did you do this weekend?
@@ -132,6 +132,33 @@ def _sentence_chunks(token_buffer: str) -> tuple[list[str], str]:
         if len(buf) >= CHUNK_CHAR_LIMIT:
             last_space = buf.rfind(" ", 0, CHUNK_CHAR_LIMIT + 10)
             if last_space > 0:
+                # Guard: never cut inside or immediately before a parenthetical
+                # gloss — that severs the Cyrillic gloss from the English word
+                # it annotates. Two failure modes:
+                #  A) last_space is immediately before "("   → "word | (gloss)"
+                #  B) last_space is inside "(...)"           → gloss split mid-word
+                # rfind("(", 0, last_space+2) catches both: it finds the
+                # rightmost "(" at or before last_space+1 (case A) or earlier
+                # (case B). Then if that paren is unclosed, we back up past the
+                # glossed word so "word (gloss)" travels in the same TTS chunk.
+                open_paren = buf.rfind("(", 0, last_space + 2)
+                if open_paren > 0:
+                    close_paren = buf.find(")", open_paren)
+                    if close_paren < 0 or close_paren >= last_space:
+                        # Cut touches an unclosed paren. Back up to before the
+                        # glossed word (one extra space before the "(" itself).
+                        space_before_paren = buf.rfind(" ", 0, open_paren)
+                        if space_before_paren > 0:
+                            safe_cut = buf.rfind(" ", 0, space_before_paren)
+                            last_space = safe_cut if safe_cut > 0 else space_before_paren
+                        else:
+                            # No space before the paren — flush whole buffer as
+                            # one chunk rather than severing the gloss.
+                            chunk = buf.strip()
+                            if chunk:
+                                chunks.append(chunk)
+                            buf = ""
+                            continue
                 chunk = buf[:last_space].strip()
                 if chunk:
                     chunks.append(chunk)
