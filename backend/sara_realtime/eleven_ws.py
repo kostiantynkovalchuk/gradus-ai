@@ -40,7 +40,7 @@ EL_WSS_BASE = "wss://api.elevenlabs.io/v1"
 STT_URL_TMPL = (
     EL_WSS_BASE
     + "/speech-to-text/realtime"
-    + "?model_id={model}&audio_format=pcm_16000&commit_strategy=true"
+    + "?model_id={model}&audio_format=pcm_16000&commit_strategy=vad"
 )
 
 # TTS: key in HEADER only — xi_api_key removed from query string
@@ -163,14 +163,15 @@ class ScribeRealtimeSTT:
                         yield {"type": "final", "text": text}
                     return  # VAD commit = turn boundary; caller opens new receive loop
 
-                elif mt == "scribeError":
-                    err = msg.get("message") or msg.get("error") or str(msg)
-                    logger.error("[Scribe] scribeError: %s", err)
+                else:
+                    # Defensive catch-all: any message_type outside the known-good set
+                    # is treated as an error regardless of exact casing or naming.
+                    # (The docs list error schemas in camelCase but wire messages may
+                    # differ — we must not rely on matching a specific error string.)
+                    err = msg.get("message") or msg.get("error") or msg.get("text") or str(msg)
+                    logger.error("[Scribe] Unknown/error message_type=%r raw=%s", mt, str(msg)[:400])
                     yield {"type": "error", "message": err}
                     return
-
-                else:
-                    logger.debug("[Scribe] Unhandled message_type=%r msg=%s", mt, str(msg)[:200])
 
         except (ConnectionClosedError, ConnectionClosedOK):
             logger.info("[Scribe] STT WebSocket closed by server")
