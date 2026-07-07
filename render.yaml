@@ -26,3 +26,26 @@ services:
       - key: APP_URL
         sync: false
     healthCheckPath: /health
+
+  - type: web
+    name: sara-realtime
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    # Override CMD to start the real-time service from backend/ (same import
+    # root as the main service — services.sara_prompts resolves correctly).
+    dockerCommand: bash -c "cd backend && exec uvicorn sara_realtime.app:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: SARA_RT_VOICE_ID
+        sync: false
+      - key: SARA_RT_STT_MODEL
+        sync: false
+      - key: SARA_RT_TTS_MODEL
+        sync: false
+      - key: SARA_RT_ACCESS_TOKEN
+        sync: false
