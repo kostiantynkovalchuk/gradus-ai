@@ -64,3 +64,6 @@ backend/assets/bestbrands-presentation.mp4
 !.config/
 !.local/
 .local/
+
+# Replit UI paste artifacts (root-anchored — does NOT affect backend/attached_assets/)
+/attached_assets/
