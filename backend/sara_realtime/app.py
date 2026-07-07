@@ -136,9 +136,16 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     except WebSocketDisconnect:
         logger.info("[WS] WebSocket disconnected during session")
     except Exception as e:
-        logger.exception("[WS] Unexpected session error: %s", e)
+        # Catches __aenter__ failures (bad API key → 403, network error) as well as
+        # mid-session errors.  Send a structured frame so the browser never sees a
+        # bare 1006, then close with code 1011 (internal error).
+        logger.exception("[WS] Session error (setup or runtime): %s", e)
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=1011)
         except Exception:
             pass
     finally:

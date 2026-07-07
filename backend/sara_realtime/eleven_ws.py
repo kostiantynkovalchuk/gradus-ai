@@ -6,11 +6,19 @@ Audio format choice: mp3_44100_128
   - Good compression for streaming (≈128kbps)
   - No gap between chunks when queued correctly
 
-STT: Scribe v2 Realtime — binary PCM16 input, JSON transcript output
-TTS: Flash v2.5 streaming — JSON text input, base64-encoded MP3 output
-     NOTE: eleven_v3 is NOT supported on the TTS WebSocket. Do not change
-     the default model here even if ELEVENLABS_TTS_MODEL is set to eleven_v3
-     in the environment (that var belongs to the sync REST path in sara_webhook.py).
+STT: Scribe v2 Realtime
+  Endpoint : wss://api.elevenlabs.io/v1/speech-to-text/realtime
+  Auth     : xi-api-key HEADER only (never in URL)
+  Input    : JSON {"message_type":"input_audio_chunk","audio_base_64":"<b64>","sample_rate":16000}
+  Commit   : VAD-based (commit_strategy=true query param) — no manual EOS message
+  Events   : session_started | partial_transcript | committed_transcript | scribeError
+  Ref      : https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime
+
+TTS: Flash v2.5 streaming
+  Auth     : xi-api-key HEADER only (never in URL)
+  NOTE: eleven_v3 is NOT supported on the TTS WebSocket. Do not change
+  the default model here even if ELEVENLABS_TTS_MODEL is set to eleven_v3
+  in the environment (that var belongs to the sync REST path in sara_webhook.py).
 """
 import os
 import json
@@ -27,11 +35,19 @@ logger = logging.getLogger(__name__)
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 
 EL_WSS_BASE = "wss://api.elevenlabs.io/v1"
-STT_URL_TMPL = EL_WSS_BASE + "/speech-to-text/stream?xi_api_key={key}&model_id={model}"
+
+# STT: key in HEADER only — not in URL (403 if key appears in URL on v1/realtime)
+STT_URL_TMPL = (
+    EL_WSS_BASE
+    + "/speech-to-text/realtime"
+    + "?model_id={model}&audio_format=pcm_16000&commit_strategy=true"
+)
+
+# TTS: key in HEADER only — xi_api_key removed from query string
 TTS_URL_TMPL = (
     EL_WSS_BASE
     + "/text-to-speech/{voice_id}/stream-input"
-    + "?model_id={model}&output_format=mp3_44100_128&xi_api_key={key}"
+    + "?model_id={model}&output_format=mp3_44100_128"
 )
 
 
@@ -39,15 +55,22 @@ class ScribeRealtimeSTT:
     """
     Wraps ElevenLabs Scribe v2 Realtime WebSocket (STT).
 
-    Usage pattern (one instance per turn):
+    Protocol (doc-confirmed 2026-07-07):
+      • Client sends: JSON {"message_type":"input_audio_chunk",
+                            "audio_base_64":"<base64 PCM16>",
+                            "sample_rate":16000}
+      • VAD commits automatically (commit_strategy=true) — no EOS message needed.
+      • Server emits: session_started → partial_transcript → committed_transcript
+
+    Usage pattern (one instance per session — EL keeps VAD context across turns):
         async with ScribeRealtimeSTT(model) as stt:
-            async for event in stt.events():
+            async for event in stt.receive_events():
                 if event["type"] == "partial":
                     ...
                 elif event["type"] == "final":
                     transcript = event["text"]
                     break
-            # feed audio via stt.send_audio(pcm16_bytes)
+            # feed audio concurrently via stt.send_audio(pcm16_bytes)
     """
 
     def __init__(self, model: str):
@@ -55,7 +78,7 @@ class ScribeRealtimeSTT:
         self._ws = None
 
     async def __aenter__(self):
-        url = STT_URL_TMPL.format(key=ELEVENLABS_API_KEY, model=self._model)
+        url = STT_URL_TMPL.format(model=self._model)
         self._ws = await websockets.connect(
             url,
             additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
@@ -74,28 +97,40 @@ class ScribeRealtimeSTT:
             self._ws = None
 
     async def send_audio(self, pcm16_bytes: bytes):
-        """Forward a binary PCM16 chunk to ElevenLabs."""
-        if self._ws:
-            try:
-                await self._ws.send(pcm16_bytes)
-            except (ConnectionClosedError, ConnectionClosedOK):
-                pass
+        """
+        Wrap PCM16 bytes as a doc-confirmed input_audio_chunk JSON frame and send.
 
-    async def signal_end_of_stream(self):
-        """Tell ElevenLabs no more audio is coming (flush remaining buffer)."""
-        if self._ws:
+        Shape (doc-confirmed):
+          {"message_type": "input_audio_chunk",
+           "audio_base_64": "<base64>",
+           "sample_rate": 16000}
+
+        commit_strategy=true (set at connect time) means VAD commits automatically;
+        no per-chunk "commit" field or end-of-stream message is needed.
+        """
+        if self._ws and pcm16_bytes:
             try:
-                await self._ws.send(json.dumps({"type": "end_of_stream"}))
+                await self._ws.send(json.dumps({
+                    "message_type": "input_audio_chunk",
+                    "audio_base_64": base64.b64encode(pcm16_bytes).decode("utf-8"),
+                    "sample_rate": 16000,
+                }))
             except (ConnectionClosedError, ConnectionClosedOK):
                 pass
 
     async def receive_events(self) -> AsyncIterator[dict]:
         """
-        Async iterator over transcript events from ElevenLabs.
+        Async iterator over transcript events from ElevenLabs Scribe v2 Realtime.
 
-        Yields dicts:
-            {"type": "partial", "text": "..."}   — uncommitted interim
-            {"type": "final",   "text": "..."}   — VAD-committed utterance
+        Doc-confirmed server→client message_type values:
+          session_started             → logged, not yielded
+          partial_transcript          → yields {"type": "partial", "text": "..."}
+          committed_transcript        → yields {"type": "final",   "text": "..."}, then returns
+          committed_transcript_with_timestamps → treated same as committed_transcript
+          scribeError                 → yields {"type": "error", "message": "..."}, then returns
+
+        The generator returns (stops) after the first committed_transcript so the
+        pipeline knows the VAD turn is complete.
         """
         if not self._ws:
             return
@@ -106,28 +141,37 @@ class ScribeRealtimeSTT:
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
-                    logger.warning("[Scribe] Non-JSON message: %s", raw[:200])
+                    logger.warning("[Scribe] Non-JSON frame: %s", raw[:200])
                     continue
 
-                event_type = msg.get("type", "") or msg.get("speech_event_type", "")
+                mt = msg.get("message_type", "")
 
-                # ElevenLabs Scribe v2 Realtime event shapes (July 2026):
-                #   {"type": "interim_transcript", "text": "..."}
-                #   {"type": "final_transcript",   "text": "..."}
-                # Also emitted as:
-                #   {"speech_event_type": "utterance_end", "text": "..."}
-                # We normalise to "partial" / "final" for the pipeline.
-                if "final" in event_type or event_type == "utterance_end":
-                    text = msg.get("text", "").strip()
-                    if text:
-                        yield {"type": "final", "text": text}
-                    return
-                elif "interim" in event_type or "partial" in event_type:
+                if mt == "session_started":
+                    logger.info(
+                        "[Scribe] Session started: id=%s config=%s",
+                        msg.get("session_id"), msg.get("config"),
+                    )
+
+                elif mt == "partial_transcript":
                     text = msg.get("text", "").strip()
                     if text:
                         yield {"type": "partial", "text": text}
+
+                elif mt in ("committed_transcript", "committed_transcript_with_timestamps"):
+                    text = msg.get("text", "").strip()
+                    if text:
+                        yield {"type": "final", "text": text}
+                    return  # VAD commit = turn boundary; caller opens new receive loop
+
+                elif mt == "scribeError":
+                    err = msg.get("message") or msg.get("error") or str(msg)
+                    logger.error("[Scribe] scribeError: %s", err)
+                    yield {"type": "error", "message": err}
+                    return
+
                 else:
-                    logger.debug("[Scribe] Unknown event: %s", event_type)
+                    logger.debug("[Scribe] Unhandled message_type=%r msg=%s", mt, str(msg)[:200])
+
         except (ConnectionClosedError, ConnectionClosedOK):
             logger.info("[Scribe] STT WebSocket closed by server")
 
@@ -137,6 +181,7 @@ class FlashStreamingTTS:
     Wraps ElevenLabs Flash v2.5 streaming TTS WebSocket.
 
     Open once per turn, send text sentence-chunks, receive binary MP3 chunks.
+    Auth: xi-api-key HEADER only (not in URL).
 
     Usage:
         async with FlashStreamingTTS(voice_id, model) as tts:
@@ -153,9 +198,7 @@ class FlashStreamingTTS:
         self._ws = None
 
     async def __aenter__(self):
-        url = TTS_URL_TMPL.format(
-            voice_id=self._voice_id, model=self._model, key=ELEVENLABS_API_KEY
-        )
+        url = TTS_URL_TMPL.format(voice_id=self._voice_id, model=self._model)
         self._ws = await websockets.connect(
             url,
             additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
