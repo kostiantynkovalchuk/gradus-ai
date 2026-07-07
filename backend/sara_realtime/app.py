@@ -19,6 +19,7 @@ Does NOT import backend/main.py or any route module.
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -80,6 +81,12 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     # audio_queue: binary PCM16 frames from the browser → STT leg
     audio_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
 
+    # Half-duplex gate: set while run_turn is executing; mic frames are discarded.
+    # Phase 1 design — barge-in is a Phase 3 product decision.
+    turn_active = asyncio.Event()
+    # Mutable counter: frames discarded by the gate since the last turn end.
+    discarded_frames = [0]
+
     # One persistent STT connection per session (EL keeps context across turns)
     stt_client = None
     session_started = False
@@ -98,10 +105,14 @@ async def ws_session(websocket: WebSocket, token: str = ""):
                 # Binary frame → PCM16 audio → audio_queue for STT
                 if "bytes" in message and message["bytes"]:
                     if session_started:
-                        try:
-                            audio_queue.put_nowait(message["bytes"])
-                        except asyncio.QueueFull:
-                            logger.warning("[WS] Audio queue full — dropping frame")
+                        if turn_active.is_set():
+                            # Half-duplex: discard mic audio while Sara thinks/speaks.
+                            discarded_frames[0] += 1
+                        else:
+                            try:
+                                audio_queue.put_nowait(message["bytes"])
+                            except asyncio.QueueFull:
+                                logger.warning("[WS] Audio queue full — dropping frame")
                     continue
 
                 # JSON control message
@@ -122,7 +133,8 @@ async def ws_session(websocket: WebSocket, token: str = ""):
                     logger.info("[WS] Session started, sample_rate=%s", cmd.get("sample_rate"))
                     # Kick off the first turn — pipeline blocks until VAD commit + response done
                     asyncio.create_task(
-                        _run_turn_loop(websocket, pipeline, audio_queue, stt_client),
+                        _run_turn_loop(websocket, pipeline, audio_queue, stt_client,
+                                       turn_active, discarded_frames),
                         name="turn_loop",
                     )
 
@@ -157,18 +169,29 @@ async def ws_session(websocket: WebSocket, token: str = ""):
         logger.info("[WS] Session closed")
 
 
-async def _run_turn_loop(websocket, pipeline: SessionPipeline, audio_queue: asyncio.Queue, stt_client):
+async def _run_turn_loop(
+    websocket,
+    pipeline: SessionPipeline,
+    audio_queue: asyncio.Queue,
+    stt_client,
+    turn_active: asyncio.Event,
+    discarded_frames: list,
+):
     """
     Runs the turn loop: each VAD commit triggers one full pipeline turn.
-    After a turn completes, loops back to wait for the next VAD commit.
+    After each turn: clears the half-duplex gate, drains stale audio queue,
+    logs discarded frame count, then loops back to listen for the next utterance.
     Errors within a turn are surfaced as {"type": "error"} events; the loop continues.
     This task runs for the lifetime of the session.
     """
+    empty_commit_count = 0
+    last_warning_t = 0.0
+
     while True:
+        result = None
         try:
+            turn_active.set()
             result = await pipeline.run_turn(websocket, audio_queue, stt_client)
-            if result is None:
-                logger.warning("[TurnLoop] Turn returned None — continuing to next turn")
         except WebSocketDisconnect:
             logger.info("[TurnLoop] WebSocket disconnected — exiting loop")
             break
@@ -178,3 +201,32 @@ async def _run_turn_loop(websocket, pipeline: SessionPipeline, audio_queue: asyn
                 await websocket.send_json({"type": "error", "message": str(e)})
             except Exception:
                 break
+        finally:
+            turn_active.clear()
+            # Belt-and-braces: drain any frames that slipped into the queue
+            # before the gate set or during the stt_drain window.
+            drained = 0
+            while True:
+                try:
+                    audio_queue.get_nowait()
+                    drained += 1
+                except asyncio.QueueEmpty:
+                    break
+            gated = discarded_frames[0]
+            discarded_frames[0] = 0
+            logger.info(
+                "[Session] resumed listening — discarded %d stale frames (%d gated + %d drained)",
+                gated + drained, gated, drained,
+            )
+
+        if result is None:
+            empty_commit_count += 1
+            logger.debug("[TurnLoop] Turn returned None — continuing to next turn")
+            now = time.monotonic()
+            if now - last_warning_t >= 60.0 and empty_commit_count > 0:
+                logger.warning("[TurnLoop] %d empty commits in last 60s", empty_commit_count)
+                empty_commit_count = 0
+                last_warning_t = now
+            await asyncio.sleep(0.25)
+        else:
+            empty_commit_count = 0

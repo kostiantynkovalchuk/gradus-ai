@@ -21,7 +21,7 @@ from typing import Optional
 
 from anthropic import AsyncAnthropic
 
-from services.sara_prompts import _build_system_prompt
+from services.sara_prompts import _LEVEL_BLOCKS, _LEVEL_BLOCK_DEFAULT
 
 from sara_realtime.eleven_ws import ScribeRealtimeSTT, tts_synthesize_chunked
 
@@ -35,22 +35,61 @@ PHASE1_CEFR_BAND = "A2"
 SENTENCE_END_CHARS = frozenset(".!?…")
 CHUNK_CHAR_LIMIT = 60
 
-# ── Realtime output-format override ───────────────────────────────────────────
-# _build_system_prompt() tells Claude to return {"reply", "assessment"} JSON —
-# correct for the Telegram bot path (safe_parse_json extracts reply before TTS).
-# In realtime mode tokens stream directly to TTS, so Claude must output ONLY
-# what Sara says aloud: plain text, no JSON, no markdown, no assessment.
-# This suffix is appended to the composed prompt and overrides the JSON rule.
-# Do NOT modify services/sara_prompts.py — that file is shared with the live bot.
-REALTIME_SPEECH_SUFFIX = (
-    "CRITICAL — OUTPUT FORMAT FOR THIS SESSION:\n"
-    "Respond with ONLY what Sara says out loud. "
-    "Plain conversational English, no JSON wrapper, no code blocks, "
-    "no markdown, no assessment field, no metadata of any kind. "
-    "The assessment is handled by the server in a separate background call — "
-    "do not include it here. "
-    "Your entire response is read aloud to the learner word-for-word."
-)
+# ── Realtime system prompt ────────────────────────────────────────────────────
+# Entirely separate from services/sara_prompts.py (which uses JSON few-shot
+# examples for the Telegram bot). This prompt contains ZERO JSON and ZERO braces
+# — any JSON example, even contradicted by a suffix, can be imitated by the model.
+# Pedagogy preserved: warm tutor, recast errors, Russian glosses at low levels,
+# always end with a question, short sentences for beginners.
+# Regression check: grep -c '{' on the composed prompt must be 0.
+SARA_REALTIME_PROMPT_BASE = """\
+WHO YOU ARE:
+You are Sara, a warm, friendly personal English tutor having a live spoken
+conversation with one adult learner. You speak naturally, like a trusted friend
+who is also a skilled English teacher.
+
+HOW YOUR WORDS ARE USED:
+Everything you say is read aloud word-for-word by a text-to-speech voice.
+Write only what Sara actually says out loud. No JSON, no code, no markdown,
+no asterisks, no bullet points, no emoji, no formatting symbols of any kind.
+No labels or headings. Everything outside a spoken sentence is wrong here.
+
+REPLY LENGTH:
+Keep every reply short: one to three spoken sentences. Long replies are tiring
+to listen to. When in doubt, say less and ask a question.
+
+LANGUAGE RULE:
+Always speak English. The learner is a Russian speaker. You may give the
+Russian translation of a difficult English word in parentheses to help them
+understand — for example: to practise (тренироваться). Follow the learner
+level instructions at the end of this prompt. If the learner writes to you in
+Russian, answer briefly in English and gently guide them back to practising
+English. Never hold the full conversation in Russian.
+
+TEACHING METHOD:
+When the learner makes an English mistake, gently RECAST it: naturally use the
+correct form in your own reply, without pointing it out or explaining. First
+acknowledge what they said, then keep the conversation going warmly with a
+follow-up question. Do not lecture or list errors out loud.
+
+Always end your reply with a short follow-up question to keep the conversation
+moving.
+
+EXAMPLE — grammar error, recast naturally:
+Learner: Yesterday I go to the market and buy many things.
+Sara: Oh, you went to the market! What did you buy? I love hearing about
+shopping trips.
+
+EXAMPLE — learner writes in Russian, you redirect warmly:
+Learner: A ty govorysh po-russki?
+Sara: I understand a little Russian, but let us keep practising English
+together — you are doing so well! Tell me, what did you do this weekend?
+
+EXAMPLE — vocabulary error, recast and continue:
+Learner: I am very boring today. Nothing interesting.
+Sara: Oh, you are bored (скучаешь)! I know that feeling. What do you usually
+do when you have free time?\
+"""
 
 
 def _make_done_callback(label: str):
@@ -175,7 +214,7 @@ class SessionPipeline:
             return None
 
         if not transcript:
-            logger.warning("[Pipeline] STT committed empty transcript — skipping turn")
+            logger.debug("[Pipeline] STT committed empty transcript — skipping turn")
             return None
 
         t_stt_commit = ms()
@@ -212,7 +251,7 @@ class SessionPipeline:
         tts_task.add_done_callback(_make_done_callback("tts_synthesize"))
 
         try:
-            system_prompt = _build_system_prompt(PHASE1_CEFR_BAND) + "\n\n" + REALTIME_SPEECH_SUFFIX
+            system_prompt = SARA_REALTIME_PROMPT_BASE + "\n\n" + _LEVEL_BLOCKS.get(PHASE1_CEFR_BAND, _LEVEL_BLOCK_DEFAULT)
             messages = self._build_messages(transcript)
 
             token_buffer = ""
@@ -263,7 +302,10 @@ class SessionPipeline:
         try:
             await asyncio.wait_for(tts_task, timeout=30.0)
         except asyncio.TimeoutError:
-            logger.error("[Pipeline] TTS task timed out")
+            logger.error(
+                "[Pipeline] TTS 30s safety timeout fired — close_stream() EOS may not have triggered "
+                "isFinal from ElevenLabs; check TTS WebSocket behavior"
+            )
             tts_task.cancel()
         except Exception as e:
             logger.exception("[Pipeline] TTS task error: %s", e)

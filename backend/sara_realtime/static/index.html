@@ -104,7 +104,7 @@ async function enqueueAudio(arrayBuffer) {
 // ── Microphone capture (PCM16, 16kHz mono) ───────────────────────────────────
 
 async function startMic() {
-  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   audioCtx = new AudioContext({ sampleRate: 16000 });
   const source = audioCtx.createMediaStreamSource(mediaStream);
   processor = audioCtx.createScriptProcessor(4096, 1, 1);

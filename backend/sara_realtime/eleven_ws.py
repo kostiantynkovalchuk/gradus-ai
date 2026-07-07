@@ -10,7 +10,7 @@ STT: Scribe v2 Realtime
   Endpoint : wss://api.elevenlabs.io/v1/speech-to-text/realtime
   Auth     : xi-api-key HEADER only (never in URL)
   Input    : JSON {"message_type":"input_audio_chunk","audio_base_64":"<b64>","sample_rate":16000}
-  Commit   : VAD-based (commit_strategy=true query param) — no manual EOS message
+  Commit   : VAD-based (commit_strategy=vad query param) — no manual EOS message
   Events   : session_started | partial_transcript | committed_transcript | scribeError
   Ref      : https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime
 
@@ -59,7 +59,7 @@ class ScribeRealtimeSTT:
       • Client sends: JSON {"message_type":"input_audio_chunk",
                             "audio_base_64":"<base64 PCM16>",
                             "sample_rate":16000}
-      • VAD commits automatically (commit_strategy=true) — no EOS message needed.
+      • VAD commits automatically (commit_strategy=vad) — no EOS message needed.
       • Server emits: session_started → partial_transcript → committed_transcript
 
     Usage pattern (one instance per session — EL keeps VAD context across turns):
@@ -188,7 +188,7 @@ class FlashStreamingTTS:
         async with FlashStreamingTTS(voice_id, model) as tts:
             await tts.send_text("Hello there.")
             await tts.send_text("How are you?")
-            await tts.flush()
+            await tts.close_stream()
             async for audio_bytes in tts.audio_chunks():
                 # relay to client
     """
@@ -231,10 +231,13 @@ class FlashStreamingTTS:
         if self._ws and text:
             await self._ws.send(json.dumps({"text": text}))
 
-    async def flush(self):
-        """Signal end of text input; ElevenLabs will synthesize and return all remaining audio."""
+    async def close_stream(self):
+        """Send EOS (end-of-stream) to ElevenLabs: empty text string closes the text input.
+        Docs-confirmed: {"text": ""} (no flush key) is the canonical close signal.
+        After EOS the server finishes synthesis, emits isFinal=true in the last audio
+        frame, and closes the connection — allowing audio_chunks() to exit cleanly."""
         if self._ws:
-            await self._ws.send(json.dumps({"text": "", "flush": True}))
+            await self._ws.send(json.dumps({"text": ""}))
 
     async def audio_chunks(self) -> AsyncIterator[bytes]:
         """
@@ -288,7 +291,7 @@ async def tts_synthesize_chunked(
                 if chunk is None:
                     break
                 await tts.send_text(chunk)
-            await tts.flush()
+            await tts.close_stream()
             async for audio in tts.audio_chunks():
                 await on_audio(audio)
     except Exception as e:
