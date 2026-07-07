@@ -25,6 +25,8 @@ Session architecture: three long-lived coroutines per session.
     JSON control             → start | end_session
 
   [stt_reader task] — owns the Scribe socket for the session lifetime
+    LAZY START: created only after the "start" control message arrives so
+    that an idle test page does not burn EL connections on every load.
     loop:
       connect Scribe (same URL/params as before)
       run two parallel sub-tasks:
@@ -139,12 +141,15 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     discarded_mic = [0]
     last_gate_log = [time.monotonic()]  # R4 fix: real monotonic start, not 0.0
 
+    # Monotonic timestamp of the last mic frame forwarded to Scribe.
+    # Updated by _stt_pump on every send; read by _stt_reader to decide
+    # whether a Scribe close is "idle" (INFO) or "mid-stream" (WARNING).
+    last_audio_t: list = [0.0]
+
     # ── Long-lived background tasks ───────────────────────────────────────────
-    reader_task = asyncio.create_task(
-        _stt_reader(audio_queue, transcript_queue, turn_active, websocket),
-        name="stt_reader",
-    )
-    reader_task.add_done_callback(_task_done_cb("stt_reader"))
+    # reader_task is started LAZILY — only after the "start" control message
+    # arrives, so an idle browser tab does not open a Scribe connection.
+    reader_task = None
 
     loop_task = asyncio.create_task(
         _turn_loop(websocket, pipeline, transcript_queue, turn_active),
@@ -209,6 +214,17 @@ async def ws_session(websocket: WebSocket, token: str = ""):
             if msg_type == "start":
                 session_started = True
                 logger.info("[WS] Session started, sample_rate=%s", cmd.get("sample_rate"))
+                # Lazy Scribe connect: open the EL STT socket only now that mic
+                # is actually flowing, not at WS-accept time.
+                if reader_task is None:
+                    reader_task = asyncio.create_task(
+                        _stt_reader(
+                            audio_queue, transcript_queue, turn_active,
+                            websocket, last_audio_t,
+                        ),
+                        name="stt_reader",
+                    )
+                    reader_task.add_done_callback(_task_done_cb("stt_reader"))
 
             elif msg_type == "ping":
                 try:
@@ -236,9 +252,12 @@ async def ws_session(websocket: WebSocket, token: str = ""):
         except Exception:
             pass
     finally:
-        reader_task.cancel()
+        # reader_task is None if the "start" message never arrived.
+        if reader_task is not None:
+            reader_task.cancel()
         loop_task.cancel()
-        await asyncio.gather(reader_task, loop_task, return_exceptions=True)
+        tasks = [t for t in (reader_task, loop_task) if t is not None]
+        await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("[WS] Session closed — all tasks cancelled")
 
 
@@ -249,12 +268,19 @@ async def _stt_reader(
     transcript_queue: asyncio.Queue,
     turn_active: asyncio.Event,
     websocket,
+    last_audio_t: list,  # [float] shared with _stt_pump; 0.0 until first audio sent
 ):
     """
     Owns the Scribe STT WebSocket for the session lifetime.
 
     Connects Scribe, runs two parallel sub-tasks (pump + recv), and reconnects
     with exponential backoff when the connection closes unexpectedly.
+
+    Log levels for Scribe closes:
+      INFO    — EL closed an idle connection (no mic audio in the last 5s).
+                Expected behavior; no operator action needed.
+      WARNING — connection closed while audio was actively flowing (<5s ago).
+                May indicate a dropped utterance; worth investigating.
 
     R9: ConnectionClosed is never swallowed — it propagates from receive_events()
     through _stt_recv, surfaces here as an exception, and triggers a reconnect
@@ -271,7 +297,7 @@ async def _stt_reader(
                 logger.info("[Scribe] Connected — consecutive failure counter reset")
 
                 pump_task = asyncio.create_task(
-                    _stt_pump(audio_queue, stt), name="stt_pump"
+                    _stt_pump(audio_queue, stt, last_audio_t), name="stt_pump"
                 )
                 recv_task = asyncio.create_task(
                     _stt_recv(stt, transcript_queue, turn_active, websocket),
@@ -303,9 +329,22 @@ async def _stt_reader(
                     if not t.cancelled() and t.exception() is not None:
                         raise t.exception()  # type: ignore[misc]
 
-                # recv_task ended without exception — unusual with the new looping
-                # receive_events (only if self._ws is None at entry). Reconnect anyway.
-                logger.warning("[Scribe] recv_task ended without exception — reconnecting")
+                # recv_task ended without exception — EL closed the socket cleanly
+                # (e.g. idle timeout). Log at INFO if the connection was idle,
+                # WARNING if audio was flowing recently (possible dropped utterance).
+                audio_age = time.monotonic() - last_audio_t[0]
+                if audio_age < 5.0:
+                    logger.warning(
+                        "[Scribe] EL closed STT connection while audio active "
+                        "(last frame %.1fs ago) — reconnecting",
+                        audio_age,
+                    )
+                else:
+                    logger.info(
+                        "[Scribe] EL closed idle STT connection "
+                        "(no audio for %.0fs) — reconnecting",
+                        audio_age,
+                    )
                 # Fall through to next while True iteration (no exception = reconnect)
 
         except asyncio.CancelledError:
@@ -319,10 +358,19 @@ async def _stt_reader(
             code = getattr(getattr(e, "rcvd", None), "code", "?") if is_close else None
 
             if is_close:
-                logger.warning(
-                    "[Scribe] Connection closed (close_code=%s, consecutive=%d/%d)",
-                    code, consecutive, STT_MAX_ATTEMPTS,
-                )
+                audio_age = time.monotonic() - last_audio_t[0]
+                if audio_age < 5.0:
+                    logger.warning(
+                        "[Scribe] Connection closed while audio active "
+                        "(last frame %.1fs ago, close_code=%s, consecutive=%d/%d)",
+                        audio_age, code, consecutive, STT_MAX_ATTEMPTS,
+                    )
+                else:
+                    logger.info(
+                        "[Scribe] EL closed idle connection "
+                        "(no audio for %.0fs, close_code=%s, consecutive=%d/%d)",
+                        audio_age, code, consecutive, STT_MAX_ATTEMPTS,
+                    )
             else:
                 logger.exception(
                     "[Scribe] Unexpected error (consecutive=%d/%d): %s",
@@ -353,14 +401,20 @@ async def _stt_reader(
             await asyncio.sleep(backoff)
 
 
-async def _stt_pump(audio_queue: asyncio.Queue, stt: ScribeRealtimeSTT):
+async def _stt_pump(
+    audio_queue: asyncio.Queue,
+    stt: ScribeRealtimeSTT,
+    last_audio_t: list,  # [float] — updated here so _stt_reader can gauge activity
+):
     """
     Drain mic frames from audio_queue and forward to the Scribe STT socket.
     Runs until cancelled (Scribe reconnect or session teardown).
+    Records the monotonic time of each forwarded frame in last_audio_t[0].
     """
     while True:
         chunk = await audio_queue.get()
         if chunk:  # None or empty bytes are no-ops; skip silently
+            last_audio_t[0] = time.monotonic()
             await stt.send_audio(chunk)
 
 
