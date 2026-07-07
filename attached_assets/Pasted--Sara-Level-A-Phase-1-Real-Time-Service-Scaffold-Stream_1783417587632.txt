@@ -1,0 +1,201 @@
+# Sara Level A — Phase 1: Real-Time Service Scaffold + Streaming Pipeline
+**Date:** 2026-07-07 · **Reads with:** `sara_status_2026-07-06_spike-passed.md`
+**Delivery:** two Replit Agent prompts below. Send Prompt 1 first. Review its output. Only then send Prompt 2.
+
+---
+
+## Placement decision (recommended): same monorepo, second Render service
+
+- New package `backend/sara_realtime/` — own FastAPI app, own process, own Render service. It shares the repo, the Neon DB, and the extracted Sara prompt constants, but is **never imported by `backend/main.py`** and never joins the seven-bot event loop.
+- Migrations stay owned by the main backend service. The new service **must not** call `run_migrations()` — two services racing migrations on deploy is a failure mode we refuse upfront.
+- One `git push origin main` deploys both services. Note: this also still restarts all seven bots — post-deploy checklist applies as always.
+- Cost: one extra Render service (~$7–25/mo depending on tier). A standalone repo would save nothing and cost us duplicated prompt constants, duplicated env management, and a second deploy pipeline.
+
+**Phase 1 scope = a talkable end-to-end service with the token-overlap optimization, instrumented for latency.** Explicitly deferred to Phase 2/3: split-brain Haiku assessment, 20-min lesson model + `sara_sessions.status='completed'` migration, wireframe UI, TG cron link, DB persistence of turns. Phase 1 keeps conversation state in memory per WebSocket session.
+
+---
+
+## PROMPT 1 — AUDIT (read-only, report findings, change nothing)
+
+```
+AUDIT TASK — read files and report. Do NOT modify any file, do NOT write
+any code. Output is a findings report only.
+
+Context: we are about to add a new, isolated real-time voice service in
+backend/sara_realtime/ (own FastAPI app, own Render service). Before the
+implementation prompt goes out, I need the following verified against the
+actual code, with file paths and line numbers for every claim.
+
+1. Deployment config
+   - Open render.yaml. Report: every service defined, runtime type,
+     how the start command is specified (dockerCommand? startCommand?),
+     and whether the file structure supports adding a second service.
+   - Open the Dockerfile. Report the base image line, the CMD/ENTRYPOINT,
+     and whether one Dockerfile can serve two services with a
+     dockerCommand override per service.
+
+2. backend/routes/sara_webhook.py — constants inventory
+   Report exact names and line ranges for:
+   - The system prompt base constants (Russian base, and the _EN variants
+     from Impl #2).
+   - _LEVEL_BLOCK_A and all other level blocks.
+   - The calibration logic (EWA / hysteresis) — function names, and
+     whether they are pure functions (no Telegram/DB coupling) or
+     entangled with handler context.
+   - ElevenLabs helper functions (TTS call, STT call) — names, and which
+     env vars they read (ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID,
+     ELEVENLABS_TTS_MODEL, ELEVENLABS_STT_MODEL, others?).
+   - Session helpers touching sara_sessions.
+   For each item, classify: SAFE TO MOVE (pure constant / pure function)
+   vs ENTANGLED (imports Telegram context, DB session, or route state).
+
+3. backend/main.py lifespan
+   - Confirm nothing in the lifespan or router registration would be
+     affected by adding a new package directory backend/sara_realtime/
+     that main.py does not import.
+
+4. Dependencies
+   - Open requirements.txt. Report: anthropic version (AsyncAnthropic
+     available?), any elevenlabs SDK, any websockets/wsproto library,
+     uvicorn version and whether it has websocket extras.
+
+5. Env vars
+   - Grep for ELEVENLABS_ across backend/. Report every env var name in
+     use today and which file reads it.
+
+Report format: numbered findings with path:line references. Flag anything
+that contradicts the assumptions above. STOP after reporting.
+```
+
+---
+
+## PROMPT 2 — IMPLEMENTATION (send only after Prompt 1 findings are reviewed)
+
+> Before sending: fill the two `<<CONFIRM>>` markers from the audit output
+> (exact constant names, exact render.yaml mechanism).
+
+```
+IMPLEMENTATION TASK — Sara Level A, Phase 1: dedicated real-time voice
+service. The audit findings from the previous prompt are confirmed.
+Production-ready output expected.
+
+═══ SCOPE GUARD (non-negotiable) ═══
+- New code lives in backend/sara_realtime/ + one new file
+  backend/services/sara_prompts.py. The ONLY change to existing files:
+  sara_webhook.py switches to importing the moved constants (pure move,
+  zero logic change), and render.yaml gains the second service.
+- Do NOT touch any other bot, route, or the scheduler.
+- The new service does NOT run migrations, does NOT register any
+  Telegram webhook, does NOT import backend/main.py or any route module.
+- No DB writes in Phase 1. Conversation state is in-memory per session.
+- No polling anywhere.
+
+═══ STEP 1 — Extract shared Sara constants ═══
+Create backend/services/sara_prompts.py containing (moved verbatim from
+sara_webhook.py, per audit line refs): <<CONFIRM: exact constant names —
+system prompt base RU, _EN variants, _LEVEL_BLOCK_A and sibling level
+blocks, and any pure calibration helpers classified SAFE TO MOVE>>.
+Update sara_webhook.py to import them from the new module. Zero behavior
+change. Then verify: python -c "import backend.routes.sara_webhook" (or
+the project-equivalent import check) passes, and report every other
+module that imports sara_webhook.py and that they still import cleanly.
+
+═══ STEP 2 — New package backend/sara_realtime/ ═══
+Files:
+- app.py        — FastAPI app, serves the test page + /ws/session
+- pipeline.py   — per-turn orchestration (STT → Claude → TTS overlap)
+- eleven_ws.py  — ElevenLabs WebSocket clients (Scribe v2 Realtime STT,
+                  Flash v2.5 streaming TTS)
+- static/index.html — minimal test page (NOT the final UI)
+
+═══ STEP 3 — WebSocket protocol (browser ↔ our server) ═══
+Single WS at /ws/session?token=... 
+Client → server: JSON {"type":"start","sample_rate":16000}, then binary
+frames of PCM16 mono mic audio; {"type":"end_session"}.
+Server → client:
+  {"type":"partial_transcript","text":...}       (live, uncommitted)
+  {"type":"user_transcript","text":...}          (VAD-committed final)
+  {"type":"assistant_delta","text":...}          (Claude tokens, live)
+  binary frames: TTS audio chunks (mp3_44100 or pcm — pick one, document it)
+  {"type":"turn_complete","metrics":{...}}
+  {"type":"error","message":...}                 (NEVER fail silently —
+                                                  every leg failure must
+                                                  surface as this event
+                                                  AND a logged exception)
+
+═══ STEP 4 — STT leg ═══
+Proxy client audio frames to ElevenLabs Scribe v2 Realtime over WebSocket
+(model scribe_v2_realtime, env SARA_RT_STT_MODEL with that default).
+Forward partials as partial_transcript. On VAD auto-commit, emit
+user_transcript and hand the final text to the pipeline.
+
+═══ STEP 5 — Brain leg ═══
+AsyncAnthropic (NOT the sync client — the sync client blocking the event
+loop was the spike's 4x latency bug), model claude-sonnet-4-6, streaming.
+System prompt = base + _LEVEL_BLOCK_A from backend/services/sara_prompts.py
+(Felix keeps Russian scaffolding — do not use the _EN variants here).
+History: in-memory list per WS session, last 20 turns.
+
+═══ STEP 6 — TTS overlap (the point of this phase) ═══
+Do NOT wait for Claude's full reply. Sentence-chunk the token stream:
+flush a chunk to the TTS WebSocket when the buffer hits sentence-ending
+punctuation (. ! ? …) or exceeds ~60 chars at a word boundary. TTS:
+ElevenLabs streaming WebSocket, model eleven_flash_v2_5 (env
+SARA_RT_TTS_MODEL, that default — v3 is NOT supported on the TTS
+WebSocket, do not use it here), voice env SARA_RT_VOICE_ID with fallback
+to ELEVENLABS_VOICE_ID. Relay every audio chunk to the browser the moment
+it arrives. Keep chunk ordering strict (single consumer queue per turn).
+
+═══ STEP 7 — Latency instrumentation ═══
+Per turn, log ONE structured line:
+  SARA_RT_TURN t_stt_commit=... t_claude_first_token=... 
+  t_first_audio_to_client=... t_turn_end=... (all ms deltas from commit)
+Also include the same numbers in the turn_complete metrics payload so we
+can read them from the browser console. Target to verify: 
+t_first_audio_to_client ≈ 2000ms.
+
+═══ STEP 8 — Auth ═══
+Env SARA_RT_ACCESS_TOKEN. The page and the WS both require
+?token=<value>; reject otherwise (page: 403, WS: close 4403). This is a
+single-user pilot gate, not a full auth system.
+
+═══ STEP 9 — Test page ═══
+static/index.html: mic start/stop button, live dual transcript (user +
+Sara), progressive audio playback via Web Audio API (queue chunks, play
+gapless), latency metrics readout from turn_complete. Plain HTML/JS, no
+build step. This page is throwaway; the wireframe UI is Phase 3.
+
+═══ STEP 10 — Render second service ═══
+Add service sara-realtime to render.yaml using <<CONFIRM: mechanism per
+audit — same Dockerfile with dockerCommand override, or startCommand>>:
+  uvicorn backend.sara_realtime.app:app --host 0.0.0.0 --port $PORT
+Env vars required on the new service (report this list at the end so they
+can be set in Render BEFORE the push, and mirrored in Replit Secrets):
+  ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, SARA_RT_VOICE_ID,
+  SARA_RT_STT_MODEL, SARA_RT_TTS_MODEL, SARA_RT_ACCESS_TOKEN.
+The new service's startup must NOT call run_migrations().
+
+═══ STEP 11 — Error handling rules ═══
+- Every asyncio.create_task in this service gets a done-callback that
+  logs exceptions (the fire-and-forget-with-invisible-failures pattern
+  is a known gap elsewhere in this codebase — do not reproduce it).
+- STT/TTS WebSocket drops: emit {"type":"error"} to the client, close
+  the turn cleanly, leave the session usable for the next turn.
+- Claude API errors: same — error event + log, session survives.
+
+═══ VERIFICATION (report all of this before finishing) ═══
+1. sara_webhook.py imports cleanly after the constant move; list every
+   module importing it and confirm each.
+2. The new app imports cleanly and starts locally.
+3. One real round-trip transcript of the SARA_RT_TURN log line with
+   actual latency numbers.
+4. Confirm zero changes outside: backend/sara_realtime/*, 
+   backend/services/sara_prompts.py, backend/routes/sara_webhook.py
+   (imports only), render.yaml. Show git diff --stat.
+```
+
+---
+
+## After Phase 1 ships
+- **Phase 2:** split brain (background Haiku CEFR/error assessment with done-callback), `sara_sessions` persistence, lesson model — `status='completed'` migration (number checked against live `schema_migrations` max at write time, idempotent, CHECK constraint), 20-min config via `session_active_minutes`.
+- **Phase 3:** wireframe UI (desktop Meet-style / mobile fullscreen), progress ring, TG cron class-time link, then the Level B clip layer.
