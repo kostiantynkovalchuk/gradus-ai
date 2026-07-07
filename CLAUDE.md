@@ -227,3 +227,61 @@ reactivates it.
 When any of these areas is touched for other reasons, closing the adjacent
 gap in the same change is preferred over preserving it. Removing an item from
 this register requires evidence (file + line) in the commit message.
+
+---
+
+## 11. Sara English — realtime voice service
+
+### Deployment
+- Second Render service named **`sara-english`**, same repo and Dockerfile as
+  the main backend.
+- Docker Command (dashboard is authoritative):  `bash start_sara.sh`
+  The `render.yaml` entry mirrors this for documentation only.
+- Package: `backend/sara_realtime/` — deliberately **not** renamed to match
+  the service name; it names the architecture, not the product.
+
+### Hard rules — never violate
+- **No migrations, no DB reads/writes, no webhook registration, no Telegram**
+  in this service. Any import of `sqlalchemy`, `psycopg`, `register_webhook`,
+  or Telegram-bot code is a regression.
+- **AsyncAnthropic only** in `pipeline.py`. The sync `Anthropic` client is
+  forbidden here (blocks the event loop during streaming).
+- **Half-duplex by design.** Mic frames are discarded while Sara is speaking
+  (`turn_active` gate at ingestion) and committed transcripts are dropped
+  while a turn is active (`stt_recv` gate). This is correct behaviour — do
+  not "fix" the gating. Barge-in is a Phase 3 feature.
+
+### Voice / model env vars — explicit split
+| Variable | Holds | Notes |
+|---|---|---|
+| `SARA_RT_VOICE_ID` | Clarice — `sIak7pFapfSLCfctxdOu` | **Set explicitly. Never fall back to `ELEVENLABS_VOICE_ID`.** |
+| `ELEVENLABS_VOICE_ID` | Yaroslava (employee bot) | Belongs to the main service only. |
+| `SARA_RT_TTS_MODEL` | Realtime TTS model (Flash / `multilingual_v2`) | `eleven_v3` is **not** supported on the TTS WebSocket. |
+| `ELEVENLABS_TTS_MODEL` | Async Telegram path | `sara_webhook.py` only — never used in `sara_realtime/`. |
+| `SARA_RT_VAD_SILENCE_S` | VAD commit threshold in seconds (default `2.2`) | Tunable without redeploy. |
+
+### Regression checklist R1–R10
+Must be included verbatim in every Sara implementation prompt and re-verified
+(all PASS) in every implementation report.
+
+| # | What to check | How |
+|---|---|---|
+| R1 | `SARA_REALTIME_PROMPT_BASE` + level block contains **zero** `{` chars | `composed.count('{') == 0` |
+| R2 | `t0 = time.monotonic()` appears **exactly once** in `run_turn` (at entry — VAD commit baseline) | `getsource(run_turn).count('t0 = time.monotonic()') == 1` |
+| R3 | Scribe URL contains `model_id`, `audio_format=pcm_16000`, `commit_strategy=vad`, `vad_silence_threshold_secs={VAD_SILENCE_S}` | format the template and assert all four substrings |
+| R4 | `xi_api_key` absent from both `STT_URL_TMPL` and `TTS_URL_TMPL` | string search |
+| R5 | `eleven_flash_v2_5` present in `app.py` | string search |
+| R6 | `AsyncAnthropic` present in `pipeline.py`; sync `Anthropic` import absent | string search |
+| R7 | EOS frame `{"text": ""}` present in `FlashStreamingTTS.close_stream()` | `json.dumps({'text':''}) in getsource(close_stream)` |
+| R8 | No `sqlalchemy` / `psycopg` / `register_webhook(` calls anywhere in `sara_realtime/` | grep |
+| R9 | `ConnectionClosedError`/`OK` **not** caught inside `ScribeRealtimeSTT.receive_events()` | assert absent from `getsource(receive_events)` |
+| R10 | No `get_nowait()` drain loop in `app.py` or `pipeline.py` | string search |
+
+### Known gaps (Sara-specific)
+1. **Intermittent silent-audio turn** — one observed instance; root side
+   (server or client) undetermined. Diagnose first: correlate the
+   `SARA_RT_TURN` log line with browser console output before writing any
+   fix.
+2. **Claude first-token variance 0.8–4.8 s** — Anthropic-side latency, not
+   a local bug. Monitor in pilot; do not attempt to work around in code
+   without data showing a consistent pattern.
