@@ -432,14 +432,27 @@ async function ensureAudioCtx() {
   if (audioCtx.state === "suspended") await audioCtx.resume();
 }
 
-async function enqueueAudio(arrayBuffer, turnIdx) {
+/* Single mechanism for both barge-in and new-turn audio cancellation.
+   Incrementing audioGeneration makes every in-flight enqueueAudio callback
+   stale at both its pre-decode and post-decode check points. */
+function invalidateAudio(){
+  audioGeneration += 1;
+  activeSources.forEach(s => { try { s.stop(); } catch {} });
+  activeSources = [];
+  nextPlayAt = audioCtx ? audioCtx.currentTime : 0;
+  playChain = Promise.resolve();
+}
+
+async function enqueueAudio(arrayBuffer, turnIdx, gen) {
+  // Pre-decode generation check: cheap skip before the async decode.
+  if (gen !== audioGeneration) return;
   await ensureAudioCtx();
   try {
     const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-    // Client-side-only barge-in: if the learner hit "Стоп — я скажу" for this
-    // turn, drop any audio chunks still in flight from the server instead of
-    // scheduling them. Server-side gating (§11) is never touched.
-    if (bargeInTurn === turnIdx) return;
+    // Post-decode generation check: decodeAudioData is the race window —
+    // invalidateAudio() (via user_transcript or bargeIn) can fire while decode
+    // is in progress, incrementing audioGeneration. If so, discard this chunk.
+    if (gen !== audioGeneration) return;
     const src = audioCtx.createBufferSource();
     src.buffer = decoded;
     src.connect(audioCtx.destination);
@@ -495,7 +508,7 @@ const transcriptEl = $('transcript');
 let partialEl = null;
 let currentSaraEl = null;
 let currentTurnIndex = 0;
-let bargeInTurn = null;          // turn index the learner interrupted, or null
+let audioGeneration = 0;         // incremented by invalidateAudio(); captured per binary chunk
 const replayBuffers = {};        // turnIndex -> [AudioBuffer, ...]
 let replayNextAt = 0;
 
@@ -711,8 +724,9 @@ function connect(){
       if (e.data.byteLength > 0) {
         const buf = e.data.slice(0);
         const turnIdx = currentTurnIndex;
+        const gen = audioGeneration;
         playChain = playChain
-            .then(() => enqueueAudio(buf, turnIdx))
+            .then(() => enqueueAudio(buf, turnIdx, gen))
             .catch(err => console.error('audio chunk failed:', err));
       }
       return;
@@ -726,10 +740,12 @@ function connect(){
         break;
       case 'user_transcript':
         currentTurnIndex += 1;
-        bargeInTurn = null;
+        // Under half-duplex, a committed transcript while old audio plays means
+        // the user talked over the tail — treat it as an interruption and cut
+        // the tail. invalidateAudio() is the single mechanism for both barge-in
+        // and new-turn audio cancellation.
+        invalidateAudio();
         commitFelixTurn(msg.text);
-        nextPlayAt = 0;
-        playChain = Promise.resolve();
         currentSaraEl = null;
         setState('thinking');
         break;
@@ -785,10 +801,7 @@ function endSession(){
    sending audio for this turn until it completes on its own. */
 function bargeIn(){
   if (mode !== 'speaking') return;
-  bargeInTurn = currentTurnIndex;
-  activeSources.forEach(s => { try { s.stop(); } catch {} });
-  activeSources = [];
-  nextPlayAt = audioCtx ? audioCtx.currentTime : 0;
+  invalidateAudio();
   finalizeSaraTurn();
   setState(micEnabled ? 'listening' : 'paused');
 }

@@ -221,7 +221,7 @@ class FlashStreamingTTS:
                 }
             )
         )
-        logger.debug("[Flash TTS] WebSocket opened, voice=%s model=%s", self._voice_id, self._model)
+        logger.info("[Flash TTS] WebSocket opened, voice=%s model=%s", self._voice_id, self._model)
         return self
 
     async def __aexit__(self, *_):
