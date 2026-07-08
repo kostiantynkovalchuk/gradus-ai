@@ -113,6 +113,19 @@ async def index(token: str = ""):
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/debug")
+async def debug_page(token: str = ""):
+    """
+    Engineering lab-bench test page (the original throwaway Phase-1 UI).
+    Kept alongside the production UI at "/" for raw event/metrics debugging —
+    same token gate, same static dir, just a different file.
+    """
+    if not _check_token(token):
+        return HTMLResponse("<h1>403 Forbidden</h1>", status_code=403)
+    html_path = STATIC_DIR / "debug.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @app.get("/health")
 async def health():
     return JSONResponse({"status": "ok", "service": "sara-english"})

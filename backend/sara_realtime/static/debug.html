@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sara English — Test Page</title>
+<style>
+  body { font-family: monospace; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #111; color: #eee; }
+  h1 { color: #7cf; margin-bottom: 4px; }
+  .subtitle { color: #888; font-size: 12px; margin-bottom: 24px; }
+  button { padding: 10px 24px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+  #btnStart { background: #2a7; color: #fff; }
+  #btnStop  { background: #a33; color: #fff; display: none; }
+  #status   { margin: 12px 0; font-size: 12px; color: #aaa; }
+  .transcript-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; margin: 8px 0; min-height: 60px; font-size: 13px; }
+  .label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  #partialUser { color: #aaa; font-style: italic; }
+  #finalUser   { color: #7cf; }
+  #partialSara { color: #888; font-style: italic; }
+  #finalSara   { color: #7f7; }
+  .metrics-box { background: #1a1a1a; border: 1px solid #444; border-radius: 4px; padding: 12px; margin-top: 16px; font-size: 12px; }
+  .metric { display: flex; justify-content: space-between; padding: 2px 0; }
+  .metric .val { color: #ff9; }
+  #error { color: #f55; font-size: 12px; margin-top: 8px; display: none; }
+</style>
+</head>
+<body>
+<h1>Sara English</h1>
+<p class="subtitle">Phase 1 test page — throwaway; final UI arrives in Phase 3.</p>
+
+<button id="btnStart">▶ Start</button>
+<button id="btnStop">■ Stop</button>
+<div id="status">Not connected.</div>
+<div id="error"></div>
+
+<div class="label">You</div>
+<div class="transcript-box">
+  <div id="partialUser"></div>
+  <div id="finalUser"></div>
+</div>
+
+<div class="label">Sara</div>
+<div class="transcript-box">
+  <div id="partialSara"></div>
+  <div id="finalSara"></div>
+</div>
+
+<div class="metrics-box" id="metricsBox" style="display:none">
+  <div class="label">Last turn latency</div>
+  <div class="metric"><span>STT commit</span><span class="val" id="mStt">—</span></div>
+  <div class="metric"><span>Claude first token (Δ from commit)</span><span class="val" id="mClaude">—</span></div>
+  <div class="metric"><span>First audio to browser (Δ from commit)</span><span class="val" id="mAudio">—</span></div>
+  <div class="metric"><span>Turn end (Δ from commit)</span><span class="val" id="mEnd">—</span></div>
+</div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/session?token=${TOKEN}`;
+
+let ws = null;
+let audioCtx = null;
+let mediaStream = null;
+let processor = null;
+// Promise chain that serialises decode+schedule in ARRIVAL ORDER.
+// Each incoming chunk is appended to the tail of the chain so that
+// chunk N+1's decode never races ahead of chunk N's — even if N+1's
+// decodeAudioData call resolves faster (e.g. a short Russian gloss).
+let playChain = Promise.resolve();
+let pingInterval = null;
+
+const $ = id => document.getElementById(id);
+const setStatus = s => { $("status").textContent = s; };
+const showError = msg => {
+  const el = $("error");
+  el.textContent = "Error: " + msg;
+  el.style.display = "block";
+  setTimeout(() => { el.style.display = "none"; }, 8000);
+};
+
+// ── Audio playback queue ──────────────────────────────────────────────────────
+// Decode incoming MP3 chunks and play them gaplessly via Web Audio API.
+
+async function ensureAudioCtx() {
+  if (!audioCtx || audioCtx.state === "closed") {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+}
+
+let nextPlayAt = 0;
+
+async function enqueueAudio(arrayBuffer) {
+  await ensureAudioCtx();
+  try {
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+    const src = audioCtx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(audioCtx.destination);
+    // Guard against clock drift / long silence between turns.
+    nextPlayAt = Math.max(nextPlayAt, audioCtx.currentTime);
+    src.start(nextPlayAt);
+    nextPlayAt += decoded.duration;
+  } catch (e) {
+    console.warn("Audio decode error:", e);
+  }
+}
+
+// ── Microphone capture (PCM16, 16kHz mono) ───────────────────────────────────
+
+async function startMic() {
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  audioCtx = new AudioContext({ sampleRate: 16000 });
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+  processor.onaudioprocess = e => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const float32 = e.inputBuffer.getChannelData(0);
+    const pcm16 = float32ToPcm16(float32);
+    ws.send(pcm16);
+  };
+
+  source.connect(processor);
+  processor.connect(audioCtx.destination);
+}
+
+function float32ToPcm16(float32) {
+  const buf = new ArrayBuffer(float32.length * 2);
+  const view = new DataView(buf);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return buf;
+}
+
+function stopMic() {
+  if (processor) { processor.disconnect(); processor = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = "arraybuffer";
+  setStatus("Connecting…");
+
+  ws.onopen = () => {
+    setStatus("Connected — speak after pressing Start.");
+    ws.send(JSON.stringify({ type: "start", sample_rate: 16000 }));
+    // Keepalive: Render's proxy drops idle WebSockets (throttled background
+    // tabs stop sending mic frames and look frozen). Send a ping every 20s
+    // so the session stays alive regardless of mic activity.
+    pingInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 20000);
+  };
+
+  ws.onclose = e => {
+    setStatus(`Disconnected (code ${e.code}).`);
+    console.log("[WS] closed — code:", e.code, "reason:", e.reason || "(none)", "wasClean:", e.wasClean);
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    if (e.code === 4403) showError("Invalid access token.");
+    stopMic();
+    $("btnStart").style.display = "inline-block";
+    $("btnStop").style.display  = "none";
+  };
+
+  ws.onerror = () => showError("WebSocket error. Check console.");
+
+  ws.onmessage = e => {
+    if (e.data instanceof ArrayBuffer) {
+      // Binary frame = MP3 audio chunk.
+      // Append to the promise chain rather than awaiting inline so that
+      // chunk N+1 can never steal a lower nextPlayAt slot from chunk N,
+      // even if N+1's decodeAudioData resolves faster (e.g. a short gloss).
+      if (e.data.byteLength > 0) {
+        const buf = e.data.slice(0);
+        playChain = playChain
+            .then(() => enqueueAudio(buf))
+            .catch(err => console.error("audio chunk failed:", err));
+      }
+      return;
+    }
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    switch (msg.type) {
+      case "partial_transcript":
+        $("partialUser").textContent = msg.text;
+        break;
+      case "user_transcript":
+        $("partialUser").textContent = "";
+        $("finalUser").textContent   = msg.text;
+        $("partialSara").textContent = "";
+        $("finalSara").textContent   = "";
+        // Reset both the scheduling clock and the promise chain so stale
+        // promises from a previous turn cannot delay new-turn audio.
+        nextPlayAt = 0;
+        playChain = Promise.resolve();
+        break;
+      case "assistant_delta":
+        $("partialSara").textContent += msg.text;
+        break;
+      case "turn_complete":
+        $("finalSara").textContent  = $("partialSara").textContent;
+        $("partialSara").textContent = "";
+        showMetrics(msg.metrics || {});
+        break;
+      case "error":
+        showError(msg.message || "Unknown error");
+        break;
+    }
+  };
+}
+
+function disconnect() {
+  if (ws) { ws.send(JSON.stringify({ type: "end_session" })); ws.close(); ws = null; }
+  stopMic();
+}
+
+function showMetrics(m) {
+  const fmtDelta = v => v !== null && v !== undefined ? "+" + v + " ms" : "—";
+  $("mStt").textContent    = "0 ms (baseline)";
+  $("mClaude").textContent = fmtDelta(m.t_claude_first_token_ms);
+  $("mAudio").textContent  = fmtDelta(m.t_first_audio_to_client_ms);
+  $("mEnd").textContent    = fmtDelta(m.t_turn_end_ms);
+  $("metricsBox").style.display = "block";
+}
+
+$("btnStart").onclick = async () => {
+  $("btnStart").style.display = "none";
+  $("btnStop").style.display  = "inline-block";
+  await startMic();
+  connect();
+};
+
+$("btnStop").onclick = () => {
+  disconnect();
+  $("btnStart").style.display = "inline-block";
+  $("btnStop").style.display  = "none";
+  setStatus("Stopped.");
+};
+</script>
+</body>
+</html>
