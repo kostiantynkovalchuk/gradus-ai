@@ -274,7 +274,7 @@ Must be included verbatim in every Sara implementation prompt and re-verified
 | R6 | `AsyncAnthropic` present in `pipeline.py`; sync `Anthropic` import absent | string search |
 | R7 | EOS frame `{"text": ""}` present in `FlashStreamingTTS.close_stream()` | `json.dumps({'text':''}) in getsource(close_stream)` |
 | R8 | No `sqlalchemy` / `psycopg` / `register_webhook(` calls anywhere in `sara_realtime/` | grep |
-| R9 | `ConnectionClosedError`/`OK` **not** caught inside `ScribeRealtimeSTT.receive_events()` | assert absent from `getsource(receive_events)` |
+| R9 | `ConnectionClosedError`/`OK` **not** caught inside `ScribeRealtimeSTT.receive_events()` | no `except` clause referencing `ConnectionClosed` in `receive_events()` — `re.search(r'except[^:]*ConnectionClosed', getsource(receive_events))` must be `None` (docstring/comment mentions documenting the intentional non-catch are fine) |
 | R10 | No `get_nowait()` drain loop in `app.py` or `pipeline.py` | string search |
 | R11 | The Architecture C forward POST is never awaited on the voice path — it exists only inside an `asyncio.create_task` fired after `turn_complete` is sent | grep for a bare `await *client.post` inside `run_turn`'s main body — must be absent |
 
