@@ -135,41 +135,31 @@ def upsert_web_session(web_session_id: str, session_elapsed_s: float | None = No
 
 def end_session(web_session_id: str, session_elapsed_s: float | None = None) -> bool:
     """
-    Idempotent atomic close: WHERE status = 'active' guards this so it can
-    NEVER downgrade an already-'completed' session back to 'closed', and a
-    retried end-of-session POST against an already-'closed' session is a
-    harmless no-op. Returns True only if this call performed the transition
-    (nothing to relay/log on False — already handled or unknown session).
+    Idempotent atomic close: always stamps ended_at/active_seconds for the
+    session (so a retried or late end-of-session POST against an already-
+    'completed' session still records the end), but the CASE guards the
+    *status transition* only — a session already past 'active' (e.g.
+    'completed') is never demoted to 'closed'. Returns True iff the row's
+    status is 'closed' after this call.
     """
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
-            if session_elapsed_s is not None:
-                cur.execute(
-                    """
-                    UPDATE sara_sessions
-                    SET status = 'closed',
-                        ended_at = now(),
-                        active_seconds = GREATEST(active_seconds, %s)
-                    WHERE web_session_id = %s AND status = 'active'
-                    RETURNING id
-                    """,
-                    (int(session_elapsed_s), web_session_id),
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE sara_sessions
-                    SET status = 'closed',
-                        ended_at = now()
-                    WHERE web_session_id = %s AND status = 'active'
-                    RETURNING id
-                    """,
-                    (web_session_id,),
-                )
+            cur.execute(
+                """
+                UPDATE sara_sessions
+                SET ended_at = now(),
+                    active_seconds = GREATEST(active_seconds, %s),
+                    status = CASE WHEN status = 'active' THEN 'closed'
+                                  ELSE status END
+                WHERE web_session_id = %s
+                RETURNING status
+                """,
+                (int(session_elapsed_s or 0), web_session_id),
+            )
             row = cur.fetchone()
         conn.commit()
-        return row is not None
+        return row is not None and row[0] == "closed"
     except Exception:
         conn.rollback()
         raise
