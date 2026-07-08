@@ -65,7 +65,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from sara_realtime.pipeline import SessionPipeline
+from sara_realtime.pipeline import SessionPipeline, end_session as _forward_end_session
 from sara_realtime.eleven_ws import ScribeRealtimeSTT
 
 logging.basicConfig(level=logging.INFO)
@@ -133,6 +133,10 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     # the idempotency key on the main-backend side (sara_turns unique index).
     web_session_id = str(uuid4())
     turn_index_counter = [0]
+    # Monotonic wall-clock start of this WS session — used to compute
+    # session_elapsed_s for both per-turn forwarding and the end-of-session
+    # POST (Phase 3 lesson completion tracking).
+    session_start_t = time.monotonic()
 
     pipeline = SessionPipeline(
         voice_id=VOICE_ID,
@@ -160,7 +164,10 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     reader_task = None
 
     loop_task = asyncio.create_task(
-        _turn_loop(websocket, pipeline, transcript_queue, turn_active, web_session_id, turn_index_counter),
+        _turn_loop(
+            websocket, pipeline, transcript_queue, turn_active,
+            web_session_id, turn_index_counter, session_start_t,
+        ),
         name="turn_loop",
     )
     loop_task.add_done_callback(_task_done_cb("turn_loop"))
@@ -240,6 +247,25 @@ async def ws_session(websocket: WebSocket, token: str = ""):
                 except Exception:
                     pass
 
+            elif msg_type == "text_turn":
+                # Typed-text turn (UI text input), bypassing STT entirely.
+                # Same gating as a committed Scribe transcript: ignored before
+                # "start" and dropped while a turn is already in flight — the
+                # ingestion gate for mic frames has no equivalent for typed
+                # text, so it is enforced explicitly here.
+                if not session_started:
+                    continue
+                text = (cmd.get("text") or "").strip()
+                if not text:
+                    continue
+                if turn_active.is_set():
+                    logger.debug("[WS] text_turn dropped (turn active): %r", text[:80])
+                    continue
+                try:
+                    transcript_queue.put_nowait(text)
+                except asyncio.QueueFull:
+                    logger.warning("[WS] transcript_queue full — dropping text_turn")
+
             elif msg_type == "end_session":
                 logger.info("[WS] Client requested end_session")
                 break
@@ -267,6 +293,17 @@ async def ws_session(websocket: WebSocket, token: str = ""):
         tasks = [t for t in (reader_task, loop_task) if t is not None]
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("[WS] Session closed — all tasks cancelled")
+
+        # Fire-and-forget end-of-session signal to the main backend (Phase 3
+        # lesson completion). Created as its own task so a slow/failed POST
+        # here can never delay WS teardown — this function call itself
+        # returns immediately either way.
+        session_elapsed_s = time.monotonic() - session_start_t
+        end_task = asyncio.create_task(
+            _forward_end_session(web_session_id, session_elapsed_s),
+            name="forward_end_session",
+        )
+        end_task.add_done_callback(_task_done_cb("forward_end_session"))
 
 
 # ── STT reader task ───────────────────────────────────────────────────────────
@@ -481,6 +518,7 @@ async def _turn_loop(
     turn_active: asyncio.Event,
     web_session_id: str,
     turn_index_counter: list,  # [int], shared mutable counter — one WS session
+    session_start_t: float,  # monotonic WS-accept time — for session_elapsed_s
 ):
     """
     Consumes committed transcripts from transcript_queue and runs the brain+TTS
@@ -511,6 +549,7 @@ async def _turn_loop(
                 websocket, transcript,
                 web_session_id=web_session_id,
                 turn_index=turn_index_counter[0],
+                session_elapsed_s=time.monotonic() - session_start_t,
             )
         except asyncio.CancelledError:
             logger.info("[TurnLoop] Cancelled during pipeline turn — exiting")

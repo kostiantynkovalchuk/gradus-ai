@@ -60,17 +60,24 @@ def _get_forward_client() -> httpx.AsyncClient:
 
 
 async def _forward_turn(
+    websocket,
     web_session_id: str,
     turn_index: int,
     user_transcript: str,
     sara_reply: str,
     cefr_band: str,
+    session_elapsed_s: Optional[float],
 ):
     """
     Fire-and-forget POST to the main backend. Runs inside its own
     asyncio.create_task (see run_turn) — never awaited on the voice path.
     Failures are logged and NEVER propagate; the voice path is provably
     unaffected by this call's success or failure.
+
+    On a successful response, relays any assessment corrections and the
+    lesson-completion flag back to the browser over the same WS — still
+    entirely inside this fire-and-forget task, so a slow/failed WS send here
+    can never delay or break the voice path (R11).
     """
     try:
         client = _get_forward_client()
@@ -83,6 +90,7 @@ async def _forward_turn(
                 "user_transcript": user_transcript,
                 "sara_reply": sara_reply,
                 "cefr_band": cefr_band,
+                "session_elapsed_s": session_elapsed_s,
             },
         )
         if resp.status_code // 100 != 2:
@@ -90,10 +98,71 @@ async def _forward_turn(
                 "[Pipeline] Turn forward non-2xx: status=%d body=%r",
                 resp.status_code, resp.text[:300],
             )
+            return
+
+        try:
+            data = resp.json()
+        except Exception:
+            logger.warning("[Pipeline] Turn forward: response body was not JSON")
+            return
+
+        assessment = data.get("assessment")
+        errors = (assessment.get("errors") or []) if isinstance(assessment, dict) else []
+        if errors:
+            try:
+                await websocket.send_json({
+                    "type": "corrections",
+                    "turn_index": turn_index,
+                    "errors": [
+                        {
+                            "type": e.get("type"),
+                            "original": e.get("original"),
+                            "correction": e.get("correction"),
+                            "explanation_ru": e.get("explanation_ru"),
+                        }
+                        for e in errors if isinstance(e, dict)
+                    ],
+                })
+            except Exception as ws_e:
+                logger.warning("[Pipeline] Failed to relay corrections over WS: %s", ws_e)
+
+        if data.get("lesson_completed"):
+            try:
+                await websocket.send_json({"type": "lesson_completed"})
+            except Exception as ws_e:
+                logger.warning("[Pipeline] Failed to relay lesson_completed over WS: %s", ws_e)
+
     except httpx.TimeoutException as e:
         logger.warning("[Pipeline] Turn forward timed out: %s", e)
     except Exception as e:
         logger.warning("[Pipeline] Turn forward failed: %s", e)
+
+
+async def end_session(web_session_id: str, session_elapsed_s: float):
+    """
+    Fire-and-forget POST to /internal/sara/session/end, called once from
+    app.py's ws_session teardown (finally block). Same graceful-degradation
+    contract as _forward_turn: no-ops entirely if forwarding is disabled,
+    never raises.
+    """
+    if not _FORWARD_ENABLED:
+        return
+    try:
+        client = _get_forward_client()
+        resp = await client.post(
+            f"{MAIN_BACKEND_URL}/internal/sara/session/end",
+            headers={"Authorization": f"Bearer {SARA_INTERNAL_TOKEN}"},
+            json={"web_session_id": web_session_id, "session_elapsed_s": session_elapsed_s},
+        )
+        if resp.status_code // 100 != 2:
+            logger.warning(
+                "[Pipeline] Session end forward non-2xx: status=%d body=%r",
+                resp.status_code, resp.text[:300],
+            )
+    except httpx.TimeoutException as e:
+        logger.warning("[Pipeline] Session end forward timed out: %s", e)
+    except Exception as e:
+        logger.warning("[Pipeline] Session end forward failed: %s", e)
 
 
 # Sentence-chunking thresholds
@@ -261,6 +330,7 @@ class SessionPipeline:
         transcript: str,
         web_session_id: Optional[str] = None,
         turn_index: Optional[int] = None,
+        session_elapsed_s: Optional[float] = None,
     ) -> Optional[str]:
         """
         Run one turn: Claude streaming → TTS.
@@ -400,8 +470,9 @@ class SessionPipeline:
         if _FORWARD_ENABLED and web_session_id is not None and turn_index is not None:
             forward_task = asyncio.create_task(
                 _forward_turn(
-                    web_session_id, turn_index, transcript,
+                    websocket, web_session_id, turn_index, transcript,
                     full_reply_text or raw_response, PHASE1_CEFR_BAND,
+                    session_elapsed_s,
                 ),
                 name="forward_turn",
             )

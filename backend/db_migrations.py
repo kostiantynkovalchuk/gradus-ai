@@ -1780,6 +1780,30 @@ MIGRATIONS = [
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_sara_turns_session_turn ON sara_turns (session_id, turn_index) WHERE turn_index IS NOT NULL",
         ],
     },
+    {
+        "version": "068_sara_lesson_completion",
+        "statements": [
+            # --- Widen the status enum CHECK to add 'completed' as a terminal-
+            # positive state (append-only: drop-and-recreate is the documented
+            # pattern for widening a CHECK; 064/067 constraints are untouched). ---
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'chk_sara_sessions_status'
+                ) THEN
+                    ALTER TABLE sara_sessions DROP CONSTRAINT chk_sara_sessions_status;
+                END IF;
+                ALTER TABLE sara_sessions ADD CONSTRAINT chk_sara_sessions_status
+                    CHECK (status IN ('active', 'closed', 'completed'));
+            END $$;
+            """,
+
+            "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ NULL",
+
+            "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS active_seconds INT NOT NULL DEFAULT 0",
+        ],
+    },
 ]
 
 

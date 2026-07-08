@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# Elapsed *active* seconds (learner speaking/turn time, tracked by sara-english
+# and sent on every turn POST) at which a web session auto-flips to
+# status='completed'. Default 600s = 10 minutes.
+SARA_LESSON_COMPLETE_S = int(os.environ.get("SARA_LESSON_COMPLETE_S", "600"))
+
 
 def _get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -60,10 +65,21 @@ words (uh, um, mm) are NEVER errors."""
 # FUNCTION 1: upsert_web_session
 # ─────────────────────────────────────────────────────────────────────────────
 
-def upsert_web_session(web_session_id: str) -> int:
+def upsert_web_session(web_session_id: str, session_elapsed_s: float | None = None):
     """
     Ensure a sara_sessions row exists for this web_session_id (source='web'),
-    bump last_activity_at / message_count, and return the numeric session id.
+    bump last_activity_at / message_count, ratchet active_seconds up to the
+    caller-reported elapsed time, and flip status 'active' -> 'completed'
+    (setting completed_at) the first time active_seconds crosses
+    SARA_LESSON_COMPLETE_S.
+
+    SELECT ... FOR UPDATE row-locks the session for the duration of this
+    transaction so concurrent/retried turn POSTs cannot race the completion
+    flip (same row-locking pattern used elsewhere in this codebase for
+    idempotency, e.g. duplicate post prevention).
+
+    Returns (session_id, lesson_completed_now) where lesson_completed_now is
+    True only on the single call that performs the active->completed flip.
     """
     conn = _get_conn()
     try:
@@ -77,18 +93,83 @@ def upsert_web_session(web_session_id: str) -> int:
                 (web_session_id,),
             )
             cur.execute(
-                """
-                UPDATE sara_sessions
-                SET last_activity_at = now(),
-                    message_count = message_count + 1
-                WHERE web_session_id = %s
-                RETURNING id
-                """,
+                "SELECT id, status, active_seconds FROM sara_sessions "
+                "WHERE web_session_id = %s FOR UPDATE",
                 (web_session_id,),
             )
             row = cur.fetchone()
+            session_id, prev_status, prev_active = row
+
+            elapsed = int(session_elapsed_s) if session_elapsed_s is not None else 0
+            new_active = max(prev_active, elapsed)
+
+            lesson_completed_now = (
+                prev_status == "active" and new_active >= SARA_LESSON_COMPLETE_S
+            )
+            new_status = "completed" if lesson_completed_now else prev_status
+
+            cur.execute(
+                """
+                UPDATE sara_sessions
+                SET last_activity_at = now(),
+                    message_count = message_count + 1,
+                    active_seconds = %s,
+                    status = %s,
+                    completed_at = CASE WHEN %s THEN now() ELSE completed_at END
+                WHERE id = %s
+                """,
+                (new_active, new_status, lesson_completed_now, session_id),
+            )
         conn.commit()
-        return row[0]
+        return session_id, lesson_completed_now
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCTION 1b: end_session — explicit end-of-session signal (Phase 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def end_session(web_session_id: str, session_elapsed_s: float | None = None) -> bool:
+    """
+    Idempotent atomic close: WHERE status = 'active' guards this so it can
+    NEVER downgrade an already-'completed' session back to 'closed', and a
+    retried end-of-session POST against an already-'closed' session is a
+    harmless no-op. Returns True only if this call performed the transition
+    (nothing to relay/log on False — already handled or unknown session).
+    """
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            if session_elapsed_s is not None:
+                cur.execute(
+                    """
+                    UPDATE sara_sessions
+                    SET status = 'closed',
+                        ended_at = now(),
+                        active_seconds = GREATEST(active_seconds, %s)
+                    WHERE web_session_id = %s AND status = 'active'
+                    RETURNING id
+                    """,
+                    (int(session_elapsed_s), web_session_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE sara_sessions
+                    SET status = 'closed',
+                        ended_at = now()
+                    WHERE web_session_id = %s AND status = 'active'
+                    RETURNING id
+                    """,
+                    (web_session_id,),
+                )
+            row = cur.fetchone()
+        conn.commit()
+        return row is not None
     except Exception:
         conn.rollback()
         raise

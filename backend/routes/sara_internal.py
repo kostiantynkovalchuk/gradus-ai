@@ -40,6 +40,10 @@ class SaraTurnRequest(BaseModel):
     user_transcript: str
     sara_reply: str
     cefr_band: str = "A2"
+    # Total active-session seconds as tracked by sara-english (Phase 3 lesson
+    # completion). Optional so an older/mismatched caller degrades gracefully
+    # to "never completes" rather than erroring.
+    session_elapsed_s: float | None = None
 
 
 @sara_internal_router.post("/turn")
@@ -48,7 +52,9 @@ async def post_turn(payload: SaraTurnRequest, authorization: str | None = Header
         return JSONResponse({"status": "unauthorized"}, status_code=401)
 
     try:
-        session_id = assessment_service.upsert_web_session(payload.web_session_id)
+        session_id, lesson_completed_now = assessment_service.upsert_web_session(
+            payload.web_session_id, payload.session_elapsed_s
+        )
 
         turn_id = assessment_service.insert_turn(
             session_id, payload.turn_index, payload.user_transcript, payload.sara_reply
@@ -65,10 +71,42 @@ async def post_turn(payload: SaraTurnRequest, authorization: str | None = Header
         )
         assessment_service.save_assessment(turn_id, session_id, assessment)
 
-        return JSONResponse({"status": "ok", "turn_id": turn_id})
+        if lesson_completed_now:
+            logger.info(
+                "[SaraInternal] Lesson completed (session=%s, turn_index=%s)",
+                payload.web_session_id, payload.turn_index,
+            )
+
+        return JSONResponse({
+            "status": "ok",
+            "turn_id": turn_id,
+            "assessment": assessment,
+            "lesson_completed": lesson_completed_now,
+        })
 
     except Exception as e:
         logger.exception("[SaraInternal] /internal/sara/turn failed: %s", e)
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
+class SaraSessionEndRequest(BaseModel):
+    web_session_id: str
+    session_elapsed_s: float | None = None
+
+
+@sara_internal_router.post("/session/end")
+async def post_session_end(payload: SaraSessionEndRequest, authorization: str | None = Header(default=None)):
+    if not _check_token(authorization):
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
+    try:
+        closed = assessment_service.end_session(payload.web_session_id, payload.session_elapsed_s)
+        return JSONResponse({"status": "ok", "closed": closed})
+    except Exception as e:
+        logger.exception(
+            "[SaraInternal] /internal/sara/session/end failed (session=%s): %s",
+            payload.web_session_id, e,
+        )
         return JSONResponse({"status": "error"}, status_code=500)
 
 
