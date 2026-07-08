@@ -1729,6 +1729,57 @@ MIGRATIONS = [
             "INSERT INTO sara_beats (scenario, script_text) VALUES ('farewell','Great chat today, Felix. See you next time!') ON CONFLICT DO NOTHING",
         ],
     },
+    {
+        "version": "067_sara_web_sessions",
+        "statements": [
+            # --- Let sara_sessions represent web (realtime) sessions with no
+            # Telegram identity. Idempotent — every step is guarded so this is
+            # safe to re-run. Existing Telegram rows are untouched: they never
+            # set `source`, so the DEFAULT 'telegram' covers them unchanged. ---
+            "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'telegram'",
+
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'chk_sara_sessions_source'
+                ) THEN
+                    ALTER TABLE sara_sessions ADD CONSTRAINT chk_sara_sessions_source
+                        CHECK (source IN ('telegram', 'web'));
+                END IF;
+            END $$;
+            """,
+
+            "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS web_session_id UUID NULL",
+
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_sara_sessions_web_session_id ON sara_sessions (web_session_id) WHERE web_session_id IS NOT NULL",
+
+            # DROP NOT NULL is itself idempotent in Postgres (no-op, no error,
+            # if the column is already nullable) — no DO guard needed.
+            "ALTER TABLE sara_sessions ALTER COLUMN tg_user_id DROP NOT NULL",
+
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'chk_sara_sessions_identity'
+                ) THEN
+                    ALTER TABLE sara_sessions ADD CONSTRAINT chk_sara_sessions_identity
+                        CHECK (
+                            (source = 'telegram' AND tg_user_id IS NOT NULL) OR
+                            (source = 'web' AND web_session_id IS NOT NULL)
+                        );
+                END IF;
+            END $$;
+            """,
+
+            # --- Idempotency backbone for retried forward-POSTs (rule 4):
+            # a (session_id, turn_index) pair can only ever produce one row. ---
+            "ALTER TABLE sara_turns ADD COLUMN IF NOT EXISTS turn_index INT NULL",
+
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_sara_turns_session_turn ON sara_turns (session_id, turn_index) WHERE turn_index IS NOT NULL",
+        ],
+    },
 ]
 
 

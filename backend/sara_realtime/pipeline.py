@@ -19,6 +19,7 @@ import os
 import time
 from typing import Optional
 
+import httpx
 from anthropic import AsyncAnthropic
 
 from services.sara_prompts import _LEVEL_BLOCKS, _LEVEL_BLOCK_DEFAULT
@@ -30,6 +31,70 @@ logger = logging.getLogger(__name__)
 CLAUDE_MODEL = "claude-sonnet-4-6"
 MAX_HISTORY_TURNS = 20
 PHASE1_CEFR_BAND = "A2"
+
+# ── Turn forwarding (Architecture C — audit C7/C8) ────────────────────────────
+# First-ever outbound HTTP call from sara_realtime/. This is a POST to the
+# MAIN backend, never a DB write and never a migration call — §11 stays
+# intact. Graceful degradation: if either env var is unset, forwarding is
+# disabled entirely and sara-english keeps working standalone.
+MAIN_BACKEND_URL = os.getenv("MAIN_BACKEND_URL", "").rstrip("/")
+SARA_INTERNAL_TOKEN = os.getenv("SARA_INTERNAL_TOKEN", "")
+_FORWARD_ENABLED = bool(MAIN_BACKEND_URL and SARA_INTERNAL_TOKEN)
+
+if not _FORWARD_ENABLED:
+    logger.warning(
+        "[Pipeline] Turn forwarding disabled — MAIN_BACKEND_URL and/or "
+        "SARA_INTERNAL_TOKEN not set. sara-english runs fully standalone."
+    )
+
+# Lazy module-level httpx.AsyncClient — created once, reused across turns
+# and sessions. Never instantiated if forwarding is disabled.
+_forward_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_forward_client() -> httpx.AsyncClient:
+    global _forward_client
+    if _forward_client is None:
+        _forward_client = httpx.AsyncClient(timeout=15.0)
+    return _forward_client
+
+
+async def _forward_turn(
+    web_session_id: str,
+    turn_index: int,
+    user_transcript: str,
+    sara_reply: str,
+    cefr_band: str,
+):
+    """
+    Fire-and-forget POST to the main backend. Runs inside its own
+    asyncio.create_task (see run_turn) — never awaited on the voice path.
+    Failures are logged and NEVER propagate; the voice path is provably
+    unaffected by this call's success or failure.
+    """
+    try:
+        client = _get_forward_client()
+        resp = await client.post(
+            f"{MAIN_BACKEND_URL}/internal/sara/turn",
+            headers={"Authorization": f"Bearer {SARA_INTERNAL_TOKEN}"},
+            json={
+                "web_session_id": web_session_id,
+                "turn_index": turn_index,
+                "user_transcript": user_transcript,
+                "sara_reply": sara_reply,
+                "cefr_band": cefr_band,
+            },
+        )
+        if resp.status_code // 100 != 2:
+            logger.warning(
+                "[Pipeline] Turn forward non-2xx: status=%d body=%r",
+                resp.status_code, resp.text[:300],
+            )
+    except httpx.TimeoutException as e:
+        logger.warning("[Pipeline] Turn forward timed out: %s", e)
+    except Exception as e:
+        logger.warning("[Pipeline] Turn forward failed: %s", e)
+
 
 # Sentence-chunking thresholds
 SENTENCE_END_CHARS = frozenset(".!?…")
@@ -194,6 +259,8 @@ class SessionPipeline:
         self,
         websocket,
         transcript: str,
+        web_session_id: Optional[str] = None,
+        turn_index: Optional[int] = None,
     ) -> Optional[str]:
         """
         Run one turn: Claude streaming → TTS.
@@ -205,6 +272,11 @@ class SessionPipeline:
         t0 is set at function entry, which is the moment the committed transcript
         was pulled from transcript_queue — i.e. the VAD commit baseline. All
         SARA_RT_TURN metrics are deltas from this point (t_stt_commit_ms = 0).
+
+        web_session_id / turn_index (assigned per-session/per-turn in app.py)
+        are used only to fire the fire-and-forget forward POST to the main
+        backend after the turn completes — see the forward task below. Never
+        awaited on the voice path (audit C7, R11).
 
         Returns the Sara reply text (for history), or None on brain/TTS error.
         Never raises — all errors surface as {"type": "error"} WS events.
@@ -319,6 +391,21 @@ class SessionPipeline:
         )
 
         await websocket.send_json({"type": "turn_complete", "metrics": metrics})
+
+        # ── Fire-and-forget forward to main backend (Architecture C) ──────────
+        # Fired AFTER turn_complete has been sent to the browser — the voice
+        # path has already finished from the user's perspective. This task is
+        # never awaited here; its own errors are caught inside _forward_turn
+        # and never propagate (audit C7/C8, R11).
+        if _FORWARD_ENABLED and web_session_id is not None and turn_index is not None:
+            forward_task = asyncio.create_task(
+                _forward_turn(
+                    web_session_id, turn_index, transcript,
+                    full_reply_text or raw_response, PHASE1_CEFR_BAND,
+                ),
+                name="forward_turn",
+            )
+            forward_task.add_done_callback(_make_done_callback("forward_turn"))
 
         # Update history (keep last MAX_HISTORY_TURNS pairs)
         self._history.append({"role": "user", "content": transcript})

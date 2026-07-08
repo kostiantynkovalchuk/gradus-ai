@@ -276,6 +276,7 @@ Must be included verbatim in every Sara implementation prompt and re-verified
 | R8 | No `sqlalchemy` / `psycopg` / `register_webhook(` calls anywhere in `sara_realtime/` | grep |
 | R9 | `ConnectionClosedError`/`OK` **not** caught inside `ScribeRealtimeSTT.receive_events()` | assert absent from `getsource(receive_events)` |
 | R10 | No `get_nowait()` drain loop in `app.py` or `pipeline.py` | string search |
+| R11 | The Architecture C forward POST is never awaited on the voice path — it exists only inside an `asyncio.create_task` fired after `turn_complete` is sent | grep for a bare `await *client.post` inside `run_turn`'s main body — must be absent |
 
 ### Known gaps (Sara-specific)
 1. **Intermittent silent-audio turn** — one observed instance; root side

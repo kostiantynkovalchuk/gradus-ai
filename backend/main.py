@@ -458,6 +458,8 @@ from routes.alex_avtd_webhook import alex_avtd_router
 app.include_router(alex_avtd_router)
 from routes.sara_webhook import sara_router
 app.include_router(sara_router)
+from routes.sara_internal import sara_internal_router
+app.include_router(sara_internal_router)
 
 class ChatRequest(BaseModel):
     message: str

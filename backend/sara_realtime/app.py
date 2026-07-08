@@ -58,6 +58,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -126,6 +127,13 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     await websocket.accept()
     logger.info("[WS] New session accepted")
 
+    # Web session identity for Architecture C turn forwarding. Generated here
+    # (not by the browser) so it cannot be spoofed/reused across sessions.
+    # turn_index increments per completed turn within this WS session and is
+    # the idempotency key on the main-backend side (sara_turns unique index).
+    web_session_id = str(uuid4())
+    turn_index_counter = [0]
+
     pipeline = SessionPipeline(
         voice_id=VOICE_ID,
         stt_model=STT_MODEL,
@@ -152,7 +160,7 @@ async def ws_session(websocket: WebSocket, token: str = ""):
     reader_task = None
 
     loop_task = asyncio.create_task(
-        _turn_loop(websocket, pipeline, transcript_queue, turn_active),
+        _turn_loop(websocket, pipeline, transcript_queue, turn_active, web_session_id, turn_index_counter),
         name="turn_loop",
     )
     loop_task.add_done_callback(_task_done_cb("turn_loop"))
@@ -471,6 +479,8 @@ async def _turn_loop(
     pipeline: SessionPipeline,
     transcript_queue: asyncio.Queue,
     turn_active: asyncio.Event,
+    web_session_id: str,
+    turn_index_counter: list,  # [int], shared mutable counter — one WS session
 ):
     """
     Consumes committed transcripts from transcript_queue and runs the brain+TTS
@@ -496,7 +506,12 @@ async def _turn_loop(
 
         turn_active.set()
         try:
-            await pipeline.run_turn(websocket, transcript)
+            turn_index_counter[0] += 1
+            await pipeline.run_turn(
+                websocket, transcript,
+                web_session_id=web_session_id,
+                turn_index=turn_index_counter[0],
+            )
         except asyncio.CancelledError:
             logger.info("[TurnLoop] Cancelled during pipeline turn — exiting")
             return

@@ -1,0 +1,1 @@
+- [Partial unique index ON CONFLICT](postgres-partial-unique-index-on-conflict.md) — ON CONFLICT (col) needs a WHERE clause matching the partial index predicate; ON CONFLICT ON CONSTRAINT only works for named constraints, not CREATE UNIQUE INDEX.
