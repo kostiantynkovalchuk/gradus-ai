@@ -2,12 +2,11 @@
 Sara Real-Time Voice Service — FastAPI app.
 
 Serves:
-  GET  /           → test page (auth: ?token=)
+  GET  /           → production lesson UI (open access)
   GET  /health     → liveness probe
-  WS   /ws/session → real-time voice session (auth: ?token=)
+  WS   /ws/session → real-time voice session (open access)
 
-Auth: single env var SARA_RT_ACCESS_TOKEN (pilot gate, not a full auth system).
-Page: 403 on bad token. WebSocket: close code 4403 on bad token.
+Auth: none. SARA_RT_ACCESS_TOKEN env var is read but ignored.
 
 Start command (from backend/ as CWD, matching monorepo import root):
   uvicorn sara_realtime.app:app --host 0.0.0.0 --port $PORT
@@ -71,7 +70,7 @@ from sara_realtime.eleven_ws import ScribeRealtimeSTT
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ACCESS_TOKEN = os.getenv("SARA_RT_ACCESS_TOKEN", "")
+ACCESS_TOKEN = os.getenv("SARA_RT_ACCESS_TOKEN", "")  # read but not used — auth disabled
 VOICE_ID = os.getenv("SARA_RT_VOICE_ID") or os.getenv("ELEVENLABS_VOICE_ID", "")
 STT_MODEL = os.getenv("SARA_RT_STT_MODEL", "scribe_v2_realtime")
 TTS_MODEL = os.getenv("SARA_RT_TTS_MODEL", "eleven_flash_v2_5")
@@ -87,13 +86,6 @@ app = FastAPI(title="Sara Real-Time Voice", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-def _check_token(token: str) -> bool:
-    """Reject if ACCESS_TOKEN is set and the provided token doesn't match."""
-    if not ACCESS_TOKEN:
-        return True
-    return token == ACCESS_TOKEN
-
-
 def _task_done_cb(label: str):
     """Return an asyncio Task done-callback that logs unexpected exceptions."""
     def _cb(task: asyncio.Task):
@@ -106,22 +98,17 @@ def _task_done_cb(label: str):
 
 
 @app.get("/")
-async def index(token: str = ""):
-    if not _check_token(token):
-        return HTMLResponse("<h1>403 Forbidden</h1>", status_code=403)
+async def index():
     html_path = STATIC_DIR / "index.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
 @app.get("/debug")
-async def debug_page(token: str = ""):
+async def debug_page():
     """
     Engineering lab-bench test page (the original throwaway Phase-1 UI).
-    Kept alongside the production UI at "/" for raw event/metrics debugging —
-    same token gate, same static dir, just a different file.
+    Kept alongside the production UI at "/" for raw event/metrics debugging.
     """
-    if not _check_token(token):
-        return HTMLResponse("<h1>403 Forbidden</h1>", status_code=403)
     html_path = STATIC_DIR / "debug.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
@@ -132,11 +119,7 @@ async def health():
 
 
 @app.websocket("/ws/session")
-async def ws_session(websocket: WebSocket, token: str = ""):
-    if not _check_token(token):
-        await websocket.close(code=4403)
-        return
-
+async def ws_session(websocket: WebSocket):
     await websocket.accept()
     logger.info("[WS] New session accepted")
 

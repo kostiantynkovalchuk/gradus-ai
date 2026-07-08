@@ -398,22 +398,7 @@ function setState(m){
   ['avatarWrap','avatarWrapM'].forEach(id => { const el = $(id); if (el) el.classList.toggle('speaking', m === 'speaking'); });
 }
 
-/* ══════════ TOKEN ══════════ */
-function resolveToken(){
-  const qs = new URLSearchParams(location.search).get('token');
-  if (qs) {
-    localStorage.setItem('sara_token', qs);
-    history.replaceState(null, '', location.pathname);
-    return qs;
-  }
-  const stored = localStorage.getItem('sara_token');
-  if (stored) return stored;
-  const entered = window.prompt('Введите код доступа к уроку:') || '';
-  if (entered) localStorage.setItem('sara_token', entered);
-  return entered;
-}
-const TOKEN = resolveToken();
-const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/session?token=${encodeURIComponent(TOKEN)}`;
+const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/session`;
 
 /* ══════════ AUDIO SCHEDULER (ported verbatim from Phase-1 test page) ══════════ */
 let ws = null;
@@ -703,11 +688,6 @@ function connect(){
   ws.onclose = e => {
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (sessionEnded) return;
-    if (e.code === 4403) {
-      localStorage.removeItem('sara_token');
-      showBanner('Неверный код доступа — обновите страницу.');
-      return;
-    }
     if (!e.wasClean && !reconnectAttempted) {
       reconnectAttempted = true;
       showBanner('Связь прервалась — переподключаюсь…');
