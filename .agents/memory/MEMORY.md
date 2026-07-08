@@ -1,1 +1,2 @@
 - [Partial unique index ON CONFLICT](postgres-partial-unique-index-on-conflict.md) — ON CONFLICT (col) needs a WHERE clause matching the partial index predicate; ON CONFLICT ON CONSTRAINT only works for named constraints, not CREATE UNIQUE INDEX.
+- [sara_realtime standalone testing](sara-realtime-standalone-testing.md) — start+curl+kill a standalone (non-workflow) uvicorn service in ONE bash call; background procs die between calls.
