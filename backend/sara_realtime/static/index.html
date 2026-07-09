@@ -120,6 +120,9 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sara);outline-offse
 .state[data-mode="speaking"] .dot{background:var(--speak)}
 .state[data-mode="paused"]{color:var(--muted)}
 .state[data-mode="paused"] .dot{background:var(--muted)}
+.state[data-mode="ended"]{background:var(--live-soft);border-color:#CBE3D6;color:var(--live)}
+.state[data-mode="ended"] .dot{background:var(--live);animation:none}
+button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 
 /* mic level bars inside listening pill */
 .bars{display:none;align-items:flex-end;gap:2px;height:12px}
@@ -389,13 +392,21 @@ setRing(elapsed);
 let clockTimer = setInterval(() => setRing(++elapsed), 1000);
 let lessonCompleted = false;
 
-const LABELS = { listening:'Слушаю', thinking:'Думаю…', speaking:'Говорю', paused:'Пауза' };
+const LABELS = { listening:'Слушаю', thinking:'Думаю…', speaking:'Говорю', paused:'Пауза', ended:'Урок завершён' };
 let mode = 'paused';
 function setState(m){
   mode = m;
   ['statePill','statePillM'].forEach(id => { const el = $(id); if (el) el.dataset.mode = m; });
   $('stateLabel').textContent = LABELS[m]; $('stateLabelM').textContent = LABELS[m];
   ['avatarWrap','avatarWrapM'].forEach(id => { const el = $(id); if (el) el.classList.toggle('speaking', m === 'speaking'); });
+  // Ended is terminal — exactly one coherent control may show: disable the
+  // mic toggle and any bars so no other control can look interactive once
+  // the lesson is truly over (fix for the Пауза/«Урок завершён» conflict).
+  if (m === 'ended') {
+    ['micBtn','micBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+    const bars = document.querySelectorAll('.state .bars');
+    bars.forEach(b => b.style.display = 'none');
+  }
 }
 
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/session`;
@@ -811,8 +822,11 @@ function bindEnd(btn){
     } else {
       clearTimeout(timer);
       btn.textContent = 'Урок завершён ✓'; btn.classList.remove('confirm');
-      setState('paused');
+      // Terminal state — distinct from a mic-off pause, so the state pill
+      // and the end button never contradict each other at session end.
+      setState('ended');
       endSession();
+      ['endBtn','endBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
     }
   });
 }

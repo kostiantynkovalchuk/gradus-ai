@@ -55,3 +55,8 @@ services:
         sync: false
       - key: SARA_INTERNAL_TOKEN
         sync: false
+      # Configured pilot learner id (identity + lesson continuity, spec
+      # Part B2). Defaults to 'felix' if unset — set explicitly so a future
+      # second pilot user is obviously a config change, not a code change.
+      - key: SARA_RT_LEARNER_ID
+        sync: false

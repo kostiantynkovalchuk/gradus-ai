@@ -92,6 +92,11 @@ async def post_turn(payload: SaraTurnRequest, authorization: str | None = Header
 class SaraSessionEndRequest(BaseModel):
     web_session_id: str
     session_elapsed_s: float | None = None
+    # Which learner this web session belongs to, so the best-effort recap
+    # (below) knows which sara_web_state row to update. Optional so an
+    # older/mismatched caller degrades gracefully to "no recap" rather than
+    # erroring — the end-of-session close itself never depends on this.
+    learner_id: str | None = None
 
 
 @sara_internal_router.post("/session/end")
@@ -101,12 +106,48 @@ async def post_session_end(payload: SaraSessionEndRequest, authorization: str | 
 
     try:
         closed = assessment_service.end_session(payload.web_session_id, payload.session_elapsed_s)
-        return JSONResponse({"status": "ok", "closed": closed})
     except Exception as e:
         logger.exception(
             "[SaraInternal] /internal/sara/session/end failed (session=%s): %s",
             payload.web_session_id, e,
         )
+        return JSONResponse({"status": "error"}, status_code=500)
+
+    # Best-effort recap — the session is already validly closed above; a
+    # recap failure here must never turn a successful end into an error
+    # (rule 3 / spec Part C1).
+    if payload.learner_id:
+        try:
+            assessment_service.generate_and_store_recap(payload.learner_id, payload.web_session_id)
+        except Exception as e:
+            logger.warning(
+                "[SaraInternal] recap generation failed (learner=%s, session=%s): %s",
+                payload.learner_id, payload.web_session_id, e,
+            )
+
+    return JSONResponse({"status": "ok", "closed": closed})
+
+
+@sara_internal_router.get("/learner/{learner_id}")
+async def get_learner(learner_id: str, authorization: str | None = Header(default=None)):
+    """
+    Identity + continuity read for the web (sara-english) welcome turn.
+    Returns display_name + last_session_summary + last_theme, with nulls
+    (200, not 404) for a fresh/unknown learner_id — a context-fetch problem
+    must never block the lesson (rule 3).
+    """
+    if not _check_token(authorization):
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
+    try:
+        context = assessment_service.get_learner_context(learner_id)
+        return JSONResponse({
+            "display_name": context["display_name"],
+            "last_session_summary": context["last_session_summary"],
+            "last_theme": context["last_theme"],
+        })
+    except Exception as e:
+        logger.exception("[SaraInternal] /internal/sara/learner/%s failed: %s", learner_id, e)
         return JSONResponse({"status": "error"}, status_code=500)
 
 

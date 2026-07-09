@@ -171,6 +171,63 @@ SARA_SYSTEM_PROMPT_BASE_EN = SARA_SYSTEM_PROMPT_BASE.replace(
 SARA_LANGUAGE_MODE = os.getenv("SARA_LANGUAGE_MODE", "russian")  # "russian" or "english_only"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WELCOME TURN — additive only (sara-english real-time service).
+#
+# ADDITIVE: this is a NEW constant, not a change to any existing one above.
+# Nothing here is read by sara_webhook.py (Telegram). Same language law as
+# SARA_REALTIME_PROMPT_BASE: English speech, optional Russian glosses in
+# parentheses ONLY, never Ukrainian, never a standalone Russian sentence.
+#
+# Used once per session, appended to the system prompt for a single
+# Claude-generated OPENING turn (Sara speaks first) — the exact sentence is
+# never hardcoded so it stays warm and varies naturally.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_welcome_instruction(display_name: str, last_session_summary: str | None, last_theme: str | None) -> str:
+    """
+    Build the WELCOME instruction block appended to the system prompt for the
+    one-off opening turn. Two cases (spec Part B3), both English + at most
+    one short Russian gloss:
+      - fresh learner (no summary): warm greeting by name + an easy opener.
+      - returning learner (has summary/theme): greeting by name + a specific
+        callback to last_theme, then an invitation.
+    """
+    if last_session_summary and last_theme:
+        case_block = (
+            f"This is a RETURNING learner. Last session's theme was: {last_theme}. "
+            f"Last session's summary: {last_session_summary}. "
+            f"Greet them BY NAME (\"{display_name}\") and make a SPECIFIC callback to "
+            f"that theme — reference what you two talked about, then invite them to "
+            f"continue or share what happened since. Do NOT just say \"welcome back\" "
+            f"with no reference to the theme — the callback is the whole point."
+        )
+    else:
+        case_block = (
+            f"This is a FRESH learner with no prior session. Greet them warmly BY NAME "
+            f"(\"{display_name}\") as their English tutor, and offer an easy opener "
+            f"question to start today's lesson. Do NOT pretend to remember a previous "
+            f"session — there isn't one."
+        )
+
+    return (
+        "\n\nWELCOME INSTRUCTION (this turn ONLY — you are speaking FIRST, before "
+        "the learner has said anything):\n"
+        f"{case_block}\n"
+        "Hard rules for this opening turn: speak English only, with AT MOST one "
+        "short Russian gloss in parentheses (never a full Russian sentence, never "
+        "Ukrainian); end with EXACTLY one question; NEVER ask the learner's name — "
+        "you already know it; keep it short and warm (1-3 sentences), like every "
+        "other Sara reply."
+    )
+
+
+def build_welcome_system_prompt(base_system_prompt: str, display_name: str,
+                                 last_session_summary: str | None, last_theme: str | None) -> str:
+    """Compose the one-off welcome-turn system prompt: base + WELCOME instruction."""
+    return base_system_prompt + build_welcome_instruction(display_name, last_session_summary, last_theme)
+
+
 def _build_system_prompt(cefr_band) -> str:
     if SARA_LANGUAGE_MODE == "english_only":
         base = SARA_SYSTEM_PROMPT_BASE_EN

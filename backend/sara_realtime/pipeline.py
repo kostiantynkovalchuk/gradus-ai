@@ -22,7 +22,7 @@ from typing import Optional
 import httpx
 from anthropic import AsyncAnthropic
 
-from services.sara_prompts import _LEVEL_BLOCKS, _LEVEL_BLOCK_DEFAULT
+from services.sara_prompts import _LEVEL_BLOCKS, _LEVEL_BLOCK_DEFAULT, build_welcome_system_prompt
 
 from sara_realtime.eleven_ws import tts_synthesize_chunked
 
@@ -138,21 +138,28 @@ async def _forward_turn(
         logger.warning("[Pipeline] Turn forward failed: %s", e)
 
 
-async def end_session(web_session_id: str, session_elapsed_s: float):
+async def end_session(web_session_id: str, session_elapsed_s: float, learner_id: Optional[str] = None):
     """
     Fire-and-forget POST to /internal/sara/session/end, called once from
     app.py's ws_session teardown (finally block). Same graceful-degradation
     contract as _forward_turn: no-ops entirely if forwarding is disabled,
     never raises.
+
+    learner_id (when known) rides along so the main backend can run the
+    best-effort recap write for that learner's sara_web_state row (spec
+    Part C1) — omitted entirely for older callers, which just skip recap.
     """
     if not _FORWARD_ENABLED:
         return
     try:
         client = _get_forward_client()
+        payload = {"web_session_id": web_session_id, "session_elapsed_s": session_elapsed_s}
+        if learner_id:
+            payload["learner_id"] = learner_id
         resp = await client.post(
             f"{MAIN_BACKEND_URL}/internal/sara/session/end",
             headers={"Authorization": f"Bearer {SARA_INTERNAL_TOKEN}"},
-            json={"web_session_id": web_session_id, "session_elapsed_s": session_elapsed_s},
+            json=payload,
         )
         if resp.status_code // 100 != 2:
             logger.warning(
@@ -163,6 +170,46 @@ async def end_session(web_session_id: str, session_elapsed_s: float):
         logger.warning("[Pipeline] Session end forward timed out: %s", e)
     except Exception as e:
         logger.warning("[Pipeline] Session end forward failed: %s", e)
+
+
+DEFAULT_LEARNER_ID = os.getenv("SARA_RT_LEARNER_ID", "felix")
+
+
+async def fetch_learner_context(learner_id: str) -> dict:
+    """
+    GET /internal/sara/learner/{learner_id} from the main backend — identity
+    + continuity read for the welcome turn (spec Part B2). Fire-and-forget-
+    SAFE: any failure (network, non-2xx, disabled forwarding) is logged and
+    degrades to a name-only context — a context-fetch failure must never
+    block the lesson (rule 3).
+    """
+    fallback = {"display_name": learner_id.capitalize(), "last_session_summary": None, "last_theme": None}
+    if not _FORWARD_ENABLED:
+        return fallback
+    try:
+        client = _get_forward_client()
+        resp = await client.get(
+            f"{MAIN_BACKEND_URL}/internal/sara/learner/{learner_id}",
+            headers={"Authorization": f"Bearer {SARA_INTERNAL_TOKEN}"},
+        )
+        if resp.status_code // 100 != 2:
+            logger.warning(
+                "[Pipeline] Learner context fetch non-2xx: status=%d body=%r",
+                resp.status_code, resp.text[:300],
+            )
+            return fallback
+        data = resp.json()
+        return {
+            "display_name": data.get("display_name") or fallback["display_name"],
+            "last_session_summary": data.get("last_session_summary"),
+            "last_theme": data.get("last_theme"),
+        }
+    except httpx.TimeoutException as e:
+        logger.warning("[Pipeline] Learner context fetch timed out: %s", e)
+        return fallback
+    except Exception as e:
+        logger.warning("[Pipeline] Learner context fetch failed: %s", e)
+        return fallback
 
 
 # Sentence-chunking thresholds
@@ -486,6 +533,128 @@ class SessionPipeline:
         self._history.append({"role": "assistant", "content": full_reply_text or raw_response})
         if len(self._history) > MAX_HISTORY_TURNS * 2:
             self._history = self._history[-(MAX_HISTORY_TURNS * 2):]
+
+        return full_reply_text
+
+    async def run_welcome_turn(
+        self,
+        websocket,
+        display_name: str,
+        last_session_summary: Optional[str],
+        last_theme: Optional[str],
+    ) -> Optional[str]:
+        """
+        Sara speaks FIRST — the one-off opening turn (spec Part B3). Same
+        Brain→TTS pipeline as run_turn (so audio + transcript bubble +
+        metrics behave identically), but:
+          - no user transcript to echo/send
+          - system prompt = base + WELCOME instruction (build_welcome_system_prompt)
+          - no forward-to-main-backend (there is no learner utterance to log
+            as a sara_turns row)
+        The generated reply IS still appended to self._history so the rest
+        of the conversation has it as context. Never raises — mirrors
+        run_turn's error handling (an error here must not block the lesson;
+        app.py treats this call as best-effort).
+        """
+        t0 = time.monotonic()
+        ms = lambda: int((time.monotonic() - t0) * 1000)
+
+        logger.info(
+            "[Pipeline] Welcome turn start — display_name=%r has_summary=%s",
+            display_name, bool(last_session_summary),
+        )
+
+        t_claude_first_token: Optional[int] = None
+        t_first_audio: Optional[int] = None
+        full_reply_text = ""
+
+        tts_text_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+
+        async def _relay_audio(audio_bytes: bytes):
+            nonlocal t_first_audio
+            if t_first_audio is None:
+                t_first_audio = ms()
+            await websocket.send_bytes(audio_bytes)
+
+        tts_task = asyncio.create_task(
+            tts_synthesize_chunked(
+                self._voice_id, self._tts_model, tts_text_queue, _relay_audio
+            ),
+            name="tts_synthesize_welcome",
+        )
+        tts_task.add_done_callback(_make_done_callback("tts_synthesize_welcome"))
+
+        try:
+            base_prompt = SARA_REALTIME_PROMPT_BASE + "\n\n" + _LEVEL_BLOCKS.get(PHASE1_CEFR_BAND, _LEVEL_BLOCK_DEFAULT)
+            system_prompt = build_welcome_system_prompt(base_prompt, display_name, last_session_summary, last_theme)
+
+            # A single short user-role nudge is required — Claude's Messages
+            # API needs at least one user message; the actual instruction
+            # lives entirely in system_prompt so the model still speaks first
+            # from the learner's point of view once TTS plays.
+            messages = [{"role": "user", "content": "(the lesson is starting — greet me now)"}]
+
+            token_buffer = ""
+            raw_response = ""
+
+            async with self._anthropic.messages.stream(
+                model=CLAUDE_MODEL,
+                max_tokens=256,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                async for token in stream.text_stream:
+                    if t_claude_first_token is None:
+                        t_claude_first_token = ms()
+
+                    raw_response += token
+                    token_buffer += token
+
+                    await websocket.send_json({"type": "assistant_delta", "text": token})
+
+                    chunks, token_buffer = _sentence_chunks(token_buffer)
+                    for chunk in chunks:
+                        await tts_text_queue.put(chunk)
+
+            if token_buffer.strip():
+                await tts_text_queue.put(token_buffer.strip())
+
+            await tts_text_queue.put(None)
+            full_reply_text = raw_response
+
+        except Exception as e:
+            logger.exception("[Pipeline] Welcome turn Brain/TTS error: %s", e)
+            await tts_text_queue.put(None)
+            try:
+                await asyncio.wait_for(tts_task, timeout=2.0)
+            except Exception:
+                pass
+            return None
+
+        try:
+            await asyncio.wait_for(tts_task, timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("[Pipeline] Welcome turn TTS 30s safety timeout fired")
+            tts_task.cancel()
+        except Exception as e:
+            logger.exception("[Pipeline] Welcome turn TTS task error: %s", e)
+
+        t_turn_end = ms()
+        logger.info(
+            "SARA_RT_WELCOME_TURN t_claude_first_token=%s t_first_audio_to_client=%s t_turn_end=%d",
+            t_claude_first_token if t_claude_first_token is not None else "N/A",
+            t_first_audio if t_first_audio is not None else "N/A",
+            t_turn_end,
+        )
+
+        await websocket.send_json({"type": "turn_complete", "metrics": {
+            "t_stt_commit_ms": 0,
+            "t_claude_first_token_ms": t_claude_first_token,
+            "t_first_audio_to_client_ms": t_first_audio,
+            "t_turn_end_ms": t_turn_end,
+        }})
+
+        self._history.append({"role": "assistant", "content": full_reply_text or raw_response})
 
         return full_reply_text
 

@@ -64,13 +64,21 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from sara_realtime.pipeline import SessionPipeline, end_session as _forward_end_session
+from sara_realtime.pipeline import (
+    SessionPipeline,
+    end_session as _forward_end_session,
+    fetch_learner_context,
+    DEFAULT_LEARNER_ID,
+)
 from sara_realtime.eleven_ws import ScribeRealtimeSTT
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ACCESS_TOKEN = os.getenv("SARA_RT_ACCESS_TOKEN", "")  # read but not used — auth disabled
+# Configured pilot learner id (Part B2). A second pilot user is just a
+# different env value + a seeded sara_web_state row — never hardcoded logic.
+LEARNER_ID = os.getenv("SARA_RT_LEARNER_ID", DEFAULT_LEARNER_ID)
 VOICE_ID = os.getenv("SARA_RT_VOICE_ID") or os.getenv("ELEVENLABS_VOICE_ID", "")
 STT_MODEL = os.getenv("SARA_RT_STT_MODEL", "scribe_v2_realtime")
 TTS_MODEL = os.getenv("SARA_RT_TTS_MODEL", "eleven_flash_v2_5")
@@ -169,6 +177,7 @@ async def ws_session(websocket: WebSocket):
     loop_task.add_done_callback(_task_done_cb("turn_loop"))
 
     session_started = False
+    welcome_sent = [False]  # mutable so the "start" handler can flip it once
 
     try:
         while True:
@@ -237,6 +246,29 @@ async def ws_session(websocket: WebSocket):
                     )
                     reader_task.add_done_callback(_task_done_cb("stt_reader"))
 
+                # Identity + welcome turn (Part B2/B3) — fires once per
+                # session, only after this successful "start". Gated on
+                # welcome_sent so a duplicate "start" (e.g. reconnect retry)
+                # never speaks twice. A context-fetch or welcome-turn failure
+                # must never block the lesson (rule 3) — turn_active guards
+                # the mic gate around it exactly like a normal turn, and any
+                # exception is caught and logged, never re-raised.
+                if not welcome_sent[0]:
+                    welcome_sent[0] = True
+                    turn_active.set()
+                    try:
+                        context = await fetch_learner_context(LEARNER_ID)
+                        await pipeline.run_welcome_turn(
+                            websocket,
+                            context["display_name"],
+                            context["last_session_summary"],
+                            context["last_theme"],
+                        )
+                    except Exception as e:
+                        logger.exception("[WS] Welcome turn failed (non-fatal): %s", e)
+                    finally:
+                        turn_active.clear()
+
             elif msg_type == "ping":
                 try:
                     await websocket.send_json({"type": "pong"})
@@ -296,7 +328,7 @@ async def ws_session(websocket: WebSocket):
         # returns immediately either way.
         session_elapsed_s = time.monotonic() - session_start_t
         end_task = asyncio.create_task(
-            _forward_end_session(web_session_id, session_elapsed_s),
+            _forward_end_session(web_session_id, session_elapsed_s, learner_id=LEARNER_ID),
             name="forward_end_session",
         )
         end_task.add_done_callback(_task_done_cb("forward_end_session"))

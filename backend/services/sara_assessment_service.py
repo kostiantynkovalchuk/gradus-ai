@@ -321,3 +321,141 @@ def get_session_corrections(web_session_id: str) -> list:
             ],
         })
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCTION 6: get_learner_context — web-safe identity + continuity read
+#
+# Reads ONLY sara_web_state (our own table, migration 069). NEVER reads
+# sara_state / sara_sessions.theme — those are the Telegram bot's
+# single-writer columns (audit C12). A fresh/unknown learner_id degrades to
+# a name-only context with null summary/theme rather than raising, so a
+# context-fetch problem never blocks the lesson (rule 3).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_learner_context(learner_id: str) -> dict:
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT display_name, last_session_summary, last_theme "
+                "FROM sara_web_state WHERE learner_id = %s",
+                (learner_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return {"display_name": learner_id.capitalize(), "last_session_summary": None, "last_theme": None}
+
+    display_name, last_session_summary, last_theme = row
+    return {
+        "display_name": display_name,
+        "last_session_summary": last_session_summary,
+        "last_theme": last_theme,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCTION 7: generate_and_store_recap — session-end continuity write
+#
+# ENGLISH ONLY output (summary_en/theme are fed straight back into a future
+# English welcome turn, audit language law). Writes to sara_web_state ONLY —
+# never to sara_state.last_session_summary or sara_sessions.theme (audit
+# C12: those are the Telegram bot's single-writer columns).
+#
+# Best-effort by design: called as the LAST step of /internal/sara/session/end,
+# wrapped so any failure here never fails the (already-succeeded) end call.
+# Idempotency choice: a re-run simply regenerates the recap from the same
+# turns and overwrites the row (acceptable — recap is a derived summary, not
+# an append-only log; no "already written" guard is kept).
+# ─────────────────────────────────────────────────────────────────────────────
+
+RECAP_SYSTEM_PROMPT = """\
+You are summarizing one English-tutoring session for the NEXT session's \
+opening greeting. Given the conversation turns, return ONLY valid JSON, no \
+prose, exactly:
+{"summary_en": "<=2 sentences, ENGLISH ONLY, what the learner did well plus \
+1-2 new words/structures practised>",
+ "theme": "<3-6 word topic label, ENGLISH ONLY>"}
+
+Rules: English only, no Russian or any other language anywhere in the output. \
+Be specific and concrete (e.g. mention the actual topic discussed), never \
+generic. If the conversation is too short/empty to summarize meaningfully, \
+still return your best short guess rather than an empty string."""
+
+
+def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | None:
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT t.user_text, t.sara_text
+                FROM sara_turns t
+                JOIN sara_sessions s ON s.id = t.session_id
+                WHERE s.web_session_id = %s
+                ORDER BY t.turn_index ASC
+                """,
+                (web_session_id,),
+            )
+            turns = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not turns:
+        logger.info("[SaraAssessment] No turns for session=%s — skipping recap", web_session_id)
+        return None
+
+    transcript = "\n".join(f"Learner: {u}\nTutor: {s}" for u, s in turns)
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.warning("[SaraAssessment] ANTHROPIC_API_KEY not set — skipping recap")
+        return None
+
+    try:
+        client = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=HAIKU,
+            max_tokens=400,
+            system=RECAP_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": transcript}],
+        )
+        text_block = next((b for b in response.content if hasattr(b, "text")), None)
+        raw = text_block.text if text_block else ""
+    except Exception as e:
+        logger.warning("[SaraAssessment] Recap Haiku call failed (session=%s): %s", web_session_id, e)
+        return None
+
+    parsed = safe_parse_json(raw)
+    summary_en = parsed.get("summary_en") if isinstance(parsed, dict) else None
+    theme = parsed.get("theme") if isinstance(parsed, dict) else None
+    if not summary_en or not theme:
+        logger.warning("[SaraAssessment] Unparseable recap output (session=%s): %r", web_session_id, raw[:500])
+        return None
+
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sara_web_state (learner_id, display_name, last_session_summary, last_theme, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (learner_id) DO UPDATE
+                SET last_session_summary = EXCLUDED.last_session_summary,
+                    last_theme = EXCLUDED.last_theme,
+                    updated_at = now()
+                """,
+                (learner_id, learner_id.capitalize(), summary_en, theme),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    logger.info("[SaraAssessment] Recap stored (learner=%s, session=%s): theme=%r", learner_id, web_session_id, theme)
+    return {"summary_en": summary_en, "theme": theme}

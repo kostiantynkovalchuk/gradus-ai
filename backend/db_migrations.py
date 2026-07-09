@@ -1804,6 +1804,29 @@ MIGRATIONS = [
             "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS active_seconds INT NOT NULL DEFAULT 0",
         ],
     },
+    {
+        # Web-safe lesson-continuity store for sara-english (Architecture C).
+        # Deliberately its OWN table, keyed by our own learner_id — never
+        # touches sara_state (Telegram bot's single-writer last_session_summary
+        # column, audit C12). Seeds the pilot 'felix' row idempotently.
+        "version": "069_sara_web_state",
+        "statements": [
+            """
+            CREATE TABLE IF NOT EXISTS sara_web_state (
+                learner_id            TEXT PRIMARY KEY,
+                display_name          TEXT NOT NULL,
+                last_session_summary  TEXT NULL,
+                last_theme            TEXT NULL,
+                updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            """
+            INSERT INTO sara_web_state (learner_id, display_name)
+            VALUES ('felix', 'Felix')
+            ON CONFLICT (learner_id) DO NOTHING
+            """,
+        ],
+    },
 ]
 
 
