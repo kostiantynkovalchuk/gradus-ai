@@ -82,8 +82,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sara);outline-offse
   display:flex;align-items:center;justify-content:center;
   box-shadow:var(--shadow);
 }
-.avatar img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .25s ease}
-.avatar img.beat-hidden{opacity:0}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block}
 /* Beat video (HeyGen MP4, 9:16, circle already baked in on a near-white
    bg, occupying roughly the vertical center of the tall frame). We do
    NOT add border-radius here — the .avatar parent already clips to a
@@ -93,37 +92,18 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sara);outline-offse
    object-position offset). The extra scale(1.24) zooms past the video's
    own white padding so the baked circle's edge fills the square exactly
    — this is what makes it match the static portrait's size/position and
-   avoids a visible white ring inside the mask.
-   Opacity-based (not display:none/block) so revert cross-fades against
-   the portrait img instead of popping to a black/gap frame. */
+   avoids a visible white ring inside the mask. Hidden by default. */
 .avatar video.beat{
   position:absolute;inset:0;width:100%;height:100%;
   object-fit:cover;object-position:50% 50%;
   transform:scale(1.24);
-  opacity:0;pointer-events:none;
-  transition:opacity .25s ease;
+  display:none;
 }
-.avatar video.beat.beat-visible{opacity:1}
 .avatar span{font-family:'Playfair Display',serif;color:#EAF0F9;font-size:72px;font-weight:600}
-/* speaking pulse on the ring itself */
+/* Ring is progress-arc only (option A: pulse/ripple removed for good).
+   .fill stroke color still reflects speaking state, but no animation. */
 .avatar-wrap.speaking .fill{stroke:var(--speak)}
-.avatar-wrap.speaking::after{
-  content:"";position:absolute;inset:8px;border-radius:50%;
-  border:2px solid var(--speak);opacity:0;
-  animation:ripple 1.6s ease-out infinite;
-}
-@keyframes ripple{0%{transform:scale(.96);opacity:.5}100%{transform:scale(1.08);opacity:0}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-/* Beat-window ripple guard (defense-in-depth): the beat's audio now
-   only plays before the welcome turn is sequenced in, so 'speaking'
-   normally shouldn't be true during beat playback anyway — but this
-   explicit suppression covers any race (e.g. a lingering 'speaking'
-   class from a prior turn on reconnect). Placed after .speaking::after
-   in source order so it wins the tie on specificity when both classes
-   are present; normal (non-beat) speaking pulse is untouched. */
-.avatar-wrap.beat-playing::after{
-  animation:none;opacity:0;
-}
 .avatar-wrap button.interrupt{
   position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);
   background:var(--ink);color:#fff;font-size:12px;font-weight:600;
@@ -294,12 +274,8 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 }
 
 /* ══════════ LESSON COMPLETED ══════════ */
+/* Ring stays the static progress arc only — no ripple/animation here either. */
 .avatar-wrap.completed .fill{stroke:var(--live)}
-.avatar-wrap.completed::after{
-  content:"";position:absolute;inset:8px;border-radius:50%;
-  border:2px solid var(--live);opacity:0;
-  animation:ripple 1.8s ease-out 2;
-}
 .clock.completed-clock{color:var(--live);font-weight:600}
 </style>
 </head>
@@ -733,21 +709,11 @@ const BEAT_MAX_WAIT_MS = 8000;
 function revertToPortrait(){
   try {
     const v = $('beatVideo');
-    const img = $('avatarPortrait');
-    ['avatarWrap', 'avatarWrapM'].forEach(id => { const el = $(id); if (el) el.classList.remove('beat-playing'); });
-    if (img) img.classList.remove('beat-hidden');
     if (!v) return;
-    v.classList.remove('beat-visible');
-    // Cross-fade (250ms, matches the CSS transition) before actually
-    // tearing down the <video> — releasing src/pause immediately would
-    // otherwise show a dark/gap frame mid-fade.
-    setTimeout(() => {
-      try {
-        v.pause();
-        v.removeAttribute('src');
-        v.load();
-      } catch (err) { console.warn('[Beat] video teardown failed (non-fatal):', err); }
-    }, 260);
+    v.pause();
+    v.style.display = 'none';
+    v.removeAttribute('src');
+    v.load();
   } catch (err) { console.warn('[Beat] revertToPortrait failed (non-fatal):', err); }
 }
 
@@ -755,17 +721,14 @@ function playGreetingBeat(onDone){
   const proceed = () => { try { onDone(); } catch (err) { console.error('[Beat] onDone callback failed:', err); } };
   try {
     const v = $('beatVideo');
-    const img = $('avatarPortrait');
     if (!v) { proceed(); return; }
-    ['avatarWrap', 'avatarWrapM'].forEach(id => { const el = $(id); if (el) el.classList.add('beat-playing'); });
     v.onended = () => { revertToPortrait(); proceed(); };
     v.onerror = () => {
       console.warn('[Beat] video error — falling back to portrait');
       revertToPortrait(); proceed();
     };
     v.src = '/static/beats/beat_greeting.mp4';
-    if (img) img.classList.add('beat-hidden');
-    v.classList.add('beat-visible');
+    v.style.display = 'block';
     v.currentTime = 0;
     const playPromise = v.play();
     if (playPromise && typeof playPromise.catch === 'function') {
