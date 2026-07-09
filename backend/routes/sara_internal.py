@@ -151,6 +151,26 @@ async def get_learner(learner_id: str, authorization: str | None = Header(defaul
         return JSONResponse({"status": "error"}, status_code=500)
 
 
+@sara_internal_router.post("/learner/{learner_id}/reset")
+async def reset_learner(learner_id: str, authorization: str | None = Header(default=None)):
+    """
+    Testing/ops utility: nulls last_session_summary + last_theme for a
+    learner so the next welcome turn genuinely runs the fresh-learner path
+    (spec Part D). Does NOT delete the sara_web_state row or display_name —
+    only clears continuity. Bearer-gated exactly like the other internal
+    routes.
+    """
+    if not _check_token(authorization):
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
+    try:
+        found = assessment_service.reset_learner_continuity(learner_id)
+        return JSONResponse({"status": "ok", "learner_id": learner_id, "found": found})
+    except Exception as e:
+        logger.exception("[SaraInternal] /internal/sara/learner/%s/reset failed: %s", learner_id, e)
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
 @sara_internal_router.get("/session/{web_session_id}/corrections")
 async def get_corrections(web_session_id: str, authorization: str | None = Header(default=None)):
     if not _check_token(authorization):

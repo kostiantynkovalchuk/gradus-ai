@@ -187,20 +187,27 @@ SARA_LANGUAGE_MODE = os.getenv("SARA_LANGUAGE_MODE", "russian")  # "russian" or 
 def build_welcome_instruction(display_name: str, last_session_summary: str | None, last_theme: str | None) -> str:
     """
     Build the WELCOME instruction block appended to the system prompt for the
-    one-off opening turn. Two cases (spec Part B3), both English + at most
-    one short Russian gloss:
+    one-off opening turn. Two cases (spec Part B3), both clean English:
       - fresh learner (no summary): warm greeting by name + an easy opener.
-      - returning learner (has summary/theme): greeting by name + a specific
-        callback to last_theme, then an invitation.
+      - returning learner (has summary/theme): greeting by name + a LIGHT,
+        confirmable callback to the theme LABEL only (never invented detail),
+        then an invitation.
     """
     if last_session_summary and last_theme:
         case_block = (
-            f"This is a RETURNING learner. Last session's theme was: {last_theme}. "
-            f"Last session's summary: {last_session_summary}. "
-            f"Greet them BY NAME (\"{display_name}\") and make a SPECIFIC callback to "
-            f"that theme — reference what you two talked about, then invite them to "
-            f"continue or share what happened since. Do NOT just say \"welcome back\" "
-            f"with no reference to the theme — the callback is the whole point."
+            f"This is a RETURNING learner. Last session's theme (a short label only, "
+            f"NOT a transcript) was: \"{last_theme}\". "
+            f"Greet them BY NAME (\"{display_name}\") and make a LIGHT callback to "
+            f"that theme — mention the theme LABEL only, phrased as a question that "
+            f"survives being wrong (e.g. \"Last time we talked a bit about {last_theme} "
+            f"— anything new on that front?\"). "
+            f"CRITICAL: you do NOT actually remember the specifics of that session — "
+            f"do NOT invent or assert any concrete detail, place, event, or story "
+            f"(e.g. never say things like \"you told me about your trip to X and the "
+            f"Y you saw\" — you do not know that). Hold the callback loosely as an "
+            f"open question, not as a confident memory. Do NOT just say \"welcome "
+            f"back\" with no reference to the theme — the callback is the whole point, "
+            f"but it must stay at the LABEL level."
         )
     else:
         case_block = (

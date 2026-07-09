@@ -376,14 +376,23 @@ RECAP_SYSTEM_PROMPT = """\
 You are summarizing one English-tutoring session for the NEXT session's \
 opening greeting. Given the conversation turns, return ONLY valid JSON, no \
 prose, exactly:
-{"summary_en": "<=2 sentences, ENGLISH ONLY, what the learner did well plus \
-1-2 new words/structures practised>",
- "theme": "<3-6 word topic label, ENGLISH ONLY>"}
+{"summary_en": "<=2 sentences, ENGLISH ONLY, what the learner actually said \
+or practised>" or null,
+ "theme": "<3-6 word topic label, ENGLISH ONLY>" or null}
 
-Rules: English only, no Russian or any other language anywhere in the output. \
-Be specific and concrete (e.g. mention the actual topic discussed), never \
-generic. If the conversation is too short/empty to summarize meaningfully, \
-still return your best short guess rather than an empty string."""
+HONESTY RULE (critical — this summary is read back to the learner next time):
+Summarize ONLY what the learner actually said this session. Do not invent
+places, events, names, or details that were not in the transcript. Do not
+embellish or guess at specifics the learner never mentioned.
+
+If the session was too short, empty, or had no real learner content to
+summarize (e.g. only a greeting, a single word, silence, or test text),
+return both fields as JSON null — do NOT invent a plausible-sounding
+summary just to fill the field.
+
+Rules: English only, no Russian or any other language anywhere in the
+output. Be specific and concrete ONLY when the transcript actually supports
+it."""
 
 
 def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | None:
@@ -429,11 +438,28 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
         logger.warning("[SaraAssessment] Recap Haiku call failed (session=%s): %s", web_session_id, e)
         return None
 
-    parsed = safe_parse_json(raw)
-    summary_en = parsed.get("summary_en") if isinstance(parsed, dict) else None
-    theme = parsed.get("theme") if isinstance(parsed, dict) else None
-    if not summary_en or not theme:
+    if not isinstance(parsed := safe_parse_json(raw), dict):
         logger.warning("[SaraAssessment] Unparseable recap output (session=%s): %r", web_session_id, raw[:500])
+        return None
+
+    summary_en = parsed.get("summary_en")
+    theme = parsed.get("theme")
+
+    # Honesty rule (spec Part D3a): the model may legitimately return both
+    # fields as null when there was nothing real to summarize (too short/
+    # empty session). That is a valid, honest outcome — write the nulls so
+    # the next welcome turn correctly falls back to the fresh-learner path,
+    # rather than treating this as a failure and leaving stale data behind.
+    if summary_en is None and theme is None:
+        logger.info(
+            "[SaraAssessment] Recap: session too short/empty to summarize (session=%s) — writing nulls",
+            web_session_id,
+        )
+    elif not summary_en or not theme:
+        # Half-populated (one present, one missing) is a malformed response,
+        # not an honest null — skip the write rather than store a partial
+        # continuity record.
+        logger.warning("[SaraAssessment] Malformed recap output (session=%s): %r", web_session_id, raw[:500])
         return None
 
     conn = _get_conn()
@@ -459,3 +485,37 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
 
     logger.info("[SaraAssessment] Recap stored (learner=%s, session=%s): theme=%r", learner_id, web_session_id, theme)
     return {"summary_en": summary_en, "theme": theme}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCTION 8: reset_learner_continuity — testing/ops utility
+#
+# Nulls last_session_summary + last_theme for a learner so the next welcome
+# turn genuinely runs the fresh-learner path (spec Part D). Writes to
+# sara_web_state ONLY, same isolation guarantee as generate_and_store_recap.
+# Does not delete the row or touch display_name.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def reset_learner_continuity(learner_id: str) -> bool:
+    """Returns True if a sara_web_state row existed (and was reset), False if not found."""
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sara_web_state
+                SET last_session_summary = NULL, last_theme = NULL, updated_at = now()
+                WHERE learner_id = %s
+                """,
+                (learner_id,),
+            )
+            found = cur.rowcount > 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    logger.info("[SaraAssessment] Continuity reset (learner=%s, found=%s)", learner_id, found)
+    return found

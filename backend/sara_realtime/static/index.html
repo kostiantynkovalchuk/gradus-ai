@@ -301,9 +301,9 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
     </div>
 
     <div class="controls">
-      <button class="btn mic" id="micBtn" aria-pressed="true">🎙 Микрофон включён</button>
+      <button class="btn mic" id="micBtn" aria-pressed="true">⏸ Пауза</button>
       <button class="btn end" id="endBtn">Завершить урок</button>
-      <div class="hint">Говорите — Sara слушает и отвечает.<br>Нажмите «Стоп», чтобы перебить.</div>
+      <div class="hint" id="hintText">Говорите — Sara слушает и отвечает.<br>Нажмите «Пауза», чтобы приостановить.</div>
     </div>
   </aside>
 
@@ -353,7 +353,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
       </div>
       <div class="row">
         <button class="mob-side" id="kbBtn" aria-label="Написать текстом">⌨</button>
-        <button class="mob-mic" id="micBtnM" aria-pressed="true" aria-label="Микрофон">🎙</button>
+        <button class="mob-mic" id="micBtnM" aria-pressed="true" aria-label="Пауза">🎙</button>
         <button class="mob-side mob-end" id="endBtnM" style="width:auto;height:auto;border:none;background:none">Завершить</button>
       </div>
     </div>
@@ -798,12 +798,27 @@ function bargeIn(){
 }
 $('interruptBtn').addEventListener('click', bargeIn);
 
-/* mic toggle — desktop + mobile */
+/* Pause/Resume control — mic-toggle IS the pause affordance (mic off =
+   paused), but audit found it was labeled purely as an audio-input toggle
+   ("Микрофон выключен"), so users never perceived it as a pause control.
+   Relabeled here to explicit Пауза/Продолжить semantics; underlying
+   mechanism (micEnabled flag) unchanged. Visible + enabled in every active
+   state (listening/thinking/speaking); disabled only once truly 'ended'. */
+function updateHint(){
+  const el = $('hintText');
+  if (!el) return;
+  el.innerHTML = micEnabled
+    ? 'Говорите — Sara слушает и отвечает.<br>Нажмите «Пауза», чтобы приостановить.'
+    : 'Микрофон выключен — Sara не слышит.<br>Нажмите «Продолжить», чтобы возобновить урок.';
+}
+
 function bindMic(btn, hasLabel){
   btn.addEventListener('click', () => {
     micEnabled = !micEnabled;
     btn.setAttribute('aria-pressed', micEnabled);
-    if (hasLabel) btn.textContent = micEnabled ? '🎙 Микрофон включён' : '🎙 Микрофон выключен';
+    if (hasLabel) btn.textContent = micEnabled ? '⏸ Пауза' : '▶ Продолжить';
+    btn.setAttribute('aria-label', micEnabled ? 'Пауза' : 'Продолжить');
+    updateHint();
     if (mode === 'listening' || mode === 'paused') setState(micEnabled ? 'listening' : 'paused');
   });
 }

@@ -276,6 +276,30 @@ do when you have free time?\
 """
 
 
+def _identity_line(display_name: Optional[str]) -> str:
+    """
+    Build the per-turn IDENTITY line injected into every ongoing-turn system
+    prompt (spec Part A fix). Empty string if no display_name is known yet
+    (e.g. welcome turn hasn't run) — never blocks the lesson.
+
+    Root-cause fix: identity previously lived ONLY in the one-off welcome
+    instruction, so after the welcome turn Sara had no reminder of who she
+    was talking to and could revert to asking "what is your name?" mid-
+    session on any confusion/reset. This line rides along on every turn.
+    """
+    if not display_name:
+        return ""
+    return (
+        f"\n\nIDENTITY (every turn — you already know this, it never changes "
+        f"during this session):\nYou are talking with {display_name}. You "
+        f"already know them; NEVER ask their name under any circumstance, "
+        f"even when confused, unsure, or starting a thought over. If you "
+        f"make a mistake or lose the thread, apologize briefly and continue "
+        f"the conversation — do not reset to introductions or re-ask who "
+        f"they are."
+    )
+
+
 def _make_done_callback(label: str):
     """Return an asyncio Task done-callback that logs any exception."""
     def _cb(task: asyncio.Task):
@@ -367,6 +391,12 @@ class SessionPipeline:
         self._tts_model = tts_model
         self._history: list[dict] = []
         self._anthropic = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        # Set once by run_welcome_turn (from fetch_learner_context) and then
+        # injected into EVERY subsequent run_turn's system prompt via
+        # _identity_line() — fixes the mid-session "what is your name?"
+        # regression (identity must persist for the whole session, not just
+        # the one-off welcome instruction).
+        self._display_name: Optional[str] = None
 
     def _build_messages(self, transcript: str) -> list[dict]:
         """Assemble Claude messages list from history + new user turn."""
@@ -432,7 +462,11 @@ class SessionPipeline:
         tts_task.add_done_callback(_make_done_callback("tts_synthesize"))
 
         try:
-            system_prompt = SARA_REALTIME_PROMPT_BASE + "\n\n" + _LEVEL_BLOCKS.get(PHASE1_CEFR_BAND, _LEVEL_BLOCK_DEFAULT)
+            system_prompt = (
+                SARA_REALTIME_PROMPT_BASE
+                + _identity_line(self._display_name)
+                + "\n\n" + _LEVEL_BLOCKS.get(PHASE1_CEFR_BAND, _LEVEL_BLOCK_DEFAULT)
+            )
             messages = self._build_messages(transcript)
 
             token_buffer = ""
@@ -563,6 +597,10 @@ class SessionPipeline:
             "[Pipeline] Welcome turn start — display_name=%r has_summary=%s",
             display_name, bool(last_session_summary),
         )
+
+        # Store for _identity_line() injection into every subsequent run_turn
+        # this session (fix for the mid-session "what is your name?" bug).
+        self._display_name = display_name
 
         t_claude_first_token: Optional[int] = None
         t_first_audio: Optional[int] = None
