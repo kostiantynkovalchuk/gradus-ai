@@ -214,11 +214,13 @@ def build_welcome_instruction(display_name: str, last_session_summary: str | Non
         "\n\nWELCOME INSTRUCTION (this turn ONLY — you are speaking FIRST, before "
         "the learner has said anything):\n"
         f"{case_block}\n"
-        "Hard rules for this opening turn: speak English only, with AT MOST one "
-        "short Russian gloss in parentheses (never a full Russian sentence, never "
-        "Ukrainian); end with EXACTLY one question; NEVER ask the learner's name — "
-        "you already know it; keep it short and warm (1-3 sentences), like every "
-        "other Sara reply."
+        "Hard rules for this opening turn: speak clean English only, with NO "
+        "Russian glosses and NO parentheses at all. Greet warmly by name in "
+        "simple English — greetings are easy, glosses here would only add "
+        "clutter. Save Russian glosses for actual teaching moments later in "
+        "the lesson, not this welcome. End with EXACTLY one question; NEVER "
+        "ask the learner's name — you already know it; keep it short and "
+        "warm (1-3 sentences), like every other Sara reply."
     )
 
 
