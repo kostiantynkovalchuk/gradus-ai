@@ -441,21 +441,43 @@ it."""
 # ─────────────────────────────────────────────────────────────────────────────
 
 def record_session_completion(web_session_id: str, learner_id: str) -> dict:
-    """Returns {"streak_milestone": bool, "streak_count": int|None}."""
+    """Returns {"streak_milestone": bool, "streak_count": int|None}.
+
+    Rule-4 atomic guard: the increment claim is a single
+    `UPDATE sara_sessions ... WHERE streak_counted = FALSE RETURNING id`
+    statement. Postgres row-locks the matching row for the duration of the
+    UPDATE, so two concurrent calls for the same web_session_id cannot both
+    see streak_counted = FALSE — the second one simply finds zero rows
+    (RETURNING is empty) and skips the sara_web_state increment. This
+    replaces an earlier SELECT-then-UPDATE version that read status/
+    streak_counted first and only conditionally wrote — that was a
+    read-then-write race (two calls landing between the SELECT and the
+    UPDATE could both see streak_counted = FALSE and both increment). The
+    claim and the flip-to-TRUE now happen in the same statement.
+    """
     try:
         conn = _get_conn()
         try:
             with conn.cursor() as cur:
+                # Atomic claim: only succeeds (returns a row) for the FIRST
+                # caller when status='completed' AND streak_counted=FALSE.
+                # A concurrent/duplicate second call for the same
+                # web_session_id gets zero rows back — no read-then-write
+                # gap for it to race through.
                 cur.execute(
-                    "SELECT status, streak_counted FROM sara_sessions WHERE web_session_id = %s",
+                    """
+                    UPDATE sara_sessions
+                    SET streak_counted = TRUE
+                    WHERE web_session_id = %s
+                      AND status = 'completed'
+                      AND streak_counted = FALSE
+                    RETURNING id
+                    """,
                     (web_session_id,),
                 )
-                row = cur.fetchone()
-                status, streak_counted = (row[0], row[1]) if row else (None, False)
+                claimed = cur.fetchone() is not None
 
-                should_increment = (status == "completed") and not streak_counted
-
-                if should_increment:
+                if claimed:
                     cur.execute(
                         """
                         INSERT INTO sara_web_state
@@ -470,11 +492,11 @@ def record_session_completion(web_session_id: str, learner_id: str) -> dict:
                         (learner_id, learner_id.capitalize()),
                     )
                     new_count = cur.fetchone()[0]
-                    cur.execute(
-                        "UPDATE sara_sessions SET streak_counted = TRUE WHERE web_session_id = %s",
-                        (web_session_id,),
-                    )
                 else:
+                    # Either not completed, or already claimed by a prior
+                    # call — last_session_at still gets the unconditional
+                    # touch (welcome-back cares about any session ending,
+                    # not just completed ones), but no increment.
                     cur.execute(
                         """
                         INSERT INTO sara_web_state (learner_id, display_name, last_session_at, updated_at)
@@ -486,7 +508,7 @@ def record_session_completion(web_session_id: str, learner_id: str) -> dict:
                         """,
                         (learner_id, learner_id.capitalize()),
                     )
-                    new_count = cur.fetchone()[0] if status == "completed" else None
+                    new_count = cur.fetchone()[0]
             conn.commit()
         except Exception:
             conn.rollback()
@@ -500,7 +522,7 @@ def record_session_completion(web_session_id: str, learner_id: str) -> dict:
         )
         return {"streak_milestone": False, "streak_count": None}
 
-    streak_milestone = bool(new_count is not None and new_count % 5 == 0 and should_increment)
+    streak_milestone = bool(claimed and new_count is not None and new_count % 5 == 0)
     return {"streak_milestone": streak_milestone, "streak_count": new_count}
 
 
