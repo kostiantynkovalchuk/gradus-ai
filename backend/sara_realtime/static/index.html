@@ -717,7 +717,12 @@ function revertToPortrait(){
   } catch (err) { console.warn('[Beat] revertToPortrait failed (non-fatal):', err); }
 }
 
-function playGreetingBeat(onDone){
+/* Generic beat player — same play/revert/fallback mechanism used by the
+   greeting beat (Part 1 spec: reuse exactly, don't invent a new one).
+   `src` is the only thing that varies between beats; `onDone` fires
+   exactly once via the same onended/onerror/autoplay-catch/try-catch
+   paths already proven out for the greeting beat. */
+function playBeat(src, onDone){
   const proceed = () => { try { onDone(); } catch (err) { console.error('[Beat] onDone callback failed:', err); } };
   try {
     const v = $('beatVideo');
@@ -727,7 +732,7 @@ function playGreetingBeat(onDone){
       console.warn('[Beat] video error — falling back to portrait');
       revertToPortrait(); proceed();
     };
-    v.src = '/static/beats/beat_greeting.mp4';
+    v.src = src;
     v.style.display = 'block';
     v.currentTime = 0;
     const playPromise = v.play();
@@ -738,9 +743,15 @@ function playGreetingBeat(onDone){
       });
     }
   } catch (err) {
-    console.warn('[Beat] playGreetingBeat failed (non-fatal):', err);
+    console.warn('[Beat] playBeat failed (non-fatal):', err);
     revertToPortrait(); proceed();
   }
+}
+
+/* Beat 1 entry point — unchanged behavior/signature, now backed by the
+   generic playBeat() above instead of its own duplicated body. */
+function playGreetingBeat(onDone){
+  playBeat('/static/beats/beat_greeting.mp4', onDone);
 }
 
 function connect(){
@@ -918,6 +929,18 @@ function bindEnd(btn){
       // Terminal state — distinct from a mic-off pause, so the state pill
       // and the end button never contradict each other at session end.
       setState('ended');
+      // Finish-with-credit send-off (Part 2): fires only when this two-tap
+      // end coincides with status=='completed' — tracked by the existing
+      // `lessonCompleted` flag, set earlier by the 'lesson_completed' WS
+      // message (the silent 10-min-credit flip). That flip itself never
+      // plays a beat mid-lesson (rule: never interrupt a live lesson) —
+      // only this explicit end action does, and only if credit was
+      // already earned. Early exit before credit → lessonCompleted is
+      // still false here → no complete beat. No following audio turn, so
+      // no sequencing guard is needed — just play, then close as normal.
+      if (lessonCompleted) {
+        playBeat('/static/beats/beat_complete.mp4', () => {});
+      }
       endSession();
       ['endBtn','endBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
     }
