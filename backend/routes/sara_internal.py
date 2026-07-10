@@ -132,9 +132,9 @@ async def post_session_end(payload: SaraSessionEndRequest, authorization: str | 
 async def get_learner(learner_id: str, authorization: str | None = Header(default=None)):
     """
     Identity + continuity read for the web (sara-english) welcome turn.
-    Returns display_name + last_session_summary + last_theme, with nulls
-    (200, not 404) for a fresh/unknown learner_id — a context-fetch problem
-    must never block the lesson (rule 3).
+    Returns display_name + last_session_summary + last_theme + (Part 4 audit)
+    should_welcome_back, with nulls/False (200, not 404) for a fresh/unknown
+    learner_id — a context-fetch problem must never block the lesson (rule 3).
     """
     if not _check_token(authorization):
         return JSONResponse({"status": "unauthorized"}, status_code=401)
@@ -145,9 +145,46 @@ async def get_learner(learner_id: str, authorization: str | None = Header(defaul
             "display_name": context["display_name"],
             "last_session_summary": context["last_session_summary"],
             "last_theme": context["last_theme"],
+            "should_welcome_back": context["should_welcome_back"],
         })
     except Exception as e:
         logger.exception("[SaraInternal] /internal/sara/learner/%s failed: %s", learner_id, e)
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
+class SaraSessionStreakRequest(BaseModel):
+    web_session_id: str
+    learner_id: str
+
+
+@sara_internal_router.post("/session/streak")
+async def post_session_streak(payload: SaraSessionStreakRequest, authorization: str | None = Header(default=None)):
+    """
+    Fast, DB-only streak/continuity bookkeeping (Part 2/3 audit) — no Haiku
+    call, so this is safe to await synchronously from app.py's WS
+    end_session handler before it acks the client, unlike the slower
+    recap generation in /session/end which stays fire-and-forget.
+
+    Idempotency: record_session_completion() is guarded by
+    sara_sessions.streak_counted, so calling this AND letting the normal
+    /session/end -> generate_and_store_recap() flow run afterward for the
+    same web_session_id is safe — the second call is a no-op re-read.
+    """
+    if not _check_token(authorization):
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
+    try:
+        result = assessment_service.record_session_completion(payload.web_session_id, payload.learner_id)
+        return JSONResponse({
+            "status": "ok",
+            "streak_milestone": result["streak_milestone"],
+            "streak_count": result["streak_count"],
+        })
+    except Exception as e:
+        logger.exception(
+            "[SaraInternal] /internal/sara/session/streak failed (session=%s): %s",
+            payload.web_session_id, e,
+        )
         return JSONResponse({"status": "error"}, status_code=500)
 
 

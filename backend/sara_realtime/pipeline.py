@@ -183,7 +183,12 @@ async def fetch_learner_context(learner_id: str) -> dict:
     degrades to a name-only context — a context-fetch failure must never
     block the lesson (rule 3).
     """
-    fallback = {"display_name": learner_id.capitalize(), "last_session_summary": None, "last_theme": None}
+    fallback = {
+        "display_name": learner_id.capitalize(),
+        "last_session_summary": None,
+        "last_theme": None,
+        "should_welcome_back": False,
+    }
     if not _FORWARD_ENABLED:
         return fallback
     try:
@@ -203,6 +208,7 @@ async def fetch_learner_context(learner_id: str) -> dict:
             "display_name": data.get("display_name") or fallback["display_name"],
             "last_session_summary": data.get("last_session_summary"),
             "last_theme": data.get("last_theme"),
+            "should_welcome_back": bool(data.get("should_welcome_back")),
         }
     except httpx.TimeoutException as e:
         logger.warning("[Pipeline] Learner context fetch timed out: %s", e)
@@ -210,6 +216,46 @@ async def fetch_learner_context(learner_id: str) -> dict:
     except Exception as e:
         logger.warning("[Pipeline] Learner context fetch failed: %s", e)
         return fallback
+
+
+async def report_session_streak(web_session_id: str, learner_id: str) -> Optional[dict]:
+    """
+    Fast, DB-only streak check (Part 3 audit) — POST /internal/sara/session/streak.
+    Unlike end_session() above, THIS call is awaited synchronously by app.py's
+    WS end_session handler (not fire-and-forget) so its result can be relayed
+    back to the browser over the still-open WS before it closes. Kept
+    deliberately separate from the Haiku-backed recap path so it stays fast.
+
+    Returns None on any failure/timeout/disabled-forwarding (rule 3) — the
+    caller must treat None as "no streak info available, fall back to the
+    plain complete beat" rather than raising or hanging.
+    """
+    if not _FORWARD_ENABLED:
+        return None
+    try:
+        client = _get_forward_client()
+        resp = await client.post(
+            f"{MAIN_BACKEND_URL}/internal/sara/session/streak",
+            headers={"Authorization": f"Bearer {SARA_INTERNAL_TOKEN}"},
+            json={"web_session_id": web_session_id, "learner_id": learner_id},
+        )
+        if resp.status_code // 100 != 2:
+            logger.warning(
+                "[Pipeline] Session streak forward non-2xx: status=%d body=%r",
+                resp.status_code, resp.text[:300],
+            )
+            return None
+        data = resp.json()
+        return {
+            "streak_milestone": bool(data.get("streak_milestone")),
+            "streak_count": data.get("streak_count"),
+        }
+    except httpx.TimeoutException as e:
+        logger.warning("[Pipeline] Session streak forward timed out: %s", e)
+        return None
+    except Exception as e:
+        logger.warning("[Pipeline] Session streak forward failed: %s", e)
+        return None
 
 
 # Sentence-chunking thresholds

@@ -68,6 +68,7 @@ from sara_realtime.pipeline import (
     SessionPipeline,
     end_session as _forward_end_session,
     fetch_learner_context,
+    report_session_streak,
     DEFAULT_LEARNER_ID,
 )
 from sara_realtime.eleven_ws import ScribeRealtimeSTT
@@ -179,6 +180,24 @@ async def ws_session(websocket: WebSocket):
     session_started = False
     welcome_sent = [False]  # mutable so the "start" handler can flip it once
 
+    # Part 4 audit (welcome-back beat): fetched once, right after accept(),
+    # so the client can choose greeting-vs-welcome-back BEFORE it plays any
+    # beat. Cached here and reused by the "start" handler below so the
+    # welcome turn itself doesn't trigger a second, redundant HTTP round
+    # trip to the main backend for the same learner_id.
+    try:
+        early_context = await fetch_learner_context(LEARNER_ID)
+    except Exception as e:
+        logger.exception("[WS] Early learner-context fetch failed (non-fatal): %s", e)
+        early_context = None
+    try:
+        await websocket.send_json({
+            "type": "session_context",
+            "should_welcome_back": bool(early_context and early_context.get("should_welcome_back")),
+        })
+    except Exception:
+        pass
+
     try:
         while True:
             try:
@@ -257,7 +276,10 @@ async def ws_session(websocket: WebSocket):
                     welcome_sent[0] = True
                     turn_active.set()
                     try:
-                        context = await fetch_learner_context(LEARNER_ID)
+                        # Reuse the context fetched right after accept() (see
+                        # above) instead of fetching it again — avoids a
+                        # second identical HTTP round trip per session.
+                        context = early_context if early_context is not None else await fetch_learner_context(LEARNER_ID)
                         await pipeline.run_welcome_turn(
                             websocket,
                             context["display_name"],
@@ -296,6 +318,29 @@ async def ws_session(websocket: WebSocket):
 
             elif msg_type == "end_session":
                 logger.info("[WS] Client requested end_session")
+                # Part 3 audit: fast, DB-only streak check — awaited here
+                # (bounded, best-effort) so the result can reach the client
+                # over the still-open WS before it closes. Deliberately NOT
+                # the Haiku-backed recap path (that stays fire-and-forget in
+                # the finally block below, unchanged). Any failure/timeout
+                # degrades to a deterministic "no streak" ack — never hangs,
+                # never blocks teardown.
+                streak_result = None
+                try:
+                    streak_result = await asyncio.wait_for(
+                        report_session_streak(web_session_id, LEARNER_ID),
+                        timeout=3.0,
+                    )
+                except Exception as e:
+                    logger.warning("[WS] Session streak check failed/timed out (non-fatal): %s", e)
+                try:
+                    await websocket.send_json({
+                        "type": "session_ended",
+                        "streak_milestone": bool(streak_result and streak_result.get("streak_milestone")),
+                        "streak_count": streak_result.get("streak_count") if streak_result else None,
+                    })
+                except Exception:
+                    pass
                 break
 
             else:

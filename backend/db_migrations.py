@@ -1827,6 +1827,23 @@ MIGRATIONS = [
             """,
         ],
     },
+    {
+        # Streak + welcome-back tracking for the web pilot (audit follow-up
+        # to migration 069). completed_lesson_count/last_session_at live on
+        # sara_web_state exactly as scoped. streak_counted lives on
+        # sara_sessions — added beyond the original two-column ask because
+        # it is the per-session idempotency guard: session/end can be
+        # called twice for the same web_session_id, and without a
+        # session-scoped flag there is no durable way to tell "already
+        # counted this session" apart from "haven't yet", since
+        # last_session_at is overwritten unconditionally on every end.
+        "version": "070_sara_streak_tracking",
+        "statements": [
+            "ALTER TABLE sara_web_state ADD COLUMN IF NOT EXISTS completed_lesson_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sara_web_state ADD COLUMN IF NOT EXISTS last_session_at TIMESTAMPTZ NULL",
+            "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS streak_counted BOOLEAN NOT NULL DEFAULT FALSE",
+        ],
+    },
 ]
 
 

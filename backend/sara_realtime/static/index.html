@@ -398,6 +398,7 @@ function setRing(sec){
 setRing(elapsed);
 let clockTimer = setInterval(() => setRing(++elapsed), 1000);
 let lessonCompleted = false;
+let shouldWelcomeBack = false;   // set by 'session_context', read once in onopen's beat choice
 
 const LABELS = { listening:'Слушаю', thinking:'Думаю…', speaking:'Говорю', paused:'Пауза', ended:'Урок завершён' };
 let mode = 'paused';
@@ -706,6 +707,18 @@ let welcomeGateFired = false;
 let beatTimeoutId = null;
 const BEAT_MAX_WAIT_MS = 8000;
 
+/* Part 4 audit: which beat plays at session start (greeting vs
+   welcome-back) depends on server data (should_welcome_back) that isn't
+   known until the 'session_context' WS message arrives — a few ms after
+   onopen, not before. contextGateFired is the same fired-once-guard
+   pattern as welcomeGateFired, just for "have we decided which beat to
+   play yet" instead of "has the beat resolved yet". CONTEXT_MAX_WAIT_MS
+   is short (this is a fast DB-only read) — if it's slow/lost, default to
+   the plain greeting beat rather than delay the session start. */
+let contextGateFired = false;
+let contextTimeoutId = null;
+const CONTEXT_MAX_WAIT_MS = 1500;
+
 function revertToPortrait(){
   try {
     const v = $('beatVideo');
@@ -771,8 +784,16 @@ function connect(){
     }, 20000);
   }
 
-  ws.onopen = () => {
-    welcomeGateFired = false;
+  // Part 4 audit: picks beat_welcome_back.mp4 instead of beat_greeting.mp4
+  // when the server said so via 'session_context' — same playBeat +
+  // welcome-turn sequencing either way, only the file differs.
+  function playSessionStartBeat(){
+    if (contextGateFired) return;
+    contextGateFired = true;
+    if (contextTimeoutId) { clearTimeout(contextTimeoutId); contextTimeoutId = null; }
+    const src = shouldWelcomeBack
+      ? '/static/beats/beat_welcome_back.mp4'
+      : '/static/beats/beat_greeting.mp4';
     // Max-timeout fallback (rule 3): if 'ended' never fires (stalled
     // decode, tab-throttled background timer, etc.), the welcome turn
     // still must not be dropped — fireWelcomeTurn()'s own guard makes
@@ -782,7 +803,21 @@ function connect(){
       revertToPortrait();
       fireWelcomeTurn();
     }, BEAT_MAX_WAIT_MS);
-    playGreetingBeat(fireWelcomeTurn);
+    playBeat(src, fireWelcomeTurn);
+  }
+
+  ws.onopen = () => {
+    welcomeGateFired = false;
+    contextGateFired = false;
+    shouldWelcomeBack = false;
+    // Wait briefly for 'session_context' (fast DB-only read) to learn
+    // should_welcome_back before choosing a beat; if it doesn't arrive in
+    // time, default to the plain greeting beat rather than delay session
+    // start (rule 3 — a context-fetch problem must never block the lesson).
+    contextTimeoutId = setTimeout(() => {
+      console.warn('[Beat] session_context max-wait timeout — defaulting to greeting beat');
+      playSessionStartBeat();
+    }, CONTEXT_MAX_WAIT_MS);
   };
 
   ws.onclose = e => {
@@ -815,6 +850,23 @@ function connect(){
     try { msg = JSON.parse(e.data); } catch { return; }
 
     switch (msg.type) {
+      case 'session_context':
+        // Arrives right after WS accept(), before any beat plays (see
+        // ws.onopen above). should_welcome_back decides greeting vs
+        // welcome-back beat; irrelevant to anything mid-session.
+        shouldWelcomeBack = !!msg.should_welcome_back;
+        playSessionStartBeat();
+        break;
+      case 'session_ended':
+        // Ack for the end_session request sent by endSession() below —
+        // arrives on the still-open WS before it closes, carrying the
+        // fast DB-only streak check's result. Precedence vs lesson_completed
+        // (streak beat wins over the plain completion beat) is applied in
+        // bindEnd's confirm handler, not here — this only records the data.
+        streakMilestone = !!msg.streak_milestone;
+        streakCount = (typeof msg.streak_count === 'number') ? msg.streak_count : null;
+        sessionEndAckReceived = true;
+        break;
       case 'partial_transcript':
         if (mode !== 'thinking' && mode !== 'speaking') upsertPartial(msg.text);
         break;
@@ -866,11 +918,38 @@ function connect(){
   };
 }
 
+// Part 3 audit: streak state populated by the 'session_ended' WS ack (see
+// ws.onmessage above). sessionEndAckReceived is the fired-once signal the
+// confirm handler below polls for, with SESSION_END_MAX_WAIT_MS as a rule-3
+// fallback so a lost/slow ack never blocks the user from finishing the
+// lesson — it just means no streak beat plays that time.
+let streakMilestone = false;
+let streakCount = null;
+let sessionEndAckReceived = false;
+const SESSION_END_MAX_WAIT_MS = 3000;   // server-side check itself times out at 3.0s
+
 function endSession(){
   sessionEnded = true;
   if (clockTimer) clearInterval(clockTimer);
-  if (ws) { try { ws.send(JSON.stringify({ type: 'end_session' })); } catch {} ws.close(1000); ws = null; }
+  if (ws) { try { ws.send(JSON.stringify({ type: 'end_session' })); } catch {} }
   stopMic();
+}
+
+function closeSessionWs(){
+  if (ws) { try { ws.close(1000); } catch {} ws = null; }
+}
+
+function waitForSessionEndAck(){
+  return new Promise(resolve => {
+    const startedAt = Date.now();
+    (function poll(){
+      if (sessionEndAckReceived || Date.now() - startedAt > SESSION_END_MAX_WAIT_MS) {
+        resolve();
+        return;
+      }
+      setTimeout(poll, 50);
+    })();
+  });
 }
 
 /* ══════════ CONTROLS ══════════ */
@@ -929,20 +1008,36 @@ function bindEnd(btn){
       // Terminal state — distinct from a mic-off pause, so the state pill
       // and the end button never contradict each other at session end.
       setState('ended');
-      // Finish-with-credit send-off (Part 2): fires only when this two-tap
-      // end coincides with status=='completed' — tracked by the existing
-      // `lessonCompleted` flag, set earlier by the 'lesson_completed' WS
-      // message (the silent 10-min-credit flip). That flip itself never
-      // plays a beat mid-lesson (rule: never interrupt a live lesson) —
-      // only this explicit end action does, and only if credit was
-      // already earned. Early exit before credit → lessonCompleted is
-      // still false here → no complete beat. No following audio turn, so
-      // no sequencing guard is needed — just play, then close as normal.
-      if (lessonCompleted) {
-        playBeat('/static/beats/beat_complete.mp4', () => {});
-      }
+      // Finish-with-credit send-off (Part 2 + Part 3 audit):
+      //  - lessonCompleted is set earlier by the 'lesson_completed' WS
+      //    message (the silent 10-min-credit flip); unchanged from before.
+      //  - streakMilestone/streakCount are populated by the 'session_ended'
+      //    ack sent in response to the end_session request below — so we
+      //    must send end_session and await that ack (bounded by
+      //    SESSION_END_MAX_WAIT_MS, rule 3) BEFORE deciding which beat (if
+      //    any) to play, then close the WS ourselves.
+      // Precedence: streak beat > plain completion beat > no beat. A
+      // streak milestone on the same session as lesson completion is a
+      // strictly bigger moment for Felix than "lesson counted" alone, so
+      // it wins outright rather than stacking two videos.
+      sessionEndAckReceived = false;
+      streakMilestone = false;
+      streakCount = null;
       endSession();
       ['endBtn','endBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+      waitForSessionEndAck().then(() => {
+        closeSessionWs();
+        if (streakMilestone) {
+          // UI text shows the streak count; nothing is spoken over the beat.
+          const subBox = $('clockNowM').closest('.sub');
+          if (subBox && streakCount != null) {
+            subBox.insertAdjacentHTML('beforeend', ` · <span style="color:var(--live);font-weight:600">🔥 ${streakCount} уроков подряд</span>`);
+          }
+          playBeat('/static/beats/beat_streak.mp4', () => {});
+        } else if (lessonCompleted) {
+          playBeat('/static/beats/beat_complete.mp4', () => {});
+        }
+      });
     }
   });
 }

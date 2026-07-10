@@ -16,6 +16,7 @@ commit, rollback on exception, connection always closed in `finally`.
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import psycopg2
 from anthropic import Anthropic
@@ -333,12 +334,19 @@ def get_session_corrections(web_session_id: str) -> list:
 # context-fetch problem never blocks the lesson (rule 3).
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Threshold for the welcome-back beat (Part 4 audit): configurable, default
+# 3 days. A null last_session_at (never had a session, or pre-migration-070
+# row) means "first-ever session" — that is a normal greeting, NOT
+# welcome-back, per spec Part 4.
+SARA_WELCOME_BACK_DAYS = int(os.environ.get("SARA_WELCOME_BACK_DAYS", "3"))
+
+
 def get_learner_context(learner_id: str) -> dict:
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT display_name, last_session_summary, last_theme "
+                "SELECT display_name, last_session_summary, last_theme, last_session_at "
                 "FROM sara_web_state WHERE learner_id = %s",
                 (learner_id,),
             )
@@ -347,13 +355,25 @@ def get_learner_context(learner_id: str) -> dict:
         conn.close()
 
     if row is None:
-        return {"display_name": learner_id.capitalize(), "last_session_summary": None, "last_theme": None}
+        return {
+            "display_name": learner_id.capitalize(),
+            "last_session_summary": None,
+            "last_theme": None,
+            "should_welcome_back": False,
+        }
 
-    display_name, last_session_summary, last_theme = row
+    display_name, last_session_summary, last_theme, last_session_at = row
+
+    should_welcome_back = False
+    if last_session_at is not None:
+        gap = datetime.now(timezone.utc) - last_session_at
+        should_welcome_back = gap >= timedelta(days=SARA_WELCOME_BACK_DAYS)
+
     return {
         "display_name": display_name,
         "last_session_summary": last_session_summary,
         "last_theme": last_theme,
+        "should_welcome_back": should_welcome_back,
     }
 
 
@@ -395,7 +415,106 @@ output. Be specific and concrete ONLY when the transcript actually supports
 it."""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCTION 6b: record_session_completion — streak + last-session-at bookkeeping
+#
+# Two DIFFERENT conditions, per audit — do not conflate:
+#   - last_session_at = now() UNCONDITIONALLY on every session end (welcome-
+#     back cares about any absence, not credit).
+#   - completed_lesson_count += 1 ONLY IF this session's status='completed',
+#     and only ONCE per session — guarded by sara_sessions.streak_counted so
+#     a double call to session/end (it's idempotent elsewhere) can't
+#     double-count. The guard is read-and-flip inside one transaction: the
+#     increment + the streak_counted=TRUE write commit together, so a second
+#     call for the same web_session_id sees streak_counted already TRUE and
+#     skips the increment entirely.
+#
+# Called from TWO places, both safe because of the guard above:
+#   1. The fast /internal/sara/session/streak endpoint (awaited synchronously
+#      by app.py's WS end_session handler, before it acks the client) — this
+#      is the path that actually reaches the browser in time to pick a beat.
+#   2. generate_and_store_recap() below (fire-and-forget, may run after #1
+#      already did the bookkeeping — becomes a no-op re-read in that case).
+#
+# Best-effort by design (rule 3): never raises; a failure here must never
+# block session end or recap generation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def record_session_completion(web_session_id: str, learner_id: str) -> dict:
+    """Returns {"streak_milestone": bool, "streak_count": int|None}."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, streak_counted FROM sara_sessions WHERE web_session_id = %s",
+                    (web_session_id,),
+                )
+                row = cur.fetchone()
+                status, streak_counted = (row[0], row[1]) if row else (None, False)
+
+                should_increment = (status == "completed") and not streak_counted
+
+                if should_increment:
+                    cur.execute(
+                        """
+                        INSERT INTO sara_web_state
+                            (learner_id, display_name, completed_lesson_count, last_session_at, updated_at)
+                        VALUES (%s, %s, 1, now(), now())
+                        ON CONFLICT (learner_id) DO UPDATE
+                        SET completed_lesson_count = sara_web_state.completed_lesson_count + 1,
+                            last_session_at = now(),
+                            updated_at = now()
+                        RETURNING completed_lesson_count
+                        """,
+                        (learner_id, learner_id.capitalize()),
+                    )
+                    new_count = cur.fetchone()[0]
+                    cur.execute(
+                        "UPDATE sara_sessions SET streak_counted = TRUE WHERE web_session_id = %s",
+                        (web_session_id,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO sara_web_state (learner_id, display_name, last_session_at, updated_at)
+                        VALUES (%s, %s, now(), now())
+                        ON CONFLICT (learner_id) DO UPDATE
+                        SET last_session_at = now(),
+                            updated_at = now()
+                        RETURNING completed_lesson_count
+                        """,
+                        (learner_id, learner_id.capitalize()),
+                    )
+                    new_count = cur.fetchone()[0] if status == "completed" else None
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(
+            "[SaraAssessment] record_session_completion failed (learner=%s, session=%s): %s",
+            learner_id, web_session_id, e,
+        )
+        return {"streak_milestone": False, "streak_count": None}
+
+    streak_milestone = bool(new_count is not None and new_count % 5 == 0 and should_increment)
+    return {"streak_milestone": streak_milestone, "streak_count": new_count}
+
+
 def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | None:
+    # Streak/timestamp bookkeeping runs first and independently of recap
+    # generation succeeding — recap can bail out below (no turns, no API
+    # key, LLM/parse failure) but last_session_at + the credited-lesson
+    # count must still be written (rule 3 / audit Part 2).
+    try:
+        streak_info = record_session_completion(web_session_id, learner_id)
+    except Exception as e:
+        logger.warning("[SaraAssessment] Streak bookkeeping raised unexpectedly: %s", e)
+        streak_info = {"streak_milestone": False, "streak_count": None}
+
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -415,14 +534,14 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
 
     if not turns:
         logger.info("[SaraAssessment] No turns for session=%s — skipping recap", web_session_id)
-        return None
+        return {"summary_en": None, "theme": None, **streak_info}
 
     transcript = "\n".join(f"Learner: {u}\nTutor: {s}" for u, s in turns)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.warning("[SaraAssessment] ANTHROPIC_API_KEY not set — skipping recap")
-        return None
+        return {"summary_en": None, "theme": None, **streak_info}
 
     try:
         client = Anthropic(api_key=api_key)
@@ -436,11 +555,11 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
         raw = text_block.text if text_block else ""
     except Exception as e:
         logger.warning("[SaraAssessment] Recap Haiku call failed (session=%s): %s", web_session_id, e)
-        return None
+        return {"summary_en": None, "theme": None, **streak_info}
 
     if not isinstance(parsed := safe_parse_json(raw), dict):
         logger.warning("[SaraAssessment] Unparseable recap output (session=%s): %r", web_session_id, raw[:500])
-        return None
+        return {"summary_en": None, "theme": None, **streak_info}
 
     summary_en = parsed.get("summary_en")
     theme = parsed.get("theme")
@@ -460,7 +579,7 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
         # not an honest null — skip the write rather than store a partial
         # continuity record.
         logger.warning("[SaraAssessment] Malformed recap output (session=%s): %r", web_session_id, raw[:500])
-        return None
+        return {"summary_en": None, "theme": None, **streak_info}
 
     conn = _get_conn()
     try:
@@ -484,7 +603,7 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
         conn.close()
 
     logger.info("[SaraAssessment] Recap stored (learner=%s, session=%s): theme=%r", learner_id, web_session_id, theme)
-    return {"summary_en": summary_en, "theme": theme}
+    return {"summary_en": summary_en, "theme": theme, **streak_info}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
