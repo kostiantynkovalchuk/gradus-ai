@@ -33,6 +33,15 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # status='completed'. Default 600s = 10 minutes.
 SARA_LESSON_COMPLETE_S = int(os.environ.get("SARA_LESSON_COMPLETE_S", "600"))
 
+# Minimum committed turns a session must have before its recap overwrites the
+# learner's continuity (last_session_summary / last_theme).  Sessions shorter
+# than this are too thin to replace the previous context — they are silently
+# skipped at the recap-write step.
+# PRODUCT DECISION (surfaced for Konstantin): default 3.  A session with 1-2
+# turns is typically a greeting-only or accidental open; 3+ turns implies the
+# learner actually practised.  Override with SARA_RECAP_MIN_TURNS env var.
+RECAP_MIN_TURNS = int(os.environ.get("SARA_RECAP_MIN_TURNS", "3"))
+
 
 def _get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -193,6 +202,122 @@ def insert_turn(session_id: int, turn_index: int, user_text: str, sara_text: str
             row = cur.fetchone()
         conn.commit()
         return row[0] if row else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCTION 2b: write_turn_guarded — atomic status guard + turn insert
+#
+# Replaces the two-step `upsert_web_session()` + `insert_turn()` call that the
+# old /internal/sara/turn handler used.  The old pattern ran two separate
+# connections (two commits), leaving a race window where /session/end could
+# flip the session to 'closed'/'completed' between the status read and the
+# turn insert.
+#
+# This function holds ONE connection for the entire operation:
+#   1. INSERT the session row (ON CONFLICT DO NOTHING) — lazy create
+#   2. SELECT … FOR UPDATE — row-lock for this transaction's duration
+#   3. Branch on status:
+#        active     → proceed (steps 4-5)
+#        closed/completed → ROLLBACK, return rejected sentinel (no turn written)
+#   4. UPDATE sara_sessions — bump message_count / active_seconds, maybe flip
+#      to 'completed' — identical logic to upsert_web_session()
+#   5. INSERT sara_turns ON CONFLICT DO NOTHING — same idempotency as before
+#   6. COMMIT
+#
+# Return shapes:
+#   {"rejected": False, "session_id": int, "turn_id": int|None,
+#    "lesson_completed_now": bool}   — turn_id=None means duplicate turn index
+#   {"rejected": True,  "session_status": str}  — 'closed' or 'completed'
+# ─────────────────────────────────────────────────────────────────────────────
+
+def write_turn_guarded(
+    web_session_id: str,
+    session_elapsed_s: float | None,
+    turn_index: int,
+    user_text: str,
+    sara_text: str,
+) -> dict:
+    """
+    Atomic session-status guard + turn insert in a single transaction.
+
+    See block comment above for the full spec and return shapes.
+    """
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Step 1: lazy-create session row (idempotent, matches existing
+            # upsert_web_session behaviour — session born on first turn POST).
+            cur.execute(
+                """
+                INSERT INTO sara_sessions (source, web_session_id)
+                VALUES ('web', %s)
+                ON CONFLICT (web_session_id) WHERE web_session_id IS NOT NULL DO NOTHING
+                """,
+                (web_session_id,),
+            )
+
+            # Step 2: lock the row for this transaction's duration.  No
+            # concurrent /session/end can change status while we hold this lock.
+            cur.execute(
+                "SELECT id, status, active_seconds FROM sara_sessions "
+                "WHERE web_session_id = %s FOR UPDATE",
+                (web_session_id,),
+            )
+            row = cur.fetchone()
+            session_id, prev_status, prev_active = row
+
+            # Step 3: reject writes to non-active sessions.
+            if prev_status in ("closed", "completed"):
+                conn.rollback()
+                return {"rejected": True, "session_status": prev_status}
+
+            # Step 4: bump session counters — identical logic to
+            # upsert_web_session() so behaviour is unchanged for active sessions.
+            elapsed = int(session_elapsed_s) if session_elapsed_s is not None else 0
+            new_active = max(prev_active, elapsed)
+            lesson_completed_now = (
+                prev_status == "active" and new_active >= SARA_LESSON_COMPLETE_S
+            )
+            new_status = "completed" if lesson_completed_now else prev_status
+            cur.execute(
+                """
+                UPDATE sara_sessions
+                SET last_activity_at = now(),
+                    message_count    = message_count + 1,
+                    active_seconds   = %s,
+                    status           = %s,
+                    completed_at     = CASE WHEN %s THEN now() ELSE completed_at END
+                WHERE id = %s
+                """,
+                (new_active, new_status, lesson_completed_now, session_id),
+            )
+
+            # Step 5: insert turn (idempotent — same ON CONFLICT guard as the
+            # standalone insert_turn() function).
+            cur.execute(
+                """
+                INSERT INTO sara_turns (session_id, turn_index, user_text, sara_text)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (session_id, turn_index) WHERE turn_index IS NOT NULL DO NOTHING
+                RETURNING id
+                """,
+                (session_id, turn_index, user_text, sara_text),
+            )
+            turn_row = cur.fetchone()
+            turn_id = turn_row[0] if turn_row else None
+
+        conn.commit()
+        return {
+            "rejected": False,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "lesson_completed_now": lesson_completed_now,
+        }
     except Exception:
         conn.rollback()
         raise
@@ -556,6 +681,21 @@ def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | Non
 
     if not turns:
         logger.info("[SaraAssessment] No turns for session=%s — skipping recap", web_session_id)
+        return {"summary_en": None, "theme": None, **streak_info}
+
+    # Recap gate (2b): only overwrite continuity from a substantive session.
+    # Signal: len(turns) is already in hand — no extra query needed.
+    # PRODUCT DECISION: RECAP_MIN_TURNS (default 3, set at module top).
+    # Sessions that the turn guard rejected produce zero turns and are already
+    # caught by the `not turns` check above.  This gate handles legitimate but
+    # trivial sessions (1-2 real turns) that should not replace the previous
+    # session's continuity context.
+    if len(turns) < RECAP_MIN_TURNS:
+        logger.info(
+            "[SaraAssessment] Session too short for recap (%d turn(s) < RECAP_MIN_TURNS=%d, "
+            "session=%s) — skipping continuity write",
+            len(turns), RECAP_MIN_TURNS, web_session_id,
+        )
         return {"summary_en": None, "theme": None, **streak_info}
 
     transcript = "\n".join(f"Learner: {u}\nTutor: {s}" for u, s in turns)

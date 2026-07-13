@@ -52,13 +52,28 @@ async def post_turn(payload: SaraTurnRequest, authorization: str | None = Header
         return JSONResponse({"status": "unauthorized"}, status_code=401)
 
     try:
-        session_id, lesson_completed_now = assessment_service.upsert_web_session(
-            payload.web_session_id, payload.session_elapsed_s
+        result = assessment_service.write_turn_guarded(
+            payload.web_session_id,
+            payload.session_elapsed_s,
+            payload.turn_index,
+            payload.user_transcript,
+            payload.sara_reply,
         )
 
-        turn_id = assessment_service.insert_turn(
-            session_id, payload.turn_index, payload.user_transcript, payload.sara_reply
-        )
+        if result["rejected"]:
+            logger.warning(
+                "[SaraInternal] Turn rejected — session=%s is %s (turn_index=%s)",
+                payload.web_session_id, result["session_status"], payload.turn_index,
+            )
+            # HTTP 200 — caller is fire-and-forget from sara-english; a non-200
+            # would crash or retry-storm the voice service.  "closed" means
+            # "received and safely discarded," not "written."
+            return JSONResponse({"status": "closed"})
+
+        session_id = result["session_id"]
+        turn_id = result["turn_id"]
+        lesson_completed_now = result["lesson_completed_now"]
+
         if turn_id is None:
             logger.info(
                 "[SaraInternal] Duplicate turn (session=%s, turn_index=%s) — skipped assessment",
