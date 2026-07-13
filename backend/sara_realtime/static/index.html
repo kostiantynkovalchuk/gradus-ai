@@ -280,9 +280,38 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 /* Ring stays the static progress arc only — no ripple/animation here either. */
 .avatar-wrap.completed .fill{stroke:var(--live)}
 .clock.completed-clock{color:var(--live);font-weight:600}
+
+/* ══════════ START OVERLAY (graceful fallback) ══════════ */
+/* Shown when mic/autoplay is blocked on first boot (rule 3 — never a dead
+   screen). One tap provides the user gesture, then boot() retries. Also the
+   landing state on a fresh page load when auto-start isn't possible. */
+#startOverlay{
+  display:none;position:fixed;inset:0;
+  background:var(--bg);z-index:999;
+  flex-direction:column;align-items:center;justify-content:center;gap:20px;
+}
+#startOverlay.show{display:flex}
+.start-wordmark{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:var(--ink)}
+.start-tagline{font-size:14px;color:var(--muted);margin-bottom:12px}
+#startBtn{
+  padding:16px 44px;border-radius:99px;border:none;cursor:pointer;
+  background:var(--sara);color:#fff;
+  font-family:inherit;font-size:18px;font-weight:600;
+  box-shadow:0 4px 20px rgba(36,69,122,.35);
+}
 </style>
 </head>
 <body>
+
+<!-- START OVERLAY: shown when mic/autoplay is blocked on boot, or as the
+     one-tap launch affordance. The button tap IS the user gesture that
+     authorises mic and audio autoplay. Hidden by default; boot() shows it
+     only when needed. -->
+<div id="startOverlay">
+  <div class="start-wordmark">Sara English</div>
+  <div class="start-tagline">Живой урок английского</div>
+  <button id="startBtn">▶ Начать урок</button>
+</div>
 
 <div class="app">
 
@@ -1030,15 +1059,25 @@ function bindEnd(btn){
       ['endBtn','endBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
       waitForSessionEndAck().then(() => {
         closeSessionWs();
+        // After every session end, reload for a fresh start — rule 3: the
+        // reload is chained into the beat's onDone so it only fires AFTER the
+        // video finishes (or immediately if no beat plays). location.reload()
+        // is the only reliable way to guarantee a fully clean slate in the
+        // PWA WebView; the SW serves assets from cache so it's instant.
+        const reload = () => location.reload();
         if (streakMilestone) {
           // UI text shows the streak count; nothing is spoken over the beat.
           const subBox = $('clockNowM').closest('.sub');
           if (subBox && streakCount != null) {
             subBox.insertAdjacentHTML('beforeend', ` · <span style="color:var(--live);font-weight:600">🔥 ${streakCount} уроков подряд</span>`);
           }
-          playBeat('/static/beats/beat_streak.mp4', () => {});
+          playBeat('/static/beats/beat_streak.mp4', reload);
         } else if (lessonCompleted) {
-          playBeat('/static/beats/beat_complete.mp4', () => {});
+          playBeat('/static/beats/beat_complete.mp4', reload);
+        } else {
+          // No beat — short pause so "Урок завершён ✓" text is visible
+          // before the page resets, then reload.
+          setTimeout(reload, 500);
         }
       });
     }
@@ -1072,15 +1111,40 @@ transcriptEl.addEventListener('scroll', () => {
 $('jumpBtn').addEventListener('click', () => { scrollToBottom(); $('jumpBtn').style.display = 'none'; });
 
 /* ══════════ BOOT ══════════ */
-(async function boot(){
+// boot() is called once on page load (IIFE below) and again by the start
+// overlay's button tap when the initial auto-start fails (blocked mic /
+// autoplay policy). It is NOT called again after that — session lifecycle
+// is managed by connect()/endSession() and the reload-on-end strategy below.
+async function boot(){
   try {
     await startMic();
     connect();
   } catch (e) {
-    console.error('Mic permission / init failed:', e);
-    showBanner('Нет доступа к микрофону — разрешите доступ и обновите страницу.');
+    // Rule 3 graceful fallback: mic permission denied or autoplay blocked.
+    // Never show a dead/broken screen — show the single-tap start overlay
+    // instead. The button tap IS the user gesture that authorises both.
+    console.warn('[Boot] auto-start blocked — showing start overlay:', e);
+    $('startOverlay').classList.add('show');
   }
-})();
+}
+
+// One-tap start affordance — shown only when auto-start is blocked.
+$('startBtn').addEventListener('click', async () => {
+  $('startOverlay').classList.remove('show');
+  await boot();
+});
+
+boot();
+
+// FRESH-STATE-ON-RELAUNCH guard (task 4): if the PWA WebView regains
+// visibility while the session is already ended (Felix tapped the home-
+// screen icon after ending a lesson), reload for a clean session. The
+// visibilitychange event fires on icon tap in Android PWA standalone mode.
+// Guard: only fires when sessionEnded is true — a mid-lesson app-switch
+// and return (e.g. Felix checked a dictionary) does NOT trigger reload.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && sessionEnded) location.reload();
+});
 
 window.addEventListener('beforeunload', () => { if (!sessionEnded) endSession(); });
 
