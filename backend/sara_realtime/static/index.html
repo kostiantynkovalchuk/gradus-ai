@@ -81,7 +81,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sara);outline-offse
 }
 .avatar{
   position:absolute;inset:14px;border-radius:50%;
-  overflow:hidden;background:linear-gradient(150deg,#3A5A8C 0%,#1E3055 100%);
+  overflow:hidden;background:var(--bg);
   display:flex;align-items:center;justify-content:center;
   box-shadow:var(--shadow);
 }
@@ -162,6 +162,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 .btn.end{border-color:#EFD4CA}
 .btn.end:hover{background:#FBEFEA}
 .btn.end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:13px;padding:12px 16px}
+.btn.end.ended{background:var(--live-soft);border-color:#CBE3D6;color:var(--live);font-size:13px}
 .hint{font-size:12px;color:var(--muted);text-align:center}
 
 /* ══════════ TRANSCRIPT ══════════ */
@@ -271,6 +272,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
   /* FIX A+B: solid square + confirm overflow fix for 48×48 circle button */
   .mob-end{border-color:#EFD4CA}
   .mob-end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:11px;font-weight:600;white-space:nowrap;width:auto;height:auto;border-radius:99px;padding:6px 10px}
+  .mob-end.ended{background:var(--live-soft);border-color:#CBE3D6;color:var(--live);font-size:11px;font-weight:600;white-space:nowrap;width:auto;height:auto;border-radius:99px;padding:6px 10px}
   .mob-text{display:none;width:100%;gap:8px}
   .mob-text.open{display:flex}
   .mob-text input{flex:1;padding:11px 14px;border-radius:99px;border:1px solid var(--line);background:var(--surface);font-family:inherit;font-size:14px}
@@ -721,6 +723,10 @@ async function replayTurnAudio(turnIdx){
 let micEnabled = true;
 let reconnectAttempted = false;
 let sessionEnded = false;
+/* FIX 1 — endedByUser: set true when Felix two-tap-confirms end, kept true
+   through the beat so visibilitychange cannot auto-start over the ended UI.
+   Cleared only inside resetSession() after the beat's onDone fires. */
+let endedByUser = false;
 
 function showBanner(text){ $('bannerText').textContent = text; $('banner').classList.add('show'); }
 function hideBanner(){ $('banner').classList.remove('show'); }
@@ -772,7 +778,15 @@ function revertToPortrait(){
    exactly once via the same onended/onerror/autoplay-catch/try-catch
    paths already proven out for the greeting beat. */
 function playBeat(src, onDone){
-  const proceed = () => { try { onDone(); } catch (err) { console.error('[Beat] onDone callback failed:', err); } };
+  /* FIX 1: one-shot guard — on mobile, playPromise.catch AND v.onerror can
+     both fire for the same play() call, which without this guard would call
+     resetSession() twice → double boot() → two concurrent WS connections. */
+  let fired = false;
+  const proceed = () => {
+    if (fired) return;
+    fired = true;
+    try { onDone(); } catch (err) { console.error('[Beat] onDone callback failed:', err); }
+  };
   try {
     const v = $('beatVideo');
     if (!v) { proceed(); return; }
@@ -1038,6 +1052,9 @@ bindMic($('micBtn'), true); bindMic($('micBtnM'), false);
 /* end lesson — two-step confirm, never one tap */
 function bindEnd(btn){
   let armed = false, timer;
+  /* FIX 1: expose reset so resetSession() can clear armed without needing
+     access to the closure. Called in resetSession() step 12. */
+  btn._resetArmed = () => { armed = false; clearTimeout(timer); };
   btn.addEventListener('click', () => {
     if (sessionEnded) return;
     if (!armed){
@@ -1047,7 +1064,11 @@ function bindEnd(btn){
         btn.innerHTML = '<span class="stop-sq"></span>'; }, 3500);
     } else {
       clearTimeout(timer);
-      btn.textContent = 'Урок завершён ✓'; btn.classList.remove('confirm');
+      armed = false;
+      endedByUser = true;
+      /* FIX 3: .ended keeps width:auto + pill styling for "Урок завершён ✓"
+         text without overflowing the 48×48 circle base shape. */
+      btn.textContent = 'Урок завершён ✓'; btn.classList.remove('confirm'); btn.classList.add('ended');
       // Terminal state — distinct from a mic-off pause, so the state pill
       // and the end button never contradict each other at session end.
       setState('ended');
@@ -1134,12 +1155,16 @@ function resetSession(){
   invalidateAudio();
   nextPlayAt = 0;
 
-  // 3. Stop mic + close WS (idempotent — safe even if already done by endSession)
+  // 3. Stop mic + close WS (idempotent — safe even if already done by endSession).
+  //    revertToPortrait() hides any in-progress beat video so the new session
+  //    doesn't open with a stale fullscreen frame still visible.
   stopMic();
   closeSessionWs();
+  revertToPortrait();
 
   // 4. Session-scope flags
   sessionEnded          = false;
+  endedByUser           = false;
   welcomeGateFired      = false;
   contextGateFired      = false;
   shouldWelcomeBack     = false;
@@ -1191,17 +1216,21 @@ function resetSession(){
   const mbM = $('micBtnM');
   if (mbM) { mbM.setAttribute('aria-pressed', 'true'); mbM.setAttribute('aria-label', 'Пауза'); }
 
-  // 12. End buttons — re-enable + restore stop-square
+  // 12. End buttons — re-enable + restore stop-square.
+  //     _resetArmed() clears the closure-private `armed` flag so the two-tap
+  //     confirm works correctly on the next lesson (FIX 1 audit finding).
   ['endBtn','endBtnM'].forEach(id => {
     const el = $(id); if (!el) return;
+    if (el._resetArmed) el._resetArmed();
     el.disabled = false;
-    el.classList.remove('confirm');
+    el.classList.remove('confirm', 'ended');
     el.innerHTML = '<span class="stop-sq"></span>';
   });
 
   // 13. State bars + pill + misc chrome
   document.querySelectorAll('.state .bars').forEach(b => b.style.display = '');
   hideBanner();
+  $('startOverlay').classList.remove('show');
   setState('paused');
   const jb = $('jumpBtn'); if (jb) jb.style.display = 'none';
 
@@ -1233,12 +1262,17 @@ $('startBtn').addEventListener('click', async () => {
 
 boot();
 
-// FIX C: in-app reset on PWA relaunch — same guard as before (only when
-// sessionEnded is true), but calls resetSession() instead of reload().
-// Mid-lesson app-switch and return (e.g. Felix checked a dictionary) is
-// unaffected: sessionEnded stays false, nothing fires.
+// FIX 1/2: visibilitychange auto-start guard.
+// - NOT endedByUser: the guard is suppressed while the lesson is in
+//   ended state (second tap confirmed through beat's onDone). This is
+//   the critical change: the complete beat's fullscreen enter/exit fires
+//   visibilitychange, which used to restart the session mid-beat. With
+//   endedByUser=true the guard ignores ALL visibility events until
+//   resetSession() clears it when the beat finishes.
+// - sessionEnded: only reconnects when the session is truly over, not
+//   on every mid-lesson app-switch (sessionEnded stays false then).
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && sessionEnded) resetSession();
+  if (!document.hidden && sessionEnded && !endedByUser) resetSession();
 });
 
 window.addEventListener('beforeunload', () => { if (!sessionEnded) endSession(); });
