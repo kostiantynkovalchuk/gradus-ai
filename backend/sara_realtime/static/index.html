@@ -745,6 +745,12 @@ let sessionActive = false;
    show event that passes all gates. Distinguishes a real icon-tap relaunch
    (hidden→visible) from the initial page load or in-session app-switch. */
 let returnedFromBackground = false;
+/* hasBootedThisLoad: prevents the page-load auto-start from firing more
+   than once per page lifetime. Set true the moment boot() auto-runs;
+   never reset (resetSession does not reload the page). The manual
+   «Начать урок» button bypasses this flag — explicit taps are always
+   allowed. */
+let hasBootedThisLoad = false;
 
 function showBanner(text){ $('bannerText').textContent = text; $('banner').classList.add('show'); }
 function hideBanner(){ $('banner').classList.remove('show'); }
@@ -868,6 +874,14 @@ function playGreetingBeat(onDone){
 }
 
 function connect(){
+  // Double-WS guard (1c): never open a second socket while one is already
+  // live.  A second connect() call while CONNECTING or OPEN would orphan the
+  // first socket and create two overlapping sessions — the root cause of the
+  // double-Welcome-turn bug observed in production logs.
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    console.warn('[WS] connect() called with live socket — ignoring (readyState=' + ws.readyState + ')');
+    return;
+  }
   ws = new WebSocket(WS_URL);
   ws.binaryType = 'arraybuffer';
 
@@ -1203,10 +1217,11 @@ $('jumpBtn').addEventListener('click', () => { scrollToBottom(); $('jumpBtn').st
 
 /* ══════════ IN-APP SESSION RESET (FIX C) ══════════ */
 // Replaces location.reload(). Called after every session send-off beat
-// (or after a short pause when no beat plays) and from the visibilitychange
-// guard when the user returns to the PWA after a finished lesson.
+// (or after a short pause when no beat plays).
 // Gives a fully clean slate without a page reload — no autoplay loop, no
 // white flash, works correctly in Android PWA standalone WebView.
+// Option A: resetSession() shows the startOverlay and rests there — it does
+// NOT call boot() and visibilitychange no longer auto-starts (Prompt #2).
 function resetSession(){
   // 1. Cancel lingering timers
   if (beatTimeoutId)    { clearTimeout(beatTimeoutId);    beatTimeoutId    = null; }
@@ -1302,16 +1317,18 @@ function resetSession(){
   const jb = $('jumpBtn'); if (jb) jb.style.display = 'none';
 
   // 14. REST in ended state — do NOT auto-start a new session.
-  //     The visibilitychange guard boots on a genuine icon-tap relaunch
-  //     (returnedFromBackground + all guards pass). The overlay lets the
-  //     user tap to manually begin a new lesson from within the app.
+  //     Option A: visibilitychange no longer auto-starts (Prompt #2).
+  //     The overlay tap («Начать урок») is the only sanctioned start path
+  //     from this point within the same page load.
   $('startOverlay').classList.add('show');
 }
 
 /* ══════════ BOOT ══════════ */
-// boot() starts mic + opens WS. Called on initial page load, by the
-// visibilitychange guard on genuine icon-tap relaunch, and by the start
-// overlay tap. resetSession() does NOT call boot() — app rests in ended state.
+// boot() starts mic + opens WS.  Two call sites:
+//   1. Page load — gated by hasBootedThisLoad (fires at most once per page
+//      lifetime; after a lesson ends resetSession shows the overlay instead).
+//   2. «Начать урок» tap — explicit user gesture; bypasses hasBootedThisLoad.
+// visibilitychange NO LONGER calls boot() — Option A removes that path.
 async function boot(){
   try {
     await startMic();
@@ -1332,34 +1349,28 @@ $('startBtn').addEventListener('click', async () => {
   await boot();
 });
 
-boot();
+// Auto-start gate (1a): fires at most once per page lifetime.
+// After a lesson ends, resetSession() shows the startOverlay instead of
+// re-calling boot(), so this line does not fire again on that page load.
+if (!hasBootedThisLoad) { hasBootedThisLoad = true; boot(); }
 
-// visibilitychange auto-start gate.
+// visibilitychange — Option A (locked by Konstantin): return-to-foreground
+// NEVER auto-starts a session, regardless of what state the app is in.
+// This eliminates the phantom-greeting regression where resetSession() cleared
+// endedByUser/sessionActive/beatPlaying, making all prior guards transparent
+// after a lesson ended, so any background→foreground transition fired boot().
 //
-// Auto-start fires ONLY when ALL of these hold:
-//   returnedFromBackground — app was actually hidden first (rules out page load
-//     and the beat's own fullscreen enter/exit, which fire visible immediately
-//     without a preceding hidden event in most browsers, or if they do fire
-//     hidden, beatPlaying will block the visible handler)
-//   !beatPlaying — beat's fullscreen change events are ignored while video plays
-//   !endedByUser — ended state rests; doesn't auto-start until user relaunches
-//   !sessionActive — no lesson already running (mid-lesson switch is ignored;
-//     ws.onclose reconnect logic handles the reconnection instead)
+// Beat fullscreen enter/exit is also inert here — no session can start from
+// a fullscreen change event.
 //
-// Scenarios:
-//   DOES fire:  lesson ended → reset → user backgrounds → returns (relaunch)
-//   DOES NOT:   beat playing → fullscreen exit → visible event
-//   DOES NOT:   mid-lesson app switch → return (sessionActive = true)
-//   DOES NOT:   manual startOverlay tap (no prior hidden event)
+// The ONLY start paths are:
+//   1. Cold page load  — hasBootedThisLoad gate below (once per page lifetime)
+//   2. «Начать урок» tap — explicit user gesture via startBtn
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     returnedFromBackground = true;
-    return;
   }
-  if (returnedFromBackground && !beatPlaying && !endedByUser && !sessionActive) {
-    returnedFromBackground = false;
-    boot();
-  }
+  // Visible branch intentionally empty — Option A: no auto-start on return.
 });
 
 window.addEventListener('beforeunload', () => { if (!sessionEnded) endSession(); });
