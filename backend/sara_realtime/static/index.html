@@ -157,8 +157,11 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 }
 .btn:hover{background:#FAF8F3}
 .btn.mic[aria-pressed="true"]{background:var(--live-soft);border-color:#CBE3D6;color:var(--live)}
-.btn.end{color:var(--danger)}
-.btn.end.confirm{background:#FBEFEA;border-color:#EFD4CA}
+.btn.end{background:var(--danger);color:#fff;border-color:var(--danger);font-size:20px;padding:10px 16px}
+.btn.end:hover{background:#962e21}
+.btn.end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:13px;padding:12px 16px}
+.mob-end{background:var(--danger);color:#fff;border-color:var(--danger);font-size:20px}
+.mob-end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:13px;font-weight:600}
 .hint{font-size:12px;color:var(--muted);text-align:center}
 
 /* ══════════ TRANSCRIPT ══════════ */
@@ -265,8 +268,8 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
     border:1px solid var(--line);background:var(--surface);
     display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--muted);
   }
-  .mob-end{font-size:13px;font-weight:600;color:var(--danger);padding:4px 10px}
-  .mob-end.confirm{background:#FBEFEA;border-radius:99px}
+  .mob-end{font-size:20px}
+  .mob-end.confirm{border-radius:99px;font-size:13px}
   .mob-text{display:none;width:100%;gap:8px}
   .mob-text.open{display:flex}
   .mob-text input{flex:1;padding:11px 14px;border-radius:99px;border:1px solid var(--line);background:var(--surface);font-family:inherit;font-size:14px}
@@ -341,7 +344,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 
     <div class="controls">
       <button class="btn mic" id="micBtn" aria-pressed="true">⏸ Пауза</button>
-      <button class="btn end" id="endBtn">Завершить урок</button>
+      <button class="btn end" id="endBtn" aria-label="Завершить урок">⏹</button>
       <div class="hint" id="hintText">Говорите — Sara слушает и отвечает.<br>Нажмите «Пауза», чтобы приостановить.</div>
     </div>
   </aside>
@@ -393,7 +396,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
       <div class="row">
         <button class="mob-side" id="kbBtn" aria-label="Написать текстом">⌨</button>
         <button class="mob-mic" id="micBtnM" aria-pressed="true" aria-label="Пауза">🎙</button>
-        <button class="mob-side mob-end" id="endBtnM" style="width:auto;height:auto;border:none;background:none">Завершить</button>
+        <button class="mob-side mob-end" id="endBtnM" aria-label="Завершить урок">⏹</button>
       </div>
     </div>
 
@@ -823,19 +826,20 @@ function connect(){
     if (contextGateFired) return;
     contextGateFired = true;
     if (contextTimeoutId) { clearTimeout(contextTimeoutId); contextTimeoutId = null; }
-    const src = shouldWelcomeBack
-      ? '/static/beats/beat_welcome_back.mp4'
-      : '/static/beats/beat_greeting.mp4';
-    // Max-timeout fallback (rule 3): if 'ended' never fires (stalled
-    // decode, tab-throttled background timer, etc.), the welcome turn
-    // still must not be dropped — fireWelcomeTurn()'s own guard makes
-    // this safe to race against the beat's own completion callback.
-    beatTimeoutId = setTimeout(() => {
-      console.warn('[Beat] max-wait timeout — firing welcome turn without further delay');
-      revertToPortrait();
+    if (shouldWelcomeBack) {
+      // Task 1: greeting beat removed — only welcome_back beat still plays
+      // (returning user, gap ≥ SARA_WELCOME_BACK_DAYS). For a normal new
+      // session, skip the beat entirely and fire the welcome turn immediately.
+      beatTimeoutId = setTimeout(() => {
+        console.warn('[Beat] welcome-back max-wait timeout — firing welcome turn');
+        revertToPortrait();
+        fireWelcomeTurn();
+      }, BEAT_MAX_WAIT_MS);
+      playBeat('/static/beats/beat_welcome_back.mp4', fireWelcomeTurn);
+    } else {
+      // No greeting beat — go straight to Sara's spoken welcome turn.
       fireWelcomeTurn();
-    }, BEAT_MAX_WAIT_MS);
-    playBeat(src, fireWelcomeTurn);
+    }
   }
 
   ws.onopen = () => {
@@ -847,7 +851,7 @@ function connect(){
     // time, default to the plain greeting beat rather than delay session
     // start (rule 3 — a context-fetch problem must never block the lesson).
     contextTimeoutId = setTimeout(() => {
-      console.warn('[Beat] session_context max-wait timeout — defaulting to greeting beat');
+      console.warn('[Beat] session_context max-wait timeout — firing welcome turn directly (no greeting beat)');
       playSessionStartBeat();
     }, CONTEXT_MAX_WAIT_MS);
   };
@@ -1031,9 +1035,9 @@ function bindEnd(btn){
     if (sessionEnded) return;
     if (!armed){
       armed = true; btn.classList.add('confirm');
-      btn.textContent = 'Ещё раз — завершить?';
+      btn.textContent = 'Ещё раз';
       timer = setTimeout(() => { armed = false; btn.classList.remove('confirm');
-        btn.textContent = btn.id === 'endBtn' ? 'Завершить урок' : 'Завершить'; }, 3500);
+        btn.textContent = '⏹'; }, 3500);
     } else {
       clearTimeout(timer);
       btn.textContent = 'Урок завершён ✓'; btn.classList.remove('confirm');
