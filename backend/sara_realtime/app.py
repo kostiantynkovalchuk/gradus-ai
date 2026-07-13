@@ -106,6 +106,31 @@ def _task_done_cb(label: str):
     return _cb
 
 
+@app.get("/manifest.json")
+async def manifest():
+    """Serve the PWA manifest from site root so Chrome finds it at the
+    standard location. The manifest itself lives in static/ alongside
+    the app, but must be served without a /static/ prefix so the
+    start_url ("/") and scope resolve correctly."""
+    return HTMLResponse(
+        content=(STATIC_DIR / "manifest.json").read_text(encoding="utf-8"),
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js")
+async def service_worker():
+    """Service worker must be served from "/" scope (not /static/sw.js)
+    so its scope covers the whole app, not just /static/. Chrome's PWA
+    install prompt requires a registered SW — this one is network-only
+    pass-through, no caching, just satisfying the installability check."""
+    return HTMLResponse(
+        content=(STATIC_DIR / "sw.js").read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
+
+
 @app.get("/")
 async def index():
     html_path = STATIC_DIR / "index.html"
