@@ -157,11 +157,11 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 }
 .btn:hover{background:#FAF8F3}
 .btn.mic[aria-pressed="true"]{background:var(--live-soft);border-color:#CBE3D6;color:var(--live)}
-.btn.end{background:var(--danger);color:#fff;border-color:var(--danger);font-size:20px;padding:10px 16px}
-.btn.end:hover{background:#962e21}
+/* FIX A: CSS-drawn solid square — no emoji-font dependency (⏹ renders orange on MIUI) */
+.stop-sq{display:inline-block;width:18px;height:18px;background:var(--danger);border-radius:3px;pointer-events:none;flex-shrink:0}
+.btn.end{border-color:#EFD4CA}
+.btn.end:hover{background:#FBEFEA}
 .btn.end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:13px;padding:12px 16px}
-.mob-end{background:var(--danger);color:#fff;border-color:var(--danger);font-size:20px}
-.mob-end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:13px;font-weight:600}
 .hint{font-size:12px;color:var(--muted);text-align:center}
 
 /* ══════════ TRANSCRIPT ══════════ */
@@ -268,8 +268,9 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
     border:1px solid var(--line);background:var(--surface);
     display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--muted);
   }
-  .mob-end{font-size:20px}
-  .mob-end.confirm{border-radius:99px;font-size:13px}
+  /* FIX A+B: solid square + confirm overflow fix for 48×48 circle button */
+  .mob-end{border-color:#EFD4CA}
+  .mob-end.confirm{background:#FBEFEA;border-color:#EFD4CA;color:var(--danger);font-size:11px;font-weight:600;white-space:nowrap;width:auto;height:auto;border-radius:99px;padding:6px 10px}
   .mob-text{display:none;width:100%;gap:8px}
   .mob-text.open{display:flex}
   .mob-text input{flex:1;padding:11px 14px;border-radius:99px;border:1px solid var(--line);background:var(--surface);font-family:inherit;font-size:14px}
@@ -344,7 +345,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 
     <div class="controls">
       <button class="btn mic" id="micBtn" aria-pressed="true">⏸ Пауза</button>
-      <button class="btn end" id="endBtn" aria-label="Завершить урок">⏹</button>
+      <button class="btn end" id="endBtn" aria-label="Завершить урок"><span class="stop-sq"></span></button>
       <div class="hint" id="hintText">Говорите — Sara слушает и отвечает.<br>Нажмите «Пауза», чтобы приостановить.</div>
     </div>
   </aside>
@@ -396,7 +397,7 @@ button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
       <div class="row">
         <button class="mob-side" id="kbBtn" aria-label="Написать текстом">⌨</button>
         <button class="mob-mic" id="micBtnM" aria-pressed="true" aria-label="Пауза">🎙</button>
-        <button class="mob-side mob-end" id="endBtnM" aria-label="Завершить урок">⏹</button>
+        <button class="mob-side mob-end" id="endBtnM" aria-label="Завершить урок"><span class="stop-sq"></span></button>
       </div>
     </div>
 
@@ -918,10 +919,16 @@ function connect(){
         setState('thinking');
         break;
       case 'assistant_delta':
+        // AUDIT 2: clear unfinalized partial before Sara speaks —
+        // prevents grey orphan bubble when VAD cuts without user_transcript.
+        if (partialEl) { partialEl.remove(); partialEl = null; }
         if (mode !== 'speaking') setState('speaking');
         appendSaraDelta(msg.text);
         break;
       case 'turn_complete': {
+        // AUDIT 2: safety-net clear — covers any partial that survived past
+        // assistant_delta (e.g. very fast server, or partial arrived late).
+        if (partialEl) { partialEl.remove(); partialEl = null; }
         finalizeSaraTurn();
         const turnAtComplete = currentTurnIndex;
         playChain = playChain.then(() => {
@@ -1037,7 +1044,7 @@ function bindEnd(btn){
       armed = true; btn.classList.add('confirm');
       btn.textContent = 'Ещё раз';
       timer = setTimeout(() => { armed = false; btn.classList.remove('confirm');
-        btn.textContent = '⏹'; }, 3500);
+        btn.innerHTML = '<span class="stop-sq"></span>'; }, 3500);
     } else {
       clearTimeout(timer);
       btn.textContent = 'Урок завершён ✓'; btn.classList.remove('confirm');
@@ -1063,25 +1070,20 @@ function bindEnd(btn){
       ['endBtn','endBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = true; });
       waitForSessionEndAck().then(() => {
         closeSessionWs();
-        // After every session end, reload for a fresh start — rule 3: the
-        // reload is chained into the beat's onDone so it only fires AFTER the
-        // video finishes (or immediately if no beat plays). location.reload()
-        // is the only reliable way to guarantee a fully clean slate in the
-        // PWA WebView; the SW serves assets from cache so it's instant.
-        const reload = () => location.reload();
+        // FIX C: in-app state reset — no location.reload().
+        // AUDIT 1: beat video now plays fully because resetSession() is the
+        // onDone callback — no page unload interrupts video rendering.
         if (streakMilestone) {
-          // UI text shows the streak count; nothing is spoken over the beat.
-          const subBox = $('clockNowM').closest('.sub');
+          const subBox = $('clockNowM') ? $('clockNowM').closest('.sub') : null;
           if (subBox && streakCount != null) {
             subBox.insertAdjacentHTML('beforeend', ` · <span style="color:var(--live);font-weight:600">🔥 ${streakCount} уроков подряд</span>`);
           }
-          playBeat('/static/beats/beat_streak.mp4', reload);
+          playBeat('/static/beats/beat_streak.mp4', resetSession);
         } else if (lessonCompleted) {
-          playBeat('/static/beats/beat_complete.mp4', reload);
+          playBeat('/static/beats/beat_complete.mp4', resetSession);
         } else {
-          // No beat — short pause so "Урок завершён ✓" text is visible
-          // before the page resets, then reload.
-          setTimeout(reload, 500);
+          // No beat — brief pause so "Урок завершён ✓" is visible, then reset.
+          setTimeout(resetSession, 800);
         }
       });
     }
@@ -1114,11 +1116,102 @@ transcriptEl.addEventListener('scroll', () => {
 });
 $('jumpBtn').addEventListener('click', () => { scrollToBottom(); $('jumpBtn').style.display = 'none'; });
 
+/* ══════════ IN-APP SESSION RESET (FIX C) ══════════ */
+// Replaces location.reload(). Called after every session send-off beat
+// (or after a short pause when no beat plays) and from the visibilitychange
+// guard when the user returns to the PWA after a finished lesson.
+// Gives a fully clean slate without a page reload — no autoplay loop, no
+// white flash, works correctly in Android PWA standalone WebView.
+function resetSession(){
+  // 1. Cancel lingering timers
+  if (beatTimeoutId)    { clearTimeout(beatTimeoutId);    beatTimeoutId    = null; }
+  if (contextTimeoutId) { clearTimeout(contextTimeoutId); contextTimeoutId = null; }
+  if (pingInterval)     { clearInterval(pingInterval);    pingInterval     = null; }
+
+  // 2. Stop audio — invalidateAudio() also resets playChain + activeSources.
+  //    Then reset nextPlayAt to 0 so the new AudioContext (created by
+  //    startMic()) doesn't inherit a stale far-future timestamp.
+  invalidateAudio();
+  nextPlayAt = 0;
+
+  // 3. Stop mic + close WS (idempotent — safe even if already done by endSession)
+  stopMic();
+  closeSessionWs();
+
+  // 4. Session-scope flags
+  sessionEnded          = false;
+  welcomeGateFired      = false;
+  contextGateFired      = false;
+  shouldWelcomeBack     = false;
+  reconnectAttempted    = false;
+  sessionEndAckReceived = false;
+  streakMilestone       = false;
+  streakCount           = null;
+  lessonCompleted       = false;
+  micEnabled            = true;
+
+  // 5. Transcript state
+  if (partialEl) { partialEl.remove(); partialEl = null; }
+  currentSaraEl    = null;
+  currentTurnIndex = 0;
+  Object.keys(replayBuffers).forEach(k => delete replayBuffers[k]);
+  replayNextAt = 0;
+
+  // 6. Clock — same startup pattern as initial page load
+  if (clockTimer) clearInterval(clockTimer);
+  elapsed = 0;
+  setRing(0);
+  clockTimer = setInterval(() => setRing(++elapsed), 1000);
+
+  // 7. Transcript DOM
+  transcriptEl.innerHTML = '';
+
+  // 8. Avatar 'completed' ring
+  ['avatarWrap','avatarWrapM'].forEach(id => {
+    const el = $(id); if (el) el.classList.remove('completed');
+  });
+
+  // 9. Desktop clock text node — restore text changed by lesson_completed handler
+  const clockBox = $('clockNow') ? $('clockNow').closest('.clock') : null;
+  if (clockBox) {
+    clockBox.classList.remove('completed-clock');
+    if (clockBox.lastChild && clockBox.lastChild.nodeType === 3) {
+      clockBox.lastChild.textContent = ' / 20:00 · урок засчитан после 10:00';
+    }
+  }
+
+  // 10. Mobile sub box — wipe streak/lesson badges appended via insertAdjacentHTML
+  const subBoxM = $('clockNowM') ? $('clockNowM').closest('.sub') : null;
+  if (subBoxM) subBoxM.innerHTML = '<span id="clockNowM">00:00</span> / 20:00';
+
+  // 11. Mic buttons — re-enable + restore labels
+  ['micBtn','micBtnM'].forEach(id => { const el = $(id); if (el) el.disabled = false; });
+  const mbD = $('micBtn');
+  if (mbD) { mbD.textContent = '⏸ Пауза'; mbD.setAttribute('aria-pressed', 'true'); }
+  const mbM = $('micBtnM');
+  if (mbM) { mbM.setAttribute('aria-pressed', 'true'); mbM.setAttribute('aria-label', 'Пауза'); }
+
+  // 12. End buttons — re-enable + restore stop-square
+  ['endBtn','endBtnM'].forEach(id => {
+    const el = $(id); if (!el) return;
+    el.disabled = false;
+    el.classList.remove('confirm');
+    el.innerHTML = '<span class="stop-sq"></span>';
+  });
+
+  // 13. State bars + pill + misc chrome
+  document.querySelectorAll('.state .bars').forEach(b => b.style.display = '');
+  hideBanner();
+  setState('paused');
+  const jb = $('jumpBtn'); if (jb) jb.style.display = 'none';
+
+  // 14. Re-enter lesson
+  boot();
+}
+
 /* ══════════ BOOT ══════════ */
-// boot() is called once on page load (IIFE below) and again by the start
-// overlay's button tap when the initial auto-start fails (blocked mic /
-// autoplay policy). It is NOT called again after that — session lifecycle
-// is managed by connect()/endSession() and the reload-on-end strategy below.
+// boot() starts mic + opens WS. Called on page load and by resetSession()
+// after every lesson end, and by the start overlay when auto-start is blocked.
 async function boot(){
   try {
     await startMic();
@@ -1140,14 +1233,12 @@ $('startBtn').addEventListener('click', async () => {
 
 boot();
 
-// FRESH-STATE-ON-RELAUNCH guard (task 4): if the PWA WebView regains
-// visibility while the session is already ended (Felix tapped the home-
-// screen icon after ending a lesson), reload for a clean session. The
-// visibilitychange event fires on icon tap in Android PWA standalone mode.
-// Guard: only fires when sessionEnded is true — a mid-lesson app-switch
-// and return (e.g. Felix checked a dictionary) does NOT trigger reload.
+// FIX C: in-app reset on PWA relaunch — same guard as before (only when
+// sessionEnded is true), but calls resetSession() instead of reload().
+// Mid-lesson app-switch and return (e.g. Felix checked a dictionary) is
+// unaffected: sessionEnded stays false, nothing fires.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && sessionEnded) location.reload();
+  if (!document.hidden && sessionEnded) resetSession();
 });
 
 window.addEventListener('beforeunload', () => { if (!sessionEnded) endSession(); });
