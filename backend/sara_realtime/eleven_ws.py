@@ -57,7 +57,7 @@ EL_WSS_BASE = "wss://api.elevenlabs.io/v1"
 #   no_verbatim=true           strips filler/false-starts that seed misdetection
 #   filter_background_audio=true  reduces noise-triggered phantom commits
 #   include_language_detection=true  returns language_code per committed_transcript
-# language_code intentionally omitted (None = auto-detect — required for Russian).
+# language_code=en pinned for Test A (auto-detect disabled).
 # previous_text is appended dynamically in __aenter__ (URL-encoded, skipped if empty).
 STT_URL_TMPL = (
     EL_WSS_BASE
@@ -67,6 +67,7 @@ STT_URL_TMPL = (
     + "&no_verbatim=true"
     + "&filter_background_audio=true"
     + "&include_language_detection=true"
+    + "&language_code=en"
 )
 
 # ── Commit-boundary filter (Part B) ──────────────────────────────────────────
@@ -210,7 +211,7 @@ class ScribeRealtimeSTT:
         logger.info(
             "[Scribe] Connecting: vad_silence_threshold_secs=%.1f no_verbatim=True "
             "filter_background_audio=True include_language_detection=True "
-            "previous_text=%r",
+            "language_code='en' previous_text=%r",
             VAD_SILENCE_S,
             SCRIBE_PREVIOUS_TEXT or "(disabled)",
         )
