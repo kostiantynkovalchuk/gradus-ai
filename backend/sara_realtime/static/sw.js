@@ -7,8 +7,8 @@
 // Scope: registered from "/" (served by an explicit FastAPI route in
 // app.py, not from /static/) so it covers the full app origin.
 //
-// v3: bump to propagate duplicate-#beatVideo fix (complete beat now renders on mobile).
-const CACHE_VERSION = 'sara-cache-v3';
+// v4: bump to propagate streak beat (beat_streak.mp4 on every 5th credited lesson).
+const CACHE_VERSION = 'sara-cache-v4';
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));

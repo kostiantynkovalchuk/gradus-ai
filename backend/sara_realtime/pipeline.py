@@ -59,6 +59,39 @@ def _get_forward_client() -> httpx.AsyncClient:
     return _forward_client
 
 
+async def _peek_streak_milestone(learner_id: str) -> Optional[dict]:
+    """Read-only streak preview — called right after lesson_completed fires at
+    turn-time so the client can arm the correct beat before the end-lesson tap.
+    Does NOT consume streak_counted; the authoritative increment still happens
+    at session-end via report_session_streak() → /session/streak.
+    Returns None on any failure (rule 3 — never blocks the voice path)."""
+    if not _FORWARD_ENABLED:
+        return None
+    try:
+        client = _get_forward_client()
+        resp = await client.get(
+            f"{MAIN_BACKEND_URL}/internal/sara/learner/{learner_id}/streak-peek",
+            headers={"Authorization": f"Bearer {SARA_INTERNAL_TOKEN}"},
+        )
+        if resp.status_code // 100 != 2:
+            logger.warning(
+                "[Pipeline] Streak peek non-2xx: status=%d body=%r",
+                resp.status_code, resp.text[:200],
+            )
+            return None
+        data = resp.json()
+        return {
+            "streak_milestone": bool(data.get("streak_milestone")),
+            "streak_count": data.get("streak_count"),
+        }
+    except httpx.TimeoutException as e:
+        logger.warning("[Pipeline] Streak peek timed out: %s", e)
+        return None
+    except Exception as e:
+        logger.warning("[Pipeline] Streak peek failed: %s", e)
+        return None
+
+
 async def _forward_turn(
     websocket,
     web_session_id: str,
@@ -67,6 +100,7 @@ async def _forward_turn(
     sara_reply: str,
     cefr_band: str,
     session_elapsed_s: Optional[float],
+    learner_id: Optional[str] = None,
 ):
     """
     Fire-and-forget POST to the main backend. Runs inside its own
@@ -127,8 +161,18 @@ async def _forward_turn(
                 logger.warning("[Pipeline] Failed to relay corrections over WS: %s", ws_e)
 
         if data.get("lesson_completed"):
+            # Read-only peek: does the NEXT completed lesson land on a milestone
+            # (% 5 == 0)?  Best-effort — None means "unknown, default to complete".
+            # The actual streak_counted increment still happens at session-end.
+            streak_preview: Optional[dict] = None
+            if learner_id:
+                streak_preview = await _peek_streak_milestone(learner_id)
+            lesson_msg: dict = {"type": "lesson_completed"}
+            if streak_preview:
+                lesson_msg["streak_milestone"] = streak_preview["streak_milestone"]
+                lesson_msg["streak_count"] = streak_preview["streak_count"]
             try:
-                await websocket.send_json({"type": "lesson_completed"})
+                await websocket.send_json(lesson_msg)
             except Exception as ws_e:
                 logger.warning("[Pipeline] Failed to relay lesson_completed over WS: %s", ws_e)
 
@@ -457,6 +501,7 @@ class SessionPipeline:
         web_session_id: Optional[str] = None,
         turn_index: Optional[int] = None,
         session_elapsed_s: Optional[float] = None,
+        learner_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Run one turn: Claude streaming → TTS.
@@ -603,6 +648,7 @@ class SessionPipeline:
                     websocket, web_session_id, turn_index, transcript,
                     full_reply_text or raw_response, PHASE1_CEFR_BAND,
                     session_elapsed_s,
+                    learner_id=learner_id,
                 ),
                 name="forward_turn",
             )

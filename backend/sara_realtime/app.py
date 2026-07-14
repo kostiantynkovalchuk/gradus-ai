@@ -723,6 +723,7 @@ async def _turn_loop(
                 web_session_id=web_session_id,
                 turn_index=turn_index_counter[0],
                 session_elapsed_s=time.monotonic() - session_start_t,
+                learner_id=LEARNER_ID,
             )
         except asyncio.CancelledError:
             logger.info("[TurnLoop] Cancelled during pipeline turn — exiting")

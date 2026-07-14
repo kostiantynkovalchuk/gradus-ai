@@ -223,6 +223,35 @@ async def reset_learner(learner_id: str, authorization: str | None = Header(defa
         return JSONResponse({"status": "error"}, status_code=500)
 
 
+@sara_internal_router.get("/learner/{learner_id}/streak-peek")
+async def get_streak_peek(learner_id: str, authorization: str | None = Header(default=None)):
+    """
+    Read-only preview of whether the NEXT credited lesson for `learner_id`
+    would be a streak milestone.  Does NOT consume streak_counted.
+
+    Called by the realtime pipeline right after lesson_completed fires at
+    turn-time, so the client can arm the correct beat before the user taps
+    End Lesson — without racing against the authoritative streak increment
+    that still runs at session-end via /session/streak.
+    """
+    if not _check_token(authorization):
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
+    try:
+        result = assessment_service.peek_streak_milestone(learner_id)
+        return JSONResponse({
+            "status": "ok",
+            "streak_milestone": result["streak_milestone"],
+            "streak_count": result["streak_count"],
+        })
+    except Exception as e:
+        logger.exception(
+            "[SaraInternal] /internal/sara/learner/%s/streak-peek failed: %s",
+            learner_id, e,
+        )
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
 @sara_internal_router.get("/session/{web_session_id}/corrections")
 async def get_corrections(web_session_id: str, authorization: str | None = Header(default=None)):
     if not _check_token(authorization):

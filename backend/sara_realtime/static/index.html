@@ -1046,6 +1046,17 @@ function connect(){
       case 'lesson_completed':
         if (!lessonCompleted) {
           lessonCompleted = true;
+          // Read early streak prediction (read-only peek, streak_counted not consumed).
+          // Used synchronously at tap-time to pick the correct beat file.
+          if (msg.streak_milestone !== undefined) {
+            streakMilestonePredicted = !!msg.streak_milestone;
+            // Pre-populate streakCount so the 🔥 badge has a number even if the
+            // session_ended ack arrives after the beat starts — whichever value
+            // arrives last (ack or prediction) wins at badge-render time.
+            if (streakCount == null && msg.streak_count != null) {
+              streakCount = msg.streak_count;
+            }
+          }
           ['avatarWrap', 'avatarWrapM'].forEach(id => { const el = $(id); if (el) el.classList.add('completed'); });
           const clockBox = $('clockNow').closest('.clock');
           if (clockBox) { clockBox.classList.add('completed-clock'); clockBox.lastChild.textContent = ' ✓ урок засчитан'; }
@@ -1070,6 +1081,13 @@ function connect(){
 // lesson — it just means no streak beat plays that time.
 let streakMilestone = false;
 let streakCount = null;
+// Early prediction: set by the 'lesson_completed' WS message (read-only peek,
+// does NOT consume streak_counted). Used at tap-time to pick beat_streak.mp4
+// vs beat_complete.mp4 synchronously inside the user-gesture window.
+// Distinct from streakMilestone (which is the authoritative ack from session_ended
+// and drives the 🔥 badge). Both can be true on the same session — streak beat
+// plays first, badge appends in the .then() below without interrupting the video.
+let streakMilestonePredicted = false;
 let sessionEndAckReceived = false;
 const SESSION_END_MAX_WAIT_MS = 3000;   // server-side check itself times out at 3.0s
 
@@ -1183,7 +1201,13 @@ function bindEnd(btn){
       // the lesson). streakMilestone arrives with the session_ended ack and
       // is added as a badge in .then() below without interrupting the beat.
       if (lessonCompleted) {
-        playBeat('/static/beats/beat_complete.mp4', resetSession);
+        // Synchronous inside the tap — gesture window is still open.
+        // streakMilestonePredicted was set by the early lesson_completed WS
+        // message (read-only peek); no await between tap and playBeat (rule).
+        const beatSrc = streakMilestonePredicted
+          ? '/static/beats/beat_streak.mp4'
+          : '/static/beats/beat_complete.mp4';
+        playBeat(beatSrc, resetSession);
       } else {
         // No credit — brief pause so "Урок завершён ✓" is readable, then rest.
         setTimeout(resetSession, 800);
@@ -1269,9 +1293,10 @@ function resetSession(){
   shouldWelcomeBack     = false;
   reconnectAttempted    = false;
   sessionEndAckReceived = false;
-  streakMilestone       = false;
-  streakCount           = null;
-  lessonCompleted       = false;
+  streakMilestone          = false;
+  streakMilestonePredicted = false;
+  streakCount              = null;
+  lessonCompleted          = false;
   micEnabled            = true;
 
   // 5. Transcript state

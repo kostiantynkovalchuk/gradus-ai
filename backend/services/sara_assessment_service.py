@@ -651,6 +651,45 @@ def record_session_completion(web_session_id: str, learner_id: str) -> dict:
     return {"streak_milestone": streak_milestone, "streak_count": new_count}
 
 
+def peek_streak_milestone(learner_id: str) -> dict:
+    """Read-only preview: would the NEXT credited lesson for `learner_id`
+    be a streak milestone (completed_lesson_count + 1 divisible by 5)?
+
+    Purely read-only — does NOT touch streak_counted.  Designed for the early
+    lesson_completed WS message so the realtime client knows which beat to arm
+    (beat_streak.mp4 vs beat_complete.mp4) before the user taps End Lesson.
+
+    The authoritative streak_counted increment still happens once, at
+    session-end via record_session_completion() → /internal/sara/session/streak.
+
+    Returns {"streak_milestone": bool, "streak_count": int|None}.
+    Never raises (rule 3).
+    """
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT completed_lesson_count FROM sara_web_state WHERE learner_id = %s",
+                    (learner_id,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        current = row[0] if row else 0
+        next_count = (current or 0) + 1
+        return {
+            "streak_milestone": next_count % 5 == 0,
+            "streak_count": next_count,
+        }
+    except Exception as e:
+        logger.warning(
+            "[SaraAssessment] peek_streak_milestone failed (learner=%s): %s",
+            learner_id, e,
+        )
+        return {"streak_milestone": False, "streak_count": None}
+
+
 def generate_and_store_recap(learner_id: str, web_session_id: str) -> dict | None:
     # Streak/timestamp bookkeeping runs first and independently of recap
     # generation succeeding — recap can bail out below (no turns, no API
