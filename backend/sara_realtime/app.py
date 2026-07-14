@@ -71,7 +71,7 @@ from sara_realtime.pipeline import (
     report_session_streak,
     DEFAULT_LEARNER_ID,
 )
-from sara_realtime.eleven_ws import ScribeRealtimeSTT
+from sara_realtime.eleven_ws import ScribeRealtimeSTT, should_accept_transcript, TRANSCRIPT_B1_ACTION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -591,17 +591,49 @@ async def _stt_recv(
                 pass
 
         elif event["type"] == "final":
-            text = event.get("text", "").strip()
-            if not text:
+            raw_text = event.get("text", "").strip()
+            detected_lang = event.get("language_code")
+            if not raw_text:
                 logger.debug("[Scribe] Empty committed transcript — dropped")
                 continue
+
+            # Commit-boundary filter (Prompt #3 — Part B).
+            # B2: noise/empty (no alphanumeric content) → silent drop.
+            # B1: wrong language/script → drop + optional reask cue.
+            # CJK punctuation in otherwise-valid turns is normalized, not dropped.
+            accept, clean_text, reject_reason = should_accept_transcript(raw_text, detected_lang)
+            if not accept:
+                if reject_reason == "noise_empty":
+                    logger.debug(
+                        "[Scribe] Commit dropped (B2 noise/empty): %r", raw_text[:80]
+                    )
+                else:
+                    logger.warning(
+                        "[Scribe] Commit dropped (%s lang_detected=%r): %r",
+                        reject_reason, detected_lang, raw_text[:80],
+                    )
+                    if TRANSCRIPT_B1_ACTION == "reask":
+                        try:
+                            await websocket.send_json({
+                                "type": "transcript_rejected",
+                                "action": "reask",
+                            })
+                        except Exception:
+                            pass
+                # Clear any partial bubble the client is showing for this commit
+                try:
+                    await websocket.send_json({"type": "partial_transcript", "text": ""})
+                except Exception:
+                    pass
+                continue
+
             if turn_active.is_set():
                 logger.debug(
-                    "[Scribe] Committed transcript dropped (turn active): %r", text[:80]
+                    "[Scribe] Committed transcript dropped (turn active): %r", clean_text[:80]
                 )
                 continue
-            logger.info("[Scribe] Committed transcript → turn_loop: %r", text[:80])
-            await transcript_queue.put(text)
+            logger.info("[Scribe] Committed transcript → turn_loop: %r", clean_text[:80])
+            await transcript_queue.put(clean_text)
 
         elif event["type"] == "error":
             logger.error("[Scribe] Error event from Scribe: %s", event.get("message"))

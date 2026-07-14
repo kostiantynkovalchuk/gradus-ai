@@ -564,6 +564,11 @@ let replayNextAt = 0;
 function scrollToBottom(){ transcriptEl.scrollTop = transcriptEl.scrollHeight; }
 
 function upsertPartial(text){
+  // Empty text = server cleared the partial (rejected commit). Remove element.
+  if (!text) {
+    if (partialEl) { partialEl.remove(); partialEl = null; }
+    return;
+  }
   if (!partialEl){
     partialEl = document.createElement('div');
     partialEl.className = 'msg felix partial';

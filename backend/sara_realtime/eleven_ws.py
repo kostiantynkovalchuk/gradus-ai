@@ -21,11 +21,13 @@ TTS: Flash v2.5 streaming
   in the environment (that var belongs to the sync REST path in sara_webhook.py).
 """
 import os
+import re
 import json
 import base64
 import asyncio
 import logging
 from typing import AsyncIterator, Callable, Awaitable
+from urllib.parse import quote as _url_quote
 
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
@@ -39,15 +41,133 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 # Override with SARA_RT_VAD_SILENCE_S env var without a redeploy.
 VAD_SILENCE_S = float(os.getenv("SARA_RT_VAD_SILENCE_S", "2.2"))
 
+# Bilingual anchor injected as previous_text to prime Scribe's language detector
+# toward EN+RU before the learner speaks. This is the root-cause mitigation for
+# the Mandarin lock-in seen in production transcripts.
+# Override with SARA_SCRIBE_PREVIOUS_TEXT env var (set to "" to disable).
+SCRIBE_PREVIOUS_TEXT = os.getenv(
+    "SARA_SCRIBE_PREVIOUS_TEXT",
+    "Hello! Как дела? Let's practice English today.",
+)
+
 EL_WSS_BASE = "wss://api.elevenlabs.io/v1"
 
 # STT: key in HEADER only — not in URL (403 if key appears in URL on v1/realtime)
+# Boolean flags added (Part A — Prompt #3):
+#   no_verbatim=true           strips filler/false-starts that seed misdetection
+#   filter_background_audio=true  reduces noise-triggered phantom commits
+#   include_language_detection=true  returns language_code per committed_transcript
+# language_code intentionally omitted (None = auto-detect — required for Russian).
+# previous_text is appended dynamically in __aenter__ (URL-encoded, skipped if empty).
 STT_URL_TMPL = (
     EL_WSS_BASE
     + "/speech-to-text/realtime"
     + "?model_id={model}&audio_format=pcm_16000&commit_strategy=vad"
     + "&vad_silence_threshold_secs={vad_s}"
+    + "&no_verbatim=true"
+    + "&filter_background_audio=true"
+    + "&include_language_detection=true"
 )
+
+# ── Commit-boundary filter (Part B) ──────────────────────────────────────────
+
+# Han (CJK), Hiragana, Katakana, Hangul — Felix will never legitimately produce
+# these characters; any commit containing them is wrong-script.
+_BLOCK_SCRIPT_RE = re.compile(
+    r'[\u4E00-\u9FFF'   # CJK Unified Ideographs
+    r'\u3040-\u309F'    # Hiragana
+    r'\u30A0-\u30FF'    # Katakana
+    r'\uAC00-\uD7AF'    # Hangul syllables
+    r'\u3000-\u303F'    # CJK punctuation (e.g. 。，、)
+    r'\uFF01-\uFF60]'   # Fullwidth forms
+)
+
+# Stray CJK punctuation → nearest ASCII equivalent.
+# Applied BEFORE rejection checks so an otherwise-English turn with a leaked
+# '。' is cleaned rather than dropped.
+_CJK_PUNCT_MAP = str.maketrans({
+    '，': ',', '。': '.', '、': ',',
+    '！': '!', '？': '?', '：': ':', '；': ';',
+})
+
+# Scribe BCP-47 language codes that are valid for this session.
+# 'en' — English (Felix's target language)
+# 'ru' — Russian (Felix's L1; scaffolding is intentional — HARD CONSTRAINT)
+_ALLOWED_LANGS = frozenset({'en', 'ru'})
+
+# Matches any Unicode letter or decimal digit — used for the B2 noise gate.
+_ALPHA_RE = re.compile(r'\w', re.UNICODE)
+
+# B1 rejection behavior flag (Watchlist #6).
+# "reask"  → server sends {"type":"transcript_rejected","action":"reask"} over WS
+#             so the client can show a lightweight "please repeat" cue.
+# "silent" → silent drop (WARNING logged, no WS message).
+# Default is "reask" — learner DID speak; a silent drop feels broken.
+# Override: SARA_TRANSCRIPT_B1_ACTION=silent (no redeploy needed).
+TRANSCRIPT_B1_ACTION: str = os.getenv("SARA_TRANSCRIPT_B1_ACTION", "reask")
+
+
+def should_accept_transcript(
+    text: str,
+    detected_lang: str | None,
+) -> tuple[bool, str, str | None]:
+    """
+    Commit-boundary filter — TWO rejection rules, ONE normalization pass.
+
+    Args:
+        text:          Committed transcript text (already .strip()'d by caller).
+        detected_lang: Scribe's detected language code (e.g. 'en', 'ru', 'zh'),
+                       or None when include_language_detection=False or the
+                       field was absent from this commit.
+
+    Returns:
+        (accept, normalized_text, reject_reason)
+
+        accept         — False → drop this commit before it reaches turn_loop.
+        normalized_text — text with stray CJK punctuation replaced; callers MUST
+                          use this (not the original) even when accept=True.
+        reject_reason  — None | "noise_empty" | "wrong_lang:<code>"
+                         | "wrong_script"
+
+    Rule B2 — noise/empty (checked FIRST, cheapest):
+        After CJK-punct normalization, if no \\w character remains → reject.
+        A lone '。' becomes '.' → still no \\w → rejected (Watchlist #5 case).
+        Short valid turns — "Good.", "Аликуша!", "800 people." — all pass.
+        NO length threshold. Only zero real content triggers rejection.
+
+    Rule B1 — wrong language (checked after B2):
+        a) detected_lang present AND not in {en, ru} → reject "wrong_lang:<code>"
+        b) Script gate: Han/Kana/Hangul chars remaining after normalization
+           → reject "wrong_script"
+        Russian (Cyrillic) is explicitly ALLOWED — do not break it.
+
+    Normalization (always applied, even on accept):
+        CJK punctuation (，。、！？：；) → nearest ASCII equivalent.
+        An otherwise-English turn with a leaked '。' is cleaned, not dropped.
+
+    Honest limitation (documented, not engineered around):
+        Latin-script foreign languages (Portuguese, Spanish, etc.) are NOT
+        caught by the script gate. The detected_lang gate catches them when
+        Scribe's detection is reliable. no_verbatim + filter_background_audio
+        + previous_text reduce their frequency. Residual cases are rare and
+        expected to be tuned on pilot data — no hardcoded language blocklist.
+    """
+    # Always normalize CJK punctuation first — '。' → '.' before any check
+    normalized = text.translate(_CJK_PUNCT_MAP)
+
+    # B2: noise/empty — no alphanumeric content after normalization
+    if not _ALPHA_RE.search(normalized):
+        return False, normalized, "noise_empty"
+
+    # B1a: detected language gate (skipped when detected_lang is None)
+    if detected_lang is not None and detected_lang not in _ALLOWED_LANGS:
+        return False, normalized, f"wrong_lang:{detected_lang}"
+
+    # B1b: script gate — reject if Han/Kana/Hangul chars survive normalization
+    if _BLOCK_SCRIPT_RE.search(normalized):
+        return False, normalized, "wrong_script"
+
+    return True, normalized, None
 
 # TTS: key in HEADER only — xi_api_key removed from query string
 TTS_URL_TMPL = (
@@ -85,7 +205,15 @@ class ScribeRealtimeSTT:
 
     async def __aenter__(self):
         url = STT_URL_TMPL.format(model=self._model, vad_s=VAD_SILENCE_S)
-        logger.info("[Scribe] Connecting: vad_silence_threshold_secs=%.1f", VAD_SILENCE_S)
+        if SCRIBE_PREVIOUS_TEXT:
+            url += "&previous_text=" + _url_quote(SCRIBE_PREVIOUS_TEXT, safe="")
+        logger.info(
+            "[Scribe] Connecting: vad_silence_threshold_secs=%.1f no_verbatim=True "
+            "filter_background_audio=True include_language_detection=True "
+            "previous_text=%r",
+            VAD_SILENCE_S,
+            SCRIBE_PREVIOUS_TEXT or "(disabled)",
+        )
         self._ws = await websockets.connect(
             url,
             additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
@@ -171,7 +299,11 @@ class ScribeRealtimeSTT:
 
             elif mt in ("committed_transcript", "committed_transcript_with_timestamps"):
                 text = msg.get("text", "").strip()
-                yield {"type": "final", "text": text}  # caller filters empty/gated
+                # language_code is present when include_language_detection=True (Part A).
+                # None when detection was unavailable for this commit.
+                # Caller (app._stt_recv) passes it to should_accept_transcript (Part B).
+                detected_lang = msg.get("language_code")
+                yield {"type": "final", "text": text, "language_code": detected_lang}
                 # No return — loop continues across multiple VAD commits. R10.
 
             else:
