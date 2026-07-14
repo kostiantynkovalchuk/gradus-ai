@@ -89,6 +89,22 @@ STT_MAX_ATTEMPTS = 5
 # Exponential backoff schedule (seconds), one entry per attempt index.
 STT_BACKOFF_S = [0.5, 1.0, 2.0, 4.0, 8.0]
 
+# Consecutive-duplicate suppression window (seconds).
+# If a committed transcript is identical (after casefold + whitespace collapse)
+# to the previous accepted commit AND arrives within this window, it is dropped
+# before reaching turn_loop. Handles the pause/repeat pattern where Scribe emits
+# the same VAD segment twice. Override via SARA_DUP_WINDOW_S without redeploy.
+DUP_WINDOW_S: float = float(os.getenv("SARA_DUP_WINDOW_S", "8.0"))
+
+
+def _dedup_key(text: str) -> str:
+    """
+    Normalize a committed transcript for duplicate comparison.
+    strip + casefold + collapse interior whitespace to a single space.
+    Applied to clean_text (already CJK-punct-normalized), not raw_text.
+    """
+    return " ".join(text.strip().casefold().split())
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Sara Real-Time Voice", docs_url=None, redoc_url=None)
@@ -188,6 +204,12 @@ async def ws_session(websocket: WebSocket):
     # whether a Scribe close is "idle" (INFO) or "mid-stream" (WARNING).
     last_audio_t: list = [0.0]
 
+    # Consecutive-duplicate suppression state — shared across Scribe reconnects
+    # so a reconnect mid-window does not reset the dedup clock.
+    # [0] dedup_key of the last accepted commit (str)
+    # [1] monotonic time that commit was accepted (float)
+    last_commit: list = ["", 0.0]
+
     # ── Long-lived background tasks ───────────────────────────────────────────
     # reader_task is started LAZILY — only after the "start" control message
     # arrives, so an idle browser tab does not open a Scribe connection.
@@ -284,7 +306,7 @@ async def ws_session(websocket: WebSocket):
                     reader_task = asyncio.create_task(
                         _stt_reader(
                             audio_queue, transcript_queue, turn_active,
-                            websocket, last_audio_t,
+                            websocket, last_audio_t, last_commit,
                         ),
                         name="stt_reader",
                     )
@@ -411,7 +433,8 @@ async def _stt_reader(
     transcript_queue: asyncio.Queue,
     turn_active: asyncio.Event,
     websocket,
-    last_audio_t: list,  # [float] shared with _stt_pump; 0.0 until first audio sent
+    last_audio_t: list,   # [float] shared with _stt_pump; 0.0 until first audio sent
+    last_commit: list,    # [str, float] dedup state — shared across reconnects
 ):
     """
     Owns the Scribe STT WebSocket for the session lifetime.
@@ -443,7 +466,7 @@ async def _stt_reader(
                     _stt_pump(audio_queue, stt, last_audio_t), name="stt_pump"
                 )
                 recv_task = asyncio.create_task(
-                    _stt_recv(stt, transcript_queue, turn_active, websocket),
+                    _stt_recv(stt, transcript_queue, turn_active, websocket, last_commit),
                     name="stt_recv",
                 )
                 pump_task.add_done_callback(_task_done_cb("stt_pump"))
@@ -566,15 +589,18 @@ async def _stt_recv(
     transcript_queue: asyncio.Queue,
     turn_active: asyncio.Event,
     websocket,
+    last_commit: list,  # [dedup_key: str, accepted_at: float] — mutable, shared
 ):
     """
     Receive Scribe events and route them.
 
     partial_transcript  → relay to browser as {"type":"partial_transcript"}
-    committed_transcript:
-        empty/whitespace → drop (DEBUG)
-        turn_active set  → drop — trailing tail or echo (DEBUG)
-        else             → transcript_queue.put() for turn_loop to consume
+    committed_transcript — filter chain (in order):
+        1. empty/whitespace          → drop (DEBUG)
+        2. B1/B2 language+noise gate → drop (WARNING/DEBUG) + partial-clear WS
+        3. consecutive-duplicate     → drop (WARNING) — same text within DUP_WINDOW_S
+        4. turn_active set           → drop — trailing tail or echo (DEBUG)
+        5. enqueue for turn_loop
     error               → log ERROR (terminal; function returns after yield)
 
     ConnectionClosedError / ConnectionClosedOK propagate from receive_events()
@@ -626,6 +652,23 @@ async def _stt_recv(
                 except Exception:
                     pass
                 continue
+
+            # Consecutive-duplicate suppression (step 3).
+            # Protects against Scribe emitting the same VAD segment twice for
+            # pause/repeat utterances. Runs AFTER normalization so the comparison
+            # is on clean_text (CJK-punct already normalized), not raw_text.
+            key = _dedup_key(clean_text)
+            now = time.monotonic()
+            if key == last_commit[0] and now - last_commit[1] <= DUP_WINDOW_S:
+                logger.warning(
+                    "[Scribe] Duplicate commit suppressed (%.1fs since last): %r",
+                    now - last_commit[1],
+                    clean_text[:80],
+                )
+                continue
+            # Update dedup record before enqueuing (step 3 bookkeeping).
+            last_commit[0] = key
+            last_commit[1] = now
 
             if turn_active.is_set():
                 logger.debug(
