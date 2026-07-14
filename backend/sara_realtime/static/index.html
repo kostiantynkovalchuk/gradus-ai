@@ -950,6 +950,16 @@ function connect(){
   ws.onclose = e => {
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (sessionEnded) return;
+    // Background teardown: OS killed the socket uncleanly when the app was
+    // hidden (server log: code=1005). returnedFromBackground is set in the
+    // visibilitychange→hidden branch (before the JS freeze) and is therefore
+    // reliably true when this handler fires on return.
+    // Do NOT reconnect — a reconnected WS would open a new server session
+    // while both AudioContexts (mic + playback) remain suspended, producing
+    // a half-resume: Sara's welcome TTS plays silently, Scribe receives no
+    // audio and spins its idle-reconnect loop indefinitely.
+    // Instead: reset to the clean start overlay so the user taps to re-arm.
+    if (returnedFromBackground) { resetSession(); return; }
     if (!e.wasClean && !reconnectAttempted) {
       reconnectAttempted = true;
       showBanner('Связь прервалась — переподключаюсь…');
