@@ -276,6 +276,17 @@ class ScribeRealtimeSTT:
             return
         # ConnectionClosedError / ConnectionClosedOK are NOT caught here.
         # They propagate to _stt_recv → _stt_reader which handles reconnect. R9.
+        #
+        # Generator-local dedup: Scribe sends BOTH committed_transcript AND
+        # committed_transcript_with_timestamps for every utterance when
+        # include_language_detection=true.  Both carry identical text and arrive
+        # within microseconds, causing the downstream dedup in _stt_recv to fire
+        # a false "0.0s" suppression on every single turn.  Fix: yield exactly
+        # once per unique committed text.  Reset when a partial_transcript
+        # arrives — that signals a NEW VAD segment has begun, so a genuine
+        # re-utterance of the same phrase in the next segment is never skipped.
+        _last_committed_text: str | None = None
+
         async for raw in self._ws:
             if isinstance(raw, bytes):
                 continue
@@ -294,6 +305,10 @@ class ScribeRealtimeSTT:
                 )
 
             elif mt == "partial_transcript":
+                # A new partial means a fresh VAD segment is being transcribed.
+                # Reset the committed-text dedup so the same phrase spoken again
+                # in the next segment is not incorrectly treated as a duplicate.
+                _last_committed_text = None
                 text = msg.get("text", "").strip()
                 if text:
                     yield {"type": "partial", "text": text}
@@ -304,6 +319,17 @@ class ScribeRealtimeSTT:
                 # None when detection was unavailable for this commit.
                 # Caller (app._stt_recv) passes it to should_accept_transcript (Part B).
                 detected_lang = msg.get("language_code")
+                if text == _last_committed_text:
+                    # Second Scribe message for the same utterance (the
+                    # committed_transcript / committed_transcript_with_timestamps
+                    # pair).  Suppress silently — the first already yielded.
+                    logger.debug(
+                        "[Scribe] receive_events: skipped duplicate %s"
+                        " (same text as just-yielded commit): %r",
+                        mt, text[:80],
+                    )
+                    continue
+                _last_committed_text = text
                 yield {"type": "final", "text": text, "language_code": detected_lang}
                 # No return — loop continues across multiple VAD commits. R10.
 
