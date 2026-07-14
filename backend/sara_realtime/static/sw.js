@@ -6,6 +6,9 @@
 //
 // Scope: registered from "/" (served by an explicit FastAPI route in
 // app.py, not from /static/) so it covers the full app origin.
+//
+// v2: bump to propagate resume/reconnect fix to existing PWA installs.
+const CACHE_VERSION = 'sara-cache-v2';
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));

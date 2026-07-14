@@ -959,12 +959,14 @@ function connect(){
     // a half-resume: Sara's welcome TTS plays silently, Scribe receives no
     // audio and spins its idle-reconnect loop indefinitely.
     // Instead: reset to the clean start overlay so the user taps to re-arm.
-    if (returnedFromBackground) { resetSession(); return; }
+    if (returnedFromBackground) { setState('paused'); resetSession(); return; }
     if (!e.wasClean && !reconnectAttempted) {
       reconnectAttempted = true;
+      setState('paused');
       showBanner('Связь прервалась — переподключаюсь…');
       setTimeout(() => { if (!sessionEnded) connect(); }, 2000);
     } else if (!e.wasClean) {
+      setState('paused');
       showBanner('Связь потеряна. Обновите страницу, чтобы продолжить.');
     }
   };
