@@ -381,7 +381,7 @@ http://drive.google.com/file/d/1q5kc4BMt1SlSD1XyLLPmEG1da4zTfB9Y/view
     "employee_benefits": {
         "title": "🎁 Переваги для співробітників",
         "type": "photo",
-        "photo_url": "https://gradus-ai.onrender.com/static/images/perevagy.png",
+        "photo_path": "images/perevagy.png",
         "content": """🎁 Переваги для співробітників АВТД
 
 - 18 робочих днів відпустки (24 календарних) — доступна вже через 6 місяців роботи

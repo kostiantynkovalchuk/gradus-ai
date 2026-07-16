@@ -1167,38 +1167,49 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
         return False
 
 
-async def send_telegram_photo(chat_id: int, photo_url: str, caption: str = None, reply_markup: dict = None) -> bool:
-    """Send a photo to a Telegram chat via URL"""
+async def send_telegram_photo(chat_id: int, photo_path: str, caption: str = None, reply_markup: dict = None) -> bool:
+    """Send a photo to a Telegram chat by uploading bytes from disk (multipart)"""
+    import pathlib
+
     if not TELEGRAM_MAYA_BOT_TOKEN:
         logger.warning("TELEGRAM_MAYA_BOT_TOKEN not set")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto"
 
-    payload = {
-        "chat_id": chat_id,
-        "photo": photo_url,
-    }
-    if caption:
-        payload["caption"] = caption[:1024]
-        payload["parse_mode"] = "Markdown"
-    if reply_markup:
-        payload["reply_markup"] = reply_markup  # Don't stringify - httpx does it when using json=
+    abs_path = pathlib.Path(__file__).parent.parent / "static" / photo_path
+    if not abs_path.exists():
+        logger.error(f"Photo file not found: {abs_path}")
+        return False
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=payload)
+        with open(abs_path, 'rb') as f:
+            file_bytes = f.read()
+
+        data = {'chat_id': str(chat_id)}
+        if caption:
+            data['caption'] = caption[:1024]
+            data['parse_mode'] = 'Markdown'
+        if reply_markup:
+            data['reply_markup'] = json.dumps(reply_markup)
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                url,
+                files={'photo': (abs_path.name, file_bytes)},
+                data=data
+            )
             if response.status_code == 200:
-                logger.info(f"Photo sent to {chat_id} | url={photo_url}")
+                logger.info(f"Photo sent to {chat_id} | path={photo_path}")
                 return True
             else:
                 logger.error(
                     f"Failed to send photo to {chat_id} | HTTP {response.status_code} | "
-                    f"photo_url={photo_url} | Telegram response: {response.text}"
+                    f"photo_path={photo_path} | Telegram response: {response.text}"
                 )
                 return False
     except Exception as e:
-        logger.error(f"Error sending photo to {chat_id} | photo_url={photo_url} | {e}")
+        logger.error(f"Error sending photo to {chat_id} | photo_path={photo_path} | {e}")
         return False
 
 
@@ -2425,7 +2436,7 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
         content = direct_content.get('content', 'Контент недоступний')
         content_type = direct_content.get('type', 'text')
         video_url = direct_content.get('video_url')
-        photo_url = direct_content.get('photo_url')
+        photo_path = direct_content.get('photo_path')
         logger.info(f"📦 Direct content lookup for {content_id} - instant response")
     else:
         try:
@@ -2441,7 +2452,7 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                     content = data.get('content', 'Контент недоступний')
                     content_type = data.get('content_type', 'text')
                     video_url = data.get('video_url')
-                    photo_url = data.get('photo_url')
+                    photo_path = data.get('photo_path')
                     logger.info(f"🌐 API lookup for {content_id} - database response")
                 else:
                     if message_id:
@@ -2492,13 +2503,13 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
             )
         return
 
-    if content_type == 'photo' and photo_url and not text_only:
+    if content_type == 'photo' and photo_path and not text_only:
         if message_id:
             await delete_telegram_message(chat_id, message_id)
 
         success = await send_telegram_photo(
             chat_id,
-            photo_url,
+            photo_path,
             f"🎁 *{title}*",
             nav_keyboard
         )
