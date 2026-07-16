@@ -1189,13 +1189,16 @@ async def send_telegram_photo(chat_id: int, photo_url: str, caption: str = None,
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=payload)
             if response.status_code == 200:
-                logger.info(f"Photo sent to {chat_id}")
+                logger.info(f"Photo sent to {chat_id} | url={photo_url}")
                 return True
             else:
-                logger.error(f"Failed to send photo: {response.text}")
+                logger.error(
+                    f"Failed to send photo to {chat_id} | HTTP {response.status_code} | "
+                    f"photo_url={photo_url} | Telegram response: {response.text}"
+                )
                 return False
     except Exception as e:
-        logger.error(f"Error sending photo: {e}")
+        logger.error(f"Error sending photo to {chat_id} | photo_url={photo_url} | {e}")
         return False
 
 
