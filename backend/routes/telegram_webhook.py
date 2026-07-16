@@ -1372,6 +1372,13 @@ async def edit_telegram_message(
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=10.0)
             if response.status_code != 200:
+                if "there is no text in the message to edit" in response.text:
+                    logger.warning(
+                        f"[edit_msg] media guard missed — falling back to new send "
+                        f"(chat_id={chat_id}, message_id={message_id}). "
+                        f"Add the missing key to is_media_message in handle_hr_callback."
+                    )
+                    return await send_telegram_message_with_keyboard(chat_id, text, keyboard)
                 logger.warning(f"[edit_msg] {response.status_code}: {response.text[:120]}")
             return response.status_code == 200
     except Exception as e:
@@ -1914,7 +1921,13 @@ async def handle_hr_callback(callback_query: dict):
     chat_id = message.get('chat', {}).get('id')
     message_id = message.get('message_id')
     telegram_id = callback_query.get('from', {}).get('id')
-    is_video_message = 'video' in message
+    # Telegram cannot editMessageText on a media message (400 "there is no
+    # text in the message to edit"). Any message carrying media must be
+    # deleted and replaced with a fresh text message, never edited.
+    # Add new media keys here — do NOT add a second per-type flag.
+    is_media_message = any(k in message for k in (
+        'video', 'photo', 'document', 'audio', 'animation', 'voice', 'sticker'
+    ))
 
     if not callback_data.startswith('hr_pulse:'):
         await answer_callback(callback_id)
@@ -1952,7 +1965,7 @@ async def handle_hr_callback(callback_query: dict):
             menu_id = callback_data.split(':')[1]
             
             if menu_id == 'main':
-                if is_video_message:
+                if is_media_message:
                     await delete_telegram_message(chat_id, message_id)
                     await send_telegram_message_with_keyboard(
                         chat_id,
@@ -1978,13 +1991,13 @@ async def handle_hr_callback(callback_query: dict):
                     "HR-процеси та робота в системі «Бліц»\n\n"
                     "Покрокова інструкція щодо підбору, оформлення та звільнення співробітників."
                 )
-                if is_video_message:
+                if is_media_message:
                     await delete_telegram_message(chat_id, message_id)
                     await send_telegram_message_with_keyboard(chat_id, training_msg, training_keyboard)
                 else:
                     await edit_telegram_message(chat_id, message_id, training_msg, training_keyboard)
             elif menu_id in MENU_TITLES:
-                if is_video_message:
+                if is_media_message:
                     await delete_telegram_message(chat_id, message_id)
                     await send_telegram_message_with_keyboard(
                         chat_id,
@@ -2121,7 +2134,7 @@ async def handle_hr_callback(callback_query: dict):
                 avpost_text = f"📰 *Архів AV Post*\n_Усього випусків: {total}_\n"
                 avpost_kb = {"inline_keyboard": avpost_rows}
 
-            if is_video_message:
+            if is_media_message:
                 await delete_telegram_message(chat_id, message_id)
                 await send_telegram_message_with_keyboard(chat_id, avpost_text, avpost_kb)
             else:
@@ -2510,7 +2523,7 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
         success = await send_telegram_photo(
             chat_id,
             photo_path,
-            f"🎁 *{title}*",
+            f"*{title}*",
             nav_keyboard
         )
         if not success:
