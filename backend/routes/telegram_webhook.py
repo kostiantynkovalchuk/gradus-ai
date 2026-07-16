@@ -120,6 +120,16 @@ CONTENT_CATEGORY_MAP = {
     'appendix_21_furniture': 'work',
     'appendix_21_1_equipment': 'work',
     'appendix_22_contacts': 'contacts',
+    'employee_benefits': 'about',
+}
+
+CONTENT_EXTRA_BUTTONS = {
+    "q26": [
+        [{
+            "text": "📝 Екзіт-інтерв'ю",
+            "url": "https://docs.google.com/forms/d/e/1FAIpQLSfL09AR7pGZWUVty_kO3__LgSrEibii59eJjxbWgfF3bY_lyA/viewform"
+        }]
+    ]
 }
 
 VIDEO_CONTENT_TRIGGERS = {
@@ -1154,6 +1164,38 @@ async def send_telegram_video(chat_id: int, video_source: str, caption: str = No
                 return False
     except Exception as e:
         logger.error(f"Error sending video: {e}")
+        return False
+
+
+async def send_telegram_photo(chat_id: int, photo_url: str, caption: str = None, reply_markup: dict = None) -> bool:
+    """Send a photo to a Telegram chat via URL"""
+    if not TELEGRAM_MAYA_BOT_TOKEN:
+        logger.warning("TELEGRAM_MAYA_BOT_TOKEN not set")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto"
+
+    payload = {
+        "chat_id": chat_id,
+        "photo": photo_url,
+    }
+    if caption:
+        payload["caption"] = caption[:1024]
+        payload["parse_mode"] = "Markdown"
+    if reply_markup:
+        payload["reply_markup"] = reply_markup  # Don't stringify - httpx does it when using json=
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                logger.info(f"Photo sent to {chat_id}")
+                return True
+            else:
+                logger.error(f"Failed to send photo: {response.text}")
+                return False
+    except Exception as e:
+        logger.error(f"Error sending photo: {e}")
         return False
 
 
@@ -2368,6 +2410,11 @@ async def handle_hr_callback(callback_query: dict):
 async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: str, text_only: bool = False, parent_category: str = None):
     """Fetch content - uses direct memory lookup first, then falls back to API"""
     nav_keyboard = create_content_navigation_keyboard(parent_category)
+    extra_rows = CONTENT_EXTRA_BUTTONS.get(content_id)
+    if extra_rows:
+        nav_keyboard = {
+            "inline_keyboard": extra_rows + nav_keyboard["inline_keyboard"]
+        }
     
     direct_content = get_direct_content(content_id)
     if direct_content:
@@ -2375,6 +2422,7 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
         content = direct_content.get('content', 'Контент недоступний')
         content_type = direct_content.get('type', 'text')
         video_url = direct_content.get('video_url')
+        photo_url = direct_content.get('photo_url')
         logger.info(f"📦 Direct content lookup for {content_id} - instant response")
     else:
         try:
@@ -2390,6 +2438,7 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                     content = data.get('content', 'Контент недоступний')
                     content_type = data.get('content_type', 'text')
                     video_url = data.get('video_url')
+                    photo_url = data.get('photo_url')
                     logger.info(f"🌐 API lookup for {content_id} - database response")
                 else:
                     if message_id:
@@ -2439,7 +2488,25 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                 nav_keyboard
             )
         return
-    
+
+    if content_type == 'photo' and photo_url and not text_only:
+        if message_id:
+            await delete_telegram_message(chat_id, message_id)
+
+        success = await send_telegram_photo(
+            chat_id,
+            photo_url,
+            f"🎁 *{title}*",
+            nav_keyboard
+        )
+        if not success:
+            await send_telegram_message_with_keyboard(
+                chat_id,
+                f"⚠️ Зображення тимчасово недоступне.\n\n*{title}*\n\n{content}",
+                nav_keyboard
+            )
+        return
+
     # Handle link type - send URL with description
     if content_type == 'link':
         url = direct_content.get('url', '') if direct_content else ''
