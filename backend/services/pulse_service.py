@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy import text
 
 import models as _models
+from services.hr_sed_service import sed_service
 
 # Absolute base = backend/ (one level up from services/)
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1069,7 +1070,7 @@ def send_monthly_survey() -> int:
     try:
         rows = db.execute(
             text(
-                "SELECT telegram_id, first_name FROM hr_users "
+                "SELECT telegram_id, first_name, phone, verification_method FROM hr_users "
                 "WHERE is_active = TRUE AND telegram_id IS NOT NULL"
             )
         ).fetchall()
@@ -1091,10 +1092,44 @@ def send_monthly_survey() -> int:
         import asyncio
 
         async def _send_all(rows):
-            sent = skipped = errors = 0
+            sent = tg_skipped = tg_errors = not_found_skipped = sed_check_errors = 0
+            status_updates = []  # list of (telegram_id, employment_status)
+
             async with _httpx.AsyncClient(timeout=10.0) as client:
                 for row in rows:
-                    tg_id = row[0]
+                    tg_id        = row[0]
+                    first_name   = row[1]
+                    phone        = row[2]
+                    verif_method = row[3]
+
+                    # ── Employment check (sed_api users only) ──────────────
+                    should_send = True
+                    if verif_method == 'sed_api':
+                        sed_result = await sed_service.verify_employee(phone)
+                        if sed_result["verified"]:
+                            status_updates.append((tg_id, 'employed'))
+                        elif sed_result.get("error") == "not_found":
+                            status_updates.append((tg_id, 'not_found'))
+                            logger.warning(
+                                f"[PULSE] Employment not_found — skipping survey for "
+                                f"{first_name} (phone={phone})"
+                            )
+                            not_found_skipped += 1
+                            should_send = False
+                        else:
+                            # Fail-open: timeout / 5xx / network / not_configured
+                            logger.warning(
+                                f"[PULSE] SED check error for {first_name} "
+                                f"(phone={phone}): {sed_result.get('error')} "
+                                f"— sending anyway"
+                            )
+                            sed_check_errors += 1
+                        await asyncio.sleep(0.2)
+
+                    if not should_send:
+                        continue
+
+                    # ── Telegram send ──────────────────────────────────────
                     try:
                         resp = await client.post(
                             f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendMessage",
@@ -1110,23 +1145,51 @@ def send_monthly_survey() -> int:
                         else:
                             data = resp.json()
                             if "bot was blocked" in str(data) or "chat not found" in str(data):
-                                skipped += 1
+                                tg_skipped += 1
                             else:
                                 logger.warning(f"[PULSE] Survey to {tg_id}: {resp.status_code}")
-                                errors += 1
+                                tg_errors += 1
                     except Exception as e:
                         logger.warning(f"[PULSE] Survey send error (uid={tg_id}): {e}")
-                        errors += 1
+                        tg_errors += 1
+
             logger.info(
-                f"[PULSE] Survey complete: sent={sent}, skipped={skipped}, errors={errors}"
+                f"[PULSE] Survey summary: sent={sent}, "
+                f"not_found_skipped={not_found_skipped}, "
+                f"sed_check_errors={sed_check_errors}, "
+                f"tg_skipped={tg_skipped}, tg_errors={tg_errors}"
             )
-            return sent
+            return sent, not_found_skipped, sed_check_errors, status_updates
 
         sent_count = 0
+        not_found_count = 0
+        check_errors_count = 0
         try:
-            sent_count = asyncio.run(_send_all(rows))
+            sent_count, not_found_count, check_errors_count, status_updates = (
+                asyncio.run(_send_all(rows))
+            )
         except Exception as e:
             logger.error(f"[PULSE] Async survey send failed: {e}")
+            return 0
+
+        # ── Persist employment status to hr_users ──────────────────────────
+        if status_updates:
+            checked_at = datetime.utcnow()
+            for tg_id, emp_status in status_updates:
+                db.execute(
+                    text(
+                        "UPDATE hr_users "
+                        "SET employment_status = :s, employment_checked_at = :ts "
+                        "WHERE telegram_id = :tid"
+                    ),
+                    {"s": emp_status, "ts": checked_at, "tid": tg_id},
+                )
+            db.commit()
+            logger.info(
+                f"[PULSE] Employment status written for {len(status_updates)} users "
+                f"({not_found_count} not_found, {check_errors_count} sed_errors)"
+            )
+
         return sent_count
 
     except Exception as e:

@@ -1844,6 +1844,28 @@ MIGRATIONS = [
             "ALTER TABLE sara_sessions ADD COLUMN IF NOT EXISTS streak_counted BOOLEAN NOT NULL DEFAULT FALSE",
         ],
     },
+    {
+        # Employment status cache written by pulse_service.send_monthly_survey()
+        # before each dispatch.  NULL = never checked.
+        # Fail-open design: SED errors leave the column NULL and still send.
+        # is_active is NOT touched here (hr_auth.py owns it on login).
+        "version": "071_hr_employment_status",
+        "statements": [
+            "ALTER TABLE hr_users ADD COLUMN IF NOT EXISTS employment_status VARCHAR(20) NULL",
+            "ALTER TABLE hr_users ADD COLUMN IF NOT EXISTS employment_checked_at TIMESTAMP NULL",
+            """DO $$
+               BEGIN
+                 IF NOT EXISTS (
+                   SELECT 1 FROM pg_constraint
+                   WHERE conname = 'chk_hr_users_employment_status'
+                 ) THEN
+                   ALTER TABLE hr_users
+                   ADD CONSTRAINT chk_hr_users_employment_status
+                   CHECK (employment_status IN ('employed', 'not_found') OR employment_status IS NULL);
+                 END IF;
+               END$$""",
+        ],
+    },
 ]
 
 
