@@ -98,7 +98,7 @@ def create_category_keyboard(category: str) -> Dict:
         'about': [
             ('🎬 Огляд', 'hr_content:video_overview'),
             ('🎬 Цінності', 'hr_content:video_values'),
-            ('🎬 Історія компанії', 'hr_content:video_history'),
+            ('🎬 Історія', 'hr_content:video_history'),
             ('📊 Структура', 'hr_content:section_4_structure'),
             ('🎁 Переваги', 'hr_content:employee_benefits'),
             ('👔 Дрес-код', 'hr_menu:dresscode'),
@@ -114,7 +114,7 @@ def create_category_keyboard(category: str) -> Dict:
             ('🔙 Назад', 'hr_menu:main')
         ],
         'legal': [
-            ('🏢 Бест Брендс (ББ)', 'hr_menu:legal_bb'),
+            ('🏢 Бест Брендс', 'hr_menu:legal_bb'),
             ('🏭 Торговий Дім АВ', 'hr_menu:legal_tdav'),
             ('🥐 Світ Бейкерс', 'hr_menu:legal_sb'),
             ('🔙 Назад', 'hr_menu:main')
