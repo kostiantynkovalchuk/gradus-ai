@@ -67,23 +67,23 @@ def create_category_keyboard(category: str) -> Dict:
     
     SUBMENUS = {
         'onboarding': [
-            ('📋 Документи для працевлаштування', 'hr_content:q1'),
-            ('🔐 Корпоративний доступ', 'hr_content:q2'),
+            ('📋 Документи', 'hr_content:q1'),
+            ('🔐 Корп. доступ', 'hr_content:q2'),
             ('📱 Перші кроки', 'hr_content:q3'),
             ('🔙 Назад', 'hr_menu:main')
         ],
         'salary': [
             ('💵 Строки виплати', 'hr_content:q4'),
-            ('❓ Питання про нарахування', 'hr_content:q5'),
+            ('❓ Нарахування', 'hr_content:q5'),
             ('🔙 Назад', 'hr_menu:main')
         ],
         'work': [
             ('🏖️ Відпустки', 'hr_content:q6'),
             ('🏥 Лікарняні', 'hr_content:q10'),
-            ('🏠 Віддалена робота', 'hr_content:q11'),
+            ('🏠 Віддалена', 'hr_content:q11'),
             ('✈️ Відрядження', 'hr_content:q12'),
             ('🪑 Основні фонди', 'hr_content:q20'),
-            ('🤝 Вирішення конфліктів', 'hr_content:q19'),
+            ('🤝 Конфлікти', 'hr_content:q19'),
             ('📤 Звільнення', 'hr_content:q26'),
             ('🔙 Назад', 'hr_menu:main')
         ],
@@ -91,16 +91,16 @@ def create_category_keyboard(category: str) -> Dict:
             ('💻 Проблеми з ПК', 'hr_content:q17'),
             ('📱 КПК / Планшет', 'hr_content:q15'),
             ('📄 СЕД Бліц', 'hr_content:q8'),
-            ('🌐 Віддалений робочий стіл', 'hr_content:q18'),
+            ('🌐 Робочий стіл', 'hr_content:q18'),
             ('🛠️ Канцтовари', 'hr_content:q21'),
             ('🔙 Назад', 'hr_menu:main')
         ],
         'about': [
-            ('🎬 Загальна інформація', 'hr_content:video_overview'),
-            ('🎬 Цінності компанії', 'hr_content:video_values'),
+            ('🎬 Огляд', 'hr_content:video_overview'),
+            ('🎬 Цінності', 'hr_content:video_values'),
             ('🎬 Історія компанії', 'hr_content:video_history'),
-            ('📊 Структура компанії', 'hr_content:section_4_structure'),
-            ('🎁 Переваги для співробітників', 'hr_content:employee_benefits'),
+            ('📊 Структура', 'hr_content:section_4_structure'),
+            ('🎁 Переваги', 'hr_content:employee_benefits'),
             ('👔 Дрес-код', 'hr_menu:dresscode'),
             ('🔙 Назад', 'hr_menu:main')
         ],
