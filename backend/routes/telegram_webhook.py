@@ -121,6 +121,8 @@ CONTENT_CATEGORY_MAP = {
     'appendix_21_1_equipment': 'work',
     'appendix_22_contacts': 'contacts',
     'employee_benefits': 'about',
+    'dresscode_men':   'dresscode',
+    'dresscode_women': 'dresscode',
 }
 
 CONTENT_EXTRA_BUTTONS = {

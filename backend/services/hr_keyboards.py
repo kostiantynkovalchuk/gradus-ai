@@ -101,7 +101,13 @@ def create_category_keyboard(category: str) -> Dict:
             ('🎬 Історія компанії', 'hr_content:video_history'),
             ('📊 Структура компанії', 'hr_content:section_4_structure'),
             ('🎁 Переваги для співробітників', 'hr_content:employee_benefits'),
+            ('👔 Дрес-код', 'hr_menu:dresscode'),
             ('🔙 Назад', 'hr_menu:main')
+        ],
+        'dresscode': [
+            ('👔 Чоловіки', 'hr_content:dresscode_men'),
+            ('👗 Жінки', 'hr_content:dresscode_women'),
+            ('🔙 Назад', 'hr_menu:about'),
         ],
         'contacts': [
             ('📞 Контакти ЦО', 'hr_content:appendix_22_contacts'),
@@ -282,7 +288,8 @@ CATEGORY_NAMES = {
     'legal_sb_marketing': 'Маркетинг',
     'legal_sb_logistics': 'Логістика',
     'legal_sb_supply': 'Поставки/Закупівлі',
-    'legal_sb_additional': 'Додаткові угоди'
+    'legal_sb_additional': 'Додаткові угоди',
+    'dresscode': 'Дрес-код',
 }
 
 
@@ -523,7 +530,8 @@ MENU_TITLES = {
     'legal_sb_marketing': '📝 Маркетинг',
     'legal_sb_logistics': '🚚 Логістика',
     'legal_sb_supply': '📥 Поставки/Закупівлі',
-    'legal_sb_additional': '📋 Додаткові угоди'
+    'legal_sb_additional': '📋 Додаткові угоди',
+    'dresscode': '👔 Дрес-код',
 }
 
 
