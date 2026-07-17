@@ -57,6 +57,9 @@ def check_one(phone: str) -> tuple[str, str]:
     except Exception as exc:
         return "ERROR", f"request_error: {exc}"
 
+    if resp.status_code == 404:
+        return "GONE", ""
+
     if resp.status_code != 200:
         return "ERROR", f"HTTP {resp.status_code}"
 
