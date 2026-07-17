@@ -132,24 +132,24 @@ def create_category_keyboard(category: str) -> Dict:
             ('🔙 Назад', 'hr_menu:legal_bb')
         ],
         'legal_bb_logistics': [
-            ('📄 Логістика з паливним калькулятором', 'hr_doc:bb_101_logistics'),
-            ('📄 Транспортне експедирування', 'hr_doc:bb_201_transport'),
-            ('📄 Транспортне експедирування + банк. гарантія', 'hr_doc:bb_211_transport_bank'),
-            ('📄 Договір перевезення', 'hr_doc:bb_301_shipping'),
+            ('📄 З паливним калькулятором', 'hr_doc:bb_101_logistics'),
+            ('📄 Експедирування', 'hr_doc:bb_201_transport'),
+            ('📄 Експед. + гарантія', 'hr_doc:bb_211_transport_bank'),
+            ('📄 Перевезення', 'hr_doc:bb_301_shipping'),
             ('🔙 Назад', 'hr_menu:legal_bb')
         ],
         'legal_bb_distribution': [
-            ('📄 Дистрибюція - передоплата', 'hr_doc:bb_311_dist_prepay'),
-            ('📄 Дистрибюція - відстрочка + банк. гарантія', 'hr_doc:bb_321_dist_delay_bank'),
-            ('📄 Дистрибюція (представник) - відстрочка', 'hr_doc:bb_3201_dist_agent'),
+            ('📄 Передоплата', 'hr_doc:bb_311_dist_prepay'),
+            ('📄 Відстрочка + гарантія', 'hr_doc:bb_321_dist_delay_bank'),
+            ('📄 Предст. відстрочка', 'hr_doc:bb_3201_dist_agent'),
             ('🔙 Назад', 'hr_menu:legal_bb')
         ],
         'legal_bb_supply': [
-            ('📄 Поставки - відстрочка', 'hr_doc:bb_401_supply_delay'),
-            ('📄 Поставки - передоплата', 'hr_doc:bb_411_supply_prepay'),
-            ('📄 Поставки - Вчасно', 'hr_doc:bb_4021_supply_vchasno'),
-            ('📄 Поставки (представник) - відстрочка', 'hr_doc:bb_4201_supply_agent'),
-            ('📄 Поставки (представник) - передоплата', 'hr_doc:bb_421_supply_agent_prepay'),
+            ('📄 Відстрочка', 'hr_doc:bb_401_supply_delay'),
+            ('📄 Передоплата', 'hr_doc:bb_411_supply_prepay'),
+            ('📄 Вчасно', 'hr_doc:bb_4021_supply_vchasno'),
+            ('📄 Предст. відстрочка', 'hr_doc:bb_4201_supply_agent'),
+            ('📄 Предст. передоплата', 'hr_doc:bb_421_supply_agent_prepay'),
             ('📄 Для закупівлі', 'hr_doc:bb_4011_purchase'),
             ('🔙 Назад', 'hr_menu:legal_bb')
         ],
@@ -174,24 +174,24 @@ def create_category_keyboard(category: str) -> Dict:
             ('🔙 Назад', 'hr_menu:legal_tdav')
         ],
         'legal_tdav_logistics': [
-            ('📄 Логістика з паливним калькулятором', 'hr_doc:tdav_102_logistics'),
-            ('📄 Транспортне експедирування', 'hr_doc:tdav_202_transport'),
-            ('📄 Транспортне експедирування + банк. гарантія', 'hr_doc:tdav_222_transport_bank'),
-            ('📄 Договір перевезення', 'hr_doc:tdav_302_shipping'),
+            ('📄 З паливним калькулятором', 'hr_doc:tdav_102_logistics'),
+            ('📄 Експедирування', 'hr_doc:tdav_202_transport'),
+            ('📄 Експед. + гарантія', 'hr_doc:tdav_222_transport_bank'),
+            ('📄 Перевезення', 'hr_doc:tdav_302_shipping'),
             ('🔙 Назад', 'hr_menu:legal_tdav')
         ],
         'legal_tdav_distribution': [
-            ('📄 Дистрибюція - передоплата', 'hr_doc:tdav_312_dist_prepay'),
-            ('📄 Дистрибюція - відстрочка + банк. гарантія', 'hr_doc:tdav_322_dist_delay_bank'),
-            ('📄 Дистрибюція (представник) - відстрочка', 'hr_doc:tdav_3202_dist_agent'),
+            ('📄 Передоплата', 'hr_doc:tdav_312_dist_prepay'),
+            ('📄 Відстрочка + гарантія', 'hr_doc:tdav_322_dist_delay_bank'),
+            ('📄 Предст. відстрочка', 'hr_doc:tdav_3202_dist_agent'),
             ('🔙 Назад', 'hr_menu:legal_tdav')
         ],
         'legal_tdav_supply': [
-            ('📄 Поставки - відстрочка', 'hr_doc:tdav_402_supply_delay'),
-            ('📄 Поставки - передоплата', 'hr_doc:tdav_412_supply_prepay'),
-            ('📄 Поставки - Вчасно', 'hr_doc:tdav_4022_supply_vchasno'),
-            ('📄 Поставки (представник) - відстрочка', 'hr_doc:tdav_4202_supply_agent'),
-            ('📄 Поставки (представник) - передоплата', 'hr_doc:tdav_422_supply_agent_prepay'),
+            ('📄 Відстрочка', 'hr_doc:tdav_402_supply_delay'),
+            ('📄 Передоплата', 'hr_doc:tdav_412_supply_prepay'),
+            ('📄 Вчасно', 'hr_doc:tdav_4022_supply_vchasno'),
+            ('📄 Предст. відстрочка', 'hr_doc:tdav_4202_supply_agent'),
+            ('📄 Предст. передоплата', 'hr_doc:tdav_422_supply_agent_prepay'),
             ('📄 Для закупівлі', 'hr_doc:tdav_4012_purchase'),
             ('🔙 Назад', 'hr_menu:legal_tdav')
         ],
@@ -219,8 +219,8 @@ def create_category_keyboard(category: str) -> Dict:
             ('🔙 Назад', 'hr_menu:legal_sb')
         ],
         'legal_sb_supply': [
-            ('📄 Поставки - відстрочка', 'hr_doc:sb_705_supply_delay'),
-            ('📄 Поставки - автопролонгація', 'hr_doc:sb_706_supply_auto'),
+            ('📄 Відстрочка', 'hr_doc:sb_705_supply_delay'),
+            ('📄 Автопролонгація', 'hr_doc:sb_706_supply_auto'),
             ('🔙 Назад', 'hr_menu:legal_sb')
         ],
         'legal_sb_additional': [
