@@ -71,6 +71,36 @@ from services.sara_prompts import (
 )
 
 
+# ---------- pilot gate ----------
+
+# Env var: comma-separated BIGINTs, e.g. "441389791,424503938".
+# Read once at import; a deploy restart picks up changes.
+_MAYA_ENGLISH_TEST_IDS: set[int] = set()
+_raw_test_ids = os.getenv("MAYA_ENGLISH_TEST_IDS", "")
+for _part in _raw_test_ids.split(","):
+    _part = _part.strip()
+    if _part.isdigit():
+        _MAYA_ENGLISH_TEST_IDS.add(int(_part))
+
+
+def is_english_pilot(tg_user_id: int) -> bool:
+    """Return True if tg_user_id is in the env allowlist OR in maya_english_whitelist."""
+    if tg_user_id in _MAYA_ENGLISH_TEST_IDS:
+        return True
+    if not DB_URL:
+        return False
+    try:
+        with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM maya_english_whitelist WHERE tg_user_id=%s LIMIT 1",
+                (tg_user_id,),
+            )
+            return cur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Sara is_english_pilot DB check failed: {e}")
+        return False
+
+
 # ---------- blocking helpers (run via asyncio.to_thread) ----------
 
 def _get_config_int(cur, key: str, default: int) -> int:
@@ -207,7 +237,7 @@ def _prepare(tg_user_id: int):
         beat_instruction = ""
         if opened_new and last_summary:
             beat_instruction = (
-                f"BEAT (open with this, warmly, then continue naturally): Welcome Felix back by name "
+                f"BEAT (open with this, warmly, then continue naturally): Welcome the learner back "
                 f"and briefly reference last time before your normal reply. Last session summary: "
                 f"\"{last_summary}\". Keep it to one short welcoming clause — do not recap in detail."
             )
@@ -217,7 +247,7 @@ def _prepare(tg_user_id: int):
             )
         elif streak_days in _streak_milestones(cur):
             beat_instruction = (
-                f"BEAT (work this into your reply, warmly): Congratulate Felix by name — this is day "
+                f"BEAT (work this into your reply, warmly): Congratulate the learner — this is day "
                 f"{streak_days} in a row practising. One short celebratory clause, then continue normally."
             )
 
@@ -416,6 +446,8 @@ async def _chat_action(chat_id: int, action: str):
 
 
 async def handle_voice(chat_id: int, file_id: str):
+    # sara_* tables (sara_sessions, sara_turns, sara_state) now store Maya English
+    # employee data on this bot. Do NOT rename them — append-only discipline applies.
     try:
         await _chat_action(chat_id, "record_voice")
         ogg_in = await _download_voice(file_id)
@@ -477,6 +509,13 @@ async def process_update(update: dict):
     msg = update.get("message") or update.get("edited_message") or {}
     chat_id = msg.get("chat", {}).get("id")
     if chat_id is None:
+        return
+
+    # Pilot gate — deny-by-default. Covers the voice path, the text/command
+    # path, AND the edited_message double-billing edge case — do not add a
+    # separate fix for edited_message elsewhere.
+    if not is_english_pilot(chat_id):
+        await _send_text(chat_id, "English practice isn't enabled for your account yet.")
         return
 
     voice = msg.get("voice")

@@ -1866,6 +1866,20 @@ MIGRATIONS = [
                END$$""",
         ],
     },
+    {
+        # Pilot allowlist for Maya English async voice practice.
+        # Rows are inserted manually (or via admin tooling); the table
+        # is checked on every inbound update in sara_webhook.py.
+        "version": "072_maya_english_whitelist",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS maya_english_whitelist (
+                tg_user_id  BIGINT PRIMARY KEY,
+                added_by    TEXT,
+                note        TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            )""",
+        ],
+    },
 ]
 
 
