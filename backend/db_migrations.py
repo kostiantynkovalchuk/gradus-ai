@@ -1880,6 +1880,31 @@ MIGRATIONS = [
             )""",
         ],
     },
+    {
+        # Per-turn usage meter + cap/circuit-breaker audit trail for Maya English.
+        # event_type CHECK matches the values consumed by sara_webhook.py.
+        "version": "073_maya_english_usage",
+        "statements": [
+            """CREATE TABLE IF NOT EXISTS maya_english_usage (
+                id           BIGSERIAL PRIMARY KEY,
+                session_id   BIGINT,
+                tg_user_id   BIGINT NOT NULL,
+                event_type   TEXT NOT NULL,
+                stt_seconds  NUMERIC DEFAULT 0,
+                tts_chars    INTEGER DEFAULT 0,
+                credits_est  NUMERIC DEFAULT 0,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                CONSTRAINT chk_maya_english_usage_event CHECK (event_type IN (
+                    'turn','end_user','end_time_cap','end_credit_cap','end_weekly_cap',
+                    'end_soft_breaker','end_hard_breaker','end_error'
+                ))
+            )""",
+            """CREATE INDEX IF NOT EXISTS ix_maya_english_usage_created
+               ON maya_english_usage (created_at)""",
+            """CREATE INDEX IF NOT EXISTS ix_maya_english_usage_session
+               ON maya_english_usage (session_id)""",
+        ],
+    },
 ]
 
 

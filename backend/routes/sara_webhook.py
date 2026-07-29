@@ -17,10 +17,12 @@ import os
 import re
 import html
 import json
+import time
 import asyncio
 import logging
 import subprocess
 import tempfile
+from datetime import datetime
 
 import httpx
 import psycopg2
@@ -99,6 +101,31 @@ def is_english_pilot(tg_user_id: int) -> bool:
     except Exception as e:
         logger.error(f"Sara is_english_pilot DB check failed: {e}")
         return False
+
+
+# ---------- caps & usage config (read at import; all optional with safe defaults) ----------
+
+_LESSON_TIME_CAP_S       = int(os.getenv("MAYA_LESSON_TIME_CAP_S",       "900"))
+_LESSON_CREDIT_CAP       = int(os.getenv("MAYA_LESSON_CREDIT_CAP",       "2500"))
+_WEEKLY_LESSON_CAP       = int(os.getenv("MAYA_WEEKLY_LESSON_CAP",       "3"))
+_MONTHLY_CREDIT_SOFT_CAP = int(os.getenv("MAYA_MONTHLY_CREDIT_SOFT_CAP", "450000"))
+_ACCOUNT_HARD_CAP        = int(os.getenv("MAYA_ACCOUNT_HARD_CAP",        "550000"))
+_CREDITS_PER_TTS_CHAR    = float(os.getenv("MAYA_CREDITS_PER_TTS_CHAR",  "0.5"))
+
+# ElevenLabs subscription usage cache — refreshed at most every _SUB_CACHE_TTL seconds
+_sub_cache: dict = {"ts": 0.0, "count": 0}
+_SUB_CACHE_TTL = 60.0
+
+# Goodbye lines (TTS voice for all reasons except hard_breaker which is text-only)
+_GOODBYE_VOICE = {
+    "time_cap":     "That's all for today's lesson — great work! See you next time.",
+    "credit_cap":   "That's all for today's lesson — great work! See you next time.",
+    "weekly_cap":   "You've done all your practice sessions this week — see you next week!",
+    "soft_breaker": "English practice is done for this month — see you next month!",
+}
+_GOODBYE_TEXT_ONLY = {
+    "hard_breaker": "English practice is paused for now — please try again later.",
+}
 
 
 # ---------- blocking helpers (run via asyncio.to_thread) ----------
@@ -190,7 +217,8 @@ def _prepare(tg_user_id: int):
         idle_min = _get_config_int(cur, "session_idle_minutes", 30)
 
         cur.execute(
-            "SELECT id, (last_activity_at < now() - (%s * interval '1 minute')) AS is_idle "
+            "SELECT id, (last_activity_at < now() - (%s * interval '1 minute')) AS is_idle, "
+            "started_at "
             "FROM sara_sessions WHERE tg_user_id=%s AND status='active' "
             "ORDER BY id DESC LIMIT 1",
             (idle_min, tg_user_id),
@@ -199,6 +227,7 @@ def _prepare(tg_user_id: int):
 
         if row and not row[1]:
             session_id = row[0]                       # active and fresh → continue
+            started_at = row[2]
         else:
             if row and row[1]:                        # active but idle → close + recap
                 stale_id = row[0]
@@ -217,6 +246,7 @@ def _prepare(tg_user_id: int):
             )
             session_id = cur.fetchone()[0]
             opened_new = True
+            started_at = datetime.utcnow()
 
         cur.execute(
             "SELECT user_text, sara_text FROM sara_turns WHERE session_id=%s "
@@ -277,7 +307,7 @@ def _prepare(tg_user_id: int):
             logger.info(f"📒 Sara session recap stored for {tg_user_id}: {summary!r}")
 
     logger.info(f"🗂️ Sara session {session_id} (history turns: {len(rows)})")
-    return session_id, history, cefr_band, beat_instruction
+    return session_id, history, cefr_band, beat_instruction, opened_new, started_at
 
 
 def _think(transcript: str, history: list, cefr_band, beat_instruction: str = ""):
@@ -374,6 +404,94 @@ def _persist(session_id: int, tg_user_id: int, transcript: str, reply: str, asse
         conn.commit()
 
 
+def _close_session(session_id: int) -> None:
+    """Mark a session closed (cap hit or user end). Blocking."""
+    if not DB_URL:
+        return
+    try:
+        with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sara_sessions SET status='closed', ended_at=now() "
+                "WHERE id=%s AND status='active'",
+                (session_id,),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[MAYA CAPS] _close_session failed for session={session_id}: {e}")
+
+
+def _log_usage(session_id, tg_user_id: int, event_type: str,
+               stt_seconds=0, tts_chars=0, credits_est=0) -> None:
+    """Insert a row into maya_english_usage. Blocking.
+    Never raises — logs ERROR loudly on failure (silent under-counting defeats the breaker)."""
+    if not DB_URL:
+        return
+    try:
+        with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO maya_english_usage "
+                "(session_id, tg_user_id, event_type, stt_seconds, tts_chars, credits_est) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (session_id, tg_user_id, event_type, stt_seconds, tts_chars, credits_est),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(
+            f"[MAYA USAGE] FAILED to log event={event_type} user={tg_user_id} "
+            f"session={session_id}: {e}"
+        )
+
+
+def _query_caps(session_id: int, tg_user_id: int, is_new_session: bool) -> dict:
+    """Single DB round-trip for per-session and (if new session) per-user cap values.
+    Blocking. Returns safe zeroes on error so caps are still evaluated."""
+    result = {"session_credits": 0.0, "monthly_credits": 0.0, "weekly_sessions": 0}
+    if not DB_URL:
+        return result
+    try:
+        with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(credits_est), 0) FROM maya_english_usage "
+                "WHERE session_id=%s",
+                (session_id,),
+            )
+            result["session_credits"] = float(cur.fetchone()[0] or 0)
+
+            if is_new_session:
+                cur.execute(
+                    "SELECT COALESCE(SUM(credits_est), 0) FROM maya_english_usage "
+                    "WHERE created_at >= date_trunc('month', now())",
+                )
+                result["monthly_credits"] = float(cur.fetchone()[0] or 0)
+
+                cur.execute(
+                    "SELECT COUNT(*) FROM sara_sessions "
+                    "WHERE tg_user_id=%s AND started_at >= now() - interval '7 days'",
+                    (tg_user_id,),
+                )
+                result["weekly_sessions"] = int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.error(f"[MAYA CAPS] _query_caps failed session={session_id}: {e}")
+    return result
+
+
+def _local_account_credits_this_month() -> float:
+    """Sum of all maya_english_usage credits since start of calendar month.
+    Blocking fallback when ElevenLabs subscription API is unavailable."""
+    if not DB_URL:
+        return 0.0
+    try:
+        with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(credits_est), 0) FROM maya_english_usage "
+                "WHERE created_at >= date_trunc('month', now())",
+            )
+            return float(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.error(f"[MAYA CAPS] _local_account_credits_this_month failed: {e}")
+        return 0.0
+
+
 # ---------- async pipeline ----------
 
 async def _download_voice(file_id: str) -> bytes:
@@ -445,12 +563,130 @@ async def _chat_action(chat_id: int, action: str):
         pass
 
 
-async def handle_voice(chat_id: int, file_id: str):
+async def _fetch_account_credits_used() -> int:
+    """Fetch character_count from ElevenLabs /v1/user/subscription. Cached 60 s.
+    Returns -1 on any error; caller falls back to local DB sum."""
+    now = time.monotonic()
+    if now - _sub_cache["ts"] < _SUB_CACHE_TTL:
+        return _sub_cache["count"]
+    try:
+        api_key = os.getenv("ELEVENLABS_API_KEY", "")
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            r = await hc.get(
+                "https://api.elevenlabs.io/v1/user/subscription",
+                headers={"xi-api-key": api_key},
+            )
+            r.raise_for_status()
+            data = r.json()
+            count = int(data.get("character_count", 0))
+            _sub_cache["ts"] = now
+            _sub_cache["count"] = count
+            return count
+    except Exception as e:
+        logger.error(f"[MAYA CAPS] ElevenLabs subscription check failed: {e}")
+        return -1
+
+
+async def check_lesson_allowed(
+    tg_user_id: int, session_id: int, session_started_at, is_new_session: bool
+) -> str:
+    """
+    Returns 'ok' or a reason string. Called AFTER _prepare, BEFORE _transcribe so a
+    blocked turn costs zero STT/TTS credits. Checks in spec order:
+      1. hard_breaker  — account character_count vs MAYA_ACCOUNT_HARD_CAP (every turn)
+      2. time_cap      — wall-clock elapsed vs MAYA_LESSON_TIME_CAP_S (every turn)
+      3. credit_cap    — session credits vs MAYA_LESSON_CREDIT_CAP (every turn)
+      4. soft_breaker  — monthly credits vs MAYA_MONTHLY_CREDIT_SOFT_CAP (new session only)
+      5. weekly_cap    — user sessions in last 7 d vs MAYA_WEEKLY_LESSON_CAP (new session only)
+    """
+    # 1. Hard breaker — always check, even mid-lesson
+    credits_used = await _fetch_account_credits_used()
+    if credits_used == -1:
+        # API unavailable — fall back to local monthly sum as conservative proxy
+        credits_used = await asyncio.to_thread(_local_account_credits_this_month)
+    if credits_used >= _ACCOUNT_HARD_CAP:
+        return "hard_breaker"
+
+    # 2. Per-lesson time cap
+    try:
+        if session_started_at.tzinfo is None:
+            elapsed = (datetime.utcnow() - session_started_at).total_seconds()
+        else:
+            from datetime import timezone as _tz
+            elapsed = (datetime.now(_tz.utc) - session_started_at).total_seconds()
+        if elapsed >= _LESSON_TIME_CAP_S:
+            return "time_cap"
+    except Exception as e:
+        logger.warning(f"[MAYA CAPS] time-cap check error: {e}")
+
+    # 3, 4, 5 — single DB round-trip
+    caps = await asyncio.to_thread(_query_caps, session_id, tg_user_id, is_new_session)
+
+    # 3. Per-lesson credit cap
+    if caps["session_credits"] >= _LESSON_CREDIT_CAP:
+        return "credit_cap"
+
+    # 4 & 5 — new session only (in-progress lessons are never blocked by these)
+    if is_new_session:
+        if caps["monthly_credits"] >= _MONTHLY_CREDIT_SOFT_CAP:
+            return "soft_breaker"
+        if caps["weekly_sessions"] >= _WEEKLY_LESSON_CAP:
+            return "weekly_cap"
+
+    return "ok"
+
+
+async def _end_lesson_with_cap(chat_id: int, session_id: int, tg_user_id: int, reason: str) -> None:
+    """Close session, log end_* event, send goodbye. Hard breaker = text only (never synthesize)."""
+    await asyncio.to_thread(_close_session, session_id)
+
+    event_type = f"end_{reason}"   # matches CHECK constraint values in maya_english_usage
+    tts_chars = 0
+
+    if reason in _GOODBYE_TEXT_ONLY:
+        try:
+            await _send_text(chat_id, _GOODBYE_TEXT_ONLY[reason])
+        except Exception as e:
+            logger.error(f"[MAYA CAPS] text goodbye failed reason={reason}: {e}")
+    elif reason in _GOODBYE_VOICE:
+        line = _GOODBYE_VOICE[reason]
+        try:
+            ogg = await asyncio.to_thread(_synthesize_to_ogg, line)
+            tts_chars = len(line)
+            await _send_voice(chat_id, ogg)
+        except Exception:
+            logger.error(f"[MAYA CAPS] TTS goodbye failed reason={reason}, sending text fallback")
+            try:
+                await _send_text(chat_id, line)
+            except Exception:
+                pass
+    else:
+        logger.warning(f"[MAYA CAPS] unknown cap reason={reason!r}, no goodbye sent")
+
+    await asyncio.to_thread(
+        _log_usage, session_id, tg_user_id, event_type,
+        0, tts_chars, round(tts_chars * _CREDITS_PER_TTS_CHAR),
+    )
+
+
+async def handle_voice(chat_id: int, file_id: str, duration: int = 0):
     # sara_* tables (sara_sessions, sara_turns, sara_state) now store Maya English
     # employee data on this bot. Do NOT rename them — append-only discipline applies.
     try:
         await _chat_action(chat_id, "record_voice")
         ogg_in = await _download_voice(file_id)
+
+        # _prepare runs BEFORE _transcribe: cap check fires before any ElevenLabs spend.
+        session_id, history, cefr_band, beat_instruction, is_new_session, session_started_at = \
+            await asyncio.to_thread(_prepare, chat_id)
+
+        cap_reason = await check_lesson_allowed(
+            chat_id, session_id, session_started_at, is_new_session
+        )
+        if cap_reason != "ok":
+            logger.info(f"[MAYA CAPS] user={chat_id} session={session_id} blocked: {cap_reason}")
+            await _end_lesson_with_cap(chat_id, session_id, chat_id, cap_reason)
+            return
 
         transcript = await asyncio.to_thread(_transcribe, ogg_in)
         logger.info(f"🗣️ Sara heard: {transcript!r}")
@@ -458,7 +694,6 @@ async def handle_voice(chat_id: int, file_id: str):
             await _send_text(chat_id, "Sorry, I couldn't hear that — try again?")
             return
 
-        session_id, history, cefr_band, beat_instruction = await asyncio.to_thread(_prepare, chat_id)
         reply, assessment, ok = await asyncio.to_thread(
             _think, transcript, history, cefr_band, beat_instruction
         )
@@ -481,6 +716,17 @@ async def handle_voice(chat_id: int, file_id: str):
             logger.info(f"📝 Sara turn persisted (session {session_id})")
         else:
             logger.info("Sara: fallback turn NOT persisted (avoids history poisoning)")
+
+        # Usage meter — failure must log loudly but must NOT crash the lesson
+        try:
+            tts_chars = len(reply)
+            credits = round(tts_chars * _CREDITS_PER_TTS_CHAR)
+            await asyncio.to_thread(
+                _log_usage, session_id, chat_id, "turn", duration, tts_chars, credits,
+            )
+        except Exception as e:
+            logger.error(f"[MAYA USAGE] meter write failed user={chat_id} session={session_id}: {e}")
+
     except Exception as e:
         logger.error(f"Sara handle_voice failed for chat {chat_id}: {e}")
         try:
@@ -520,7 +766,7 @@ async def process_update(update: dict):
 
     voice = msg.get("voice")
     if voice and voice.get("file_id"):
-        await handle_voice(chat_id, voice["file_id"])
+        await handle_voice(chat_id, voice["file_id"], voice.get("duration", 0))
         return
 
     if msg.get("text"):
