@@ -752,7 +752,12 @@ async def process_update(update: dict):
         return
 
     if msg.get("text"):
-        await _send_text(chat_id, "Send me a voice message and we'll talk 🎤")
+        await _send_text(
+            chat_id,
+            "Привіт! Я Maya — твій тренер з розмовної англійської 🎤\n\n"
+            "Надішли мені голосове повідомлення англійською — і ми поспілкуємось. "
+            "Розкажи про роботу, вихідні, плани... про що завгодно. Я допоможу!"
+        )
 
 
 @sara_router.post("/webhook/sara")

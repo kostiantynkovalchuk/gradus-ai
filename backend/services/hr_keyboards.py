@@ -37,9 +37,6 @@ def create_main_menu_keyboard(show_english: bool = False) -> Dict:
         [
             {"text": "📰 Архів AV Post", "callback_data": "avpost:list:0"}
         ],
-        [
-            {"text": "💬 Задати своє питання", "callback_data": "hr_ask"}
-        ]
     ]
 
     if show_english:
@@ -49,6 +46,10 @@ def create_main_menu_keyboard(show_english: bool = False) -> Dict:
                 "url": "https://t.me/sara_tutor_bot?start=maya_hr",
             }
         ])
+
+    buttons.append([
+        {"text": "💬 Задати своє питання", "callback_data": "hr_ask"}
+    ])
 
     return {"inline_keyboard": buttons}
 
