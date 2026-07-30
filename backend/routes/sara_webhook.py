@@ -74,33 +74,7 @@ from services.sara_prompts import (
 
 
 # ---------- pilot gate ----------
-
-# Env var: comma-separated BIGINTs, e.g. "441389791,424503938".
-# Read once at import; a deploy restart picks up changes.
-_MAYA_ENGLISH_TEST_IDS: set[int] = set()
-_raw_test_ids = os.getenv("MAYA_ENGLISH_TEST_IDS", "")
-for _part in _raw_test_ids.split(","):
-    _part = _part.strip()
-    if _part.isdigit():
-        _MAYA_ENGLISH_TEST_IDS.add(int(_part))
-
-
-def is_english_pilot(tg_user_id: int) -> bool:
-    """Return True if tg_user_id is in the env allowlist OR in maya_english_whitelist."""
-    if tg_user_id in _MAYA_ENGLISH_TEST_IDS:
-        return True
-    if not DB_URL:
-        return False
-    try:
-        with psycopg2.connect(DB_URL) as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM maya_english_whitelist WHERE tg_user_id=%s LIMIT 1",
-                (tg_user_id,),
-            )
-            return cur.fetchone() is not None
-    except Exception as e:
-        logger.error(f"Sara is_english_pilot DB check failed: {e}")
-        return False
+from services.maya_english_pilot import is_english_pilot
 
 
 # ---------- caps & usage config (read at import; all optional with safe defaults) ----------

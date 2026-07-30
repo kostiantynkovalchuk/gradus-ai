@@ -28,6 +28,7 @@ from services.hr_keyboards import (
     get_candidate_fork_keyboard, get_candidate_root_keyboard,
     MENU_TITLES, split_long_message, LEGAL_CONTRACTS, CATEGORY_NAMES
 )
+from services.maya_english_pilot import is_english_pilot
 from services.maya_hr_content import get_direct_content, has_direct_content
 from services.hr_auth import (
     handle_start_command, handle_phone_verification,
@@ -551,7 +552,7 @@ async def handle_contact_shared(message: dict, db: Session):
     if user:
         logger.info(f"VERIFY_CONTACT_ALREADY_AUTH: telegram_id={telegram_id}, user={user.full_name}")
         try:
-            keyboard = get_inline_menu_for_access_level(user.access_level)
+            keyboard = get_inline_menu_for_access_level(user.access_level, show_english=is_english_pilot(telegram_id))
             await send_telegram_message_with_keyboard(
                 chat_id,
                 f"✅ Ви вже авторизовані як *{user.full_name}*\n\n"
@@ -635,7 +636,7 @@ async def process_telegram_message(message: dict):
                             "• Інформацією для новачків\n"
                             "• Контактами спеціалістів\n\n"
                             "Оберіть розділ або напишіть своє питання 👇",
-                            create_main_menu_keyboard()
+                            create_main_menu_keyboard(show_english=is_english_pilot(chat_id))
                         )
                 elif text == "/contacts":
                     await fetch_and_send_hr_content(chat_id, None, 'appendix_22_contacts')
@@ -1967,18 +1968,19 @@ async def handle_hr_callback(callback_query: dict):
             menu_id = callback_data.split(':')[1]
             
             if menu_id == 'main':
+                _show_en = is_english_pilot(chat_id)
                 if is_media_message:
                     await delete_telegram_message(chat_id, message_id)
                     await send_telegram_message_with_keyboard(
                         chat_id,
                         "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
-                        create_main_menu_keyboard()
+                        create_main_menu_keyboard(show_english=_show_en)
                     )
                 else:
                     await edit_telegram_message(
                         chat_id, message_id,
                         "🏢 *Maya HR Assistant*\n\nОберіть розділ або напишіть своє питання:",
-                        create_main_menu_keyboard()
+                        create_main_menu_keyboard(show_english=_show_en)
                     )
             elif menu_id == 'training':
                 training_url = "https://docs.google.com/document/d/1Xm8wPB4Rwcj_4G50jXDLq_fANV_vvpLiyK_usrKIMs4/edit"
@@ -2097,7 +2099,7 @@ async def handle_hr_callback(callback_query: dict):
                     "• Переформулювати питання\n"
                     "• Звернутися до HR департаменту\n"
                     "• Подивитися контакти спеціалістів",
-                    create_main_menu_keyboard()
+                    create_main_menu_keyboard(show_english=is_english_pilot(chat_id))
                 )
         
         elif callback_data == 'hr_ask':
@@ -2472,32 +2474,34 @@ async def fetch_and_send_hr_content(chat_id: int, message_id: int, content_id: s
                     photo_path = data.get('photo_path')
                     logger.info(f"🌐 API lookup for {content_id} - database response")
                 else:
+                    _show_en = is_english_pilot(chat_id)
                     if message_id:
                         await edit_telegram_message(
                             chat_id, message_id,
                             "❌ Контент не знайдено. Спробуйте інший розділ.",
-                            create_main_menu_keyboard()
+                            create_main_menu_keyboard(show_english=_show_en)
                         )
                     else:
                         await send_telegram_message_with_keyboard(
                             chat_id,
                             "❌ Контент не знайдено. Спробуйте інший розділ.",
-                            create_main_menu_keyboard()
+                            create_main_menu_keyboard(show_english=_show_en)
                         )
                     return
         except Exception as e:
             logger.error(f"Error fetching HR content: {e}")
+            _show_en = is_english_pilot(chat_id)
             if message_id:
                 await edit_telegram_message(
                     chat_id, message_id,
                     "❌ Помилка завантаження. Спробуйте пізніше.",
-                    create_main_menu_keyboard()
+                    create_main_menu_keyboard(show_english=_show_en)
                 )
             else:
                 await send_telegram_message_with_keyboard(
                     chat_id,
                     "❌ Помилка завантаження. Спробуйте пізніше.",
-                    create_main_menu_keyboard()
+                    create_main_menu_keyboard(show_english=_show_en)
                 )
             return
     
@@ -2619,7 +2623,7 @@ async def send_video_only_response(chat_id: int, content_id: str, caption: str) 
             logger.warning(f"Video content not found or no video_url: {content_id}")
             return False
             
-        nav_keyboard = create_main_menu_keyboard()
+        nav_keyboard = create_main_menu_keyboard(show_english=is_english_pilot(chat_id))
         
         success = await send_telegram_video(
             chat_id,
@@ -2669,9 +2673,10 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
             logger.warning(f"Phone contact lookup failed: {_e}")
             contact_reply = None
 
+        _show_en = is_english_pilot(chat_id)
         if contact_reply:
             await send_telegram_message_with_keyboard(
-                chat_id, contact_reply, create_main_menu_keyboard()
+                chat_id, contact_reply, create_main_menu_keyboard(show_english=_show_en)
             )
             return
         # Name not found in cache → send "not found" and return
@@ -2679,7 +2684,7 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
             chat_id,
             "❌ Не знайшла контакт за вашим запитом.\n"
             "Перевірте правильність прізвища або зверніться до HR: hr@vinkom.net",
-            create_main_menu_keyboard(),
+            create_main_menu_keyboard(show_english=_show_en),
         )
         return
 
@@ -2697,7 +2702,7 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
                 await send_telegram_message_with_keyboard(
                     chat_id,
                     "❌ Вибачте, виникла помилка. Спробуйте ще раз або зверніться до HR.",
-                    create_main_menu_keyboard()
+                    create_main_menu_keyboard(show_english=is_english_pilot(chat_id))
                 )
                 return
             
@@ -2758,14 +2763,14 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
         await send_telegram_message_with_keyboard(
             chat_id,
             "⏱️ Запит обробляється довго. Спробуйте переформулювати або зверніться до HR.",
-            create_main_menu_keyboard()
+            create_main_menu_keyboard(show_english=is_english_pilot(chat_id))
         )
     except Exception as e:
         logger.error(f"HR question error: {e}")
         await send_telegram_message_with_keyboard(
             chat_id,
             "❌ Не вдалося обробити запит. Зверніться до HR департаменту.",
-            create_main_menu_keyboard()
+            create_main_menu_keyboard(show_english=is_english_pilot(chat_id))
         )
 
 
