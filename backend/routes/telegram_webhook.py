@@ -391,7 +391,7 @@ async def _process_webhook_update(request: Request, db: Session):
             logger.info(f"💬 Chat ID: {message.get('chat', {}).get('id')} | Type: {message.get('chat', {}).get('type')} | Text: {message.get('text', '')[:50]}")
             chat_id = message.get("chat", {}).get("id")
             telegram_id = message.get("from", {}).get("id", chat_id)
-            text = message.get("text", "")
+            message_text = message.get("text", "")  # renamed from `text` — was shadowing the module-level sqlalchemy text() import, breaking the dedup INSERT above
 
             # ── BROADCAST GROUP INTERCEPT ─────────────────────────────────
             if BROADCAST_GROUP_ID and int(chat_id) == BROADCAST_GROUP_ID:
@@ -474,12 +474,12 @@ async def _process_webhook_update(request: Request, db: Session):
                 await handle_candidate_resume(message, db)
                 return {"ok": True}
 
-            if message.get("document") and not text:
+            if message.get("document") and not message_text:
                 logger.info(f"📎 Document received: {message['document'].get('file_name', 'unknown')}")
                 await handle_document_upload(message, db)
                 return {"ok": True}
 
-            logger.info(f"💬 Message from user: {text[:50]}")
+            logger.info(f"💬 Message from user: {message_text[:50]}")
             
             try:
                 await process_telegram_message(message)
