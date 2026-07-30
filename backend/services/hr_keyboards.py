@@ -3,7 +3,10 @@ HR Bot Telegram Keyboards
 Interactive menu navigation for HR knowledge base
 """
 import json
+import logging
 from typing import List, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def create_main_menu_keyboard() -> Dict:
@@ -51,9 +54,22 @@ def create_feedback_keyboard(sources: List[Dict] = None, log_id: int = None) -> 
         for idx, source in enumerate(sources[:2], 1):
             content_id = source.get('content_id', '')
             title = source.get('title', 'Документ')[:30]
-            buttons.append([
-                {"text": f"📄 {title}...", "callback_data": f"hr_content:{content_id}"}
-            ])
+            cb = f"hr_content:{content_id}"
+            # Telegram enforces a hard 64-BYTE (UTF-8) limit on callback_data.
+            # Cyrillic content_id slugs (section_розділ_*) encode to 2 bytes/char
+            # and can reach 95 bytes, causing Telegram to reject the ENTIRE
+            # sendMessage with BUTTON_DATA_INVALID — the user gets no answer at all.
+            # Skip the oversized button rather than truncating (a truncated id would
+            # resolve to the wrong content in the hr_content handler).
+            if len(cb.encode('utf-8')) <= 64:
+                buttons.append([
+                    {"text": f"📄 {title}...", "callback_data": cb}
+                ])
+            else:
+                logger.info(
+                    f"[hr_keyboards] skipping oversized source button: "
+                    f"{len(cb.encode('utf-8'))} bytes, content_id={content_id!r}"
+                )
     
     buttons.append([
         {"text": "🏠 Головне меню", "callback_data": "hr_menu:main"}
