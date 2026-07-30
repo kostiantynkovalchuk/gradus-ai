@@ -2070,8 +2070,10 @@ async def handle_hr_callback(callback_query: dict):
                         if feedback_type == 'not_helpful':
                             from routes.hr_routes import hr_pinecone_index
                             from services.hr_rag_service import get_hr_rag_service
-                            from models import get_db
-                            
+                            # get_db already imported at module level (L21) — removed the
+                            # local re-import here; it was shadowing get_db as a function-
+                            # local name for all of handle_hr_callback, breaking the
+                            # candidate back-guard at L1941 with UnboundLocalError.
                             fb_db = next(get_db())
                             try:
                                 rag_service = get_hr_rag_service(
