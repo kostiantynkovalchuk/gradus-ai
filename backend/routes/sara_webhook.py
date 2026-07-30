@@ -464,9 +464,17 @@ def _query_caps(session_id: int, tg_user_id: int, is_new_session: bool) -> dict:
                 )
                 result["monthly_credits"] = float(cur.fetchone()[0] or 0)
 
+                # Count sessions with ≥1 persisted sara_turn, not raw session rows.
+                # TG sessions never write active_seconds (always 0) and never reach
+                # status='completed' — that machinery is web-only (sara_assessment_service
+                # is never called from sara_webhook.py). Counting bare sessions would block
+                # users whose only prior sessions were empty/abandoned/cap-blocked (0 turns).
                 cur.execute(
-                    "SELECT COUNT(*) FROM sara_sessions "
-                    "WHERE tg_user_id=%s AND started_at >= now() - interval '7 days'",
+                    "SELECT COUNT(DISTINCT s.id) "
+                    "FROM sara_sessions s "
+                    "JOIN sara_turns t ON t.session_id = s.id "
+                    "WHERE s.tg_user_id=%s "
+                    "AND s.started_at >= now() - interval '7 days'",
                     (tg_user_id,),
                 )
                 result["weekly_sessions"] = int(cur.fetchone()[0] or 0)
