@@ -743,7 +743,7 @@ async def process_update(update: dict):
     # path, AND the edited_message double-billing edge case — do not add a
     # separate fix for edited_message elsewhere.
     if not is_english_pilot(chat_id):
-        await _send_text(chat_id, "English practice isn't enabled for your account yet.")
+        await _send_text(chat_id, "Розмовна практика англійської поки не підключена для вашого акаунту. Зверніться до HR-відділу, щоб отримати доступ.")
         return
 
     voice = msg.get("voice")
