@@ -1,5 +1,5 @@
 """
-Shared pilot gate for Maya English (maya_tutor_bot).
+Shared pilot gate for Maya English (sara_tutor_bot).
 
 Used by both sara_webhook.py and telegram_webhook.py so the whitelist
 check lives in one place. Returns True when tg_user_id is allowed to
