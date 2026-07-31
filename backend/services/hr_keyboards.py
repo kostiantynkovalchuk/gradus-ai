@@ -43,7 +43,7 @@ def create_main_menu_keyboard(show_english: bool = False) -> Dict:
         buttons.append([
             {
                 "text": "🗣️ Розмовна англійська",
-                "url": "https://t.me/sara_tutor_bot?start=maya_hr",
+                "url": "https://t.me/maya_tutor_bot?start=maya_hr",
             }
         ])
 
