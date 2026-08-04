@@ -412,9 +412,9 @@ class HRRagService:
             search_method = "rag"
             
             if not search_results and keyword_results:
-                search_results = [r for r in keyword_results if r.score > 0]
+                search_results = [r for r in keyword_results if r.score >= 0.5]
                 search_method = "keyword_fallback"
-                logger.info(f"🔄 RAG empty, using weak keyword results: {len(search_results)}")
+                logger.info(f"🔄 RAG empty, using keyword_fallback results (>= 0.5): {len(search_results)}")
             else:
                 _ms = int((_time_module.time() - _start) * 1000)
                 logger.info(f"{'✅' if search_results else '❌'} RAG search for: '{query[:50]}' -> {len(search_results)} results ({_ms}ms, cost: ~$0.0001)")
@@ -510,14 +510,11 @@ class HRRagService:
             
         except Exception as e:
             logger.error(f"Claude API error: {e}")
-            best_result = search_results[0]
-            fallback_text = f"На основі бази знань:\n\n{best_result.text[:500]}..."
-            fallback_text = self._attach_documents(query, fallback_text)
             return AnswerResponse(
-                text=fallback_text,
-                sources=[best_result],
+                text=format_not_found_response(query),
+                sources=[],
                 from_preset=False,
-                confidence=best_result.score
+                confidence=0.0
             )
     
     async def hybrid_search(
