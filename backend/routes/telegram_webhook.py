@@ -2711,6 +2711,8 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
             sources = data.get('sources', [])
             is_preset = data.get('from_preset', False)
             confidence = data.get('confidence', 0.0)
+            search_method = data.get('search_method')
+            top_score = data.get('top_score')
             
             log_id = None
             rag_used = not is_preset and len(sources) > 0
@@ -2728,6 +2730,8 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
                             "content_ids": [s.get('content_id') for s in sources] if sources else [],
                             "response_time_ms": response_time_ms,
                             "bot_source": "hr_maya",
+                            "search_method": search_method,
+                            "top_score": top_score,
                         },
                         timeout=5.0
                     )

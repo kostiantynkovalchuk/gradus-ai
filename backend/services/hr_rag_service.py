@@ -143,6 +143,8 @@ class AnswerResponse:
     sources: List[SearchResult]
     from_preset: bool = False
     confidence: float = 0.0
+    search_method: Optional[str] = None
+    top_score: Optional[float] = None
 
 
 class HRRagService:
@@ -386,6 +388,7 @@ class HRRagService:
         preset_answer = await self.check_preset_answer(query)
         if preset_answer:
             preset_answer.text = self._attach_documents(query, preset_answer.text)
+            preset_answer.search_method = "preset"
             _ms = int((_time_module.time() - _start) * 1000)
             logger.info(f"✅ PRESET hit for: '{query[:50]}' ({_ms}ms, cost: $0)")
             return preset_answer
@@ -425,7 +428,9 @@ class HRRagService:
                 text=format_not_found_response(query),
                 sources=[],
                 from_preset=False,
-                confidence=0.0
+                confidence=0.0,
+                search_method=search_method,
+                top_score=None,
             )
         
         top_result = search_results[0]
@@ -440,7 +445,9 @@ class HRRagService:
                 text=format_not_found_response(query),
                 sources=[],
                 from_preset=False,
-                confidence=0.0
+                confidence=0.0,
+                search_method=search_method,
+                top_score=top_score,
             )
         
         if search_method == "rag" and top_score < RAG_MEDIUM_CONFIDENCE:
@@ -449,7 +456,9 @@ class HRRagService:
                 text=format_not_found_response(query),
                 sources=[],
                 from_preset=False,
-                confidence=top_score
+                confidence=top_score,
+                search_method=search_method,
+                top_score=top_score,
             )
         
         context_parts = []
@@ -505,7 +514,9 @@ class HRRagService:
                 text=answer_text,
                 sources=search_results[:3],
                 from_preset=False,
-                confidence=avg_score
+                confidence=avg_score,
+                search_method=search_method,
+                top_score=top_score,
             )
             
         except Exception as e:
@@ -514,7 +525,9 @@ class HRRagService:
                 text=format_not_found_response(query),
                 sources=[],
                 from_preset=False,
-                confidence=0.0
+                confidence=0.0,
+                search_method=search_method,
+                top_score=top_score,
             )
     
     async def hybrid_search(
@@ -703,7 +716,9 @@ class HRRagService:
         response_time_ms: int = 0,
         user_name: str = None,
         preset_id: int = None,
-        bot_source: str = "hr_maya"
+        bot_source: str = "hr_maya",
+        search_method: Optional[str] = None,
+        top_score: Optional[float] = None,
     ) -> Optional[int]:
         """Log query to database for analytics"""
         if not self.db_session:
@@ -719,12 +734,14 @@ class HRRagService:
                 INSERT INTO hr_query_log (
                     user_id, user_name, query, query_normalized,
                     preset_matched, preset_id, rag_used,
-                    content_ids, response_time_ms, bot_source
+                    content_ids, response_time_ms, bot_source,
+                    search_method, top_score
                 )
                 VALUES (
                     :user_id, :user_name, :query, :query_normalized,
                     :preset_matched, :preset_id, :rag_used,
-                    :content_ids, :response_time_ms, :bot_source
+                    :content_ids, :response_time_ms, :bot_source,
+                    :search_method, :top_score
                 )
                 RETURNING id
             """), {
@@ -737,7 +754,9 @@ class HRRagService:
                 'rag_used': rag_used,
                 'content_ids': content_ids_str,
                 'response_time_ms': response_time_ms,
-                'bot_source': bot_source or 'hr_maya'
+                'bot_source': bot_source or 'hr_maya',
+                'search_method': search_method,
+                'top_score': top_score,
             })
             
             log_id = result.scalar()

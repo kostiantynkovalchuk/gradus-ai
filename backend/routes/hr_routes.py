@@ -62,6 +62,8 @@ class LogQueryRequest(BaseModel):
     content_ids: Optional[List[str]] = None
     response_time_ms: Optional[int] = None
     bot_source: Optional[str] = "hr_maya"
+    search_method: Optional[str] = None
+    top_score: Optional[float] = None
 
 
 class SearchResultModel(BaseModel):
@@ -77,6 +79,8 @@ class AnswerResponseModel(BaseModel):
     sources: List[SearchResultModel]
     from_preset: bool
     confidence: float
+    search_method: Optional[str] = None
+    top_score: Optional[float] = None
 
 
 class ContentModel(BaseModel):
@@ -162,7 +166,9 @@ async def get_answer(request: AnswerRequest):
                 for s in answer.sources
             ],
             from_preset=answer.from_preset,
-            confidence=answer.confidence
+            confidence=answer.confidence,
+            search_method=answer.search_method,
+            top_score=answer.top_score,
         )
     except Exception as e:
         logger.error(f"Answer error: {e}")
@@ -309,7 +315,9 @@ async def log_query(request: LogQueryRequest):
             preset_id=request.preset_id,
             content_ids=request.content_ids or [],
             response_time_ms=request.response_time_ms or 0,
-            bot_source=request.bot_source or "hr_maya"
+            bot_source=request.bot_source or "hr_maya",
+            search_method=request.search_method,
+            top_score=request.top_score,
         )
         
         logger.info(

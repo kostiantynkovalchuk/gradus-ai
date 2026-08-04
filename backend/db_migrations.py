@@ -1905,6 +1905,17 @@ MIGRATIONS = [
                ON maya_english_usage (session_id)""",
         ],
     },
+    {
+        # Persists retrieval metadata for observability: which search path was taken
+        # (preset / keyword / keyword_fallback / rag) and the top similarity score,
+        # enabling post-hoc analysis of confidence distribution and fallback rates.
+        "version": "074_hr_query_log_retrieval_meta",
+        "statements": [
+            "ALTER TABLE hr_query_log ADD COLUMN IF NOT EXISTS search_method VARCHAR(30)",
+            "ALTER TABLE hr_query_log ADD COLUMN IF NOT EXISTS top_score REAL",
+            "CREATE INDEX IF NOT EXISTS idx_hr_query_log_search_method ON hr_query_log(search_method)",
+        ],
+    },
 ]
 
 

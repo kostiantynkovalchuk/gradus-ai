@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import httpx
+from typing import List, Optional
 from fastapi import APIRouter, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text as _sa_text
@@ -356,14 +357,18 @@ def _get_user_name(telegram_id: int, db: Session, tg_from: dict = None) -> str:
 
 
 async def _log_query(telegram_id: int, query: str, preset_matched: bool,
-                     response_time_ms: int, db: Session, user_name: str = "Unknown"):
+                     response_time_ms: int, db: Session, user_name: str = "Unknown",
+                     rag_used: bool = False, content_ids: Optional[List[str]] = None,
+                     search_method: Optional[str] = None, top_score: Optional[float] = None):
     try:
         db.execute(
             _sa_text("""
                 INSERT INTO hr_query_log
-                    (user_id, user_name, query, preset_matched, response_time_ms, bot_source, created_at)
+                    (user_id, user_name, query, preset_matched, response_time_ms, bot_source,
+                     rag_used, content_ids, search_method, top_score, created_at)
                 VALUES
-                    (:uid, :name, :q, :pm, :rt, 'alex_avtd', NOW())
+                    (:uid, :name, :q, :pm, :rt, 'alex_avtd',
+                     :rag_used, :content_ids, :search_method, :top_score, NOW())
             """),
             {
                 "uid": telegram_id,
@@ -371,6 +376,10 @@ async def _log_query(telegram_id: int, query: str, preset_matched: bool,
                 "q": query[:500],
                 "pm": preset_matched,
                 "rt": response_time_ms,
+                "rag_used": rag_used,
+                "content_ids": content_ids or [],
+                "search_method": search_method,
+                "top_score": top_score,
             },
         )
         db.commit()
@@ -494,6 +503,7 @@ async def alex_avtd_webhook(request: Request):
             return {"ok": True}
 
         t0 = time.time()
+        answer = None
         try:
             from routes.hr_routes import hr_pinecone_index
             from services.hr_rag_service import HRRagService
@@ -521,7 +531,13 @@ async def alex_avtd_webhook(request: Request):
 
         elapsed_ms = int((time.time() - t0) * 1000)
         await tg_send(chat_id, response_text, back_keyboard())
-        await _log_query(telegram_id, msg_text, preset_matched, elapsed_ms, db, user_name)
+        await _log_query(
+            telegram_id, msg_text, preset_matched, elapsed_ms, db, user_name,
+            rag_used=not preset_matched and bool(answer.sources) if answer else False,
+            content_ids=[s.content_id for s in answer.sources] if answer else [],
+            search_method=answer.search_method if answer else None,
+            top_score=answer.top_score if answer else None,
+        )
 
     except Exception as e:
         logger.error(f"[ALEX_AVTD] Webhook error: {e}")
