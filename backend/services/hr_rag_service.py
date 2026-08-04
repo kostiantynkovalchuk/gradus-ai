@@ -96,11 +96,11 @@ def calculate_preset_match_score(query: str, preset_question: str) -> float:
         query.lower(),
         preset_question.lower()
     ) / 100.0
-    partial_score = fuzz.partial_ratio(
-        query.lower(),
-        preset_question.lower()
-    ) / 100.0
-    return max(direct_score, normalized_score, token_score, partial_score)
+    # partial_ratio is excluded: it normalises by the shorter string only, so a
+    # 4-char branch scores 0.75 against any query containing 3 of its characters
+    # in order within any window ('вина' ⊂ 'зарахо-вана'); token_set_ratio already
+    # covers the legitimate short-branch-in-long-query case at word level.
+    return max(direct_score, normalized_score, token_score)
 
 
 def detect_domain_mismatch(query: str, result_content: str) -> bool:
