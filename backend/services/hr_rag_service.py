@@ -157,6 +157,7 @@ class HRRagService:
         self.db_session = db_session
         self._presets_cache = None
         self.system_prompt_override = system_prompt_override
+        self.last_semantic_top_score: Optional[float] = None
     
     def _attach_documents(self, query: str, answer_text: str) -> str:
         if not self.db_session:
@@ -200,6 +201,7 @@ class HRRagService:
         """
         if not self.pinecone_index:
             logger.warning("Pinecone index not available")
+            self.last_semantic_top_score = None
             return []
         
         top_k = top_k or RAG_TOP_K
@@ -233,7 +235,10 @@ class HRRagService:
             
             all_count = len(search_results)
             if search_results:
+                self.last_semantic_top_score = search_results[0].score
                 logger.info(f"🎯 Top match score: {search_results[0].score:.4f} | Title: {search_results[0].title}")
+            else:
+                self.last_semantic_top_score = None
             
             search_results = [r for r in search_results if r.score >= RAG_SIMILARITY_THRESHOLD]
             
@@ -242,6 +247,7 @@ class HRRagService:
             
         except Exception as e:
             logger.error(f"Semantic search error: {e}")
+            self.last_semantic_top_score = None
             return []
     
     async def check_preset_answer(self, query: str) -> Optional[AnswerResponse]:
@@ -395,6 +401,7 @@ class HRRagService:
         
         keyword_results = await self._keyword_search(query)
         keyword_results = sorted(keyword_results, key=lambda r: r.score, reverse=True)
+        keyword_top_score = keyword_results[0].score if keyword_results else None
         search_method = "keyword"
         
         def _keyword_quality_ok(results):
@@ -430,7 +437,7 @@ class HRRagService:
                 from_preset=False,
                 confidence=0.0,
                 search_method=search_method,
-                top_score=None,
+                top_score=self.last_semantic_top_score if search_method == "rag" else keyword_top_score,
             )
         
         top_result = search_results[0]
