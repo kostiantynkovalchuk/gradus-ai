@@ -1,5 +1,7 @@
 import re
 import os
+import json
+import pathlib
 import asyncio
 import httpx
 import logging
@@ -20,6 +22,8 @@ from utils.phone_normalizer import normalize_phone, format_for_display
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAYA_BOT_TOKEN = os.getenv("TELEGRAM_MAYA_BOT_TOKEN")
+WELCOME_DECK_URL = os.environ.get("WELCOME_DECK_URL")
+_WELCOME_CARD_PATH = "maya_welcome_card.jpg"  # relative to backend/static/
 
 PENDING_VERIFICATIONS = {}
 
@@ -329,6 +333,7 @@ async def create_whitelisted_user(db: Session, chat_id: int, telegram_id: int,
             f"Готова допомогти з питаннями про TD AV!"
         )
 
+    await _send_welcome_card_if_first_entry(db, chat_id, telegram_id)
     await send_message_with_keyboard(chat_id, message, keyboard)
 
 
@@ -385,6 +390,7 @@ async def create_sed_verified_user(db: Session, chat_id: int, telegram_id: int,
     department = employee.get("department", "")
 
     keyboard = get_inline_menu_for_access_level("employee")
+    await _send_welcome_card_if_first_entry(db, chat_id, telegram_id)
     await send_message_with_keyboard(
         chat_id,
         f"✅ Підтверджено!\n\n"
@@ -435,6 +441,7 @@ async def create_blitz_verified_user(db: Session, chat_id: int, telegram_id: int
     db.commit()
 
     keyboard = get_inline_menu_for_access_level("employee")
+    await _send_welcome_card_if_first_entry(db, chat_id, telegram_id)
     await send_message_with_keyboard(
         chat_id,
         f"✅ Підтверджено!\n\n"
@@ -845,6 +852,73 @@ async def send_plain_message(chat_id: int, text: str) -> bool:
     except Exception as e:
         logger.error(f"send_plain_message error to {chat_id}: {e}")
         return False
+
+
+async def _send_welcome_card_if_first_entry(
+    db: Session, chat_id: int, telegram_id: int
+) -> None:
+    """Idempotent welcome photo card — fires exactly once per employee.
+
+    Gate: single atomic UPDATE … RETURNING. If another call already claimed the
+    row (welcome_sent_at IS NOT NULL), fetchone() returns None and we skip.
+    Entire block is try/except so a failure never blocks the main menu.
+    Card: multipart bytes from backend/static/maya_welcome_card.jpg — never a URL.
+    """
+    try:
+        row = db.execute(
+            text(
+                "UPDATE hr_users SET welcome_sent_at = NOW() "
+                "WHERE telegram_id = :tid AND welcome_sent_at IS NULL "
+                "RETURNING telegram_id"
+            ),
+            {"tid": telegram_id},
+        ).fetchone()
+        db.commit()
+        if not row:
+            return  # card already sent on a previous session
+
+        # Build optional URL button
+        if WELCOME_DECK_URL:
+            reply_markup = {
+                "inline_keyboard": [[
+                    {"text": "📊 Презентація для новачків", "url": WELCOME_DECK_URL}
+                ]]
+            }
+        else:
+            logger.warning(
+                f"[welcome_card] WELCOME_DECK_URL not set — "
+                f"sending card without button (chat_id={chat_id})"
+            )
+            reply_markup = None
+
+        card_abs = pathlib.Path(__file__).parent.parent / "static" / _WELCOME_CARD_PATH
+        if not card_abs.exists():
+            logger.error(f"[welcome_card] card image missing at {card_abs}")
+            return
+
+        tg_url = f"https://api.telegram.org/bot{TELEGRAM_MAYA_BOT_TOKEN}/sendPhoto"
+        data: dict = {"chat_id": str(chat_id)}
+        if reply_markup is not None:
+            data["reply_markup"] = json.dumps(reply_markup)
+
+        with open(card_abs, "rb") as fh:
+            file_bytes = fh.read()
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                tg_url,
+                files={"photo": (card_abs.name, file_bytes)},
+                data=data,
+            )
+        if resp.status_code != 200:
+            logger.error(
+                f"[welcome_card] sendPhoto HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+    except Exception as exc:
+        logger.error(
+            f"[welcome_card] unexpected error for chat_id={chat_id}: {exc}",
+            exc_info=True,
+        )
 
 
 async def send_message(chat_id: int, text: str):
