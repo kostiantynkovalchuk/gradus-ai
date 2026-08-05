@@ -32,6 +32,12 @@ def _has_digits(s: str) -> bool:
     return bool(re.search(r'\d', s))
 
 
+# Map Ukrainian letters to their Russian equivalents so that a user typing
+# «іван» or «гоця» matches the Russian-script names stored in the table.
+# і → и   ї → и   є → е   ґ → г
+_UA_TO_RU = str.maketrans('іїєґ', 'ииег')
+
+
 def parse_blitz_phone_field(raw) -> tuple[str | None, str | None]:
     if not raw:
         return None, None
@@ -162,15 +168,24 @@ def find_employee_by_name_sync(query: str, db) -> list[dict]:
         return []
 
     # Use first 4 chars of each token as a stem to handle Russian/Ukrainian
-    # name declensions: Ольга/Ольги → "ольг", Наталья/Наталье → "ната"
-    stems = [t[:4] for t in tokens if len(t) >= 4]
+    # name declensions: Ольга/Ольги → "ольг", Наталья/Наталье → "ната",
+    # and 3-char surnames like "гоц". Threshold lowered from 4 → 3 so short
+    # surnames are included rather than silently dropped.
+    stems = [t[:4] for t in tokens if len(t) >= 3]
     if not stems:
         # All tokens too short — just use the longest one as-is
         stems = [max(tokens, key=len)]
 
-    # Build WHERE: all stems must appear in full_name (ILIKE, case-insensitive)
+    # Normalise Ukrainian script → Russian so that a user typing «іван» matches
+    # the Russian «Иван» stored in the table (і→и, ї→и, є→е, ґ→г).
+    # Applied to both the query stems and the DB column via SQL translate().
+    stems = [s.translate(_UA_TO_RU) for s in stems]
+
+    # Build WHERE: all stems must appear in full_name (case-insensitive,
+    # with Ukrainian→Russian script normalisation on the stored column too).
+    _norm_col = "translate(lower(full_name), 'іїєґ', 'ииег')"
     conditions = " AND ".join(
-        f"LOWER(full_name) LIKE :t{i}" for i in range(len(stems))
+        f"{_norm_col} LIKE :t{i}" for i in range(len(stems))
     )
     params = {f"t{i}": f"%{s}%" for i, s in enumerate(stems)}
 
@@ -199,10 +214,10 @@ def find_employee_by_name_sync(query: str, db) -> list[dict]:
     if len(stems) > 1:
         longest = max(stems, key=len)
         rows = db.execute(
-            _sa_text("""
+            _sa_text(f"""
                 SELECT full_name, phone_work_norm, phone_mobile_norm
                 FROM hr_employee_phone_cache
-                WHERE LOWER(full_name) LIKE :t
+                WHERE {_norm_col} LIKE :t
                 LIMIT 5
             """),
             {"t": f"%{longest}%"},

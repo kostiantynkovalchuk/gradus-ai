@@ -2762,14 +2762,7 @@ async def handle_hr_question(chat_id: int, user_id: int, query: str, user_name: 
                 chat_id, contact_reply, create_main_menu_keyboard()
             )
             return
-        # Name not found in cache → send "not found" and return
-        await send_telegram_message_with_keyboard(
-            chat_id,
-            "❌ Не знайшла контакт за вашим запитом.\n"
-            "Перевірте правильність прізвища або зверніться до HR: hr@vinkom.net",
-            create_main_menu_keyboard(),
-        )
-        return
+        # No match in phone cache — fall through to the preset→keyword→RAG chain below
 
     try:
         async with httpx.AsyncClient() as client:
