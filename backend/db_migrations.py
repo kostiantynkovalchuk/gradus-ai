@@ -1906,21 +1906,17 @@ MIGRATIONS = [
         ],
     },
     {
-        # Persists retrieval metadata for observability: which search path was taken
-        # (preset / keyword / keyword_fallback / rag) and the top similarity score,
-        # enabling post-hoc analysis of confidence distribution and fallback rates.
-        "version": "075_hr_users_welcome_sent_at",
-        "description": "Idempotent flag for first-entry welcome card on hr_users",
-        "up": [
-            "ALTER TABLE hr_users ADD COLUMN IF NOT EXISTS welcome_sent_at TIMESTAMP NULL",
-        ],
-    },
-    {
         "version": "074_hr_query_log_retrieval_meta",
         "statements": [
             "ALTER TABLE hr_query_log ADD COLUMN IF NOT EXISTS search_method VARCHAR(30)",
             "ALTER TABLE hr_query_log ADD COLUMN IF NOT EXISTS top_score REAL",
             "CREATE INDEX IF NOT EXISTS idx_hr_query_log_search_method ON hr_query_log(search_method)",
+        ],
+    },
+    {
+        "version": "075_hr_users_welcome_sent_at",
+        "statements": [
+            "ALTER TABLE hr_users ADD COLUMN IF NOT EXISTS welcome_sent_at TIMESTAMP NULL",
         ],
     },
 ]
