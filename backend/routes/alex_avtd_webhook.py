@@ -11,6 +11,15 @@ from fastapi import APIRouter, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text as _sa_text
 from models import get_db
+from services.avtd_tree import (
+    main_menu_keyboard,
+    back_keyboard,
+    client_keyboard,
+    kpi_keyboard,
+    tech_keyboard,
+    orders_keyboard,
+    get_preset,
+)
 
 logger = logging.getLogger(__name__)
 alex_avtd_router = APIRouter()
@@ -19,6 +28,8 @@ ALEX_AVTD_BOT_TOKEN = os.getenv("TELEGRAM_ALEX_AVTD_BOT_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{ALEX_AVTD_BOT_TOKEN}"
 
 PHOTO_REPORT_BOT_LINK = "https://t.me/avtd_photo_report_bot"
+# Alex-specific extra row prepended to the shared root menu.
+_PHOTO_ROW = [{"text": "📷 Фотозвіт / Мерчандайзинг", "url": PHOTO_REPORT_BOT_LINK}]
 
 ALEX_AVTD_SYSTEM_PROMPT = """Ти — Alex, асистент торгового агента АВТД.
 Відповідай коротко і практично — агент читає з телефону між візитами.
@@ -78,208 +89,6 @@ Blitz Trade → Маршрут → Торгова точка → Показни�
 
 Посилання на портал: https://tdav.atlassian.net/
 Відповідай мовою запиту (українська або російська)."""
-
-
-def main_menu_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "📷 Фотозвіт / Мерчандайзинг", "url": PHOTO_REPORT_BOT_LINK}],
-            [
-                {"text": "👤 Клієнт", "callback_data": "ax_client"},
-                {"text": "📊 KPI", "callback_data": "ax_kpi"},
-            ],
-            [
-                {"text": "🔧 Технічні питання", "callback_data": "ax_tech"},
-                {"text": "📦 Замовлення", "callback_data": "ax_orders"},
-            ],
-        ]
-    }
-
-
-def back_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "◀ Головне меню", "callback_data": "ax_menu"}]
-        ]
-    }
-
-
-def client_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "📋 Умови співпраці", "callback_data": "ax_client_terms"}],
-            [{"text": "💰 Дебіторська заборгованість", "callback_data": "ax_client_debt"}],
-            [{"text": "🏪 Інформація по точці", "callback_data": "ax_client_info"}],
-            [{"text": "◀ Назад", "callback_data": "ax_menu"}],
-        ]
-    }
-
-
-def kpi_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "❓ Чому не зарахувався фотозвіт?", "callback_data": "ax_kpi_photo"}],
-            [{"text": "💵 Розрахунок бонусу / штраф за ДЗ", "callback_data": "ax_kpi_bonus"}],
-            [{"text": "🎯 Як рахується спецціль?", "callback_data": "ax_kpi_sc"}],
-            [{"text": "📈 Де дивитися мої показники?", "callback_data": "ax_kpi_where"}],
-            [{"text": "◀ Назад", "callback_data": "ax_menu"}],
-        ]
-    }
-
-
-def tech_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "📱 Blitz Trade — інструкція", "callback_data": "ax_tech_blitz"}],
-            [{"text": "🎁 Акція не спрацювала", "callback_data": "ax_tech_promo"}],
-            [{"text": "🗺 Маршрути та точки", "callback_data": "ax_tech_routes"}],
-            [{"text": "🔄 Помилка синхронізації", "callback_data": "ax_tech_sync"}],
-            [{"text": "◀ Назад", "callback_data": "ax_menu"}],
-        ]
-    }
-
-
-def orders_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "🔤 Статуси замовлень (R*, ND*, CRE*...)", "callback_data": "ax_orders_status"}],
-            [{"text": "📦 Залишки товарів", "callback_data": "ax_orders_stock"}],
-            [{"text": "🚫 Товар не відображається", "callback_data": "ax_orders_missing"}],
-            [{"text": "◀ Назад", "callback_data": "ax_menu"}],
-        ]
-    }
-
-
-PRESETS = {
-    "ax_client_terms": (
-        "📋 *Умови співпраці з клієнтом*\n\n"
-        "Доступні в двох місцях:\n"
-        "• Сайт mobiletrade → Довідник → Контрагенти → Угоди\n"
-        "• Blitz Trade → Маршрут → Торгова точка → Картка клієнта\n\n"
-        "🔗 mobiletrade.tdav.net.ua/buyers"
-    ),
-    "ax_client_debt": (
-        "💰 *Дебіторська заборгованість*\n\n"
-        "• Blitz Trade → Маршрут → Торгова точка (загальна ДЗ)\n"
-        "• Сайт mobiletrade → Довідник → Контрагенти → Деталізація до накладної\n\n"
-        "Штраф за ДЗ: `[ПДЗ – 10%×ДЗ] × 3%`\n\n"
-        "🔗 mobiletrade.tdav.net.ua/buyers"
-    ),
-    "ax_client_info": (
-        "🏪 *Інформація по клієнту*\n\n"
-        "Сайт mobiletrade → Довідник → Контрагенти:\n"
-        "Основні, Торгові точки, Угоди, Маркетингові виплати,\n"
-        "Замовлення, Відвантаження, Оплати, Мерчендайзинг, Фотозвіти\n\n"
-        "Документи: mobiletrade → Документи → (Журнал, Замовлення, Накладні, Фотозвіт...)\n\n"
-        "🔗 mobiletrade.tdav.net.ua/buyers"
-    ),
-    "ax_kpi_photo": (
-        "❓ *Чому не зарахувався фотозвіт?*\n\n"
-        "Причини для МЧ, ДП, ДПХ:\n"
-        "• ФЗ не синхронізовано в базу\n"
-        "• Невірно вибрано результат візиту\n"
-        "• Результат візиту не відповідає типу трт (МЧ на HoReCa — не зараховується)\n"
-        "• МЧ2 — між візитами пройшло менше 5 днів\n\n"
-        "Причини для СЦ, АКБ, ОА:\n"
-        "• Випадіння товару при проведенні замовлення\n"
-        "• Повернення/вичерки за попередні накладні\n"
-        "• Самовивіз не враховується для СЦ\n\n"
-        "Виправити результат візиту можна на сайті mobiletrade → Документи → Фотозвіти (протягом 3 робочих днів)\n\n"
-        "🔗 mobiletrade.tdav.net.ua/doc-jrn/photo-reports"
-    ),
-    "ax_kpi_bonus": (
-        "💵 *Бонус / штраф за ДЗ*\n\n"
-        "Формула штрафу: `[ПДЗ – 10%×ДЗ] × 3%`\n\n"
-        "Де дивитися виконання KPI:\n"
-        "• Blitz Trade → Головна → Інфо\n"
-        "• Blitz Trade → Маршрут → Торгова точка → Показники\n"
-        "• Сайт mobiletrade → Головна → Дашборд\n"
-        "• Звіти: Аналітика, ПП, Виконання СЦ"
-    ),
-    "ax_kpi_sc": (
-        "🎯 *Спецціль — чому не зарахована?*\n\n"
-        "5 типових причин:\n"
-        "• Випадіння товару при проведенні замовлення\n"
-        "• Повернення/вичерки за попередні накладні\n"
-        "• ФЗ не синхронізовано\n"
-        "• Невірний результат візиту\n"
-        "• Самовивіз (для СЦ не враховується)\n\n"
-        "Перевірити: mobiletrade → Звіти → Виконання СЦ"
-    ),
-    "ax_kpi_where": (
-        "📈 *Де дивитися показники?*\n\n"
-        "• Blitz Trade → Головна → Інфо — загальне виконання\n"
-        "• Blitz Trade → Маршрут → Торгова точка → Показники — по точці\n"
-        "• Сайт mobiletrade → Головна → Дашборд\n"
-        "• Звіт Аналітика — всі показники\n"
-        "• Звіт ПП — по агентах і маршрутах\n"
-        "• Звіт Виконання СЦ — по агент/ТРТ/товар\n\n"
-        "🔗 mobiletrade.tdav.net.ua/home"
-    ),
-    "ax_tech_blitz": (
-        "📱 *Blitz Trade — інструкція*\n\n"
-        "Повна інструкція на порталі:\n"
-        "tdav.atlassian.net → Центр підтримки → IT AV Helpdesk → Мобільна торгівля → Інструкція з роботи з Blitz Trade\n\n"
-        "Там же: перелік можливих помилок при синхронізації\n\n"
-        "🔗 tdav.atlassian.net"
-    ),
-    "ax_tech_promo": (
-        "🎁 *Акція не спрацювала*\n\n"
-        "Де дивитися:\n"
-        "• КПК: Журнал → Замовлення → статус «Помилка експорту»\n"
-        "• Сайт МТ: Документи → Замовлення → Примітки\n\n"
-        "Причини:\n"
-        "• Випадіння товару при замовленні\n"
-        "• Повернення/вичерки за попередні накладні\n"
-        "• Акція закінчилась на філіалі\n"
-        "• Перевищено ліміт акцій по ТРТ\n"
-        "• Основне замовлення в СТОПАХ — акційне опрацюється після проведення\n\n"
-        "Залишки по акціям — уточніть у старшого оператора\n\n"
-        "🔗 mobiletrade.tdav.net.ua/doc-jrn/products-order"
-    ),
-    "ax_tech_routes": (
-        "🗺 *Маршрути та торгові точки*\n\n"
-        "• Додати нову ТРТ в маршрут → подання інформації старшому оператору\n"
-        "• Перемістити ТРТ в інший маршрут → старший оператор\n"
-        "• Перемаршрутизація → шаблон Регіональному аналітику\n"
-        "• Пропала ТРТ з маршруту → уточнити у старшого оператора стан точки"
-    ),
-    "ax_tech_sync": (
-        "🔄 *Помилка синхронізації замовлення*\n\n"
-        "Перевірте:\n"
-        "• Всі поля заповнені (н/д або ціна 0 → помилка)\n"
-        "  → Видаліть замовлення, повна синхронізація, набийте заново\n"
-        "• Немає пустих замовлень → видалити і синхронізувати\n"
-        "• Статус замовлення: mobiletrade → Документи → Замовлення\n"
-        "• Розшифровка статусів: tdav.atlassian.net → IT AV Helpdesk → Мобільна торгівля\n\n"
-        "🔗 mobiletrade.tdav.net.ua/doc-jrn/products-order"
-    ),
-    "ax_orders_status": (
-        "🔤 *Статуси замовлень*\n\n"
-        "• `R*` — Резерв (замовлення прийнято)\n"
-        "• `ND*` — Немає даних / не оброблено\n"
-        "• `CRE*` — Кредитне замовлення\n"
-        "• `А*` — Архів\n"
-        "• `АЕ*` — Архів з помилкою\n\n"
-        "Повна розшифровка: tdav.atlassian.net → Мобільна торгівля → Документ замовлення\n\n"
-        "🔗 mobiletrade.tdav.net.ua/doc-jrn/products-order"
-    ),
-    "ax_orders_stock": (
-        "📦 *Залишки товарів*\n\n"
-        "• При створенні замовлення — залишки відображаються автоматично\n"
-        "• Blitz Trade → Головна → Звіти → Залишки\n"
-        "• Сайт МТ → Звіти → Залишки товарів на складі\n\n"
-        "Товар відображається згідно вибраної фірми в замовленні\n\n"
-        "🔗 mobiletrade.tdav.net.ua/rest-of-goods"
-    ),
-    "ax_orders_missing": (
-        "🚫 *Товар не відображається*\n\n"
-        "• Якщо товар не відображається в КПК → його немає на залишках\n"
-        "• Товар доступний згідно вибраної фірми в замовленні\n"
-        "• Немає потрібної фірми → відсутній або закінчився договір\n"
-        "  → Зверніться до старшого оператора"
-    ),
-}
 
 
 async def tg_send(chat_id: int, msg_text: str, keyboard=None, parse_mode="Markdown"):
@@ -440,32 +249,35 @@ async def alex_avtd_webhook(request: Request):
                 return {"ok": True}
 
             if data == "ax_menu":
-                await tg_edit(chat_id, message_id, "👋 Оберіть розділ:", main_menu_keyboard())
+                await tg_edit(chat_id, message_id, "👋 Оберіть розділ:",
+                              main_menu_keyboard("ax_", extra_rows=[_PHOTO_ROW]))
                 return {"ok": True}
 
             if data == "ax_client":
                 await tg_edit(chat_id, message_id,
-                              "👤 *Інформація по клієнту*\n\nОберіть тему:", client_keyboard())
+                              "👤 *Інформація по клієнту*\n\nОберіть тему:", client_keyboard("ax_"))
                 return {"ok": True}
 
             if data == "ax_kpi":
                 await tg_edit(chat_id, message_id,
-                              "📊 *KPI та показники*\n\nОберіть тему:", kpi_keyboard())
+                              "📊 *KPI та показники*\n\nОберіть тему:", kpi_keyboard("ax_"))
                 return {"ok": True}
 
             if data == "ax_tech":
                 await tg_edit(chat_id, message_id,
-                              "🔧 *Технічні питання*\n\nОберіть тему:", tech_keyboard())
+                              "🔧 *Технічні питання*\n\nОберіть тему:", tech_keyboard("ax_"))
                 return {"ok": True}
 
             if data == "ax_orders":
                 await tg_edit(chat_id, message_id,
-                              "📦 *Замовлення та залишки*\n\nОберіть тему:", orders_keyboard())
+                              "📦 *Замовлення та залишки*\n\nОберіть тему:", orders_keyboard("ax_"))
                 return {"ok": True}
 
-            if data in PRESETS:
-                await tg_edit(chat_id, message_id, PRESETS[data], back_keyboard())
-                return {"ok": True}
+            if data.startswith("ax_"):
+                preset = get_preset(data[len("ax_"):])
+                if preset:
+                    await tg_edit(chat_id, message_id, preset, back_keyboard("ax_"))
+                    return {"ok": True}
 
             return {"ok": True}
 
@@ -495,7 +307,7 @@ async def alex_avtd_webhook(request: Request):
                 chat_id,
                 "👋 Привіт! Я *Alex* — твій асистент у полі.\n\n"
                 "Обери розділ або напиши питання напряму 👇",
-                main_menu_keyboard(),
+                main_menu_keyboard("ax_", extra_rows=[_PHOTO_ROW]),
             )
             return {"ok": True}
 
@@ -530,7 +342,7 @@ async def alex_avtd_webhook(request: Request):
             preset_matched = False
 
         elapsed_ms = int((time.time() - t0) * 1000)
-        await tg_send(chat_id, response_text, back_keyboard())
+        await tg_send(chat_id, response_text, back_keyboard("ax_"))
         await _log_query(
             telegram_id, msg_text, preset_matched, elapsed_ms, db, user_name,
             rag_used=not preset_matched and bool(answer.sources) if answer else False,
