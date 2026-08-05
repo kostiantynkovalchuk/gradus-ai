@@ -35,6 +35,9 @@ def create_main_menu_keyboard(show_english: bool = False) -> Dict:
             {"text": "📚 Навчання", "callback_data": "hr_menu:training"}
         ],
         [
+            {"text": "📱 Mobiletrade / польові питання", "callback_data": "hr_avtd:menu"}
+        ],
+        [
             {"text": "📰 Архів AV Post", "callback_data": "avpost:list:0"}
         ],
     ]

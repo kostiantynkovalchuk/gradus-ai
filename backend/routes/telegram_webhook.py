@@ -2015,6 +2015,87 @@ async def handle_hr_callback(callback_query: dict):
                         create_category_keyboard(menu_id)
                     )
         
+        elif callback_data.startswith('hr_avtd:'):
+            from services.avtd_tree import (
+                main_menu_keyboard as _avtd_main,
+                back_keyboard as _avtd_back,
+                client_keyboard as _avtd_client,
+                kpi_keyboard as _avtd_kpi,
+                tech_keyboard as _avtd_tech,
+                orders_keyboard as _avtd_orders,
+                get_preset as _avtd_get_preset,
+            )
+            _AVTD_PREFIX = 'hr_avtd:'
+            _AVTD_BACK_ROW = [{"text": "⬅️ Головне меню", "callback_data": "hr_menu:main"}]
+            suffix = callback_data[len(_AVTD_PREFIX):]
+
+            # Log every hr_avtd: navigation tap to hr_query_log.
+            try:
+                _tg_from = callback_query.get('from', {})
+                _log_name = ' '.join(
+                    p for p in [_tg_from.get('first_name', ''), _tg_from.get('last_name', '')] if p
+                ).strip() or None
+                async with httpx.AsyncClient() as _lc:
+                    await _lc.post(
+                        f"{API_BASE_URL}/api/hr/log-query",
+                        json={
+                            "user_id": telegram_id,
+                            "user_name": _log_name,
+                            "query": callback_data,
+                            "preset_matched": False,
+                            "rag_used": False,
+                            "content_ids": [],
+                            "response_time_ms": 0,
+                            "bot_source": "hr_maya",
+                            "search_method": "menu_avtd",
+                            "top_score": None,
+                        },
+                        timeout=3.0,
+                    )
+            except Exception as _log_err:
+                logger.warning(f"[hr_avtd] log failed: {_log_err}")
+
+            try:
+                if suffix == 'menu':
+                    _avtd_kb = _avtd_main(_AVTD_PREFIX, extra_rows=[_AVTD_BACK_ROW])
+                    _avtd_txt = "📱 *Mobiletrade / польові питання*\n\nОберіть розділ:"
+                elif suffix == 'client':
+                    _avtd_kb = _avtd_client(_AVTD_PREFIX)
+                    _avtd_txt = "👤 *Інформація по клієнту*\n\nОберіть тему:"
+                elif suffix == 'kpi':
+                    _avtd_kb = _avtd_kpi(_AVTD_PREFIX)
+                    _avtd_txt = "📊 *KPI та показники*\n\nОберіть тему:"
+                elif suffix == 'tech':
+                    _avtd_kb = _avtd_tech(_AVTD_PREFIX)
+                    _avtd_txt = "🔧 *Технічні питання*\n\nОберіть тему:"
+                elif suffix == 'orders':
+                    _avtd_kb = _avtd_orders(_AVTD_PREFIX)
+                    _avtd_txt = "📦 *Замовлення та залишки*\n\nОберіть тему:"
+                else:
+                    _avtd_preset = _avtd_get_preset(suffix)
+                    if _avtd_preset is not None:
+                        _avtd_kb = _avtd_back(_AVTD_PREFIX)
+                        _avtd_txt = _avtd_preset
+                    else:
+                        logger.warning(
+                            f"[hr_avtd] unknown suffix {suffix!r} in callback "
+                            f"{callback_data!r}; falling back to tree root"
+                        )
+                        _avtd_kb = _avtd_main(_AVTD_PREFIX, extra_rows=[_AVTD_BACK_ROW])
+                        _avtd_txt = "📱 *Mobiletrade / польові питання*\n\nОберіть розділ:"
+
+                if is_media_message:
+                    await delete_telegram_message(chat_id, message_id)
+                    await send_telegram_message_with_keyboard(chat_id, _avtd_txt, _avtd_kb)
+                else:
+                    await edit_telegram_message(chat_id, message_id, _avtd_txt, _avtd_kb)
+            except Exception as _avtd_err:
+                logger.error(f"[hr_avtd] render error: {_avtd_err}")
+                try:
+                    await send_telegram_message(chat_id, "⚠️ Виникла помилка. Спробуйте ще раз.")
+                except Exception:
+                    pass
+
         elif callback_data.startswith('hr_doc:'):
             doc_id = callback_data.split(':')[1]
             await send_legal_document(chat_id, doc_id)
