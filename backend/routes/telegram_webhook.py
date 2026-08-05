@@ -238,20 +238,10 @@ def _handle_phone_contact_query(query: str, db) -> str | None:
             lines.append("_(телефон не вказано)_")
         return "\n".join(lines)
 
-    # Multiple matches — list them all
-    lines = ["📋 *Знайшла кількох співробітників:*\n"]
-    for emp in results[:5]:
-        work = _format_phone_display(emp["phone_work"])
-        mobile = _format_phone_display(emp["phone_mobile"])
-        phones = []
-        if work:
-            phones.append(f"роб: `{work}`")
-        if mobile:
-            phones.append(f"моб: `{mobile}`")
-        phone_str = ", ".join(phones) if phones else "_(немає)_"
-        lines.append(f"• *{emp['full_name']}* — {phone_str}")
-    lines.append("\n_Уточніть прізвище для точного пошуку._")
-    return "\n".join(lines)
+    # Multiple matches — names only (no phone numbers), ask to disambiguate.
+    # The caller will send this message and return; RAG is NOT reached.
+    names = "\n".join(f"• {emp['full_name']}" for emp in results[:5])
+    return f"Знайдено кілька людей:\n{names}\n\nУточніть прізвище для точного пошуку."
 
 
 def is_hr_question(text: str) -> bool:

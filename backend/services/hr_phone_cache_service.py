@@ -210,6 +210,37 @@ def find_employee_by_name_sync(query: str, db) -> list[dict]:
             for r in rows
         ]
 
+    # Genitive retry: truncate each stem to 3 chars to collapse inflected endings
+    # (e.g. «гоца»→«гоц», «ольги»→«ольг»). AND-logic is preserved so both
+    # surname and first-name stems must still match — only fires with ≥2 stems.
+    if len(stems) > 1:
+        gen_stems = [s[:3] for s in stems]
+        gen_conditions = " AND ".join(
+            f"{_norm_col} LIKE :g{i}" for i in range(len(gen_stems))
+        )
+        gen_params = {f"g{i}": f"%{s}%" for i, s in enumerate(gen_stems)}
+        rows = db.execute(
+            _sa_text(f"""
+                SELECT full_name, phone_work_norm, phone_mobile_norm
+                FROM hr_employee_phone_cache
+                WHERE {gen_conditions}
+                LIMIT 5
+            """),
+            gen_params,
+        ).fetchall()
+        if rows:
+            logger.info(
+                f"Name genitive retry '{query[:40]}' gen_stems={gen_stems} → {len(rows)} results"
+            )
+            return [
+                {
+                    "full_name": r[0],
+                    "phone_work": r[1],
+                    "phone_mobile": r[2],
+                }
+                for r in rows
+            ]
+
     # Fallback: try with just the longest stem alone (broadest search)
     if len(stems) > 1:
         longest = max(stems, key=len)
