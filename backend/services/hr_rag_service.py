@@ -468,8 +468,13 @@ class HRRagService:
                 top_score=top_score,
             )
         
+        # Below high confidence, results 3+ are near-threshold noise that Claude
+        # treats as authoritative — observed pulling finance-sales@avtd.ua and an
+        # HR disclaimer into an answer about спецціль.
+        context_limit = 2 if (search_method == "rag" and top_score < RAG_HIGH_CONFIDENCE) else 3
+
         context_parts = []
-        for i, result in enumerate(search_results[:3], 1):
+        for i, result in enumerate(search_results[:context_limit], 1):
             context_parts.append(f"[Джерело {i}: {result.title}]\n{result.text}")
         
         context = "\n\n---\n\n".join(context_parts)
@@ -519,7 +524,7 @@ class HRRagService:
             
             return AnswerResponse(
                 text=answer_text,
-                sources=search_results[:3],
+                sources=search_results[:context_limit],
                 from_preset=False,
                 confidence=avg_score,
                 search_method=search_method,
