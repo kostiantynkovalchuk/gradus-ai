@@ -9,14 +9,8 @@ from typing import List, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
-def create_main_menu_keyboard(show_english: bool = False) -> Dict:
-    """Main HR menu with 7 primary categories and distinct Ask Question button.
-
-    Args:
-        show_english: When True, append a URL button that deep-links to the
-                      Maya English tutor bot. Default False preserves existing
-                      behaviour for all non-pilot users.
-    """
+def create_main_menu_keyboard() -> Dict:
+    """Main HR menu with primary categories and Ask Question button."""
     buttons = [
         [
             {"text": "📖 Про компанію", "callback_data": "hr_menu:about"},
@@ -41,14 +35,6 @@ def create_main_menu_keyboard(show_english: bool = False) -> Dict:
             {"text": "📰 Архів AV Post", "callback_data": "avpost:list:0"}
         ],
     ]
-
-    if show_english:
-        buttons.append([
-            {
-                "text": "🗣️ Розмовна англійська",
-                "url": "https://t.me/sara_tutor_bot?start=maya_hr",
-            }
-        ])
 
     buttons.append([
         {"text": "💬 Задати своє питання", "callback_data": "hr_ask"}
@@ -569,18 +555,14 @@ MENU_TITLES = {
 }
 
 
-def get_inline_menu_for_access_level(access_level: str, show_english: bool = False) -> Dict:
+def get_inline_menu_for_access_level(access_level: str) -> Dict:
     """Return the appropriate inline keyboard based on user access level.
     Employees get the standard HR menu; admins get a row of live admin shortcuts.
     developer  → two rows: [Admin, Stats, Logs] + [Add User, List Users]
     hr_admin / admin_it → one row: [Admin, Add User, Stats]
     employee / other    → base menu only, no admin row.
-
-    Args:
-        show_english: Passed through to create_main_menu_keyboard; shows the
-                      "Розмовна англійська" deep-link for pilot users.
     """
-    base = create_main_menu_keyboard(show_english=show_english)
+    base = create_main_menu_keyboard()
     buttons = list(base.get("inline_keyboard", []))
 
     if access_level == "developer":
