@@ -468,13 +468,24 @@ class HRRagService:
                 top_score=top_score,
             )
         
-        # Below high confidence, results 3+ are near-threshold noise that Claude
-        # treats as authoritative — observed pulling finance-sales@avtd.ua and an
-        # HR disclaimer into an answer about спецціль.
-        context_limit = 2 if (search_method == "rag" and top_score < RAG_HIGH_CONFIDENCE) else 3
+        # R2/R3 are included only when within 20 % of R1's score AND sharing its
+        # category. Measured relevant neighbours sit 4–18 % below with matching
+        # category; noise sits 33–50 % below or in a different category (e.g.
+        # contacts document pulled into a спецціль answer at a 4.6 % gap).
+        # If category is None (defensive: not seen in production data), fall back
+        # to score-only — None must never match None and admit unrelated docs.
+        selected = [search_results[0]]
+        for r in search_results[1:3]:
+            score_ok = r.score >= top_score * 0.80
+            cat_ok = (
+                search_results[0].category is not None
+                and r.category == search_results[0].category
+            )
+            if score_ok and cat_ok:
+                selected.append(r)
 
         context_parts = []
-        for i, result in enumerate(search_results[:context_limit], 1):
+        for i, result in enumerate(selected, 1):
             context_parts.append(f"[Джерело {i}: {result.title}]\n{result.text}")
         
         context = "\n\n---\n\n".join(context_parts)
@@ -524,7 +535,7 @@ class HRRagService:
             
             return AnswerResponse(
                 text=answer_text,
-                sources=search_results[:context_limit],
+                sources=selected,
                 from_preset=False,
                 confidence=avg_score,
                 search_method=search_method,
