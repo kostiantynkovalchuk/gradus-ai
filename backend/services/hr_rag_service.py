@@ -29,6 +29,9 @@ RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.3"))
 RAG_HIGH_CONFIDENCE = 0.45
 RAG_MEDIUM_CONFIDENCE = 0.35
 
+DISCLAIMER_FIELD_AGENT = "\n\n⚠️ _Рекомендую уточнити інформацію у старшого оператора або регіонального аналітика._"
+DISCLAIMER_HR = "\n\n⚠️ _Рекомендую уточнити інформацію у HR-відділі._"
+
 META_KEYWORDS = [
     'keyword', 'search', 'database', 'знайди', 'пошук', 'бази',
     'query', 'find', 'use', 'команда', 'функція', 'system',
@@ -525,11 +528,16 @@ class HRRagService:
                 from config.agent_personas import validate_gender
                 validate_gender("maya_hr", answer_text)
             
-            avg_score = sum(r.score for r in search_results[:3]) / min(3, len(search_results))
-            
+            # Confidence must describe what Claude actually saw (selected, not the
+            # full top-3), because it feeds threshold recalibration in hr_query_log.
+            avg_score = sum(r.score for r in selected) / len(selected)
+
             if search_method == "rag" and top_score < RAG_HIGH_CONFIDENCE and not self.system_prompt_override:
                 logger.info(f"⚠️ MEDIUM confidence ({top_score:.2f}) - adding disclaimer")
-                answer_text += "\n\n⚠️ _Рекомендую уточнити інформацію у HR-відділі._"
+                if search_results[0].category == 'mobiletrade_guide':
+                    answer_text += DISCLAIMER_FIELD_AGENT
+                else:
+                    answer_text += DISCLAIMER_HR
             
             answer_text = self._attach_documents(query, answer_text)
             
