@@ -2060,7 +2060,8 @@ async def handle_hr_callback(callback_query: dict):
 
             try:
                 if suffix == 'menu':
-                    _avtd_kb = _avtd_main(_AVTD_PREFIX, extra_rows=[_AVTD_BACK_ROW])
+                    _avtd_kb = _avtd_main(_AVTD_PREFIX)
+                    _avtd_kb['inline_keyboard'].append(_AVTD_BACK_ROW)
                     _avtd_txt = "📱 *Mobiletrade / польові питання*\n\nОберіть розділ:"
                 elif suffix == 'client':
                     _avtd_kb = _avtd_client(_AVTD_PREFIX)
@@ -2084,7 +2085,8 @@ async def handle_hr_callback(callback_query: dict):
                             f"[hr_avtd] unknown suffix {suffix!r} in callback "
                             f"{callback_data!r}; falling back to tree root"
                         )
-                        _avtd_kb = _avtd_main(_AVTD_PREFIX, extra_rows=[_AVTD_BACK_ROW])
+                        _avtd_kb = _avtd_main(_AVTD_PREFIX)
+                        _avtd_kb['inline_keyboard'].append(_AVTD_BACK_ROW)
                         _avtd_txt = "📱 *Mobiletrade / польові питання*\n\nОберіть розділ:"
 
                 if is_media_message:
